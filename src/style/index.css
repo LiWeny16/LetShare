@@ -1,0 +1,33 @@
+@import url(./chat.css);
+body {
+  margin: 0;
+}
+#root {
+  width: 100svw;
+  height: 100svh;
+}
+.apps {
+  background-color: #f0f0f0;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  width: 100svw;
+  height: 100svh;
+}
+.grid-container {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  width: 100%; /* 根据需要调整宽度 */
+  padding: 20px; /* 可选：为网格添加一些内边距 */
+  background-color: #f0f0f0; /* 可选：添加背景颜色 */
+}
+
+.grid-item {
+  background-color: #ffd3d3; /* 方块颜色 */
+  color: white; /* 文本颜色 */
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  font-size: 1.5rem; /* 根据需要调整文本大小 */
+  height: 100px; /* 方块高度 */
+}
