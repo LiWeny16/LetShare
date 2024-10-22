@@ -1,24 +1,24 @@
 // GridLayout.tsx
 import React from "react"
 import Card from "../components/Card"
-
+import textSvg from "../assets/text.svg"
 const displayContents = [
   {
-    imgUrl: "https://bigonion.cn/background/packImg/1.jfif",
+    imgUrl: textSvg,
     url: "/chat",
     title: "文字共享",
     content:
       "这是一个基于WebRTC技术的共享文本在线APP，只需要连接两个同样的WIFI即可传输文本信息",
   },
   {
-    imgUrl: "https://bigonion.cn/background/packImg/1.jfif",
+    imgUrl: textSvg,
     url: "/chat",
     title: "文字共享",
     content:
       "这是一个基于WebRTC技术的共享文本在线APP，只需要连接两个同样的WIFI即可传输文本信息",
   },
   {
-    imgUrl: "https://bigonion.cn/background/packImg/1.jfif",
+    imgUrl: textSvg,
     url: "/chat",
     title: "文字共享",
     content:

@@ -1,10 +1,11 @@
 import Card from "@mui/material/Card"
 import CardActions from "@mui/material/CardActions"
 import CardContent from "@mui/material/CardContent"
-import CardMedia from "@mui/material/CardMedia"
 import Button from "@mui/material/Button"
 import Typography from "@mui/material/Typography"
 import { useNavigate } from "react-router-dom"
+import TranslateIcon from "@mui/icons-material/Translate"
+
 export default function MediaCard(props: any) {
   const navigate = useNavigate()
   const handleClick = () => {
@@ -25,13 +26,14 @@ export default function MediaCard(props: any) {
         },
       }}
     >
-      <CardMedia
+      {/* <CardMedia
         onClick={() => {
           handleClick()
         }}
         sx={{ height: 140, cursor: "pointer" }}
-        image={props.imageURL ?? ""}
-      />
+        image={TranslateIcon.toString()}
+      /> */}
+      <center><TranslateIcon /></center>
       <CardContent>
         <Typography gutterBottom variant="h5" component="div">
           {props.title}
