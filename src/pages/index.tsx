@@ -3,6 +3,7 @@ import "../style/index.css" // 导入你的CSS文件
 import Home from "./home"
 import Chat from "../pages/chat"
 import { HashRouter, Routes, Route } from "react-router-dom" // 导入正确的组件和函数
+import PayNowComponent from "./paynow"
 
 export default function Index() {
   return (
@@ -10,6 +11,7 @@ export default function Index() {
       <Routes>
         <Route path="/" element={<Home />} />
         <Route path="/chat" element={<Chat />} />
+        <Route path="/paynow" element={ <PayNowComponent />}></Route>
       </Routes>
     </HashRouter>
   )

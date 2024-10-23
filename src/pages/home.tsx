@@ -5,10 +5,10 @@ import textSvg from "../assets/text.svg"
 const displayContents = [
   {
     imgUrl: textSvg,
-    url: "/chat",
-    title: "文字共享",
+    url: "/paynow",
+    title: "paynow QR",
     content:
-      "这是一个基于WebRTC技术的共享文本在线APP，只需要连接两个同样的WIFI即可传输文本信息",
+      "Share Your Paynow QR code with your friends and family, and get paid instantly",
   },
   {
     imgUrl: textSvg,
