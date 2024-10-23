@@ -3,12 +3,18 @@ import { Box, Container, TextField, MenuItem, Button } from "@mui/material"
 import { QRCode } from "react-qrcode-logo"
 import paynowImg from "../assets/paynow.png" // Path to the PayNow logo image.
 import { generatePayNowStr } from "../app/paynow" // Assuming you have the generatePayNowStr utility.
-
+import "../style/paynow.css"
 const PayNowComponent: React.FC = () => {
   // Load initial state from localStorage or use default values
-  const [countryCode, setCountryCode] = useState(localStorage.getItem("countryCode") || "+65") // Default to Singapore
-  const [phoneNumber, setPhoneNumber] = useState(localStorage.getItem("phoneNumber") || "")
-  const [payNowName, setPayNowName] = useState(localStorage.getItem("payNowName") || "")
+  const [countryCode, setCountryCode] = useState(
+    localStorage.getItem("countryCode") || "+65"
+  ) // Default to Singapore
+  const [phoneNumber, setPhoneNumber] = useState(
+    localStorage.getItem("phoneNumber") || ""
+  )
+  const [payNowName, setPayNowName] = useState(
+    localStorage.getItem("payNowName") || ""
+  )
 
   useEffect(() => {
     // Store values in localStorage whenever they change
@@ -27,11 +33,15 @@ const PayNowComponent: React.FC = () => {
     setCountryCode(event.target.value)
   }
 
-  const handlePhoneNumberChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const handlePhoneNumberChange = (
+    event: React.ChangeEvent<HTMLInputElement>
+  ) => {
     setPhoneNumber(event.target.value)
   }
 
-  const handlePayNowNameChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const handlePayNowNameChange = (
+    event: React.ChangeEvent<HTMLInputElement>
+  ) => {
     setPayNowName(event.target.value)
   }
 
@@ -50,16 +60,34 @@ const PayNowComponent: React.FC = () => {
 
   // Generate the PayNow QR code value
   const qrCodeValue = generatePayNowStr(opts)
+  const [isKeyboardVisible, setIsKeyboardVisible] = useState(false)
 
+  useEffect(() => {
+    const handleResize = () => {
+      // 检查屏幕高度变化，判断键盘是否弹出
+      if (window.innerHeight < document.documentElement.clientHeight) {
+        setIsKeyboardVisible(true) // 键盘已弹出
+      } else {
+        setIsKeyboardVisible(false) // 键盘已收起
+      }
+    }
+
+    window.addEventListener("resize", handleResize)
+
+    return () => {
+      window.removeEventListener("resize", handleResize)
+    }
+  }, [])
   return (
     <Container
       maxWidth="xs"
       sx={{
-        height: "100vh",
+        height: isKeyboardVisible ? "calc(100vh - 50px)" : "100vh", // 如果键盘弹出，调整高度
         display: "flex",
         flexDirection: "column",
         justifyContent: "center",
         alignItems: "center",
+        paddingBottom: isKeyboardVisible ? "50px" : "0", // 增加键盘显示时的下方填充
       }}
     >
       {/* Phone number input section */}
@@ -178,4 +206,3 @@ const PayNowComponent: React.FC = () => {
 }
 
 export default PayNowComponent
-  

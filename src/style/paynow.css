@@ -1,0 +1,20 @@
+html,
+body {
+  height: 100%;
+  overflow: hidden; /* 禁止页面滚动 */
+}
+
+input,
+textarea {
+  /* 强制输入框在弹出键盘时保持在视口中 */
+  -webkit-user-modify: read-write-plaintext-only;
+}
+
+@media (max-height: 600px) {
+  /* 适配小屏幕 */
+  .input-container {
+    position: fixed;
+    bottom: 0;
+    width: 100%;
+  }
+}
