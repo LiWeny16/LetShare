@@ -69,7 +69,7 @@ export default function Settings(props: { open: boolean; }) {
     const [openDialog, setOpenDialog] = useState(false);
     const [connectedUsers, setConnectedUsers] = useState<ConnectedUser[]>([]);
     const [loading, setLoading] = useState(false);
-    const [selectedButton, setSelectedButton] = useState<"file" | "text" | "clip" | null>(null);
+    const [selectedButton, setSelectedButton] = useState<"file" | "text" | "clip" | null>("clip");
     const [selectedFile, setSelectedFile] = useState<File | null>(null);
     const [selectedText, setSelectedText] = useState<string | null>(null);
     const [textInputDialogOpen, setTextInputDialogOpen] = useState(false);
