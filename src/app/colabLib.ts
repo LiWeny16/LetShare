@@ -1,3 +1,5 @@
+import alertUseMUI from "./alert";
+
 // 获取存储的状态
 function getStatesMemorable(): { memorable: { localLANId: string } } {
     const storedState = localStorage.getItem("memorableState");
@@ -142,15 +144,20 @@ class RealTimeColab {
         const fromId = data.id;
         if (!this.knownUsers.has(fromId)) {
             this.knownUsers.add(fromId);
-
-            // ✅ 双向连接关键
             await this.connectToUser(fromId);
-
             updateConnectedUsers(this.getAllUsers());
 
-            // 互相广播
-            this.broadcastSignal({ type: "discover", id: this.getUniqId() });
+
         }
+        // 如果对方不是回应消息，就回应一次
+        if (!data.isReply) {
+            this.broadcastSignal({
+                type: "discover",
+                id: this.getUniqId(),
+                isReply: true
+            });
+        }
+
     }
 
 
@@ -258,12 +265,25 @@ class RealTimeColab {
             await peer.addIceCandidate(new RTCIceCandidate(data.candidate));
         }
     }
+    private lastPongTimes: Map<string, number> = new Map();
 
     private setupDataChannel(channel: RTCDataChannel, id: string): void {
         channel.binaryType = "arraybuffer"; // 设置数据通道为二进制模式
+
+        let heartbeatInterval: ReturnType<typeof setInterval> | null = null;
+
         channel.onopen = () => {
             console.log(`Data channel with user ${id} is open`);
+
+            // 启动心跳定时器
+            heartbeatInterval = setInterval(() => {
+                if (channel.readyState === "open") {
+                    console.log("ping");    
+                    channel.send(JSON.stringify({ type: "ping" }));
+                }
+            }, 2000); // 每 5 秒发送一次 ping
         };
+
         let receivingFile: {
             name: string;
             size: number;
@@ -273,42 +293,43 @@ class RealTimeColab {
 
         channel.onmessage = (event) => {
             if (typeof event.data === "string") {
-                // 接收文件元信息
                 const message = JSON.parse(event.data);
-                if (message.type === "file-meta") {
-                    receivingFile = {
-                        name: message.name,
-                        size: message.size,
-                        receivedSize: 0,
-                        chunks: [],
-                    };
-                    realTimeColab.fileMetaInfo.name = message.name
-                    // console.log(`Receiving file: ${message.name}, size: ${message.size} bytes`);
-                } else {
-                    // 处理普通文本消息
-                    this.setMsgFromSharing(message.msg);
+
+                switch (message.type) {
+                    case "file-meta":
+                        receivingFile = {
+                            name: message.name,
+                            size: message.size,
+                            receivedSize: 0,
+                            chunks: [],
+                        };
+                        realTimeColab.fileMetaInfo.name = message.name;
+                        break;
+
+                    case "ping":
+                        // 回复 pong
+                        channel.send(JSON.stringify({ type: "pong" }));
+                        break;
+
+                    case "pong":
+                        // 更新心跳时间
+                        this.lastPongTimes.set(id, Date.now());
+                        break;
+
+                    case "text":
+                    default:
+                        this.setMsgFromSharing(message.msg);
+                        break;
                 }
             } else if (event.data instanceof ArrayBuffer) {
-                // 接收文件块
                 if (receivingFile) {
                     receivingFile.chunks.push(event.data);
                     receivingFile.receivedSize += event.data.byteLength;
 
-                    // console.log(
-                    //   `Received chunk: ${event.data.byteLength} bytes, Total: ${receivingFile.receivedSize}/${receivingFile.size}`
-                    // );
-
-                    // 检查是否接收完成
                     if (receivingFile.receivedSize >= receivingFile.size) {
-                        // 合并所有块
                         const blob = new Blob(receivingFile.chunks);
-                        // const fileUrl = URL.createObjectURL(blob);
-
-                        // 设置文件数据
                         this.setFileFromSharing(blob);
-
-                        // console.log(`File transfer complete: ${receivingFile.name}`);
-                        receivingFile = null; // 重置状态
+                        receivingFile = null;
                     }
                 } else {
                     console.error("Received file data but no file metadata available.");
@@ -316,12 +337,19 @@ class RealTimeColab {
             }
         };
 
-
         channel.onclose = () => {
             console.log(`Data channel with user ${id} is closed`);
+            alertUseMUI("与对方断开连接,请刷新页面", 2000, { kind: "error" })
+            if (heartbeatInterval) {
+                clearInterval(heartbeatInterval);
+                heartbeatInterval = null;
+            }
             this.dataChannels.delete(id);
+            this.lastPongTimes.delete(id);
         };
+
         this.dataChannels.set(id, channel);
+        this.lastPongTimes.set(id, Date.now()); // 初始化心跳时间
     }
 
 
@@ -345,12 +373,30 @@ class RealTimeColab {
 
     public async sendMessageToUser(id: string, message: string): Promise<void> {
         const channel = this.dataChannels.get(id);
+
         if (channel?.readyState === "open") {
             channel.send(JSON.stringify({ msg: message, type: "text" }));
-        } else {
-            console.error(`Data channel with user ${id} is not available.`);
+            return;
+        }
+
+        console.warn(`Channel not open with user ${id}. Attempting reconnection...`);
+
+        try {
+            await this.connectToUser(id); // 重新建立连接
+            await new Promise(res => setTimeout(res, 500)); // 等待连接稳定
+
+            const newChannel = this.dataChannels.get(id);
+            if (newChannel?.readyState === "open") {
+                newChannel.send(JSON.stringify({ msg: message, type: "text" }));
+                console.log(`Message re-sent after reconnecting to user ${id}`);
+            } else {
+                console.error(`Reconnected but channel still not open with ${id}`);
+            }
+        } catch (err) {
+            console.error(`Failed to reconnect and send message to ${id}:`, err);
         }
     }
+
     public async sendFileToUser(
         id: string,
         file: File,

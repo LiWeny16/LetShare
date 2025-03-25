@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import Dialog from "@mui/material/Dialog";
 import DevicesIcon from "@mui/icons-material/Devices";
 import CachedIcon from '@mui/icons-material/Cached';
@@ -16,6 +16,7 @@ import {
     CircularProgress,
     TextField,
     LinearProgress,
+    Backdrop,
 } from "@mui/material";
 import realTimeColab from "@App/colabLib";
 import FileIcon from "@mui/icons-material/Description";
@@ -73,7 +74,8 @@ export default function Settings(props: { open: boolean; }) {
     const [textInputDialogOpen, setTextInputDialogOpen] = useState(false);
     const [textInput, setTextInput] = useState("");
     const [fileTransferProgress, setFileTransferProgress] = useState<number | null>(null);
-
+    const [loadingPage, setLoadingPage] = useState(true);
+    const searchButtonRef = useRef(null)
     const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
         const file = event.target.files?.[0] || null;
         if (file) {
@@ -91,21 +93,29 @@ export default function Settings(props: { open: boolean; }) {
     async function handleClickSearch() {
         setLoading(true);
         try {
+            // 检查ws 的连接状态
             if (!realTimeColab.isConnected()) {
                 await realTimeColab.connect(
                     url,
-                    setMsgFromSharing,
-                    setFileFromSharing,
+                    (incomingMsg: string | null) => {
+                        // 当接收到新消息时，显示对话框以便用户决定是否接受
+                        setMsgFromSharing(incomingMsg);
+                        setOpenDialog(true);
+                    },
+                    (incomingFile: Blob | null) => {
+                        setFileFromSharing(incomingFile);
+                        setOpenDialog(true);
+                    },
                     (list: string[]) => {
-                        const userList = list.map((id) => ({ id, name: id.slice(0, 8) }));
-                        setConnectedUsers(userList);
+                        const users = list.map((id) => ({ id, name: id.slice(0, 8) }));
+                        setConnectedUsers(users);
                     }
-                );
+                ).catch(console.error);
             }
             realTimeColab.broadcastSignal({
                 type: "discover",
                 id: realTimeColab.getUniqId(),
-                name: realTimeColab.getUniqId()!.toString().slice(0, 8),
+                isReply: false
             });
             await kit.sleep(1000);
         } catch (error) {
@@ -115,34 +125,6 @@ export default function Settings(props: { open: boolean; }) {
         }
     }
 
-    // const handleClickRippleBox = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
-    //     const box = event.currentTarget;
-    //     const boundingRect = box.getBoundingClientRect();
-    //     const size = Math.max(boundingRect.width, boundingRect.height);
-    //     const xPos = event.clientX - boundingRect.left - size / 2;
-    //     const yPos = event.clientY - boundingRect.top - size / 2;
-
-    //     const rippleElement = document.createElement("div");
-    //     rippleElement.style.cssText = `
-    //   width: ${size}px;
-    //   height: ${size}px;
-    //   position: absolute;
-    //   border-radius: 50%;
-    //   background-color: rgba(255, 255, 255, 0.5);
-    //   pointer-events: none;
-    //   transform: scale(0);
-    //   left: ${xPos}px;
-    //   top: ${yPos}px;
-    // `;
-    //     box.appendChild(rippleElement);
-    //     gsap.to(rippleElement, {
-    //         scale: 2,
-    //         opacity: 0,
-    //         duration: 1.2,
-    //         ease: "power2.out",
-    //         onComplete: () => rippleElement.remove(),
-    //     });
-    // }, []);
 
     const handleClickOtherClients = async (_e: any, targetUserId: string) => {
         try {
@@ -231,10 +213,47 @@ export default function Settings(props: { open: boolean; }) {
         };
 
         window.addEventListener("paste", handlePaste);
+        setLoadingPage(false)
         return () => {
             window.removeEventListener("paste", handlePaste);
         };
+
     }, [textInputDialogOpen, openDialog]);
+    useEffect(() => {
+        const interval = setInterval(async () => {
+            // searchButtonRef.current!.click()
+            const currentUsers = [...connectedUsers];
+
+            for (const user of currentUsers) {
+                const channel = realTimeColab["dataChannels"].get(user.id);
+
+                if (!channel || channel.readyState !== "open") {
+                    console.warn(`通道不通，尝试重连 ${user.id}`);
+                    try {
+                        await realTimeColab.connectToUser(user.id);
+                        await new Promise((res) => setTimeout(res, 500));
+
+                        const newChannel = realTimeColab["dataChannels"].get(user.id);
+                        if (!newChannel || newChannel.readyState !== "open") {
+                            console.warn(`重连失败，剔除 ${user.id}`);
+                            setConnectedUsers((prev) =>
+                                prev.filter((u) => u.id !== user.id)
+                            );
+                        } else {
+                            console.log(`用户 ${user.id} 重连成功`);
+                        }
+                    } catch (err) {
+                        console.error(`连接用户 ${user.id} 失败`, err);
+                        setConnectedUsers((prev) =>
+                            prev.filter((u) => u.id !== user.id)
+                        );
+                    }
+                }
+            }
+        }, 5000); // 每5秒检测一次
+
+        return () => clearInterval(interval);
+    }, [connectedUsers]);
 
 
     const handleAcceptMessage = () => {
@@ -344,6 +363,7 @@ export default function Settings(props: { open: boolean; }) {
 
                 <Box sx={{ mt: 3 }}>
                     <Button
+                        ref={searchButtonRef}
                         onClick={handleClickSearch}
                         variant="contained"
                         endIcon={
@@ -485,7 +505,12 @@ export default function Settings(props: { open: boolean; }) {
                     />
                 </Box>
             )}
-
+            <Backdrop
+                sx={{ color: '#fff', zIndex: (theme) => theme.zIndex.drawer + 999 }}
+                open={loadingPage}
+            >
+                <CircularProgress color="inherit" />
+            </Backdrop>
             <AlertPortal />
         </>
     );
