@@ -1,30 +1,47 @@
-# React + TypeScript + Vite
+# 🔁 Let's Share Now!
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+A **React + WebSocket**-based real-time collaboration tool that enables seamless **file, text, and clipboard sharing** between devices on the same WiFi network — all through the browser. Perfect for quick local transfers, team collaboration, or peer-to-peer interactions without needing cloud services.
 
-Currently, two official plugins are available:
+![demo-preview](https://your-demo-image-url-if-you-have-one.com)
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react/README.md) uses [Babel](https://babeljs.io/) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+---
 
-## Expanding the ESLint configuration
+## ✨ Features
 
-If you are developing a production application, we recommend updating the configuration to enable type aware lint rules:
+- 📂 Share files, clipboard, or custom text with nearby devices over WiFi
+- ⚡ One-click device discovery and connection (no account required)
+- 🧠 Auto-pairing and transfer progress tracking
+- 🔒 Peer-to-peer WebSocket-based communication (no external storage)
+- 🌐 Built-in support for clipboard read/write
+- 🎛️ Elegant Material UI (MUI) interface
+- 🧪 Supports receiving and previewing incoming messages/files
 
-- Configure the top-level `parserOptions` property like this:
+---
 
-```js
-export default {
-  // other rules...
-  parserOptions: {
-    ecmaVersion: 'latest',
-    sourceType: 'module',
-    project: ['./tsconfig.json', './tsconfig.node.json'],
-    tsconfigRootDir: __dirname,
-  },
-}
+## 📦 Tech Stack
+
+- **React** (with Hooks)
+- **Material UI (MUI)**
+- **WebSockets** for real-time peer communication
+- **Custom utilities**: Clipboard handling, file transfer wrapper, unique ID mapping
+- **GSAP-ready** ripple effect components (optional)
+- Deployment-ready via [Serverless WebSocket backend](https://www.aliyun.com/)
+
+---
+
+## 🚀 Getting Started
+
+### Prerequisites
+
+- Node.js ≥ 16.x
+- npm or yarn
+
+### Installation
+
+```bash
+git clone https://github.com/your-username/your-project-name.git
+cd your-project-name
+npm install
+npm start
+
 ```
-
-- Replace `plugin:@typescript-eslint/recommended` to `plugin:@typescript-eslint/recommended-type-checked` or `plugin:@typescript-eslint/strict-type-checked`
-- Optionally add `plugin:@typescript-eslint/stylistic-type-checked`
-- Install [eslint-plugin-react](https://github.com/jsx-eslint/eslint-plugin-react) and add `plugin:react/recommended` & `plugin:react/jsx-runtime` to the `extends` list
