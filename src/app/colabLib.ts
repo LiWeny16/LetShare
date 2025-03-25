@@ -21,7 +21,7 @@ class RealTimeColab {
     private setMsgFromSharing: (msg: string | null) => void = () => { }
     private setFileFromSharing: (file: Blob | null) => void = () => { }
     public fileMetaInfo = { name: "default_received_file" }
-    
+
     private constructor() {
         const currentState = getStatesMemorable().memorable;
         RealTimeColab.userId =
@@ -94,24 +94,24 @@ class RealTimeColab {
         this.broadcastSignal({ type: "leave", id: this.getUniqId() });
         this.cleanUpConnections();
     }
-
     private cleanUpConnections(updateConnectedUsers?: (users: string[]) => void): void {
+        console.warn("🔌 WebSocket disconnected, cleaning up only WS-related state.");
+
+        // 清理 WebSocket 状态，但不要干掉 WebRTC
         if (this.ws) {
-            this.ws.onclose = null; // 避免重复触发 cleanUpConnections
+            this.ws.onclose = null;
             this.ws.close();
             this.ws = null;
         }
 
-        RealTimeColab.peers.forEach((peer) => peer.close());
-        RealTimeColab.peers.clear();
-        this.dataChannels.clear();
-        this.knownUsers.clear();
-        this.knownUsers.add(RealTimeColab.userId!);
+        // 注意：以下 WebRTC 不清理，保持现有 peer 连接和 dataChannel 不动
+        // 如果你确实要处理 WebRTC 断线，要从 onconnectionstatechange 单独处理
 
         if (updateConnectedUsers) {
             updateConnectedUsers(this.getAllUsers());
         }
     }
+
 
     private async handleSignal(
         event: MessageEvent,
@@ -221,6 +221,18 @@ class RealTimeColab {
         peer.ondatachannel = (event) => {
             this.setupDataChannel(event.channel, id);
         };
+        peer.oniceconnectionstatechange = () => {
+            console.log("ICE状态:", peer.iceConnectionState);
+        };
+
+        peer.onconnectionstatechange = () => {
+            console.log("连接状态:", peer.connectionState);
+            if (peer.connectionState === "disconnected" || peer.connectionState === "failed") {
+                alertUseMUI("WebRTC已断开，尝试重连", 2000, { kind: "error" });
+                this.connectToUser(id);
+            }
+        };
+
 
         if (id) {
             RealTimeColab.peers.set(id, peer);
@@ -352,6 +364,9 @@ class RealTimeColab {
             }
             this.dataChannels.delete(id);
             this.lastPongTimes.delete(id);
+        };
+        channel.onerror = (e) => {
+            console.error("Data channel error:", e);
         };
 
         this.dataChannels.set(id, channel);

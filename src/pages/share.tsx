@@ -148,6 +148,7 @@ export default function Settings(props: { open: boolean; }) {
                     await realTimeColab.sendMessageToUser(targetUserId, clipText ?? "读取剪切板失败");
                 }
             } else {
+                alertUseMUI("未选择发送内容", 2000, { kind: "info" });
                 // await realTimeColab.sendMessageToUser(targetUserId, "配对成功!");
             }
         } catch (error) {
