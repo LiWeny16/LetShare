@@ -10,7 +10,7 @@ const Footer = () => {
     const handleClose = () => setOpen(false);
 
     const shareUrl = 'https://bit.ly/4j0NA74';
-
+    const githubUrl = 'https://github.com/LiWeny16/LetShare'
     // const theme = useTheme(); // 获取 MUI 主题
     // const grayColor = theme.palette.text.secondary;
 
@@ -39,7 +39,7 @@ const Footer = () => {
                     <IconButton
                         aria-label="GitHub"
                         component="a"
-                        href={shareUrl}
+                        href={githubUrl}
                         target="_blank"
                         rel="noopener noreferrer"
                     >
