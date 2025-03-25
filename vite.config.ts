@@ -1,6 +1,8 @@
 import { defineConfig } from "vite"
 import react from "@vitejs/plugin-react"
 import viteCompression from "vite-plugin-compression"
+import { resolve } from "path"
+
 export default defineConfig({
   base: "./",
   build: {
@@ -28,6 +30,15 @@ export default defineConfig({
     assetsInlineLimit: 4096000, // 4000kb  超过会以base64字符串显示
     outDir: "docs", // 输出名称
     assetsDir: "static", // 静态资源目录
+  },
+  resolve: {
+    alias: {
+      "@App": resolve(__dirname, "./src/app"),
+      "@App/*": resolve(__dirname, "./src/app/*"),
+    },
+  },
+  server: {
+    host: "0.0.0.0",
   },
   plugins: [
     react(),

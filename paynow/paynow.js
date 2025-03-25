@@ -65,7 +65,7 @@ function crc16 (s) {
 
   return padLeft(((crc ^ 0) & 0xFFFF).toString(16).toUpperCase(), 4)
 }
-function generatePayNowStr(opts) {
+export function generatePayNowStr(opts) {
   const p = [
     { id: "00", value: "01" }, // ID 00: Payload Format Indicator (Fixed to '01')
     { id: "01", value: "11" }, // ID 01: Point of Initiation Method 11: static, 12: dynamic

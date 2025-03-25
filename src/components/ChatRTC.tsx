@@ -9,6 +9,7 @@ const WebRTCComponent: React.FC = () => {
 
   useEffect(() => {
     const ws = new WebSocket("wss://webrtc-wabmmfcxmo.cn-shanghai.fcapp.run")
+    // const ws = new WebSocket("ws://127.0.0.1:9000")
     socketRef.current = ws
 
     const createPeerConnection = async () => {
