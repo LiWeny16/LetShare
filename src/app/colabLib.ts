@@ -1,13 +1,13 @@
 import alertUseMUI from "./alert";
 
 // 获取存储的状态
-function getStatesMemorable(): { memorable: { localLANId: string } } {
+export function getStatesMemorable(): { memorable: { localLANId: string } } {
     const storedState = localStorage.getItem("memorableState");
     return storedState ? JSON.parse(storedState) : { memorable: { localLANId: "none" } };
 }
 
 // 更新存储的状态
-function changeStatesMemorable(newState: { memorable: { localLANId: string } }) {
+export function changeStatesMemorable(newState: { memorable: { localLANId: string } }) {
     localStorage.setItem("memorableState", JSON.stringify(newState));
 }
 
@@ -21,6 +21,7 @@ class RealTimeColab {
     private setMsgFromSharing: (msg: string | null) => void = () => { }
     private setFileFromSharing: (file: Blob | null) => void = () => { }
     public fileMetaInfo = { name: "default_received_file" }
+    
     private constructor() {
         const currentState = getStatesMemorable().memorable;
         RealTimeColab.userId =
@@ -44,6 +45,10 @@ class RealTimeColab {
 
     public getUniqId(): string | null {
         return RealTimeColab.userId;
+    }
+
+    public setUniqId(id: string) {
+        RealTimeColab.userId = id;
     }
 
     public async connect(
@@ -229,6 +234,7 @@ class RealTimeColab {
             const fullSignal = {
                 ...signal,
                 from: RealTimeColab.userId,
+                name: RealTimeColab.userId?.slice(0, 8), // ✅ 自动添加 name
             };
             this.ws.send(JSON.stringify(fullSignal));
         }
@@ -278,7 +284,7 @@ class RealTimeColab {
             // 启动心跳定时器
             heartbeatInterval = setInterval(() => {
                 if (channel.readyState === "open") {
-                    console.log("ping");    
+                    console.log("ping");
                     channel.send(JSON.stringify({ type: "ping" }));
                 }
             }, 2000); // 每 5 秒发送一次 ping
@@ -450,13 +456,8 @@ class RealTimeColab {
 
         sendNextChunk();
     }
-
-
-
-
-
-    private generateUUID(): string {
-        return "ID" + Math.random().toString(36).substring(2, 11);
+    public generateUUID(): string {
+        return "ID" + Math.random().toString(36).substring(2, 8);
     }
 
     public isConnected(): boolean {

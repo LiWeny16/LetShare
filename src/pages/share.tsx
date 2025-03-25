@@ -28,6 +28,7 @@ import { readClipboard, writeClipboard } from "@App/clipboard";
 import alertUseMUI from "@App/alert";
 import AlertPortal from "../components/Alert";
 import { Footer } from "../components/Footer";
+import EditableUserId from "../components/UserId";
 
 const url = "wss://md-server-md-server-bndnqhexdf.cn-hangzhou.fcapp.run";
 
@@ -107,7 +108,7 @@ export default function Settings(props: { open: boolean; }) {
                         setOpenDialog(true);
                     },
                     (list: string[]) => {
-                        const users = list.map((id) => ({ id, name: id.slice(0, 8) }));
+                        const users = list.map((id) => ({ id, name: id }));
                         setConnectedUsers(users);
                     }
                 ).catch(console.error);
@@ -147,7 +148,7 @@ export default function Settings(props: { open: boolean; }) {
                     await realTimeColab.sendMessageToUser(targetUserId, clipText ?? "读取剪切板失败");
                 }
             } else {
-                await realTimeColab.sendMessageToUser(targetUserId, "配对成功!");
+                // await realTimeColab.sendMessageToUser(targetUserId, "配对成功!");
             }
         } catch (error) {
             console.error("发送失败：", error);
@@ -168,7 +169,7 @@ export default function Settings(props: { open: boolean; }) {
                     setOpenDialog(true);
                 },
                 (list: string[]) => {
-                    const users = list.map((id) => ({ id, name: id.slice(0, 8) }));
+                    const users = list.map((id) => ({ id, name: id }));
                     setConnectedUsers(users);
                 }
             ).catch(console.error);
@@ -391,9 +392,10 @@ export default function Settings(props: { open: boolean; }) {
                     ))}
                 </Box>
 
-                <Typography variant="body2" color="textSecondary" align="center" sx={{ mt: 2 }}>
+                {/* <Typography variant="body2" color="textSecondary" align="center" sx={{ mt: 2 }}>
                     你的ID: {realTimeColab.getUniqId()}
-                </Typography>
+                </Typography> */}
+                <EditableUserId />
             </Dialog>
 
             <Dialog open={openDialog} onClose={() => setOpenDialog(false)}>

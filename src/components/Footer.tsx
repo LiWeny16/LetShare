@@ -31,7 +31,7 @@ const Footer = () => {
             >
                 {/* 左侧文字信息 */}
                 <Typography variant="body2" color="text.secondary">
-                    © 2025 LetShare Author Onion
+                    © 2025 LetShare Copyright Author Onion
                 </Typography>
 
                 {/* 右侧图标按钮组合 */}
@@ -53,7 +53,7 @@ const Footer = () => {
 
             {/* 弹出二维码对话框 */}
             <Dialog open={open} onClose={handleClose}>
-                <DialogTitle>扫码打开</DialogTitle>
+                <DialogTitle>分享·一触即发</DialogTitle>
                 {/* <DialogContent>
                     <Link href="https://letshare.fun/" target="_blank" rel="noopener noreferrer" underline="hover">
                         https://letshare.fun/
