@@ -31,7 +31,6 @@ import { Footer } from "../components/Footer";
 import EditableUserId from "../components/UserId";
 
 const url = "wss://md-server-md-server-bndnqhexdf.cn-hangzhou.fcapp.run";
-
 const settingsBodyContentBoxStyle = {
     transition: "background-color 0.4s ease, box-shadow 0.4s ease",
     position: "relative",
@@ -399,9 +398,10 @@ export default function Settings(props: { open: boolean; }) {
                 <EditableUserId />
             </Dialog>
 
-            <Dialog open={openDialog} onClose={() => setOpenDialog(false)}>
+            <Dialog
+                open={openDialog} onClose={() => setOpenDialog(false)}>
                 <DialogTitle>✨ 新分享</DialogTitle>
-                <DialogContent>
+                <DialogContent sx={{ width: { sx: 200, sm: 200, md: 400, lg: 400, } }} >
                     <DialogContentText>您有来自外部的消息，是否接受？</DialogContentText>
                     {msgFromSharing && (
                         <TextField
