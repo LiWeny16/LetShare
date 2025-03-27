@@ -429,7 +429,11 @@ export default function Settings(props: { open: boolean; }) {
                     )}
                 </DialogContent>
                 <DialogActions>
-                    <Button onClick={() => setOpenDialog(false)} color="secondary">拒绝</Button>
+                    <Button onClick={() => {
+                        setOpenDialog(false);
+                        setMsgFromSharing(null)
+                        setFileFromSharing(null)
+                    }} color="secondary">拒绝</Button>
                     <Button onClick={handleAcceptMessage} color="primary" autoFocus>接受</Button>
                 </DialogActions>
             </Dialog>
