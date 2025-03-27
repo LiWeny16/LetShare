@@ -275,6 +275,8 @@ export default function Settings(props: { open: boolean; }) {
             console.error("处理接受失败", e);
         } finally {
             setOpenDialog(false);
+            setMsgFromSharing(null)
+            setFileFromSharing(null)
             setTimeout(() => {
                 setFileFromSharing(null);
                 setMsgFromSharing(null);
@@ -399,7 +401,13 @@ export default function Settings(props: { open: boolean; }) {
             </Dialog>
 
             <Dialog
-                open={openDialog} onClose={() => setOpenDialog(false)}>
+                open={openDialog} onClose={() => {
+                    setOpenDialog(false)
+                    setTimeout(() => {
+                        setMsgFromSharing(null)
+                        setFileFromSharing(null)
+                    }, 300)
+                }}>
                 <DialogTitle>✨ 新分享</DialogTitle>
                 <DialogContent sx={{ width: { sx: 200, sm: 200, md: 400, lg: 400, } }} >
                     <DialogContentText>您有来自外部的消息，是否接受？</DialogContentText>
