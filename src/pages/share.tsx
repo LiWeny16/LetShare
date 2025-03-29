@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import Dialog from "@mui/material/Dialog";
 import DevicesIcon from "@mui/icons-material/Devices";
 import CachedIcon from '@mui/icons-material/Cached';
-
+import DownloadIcon from "@mui/icons-material/Download";
 import {
     Box,
     Button,
@@ -15,8 +15,9 @@ import {
     Badge,
     CircularProgress,
     TextField,
-    LinearProgress,
     Backdrop,
+    Fab,
+    Fade,
 } from "@mui/material";
 import realTimeColab from "@App/colabLib";
 import FileIcon from "@mui/icons-material/Description";
@@ -30,6 +31,7 @@ import AlertPortal from "../components/Alert";
 import { Footer } from "../components/Footer";
 import EditableUserId from "../components/UserId";
 import StartupPage from "../components/StartupPage";
+import DownloadDrawer from "../components/Download";
 
 const url = "wss://md-server-md-server-bndnqhexdf.cn-hangzhou.fcapp.run";
 // const url = "ws://192.168.1.13:9000";
@@ -58,13 +60,13 @@ type ConnectedUser = {
     id: string;
     name?: string;
 };
-
+export const buttonStyleNormal = {
+    borderRadius: "5px",
+    borderColor: "#e0e0e0",
+};
 export default function Settings() {
-    const buttonStyle = {
-        borderRadius: "5px",
-        borderColor: "#e0e0e0",
-    };
 
+    const [abortFileTransfer, setAbortFileTransfer] = React.useState<any>(() => { });
     const [msgFromSharing, setMsgFromSharing] = useState<string | null>(null);
     const [fileFromSharing, setFileFromSharing] = useState<Blob | null>(null);
     const [openDialog, setOpenDialog] = useState(false);
@@ -78,8 +80,15 @@ export default function Settings() {
     const [fileTransferProgress, setFileTransferProgress] = useState<number | null>(null);
     const [loadingPage, setLoadingPage] = useState(true);
     const [startUpVisibility, setStartUpVisibility] = useState(true);
+    const [downloadPageState, setDwnloadPageState] = useState(false);
+    const [isDraggingOver, setIsDraggingOver] = React.useState(false);
+
     const searchButtonRef = useRef(null)
+    const mainDialogRef = useRef<HTMLDivElement | null>(null);
     const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
+        event.preventDefault()
+        event.stopPropagation()
+        console.log(event);
         const file = event.target.files?.[0] || null;
         if (file) {
             setSelectedFile(file);
@@ -138,14 +147,21 @@ export default function Settings() {
 
     const handleClickOtherClients = async (_e: any, targetUserId: string) => {
         try {
-            await realTimeColab.connectToUser(targetUserId);
+            // await realTimeColab.connectToUser(targetUserId);
             if (selectedButton === "file" && selectedFile) {
-                await realTimeColab.sendFileToUser(targetUserId, selectedFile, (progress) => {
+                if (realTimeColab.isSendingFile) {
+                    alertUseMUI("有任务正在进行中！", 2000, { kind: "info" })
+                    setDwnloadPageState(true)
+                    return
+                }
+                setDwnloadPageState(true)
+                let abort = await realTimeColab.sendFileToUser(targetUserId, selectedFile, (progress) => {
                     setFileTransferProgress(progress);
                     if (progress >= 100) {
                         setTimeout(() => setFileTransferProgress(null), 1500); // 自动隐藏
                     }
                 });
+                setAbortFileTransfer(() => abort)
 
             } else if (selectedButton === "text" && selectedText) {
                 await realTimeColab.sendMessageToUser(targetUserId, selectedText);
@@ -256,7 +272,7 @@ export default function Settings() {
                     }
                 }
             }
-        }, 2000); // 每5秒检测一次
+        }, 3500); // 每5秒检测一次
 
         return () => clearInterval(interval);
     }, [connectedUsers]);
@@ -280,8 +296,6 @@ export default function Settings() {
             console.error("处理接受失败", e);
         } finally {
             setOpenDialog(false);
-            setMsgFromSharing(null)
-            setFileFromSharing(null)
             setTimeout(() => {
                 setFileFromSharing(null);
                 setMsgFromSharing(null);
@@ -289,13 +303,60 @@ export default function Settings() {
         }
     };
 
+    const handleDragOver = (e: React.DragEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+    };
+
+    const handleDragEnter = (e: React.DragEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsDraggingOver(true);
+    };
+
+    const handleDragLeave = (e: React.DragEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+
+        // 只在真正离开 Box 时才关闭遮罩（避免嵌套元素冒泡导致 flicker）
+        const rect = mainDialogRef.current?.getBoundingClientRect();
+        if (
+            rect &&
+            (e.clientX < rect.left ||
+                e.clientX > rect.right ||
+                e.clientY < rect.top ||
+                e.clientY > rect.bottom)
+        ) {
+            setIsDraggingOver(false);
+        }
+    };
+
+    const handleDrop = (e: React.DragEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsDraggingOver(false);
+
+        const files = e.dataTransfer.files;
+        if (files.length > 0) {
+            // 你已有的上传逻辑：
+            handleFileSelect({ target: { files } } as unknown as React.ChangeEvent<HTMLInputElement>);
+        }
+    };
+
     return (
         <>
-            <Dialog
-                open={startUpVisibility ? false : true}
-                hideBackdrop
-                PaperProps={{
-                    sx: {
+            {!startUpVisibility && (
+                <Box
+                    ref={mainDialogRef}
+                    onDragEnter={handleDragEnter}
+                    onDragLeave={handleDragLeave}
+                    onDragOver={handleDragOver}
+                    onDrop={handleDrop}
+                    sx={{
+                        position: "fixed",
+                        top: "50%",
+                        left: "50%",
+                        transform: "translate(-50%, -50%)",
                         width: { xs: "75%", sm: "80%", md: "60%" },
                         maxWidth: "900px",
                         height: "70vh",
@@ -303,107 +364,151 @@ export default function Settings() {
                         m: "auto",
                         boxShadow: 8,
                         borderRadius: 2,
-                        overflow: "hidden",
+                        backgroundColor: "background.paper",
+                        zIndex: (theme) => theme.zIndex.modal,
                         display: "flex",
                         flexDirection: "column",
                         justifyContent: "space-between",
-                    },
-                }}
-            >
-                <Footer />
-
-                <Box sx={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
-                    <Badge
-                        color="primary"
-                        badgeContent={selectedButton === "file" ? 1 : 0}
-                        overlap="circular"
-                        sx={badgeStyle}
-                    >
-                        <Button
-                            variant="outlined"
-                            sx={buttonStyle}
-                            startIcon={<FileIcon />}
-                            onClick={() => document.getElementById("file-input")?.click()}
-                        >
-                            文件
-                        </Button>
-                    </Badge>
-
-                    <input id="file-input" type="file" hidden onChange={handleFileSelect} />
-
-                    <Button disabled variant="outlined" startIcon={<FolderIcon />} sx={buttonStyle}>
-                        文件夹
-                    </Button>
-
-                    <Badge
-                        color="primary"
-                        badgeContent={selectedButton === "text" ? 1 : 0}
-                        overlap="circular"
-                        sx={badgeStyle}
-                    >
-                        <Button
-                            onClick={handleTextSelect}
-                            variant="outlined"
-                            startIcon={<TextIcon />}
-                            sx={buttonStyle}
-                        >
-                            文本
-                        </Button>
-                    </Badge>
-
-                    <Badge
-                        color="primary"
-                        badgeContent={selectedButton === "clip" ? 1 : 0}
-                        overlap="circular"
-                        sx={badgeStyle}
-                    >
-                        <Button
-                            onClick={() => setSelectedButton("clip")}
-                            variant="outlined"
-                            startIcon={<ClipboardIcon />}
-                            sx={buttonStyle}
-                        >
-                            剪贴板
-                        </Button>
-                    </Badge>
-                </Box>
-
-
-                <Box sx={{ mt: 3 }}>
-                    <Button
-                        ref={searchButtonRef}
-                        onClick={handleClickSearch}
-                        variant="contained"
-                        endIcon={
-                            loading ? <CircularProgress size={20} color="inherit" /> : <CachedIcon />
-                        }
-                        disabled={loading}
-                    >
-                        {loading ? '搜索同WIFI下用户' : '搜索同WIFI下用户'}
-                    </Button>
-                </Box>
-
-                <Divider sx={{ my: 2 }} />
-
-                <Box sx={{ flexGrow: 1, overflowY: "auto" }}>
-                    {connectedUsers.map((user) => (
-                        <Box key={user.id} sx={{ ...settingsBodyContentBoxStyle, width: "93%" }} onClick={(e) => {
-                            // handleClickRippleBox(e);
-                            handleClickOtherClients(e, user.id);
-                        }}>
-                            <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-                                <DevicesIcon />
-                                <Typography>{user.name}</Typography>
+                    }}
+                >
+                    {isDraggingOver && (
+                        <Fade in={isDraggingOver} timeout={400} unmountOnExit>
+                            <Box
+                                sx={{
+                                    position: "absolute",
+                                    top: 0,
+                                    left: 0,
+                                    width: "100%",
+                                    height: "100%",
+                                    zIndex: 1000,
+                                    backgroundColor: "rgba(0, 0, 0, 0.5)",
+                                    borderRadius: 2,
+                                    display: "flex",
+                                    alignItems: "center",
+                                    justifyContent: "center",
+                                    pointerEvents: "none",
+                                }}
+                            >
+                                <Typography variant="h6" color="white">
+                                    松手上传文件
+                                </Typography>
                             </Box>
-                        </Box>
-                    ))}
-                </Box>
+                        </Fade>
+                    )}
+                    <Footer />
 
-                {/* <Typography variant="body2" color="textSecondary" align="center" sx={{ mt: 2 }}>
-                    你的ID: {realTimeColab.getUniqId()}
-                </Typography> */}
-                <EditableUserId />
-            </Dialog>
+                    <Box sx={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
+                        <Badge
+                            color="primary"
+                            badgeContent={selectedButton === "file" ? 1 : 0}
+                            overlap="circular"
+                            sx={badgeStyle}
+                        >
+                            <Button
+                                variant="outlined"
+                                sx={buttonStyleNormal}
+                                startIcon={<FileIcon />}
+                                onClick={() => {
+                                    const input = document.getElementById("file-input") as HTMLInputElement;
+                                    if (input) {
+                                        input.value = ""; // <-- 关键点：重置 value
+                                        input.click();
+                                    }
+                                }}
+
+                            >
+                                文件
+                            </Button>
+                        </Badge>
+
+                        <input id="file-input" type="file" hidden onChange={handleFileSelect} />
+
+                        <Button disabled variant="outlined" startIcon={<FolderIcon />} sx={buttonStyleNormal}>
+                            文件夹
+                        </Button>
+
+                        <Badge
+                            color="primary"
+                            badgeContent={selectedButton === "text" ? 1 : 0}
+                            overlap="circular"
+                            sx={badgeStyle}
+                        >
+                            <Button
+                                onClick={handleTextSelect}
+                                variant="outlined"
+                                startIcon={<TextIcon />}
+                                sx={buttonStyleNormal}
+                            >
+                                文本
+                            </Button>
+                        </Badge>
+
+                        <Badge
+                            color="primary"
+                            badgeContent={selectedButton === "clip" ? 1 : 0}
+                            overlap="circular"
+                            sx={badgeStyle}
+                        >
+                            <Button
+                                onClick={() => setSelectedButton("clip")}
+                                variant="outlined"
+                                startIcon={<ClipboardIcon />}
+                                sx={buttonStyleNormal}
+                            >
+                                剪贴板
+                            </Button>
+                        </Badge>
+                    </Box>
+
+                    <Box sx={{ mt: 3 }}>
+                        <Button
+                            ref={searchButtonRef}
+                            onClick={handleClickSearch}
+                            variant="contained"
+                            endIcon={
+                                loading ? <CircularProgress size={20} color="inherit" /> : <CachedIcon />
+                            }
+                            disabled={loading}
+                        >
+                            {loading ? '搜索同WIFI下用户' : '搜索同WIFI下用户'}
+                        </Button>
+                    </Box>
+
+                    <Divider sx={{ my: 2 }} />
+
+                    <Box sx={{ flexGrow: 1, overflowY: "auto" }}>
+                        {connectedUsers.map((user) => (
+                            <Box
+                                key={user.id}
+                                sx={{ ...settingsBodyContentBoxStyle, width: "93%" }}
+                                onClick={(e) => handleClickOtherClients(e, user.id)}
+                            >
+                                <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                                    <DevicesIcon />
+                                    <Typography>{user.name}</Typography>
+                                </Box>
+                            </Box>
+                        ))}
+                    </Box>
+
+                    {/* 悬浮按钮 */}
+                    <Fab
+                        color="primary"
+                        onClick={() => { setDwnloadPageState(true) }}
+                        sx={{
+                            position: "absolute",
+                            bottom: 65,
+                            right: 35,
+                            zIndex: (theme) => theme.zIndex.modal + 1,
+                        }}
+                    >
+                        <DownloadIcon />
+                    </Fab>
+
+                    <EditableUserId />
+                </Box>
+            )}
+
 
             <Dialog
                 open={openDialog} onClose={() => {
@@ -513,21 +618,12 @@ export default function Settings() {
                         确认
                     </Button>
                 </DialogActions>
+
             </Dialog>
-            {fileTransferProgress !== null && (
-                <Box sx={{ width: '100%', mt: 2 }}>
-                    <Typography variant="body2" color="textSecondary" gutterBottom>
-                        正在发送文件: {fileTransferProgress.toFixed(0)}%
-                    </Typography>
-                    <LinearProgress
-                        variant="determinate"
-                        value={fileTransferProgress}
-                        sx={{ height: 8, borderRadius: 5 }}
-                    />
-                </Box>
-            )}
+
+            <DownloadDrawer abortFileTransfer={abortFileTransfer} onClose={() => { setDwnloadPageState(false) }} open={downloadPageState} progress={fileTransferProgress} setProgress={setFileTransferProgress} />
             <Backdrop
-                sx={{ color: '#fff', zIndex: (theme) => theme.zIndex.drawer + 99 }}
+                sx={{ color: '#fff', zIndex: (theme) => theme.zIndex.drawer + 9999 }}
                 open={loadingPage}
             >
                 <CircularProgress color="inherit" />

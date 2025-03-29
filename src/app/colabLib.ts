@@ -19,6 +19,8 @@ class RealTimeColab {
     private updateConnectedUsers: (list: string[]) => void = () => { }
     public fileMetaInfo = { name: "default_received_file" }
     private lastPongTimes: Map<string, number> = new Map();
+    public isSendingFile = false
+
     public receivingFile: {
         name: string;
         size: number;
@@ -646,20 +648,30 @@ class RealTimeColab {
         id: string,
         file: File,
         onProgress?: (progress: number) => void
-    ): Promise<void> {
+    ): Promise<() => void> {
         const channel = this.dataChannels.get(id);
         if (!channel || channel.readyState !== "open") {
             console.error(`Data channel with user ${id} is not available.`);
-            return;
+            return () => { };
         }
 
-
         const totalChunks = Math.ceil(file.size / this.chunkSize);
-        const maxConcurrentReads = 10; // 控制最多同时读取的切片数
+        const maxConcurrentReads = 10;
         let chunksSent = 0;
         let currentIndex = 0;
+        let aborted = false;
 
-        // 发送文件元数据（文本形式）
+        const activeTasks: Promise<void>[] = [];
+
+        // 🧨 返回的中断函数
+        const abort = () => {
+            aborted = true;
+            activeTasks.length = 0; // 清空活跃任务列表
+            this.isSendingFile = false
+            console.warn("⛔️ 文件传输已被中断");
+        };
+
+        // 元信息
         const metaMessage = {
             type: "file-meta",
             name: file.name,
@@ -669,9 +681,15 @@ class RealTimeColab {
         channel.send(JSON.stringify(metaMessage));
         console.log("已发送文件元数据:", metaMessage);
 
-        // 读取指定切片，返回 ArrayBuffer 数据
         const readChunk = (index: number): Promise<ArrayBuffer> => {
             return new Promise((resolve, reject) => {
+                if (aborted) {
+                    if (onProgress) {
+                        // onProgress(0);
+                    }
+                    return reject(new Error("读取中止"));
+                }
+
                 const offset = index * this.chunkSize;
                 const slice = file.slice(offset, offset + this.chunkSize);
                 const reader = new FileReader();
@@ -687,43 +705,48 @@ class RealTimeColab {
             });
         };
 
-        // 读取并发送单个切片
         const sendChunk = async (index: number) => {
+            if (aborted) return;
+
             try {
                 const chunkBuffer = await readChunk(index);
-                // 构造包含头部和数据的 ArrayBuffer：
-                // 头部固定8字节，前4字节为切片索引，后4字节为切片数据长度
+                if (aborted) return;
+
                 const headerSize = 8;
                 const bufferWithHeader = new ArrayBuffer(headerSize + chunkBuffer.byteLength);
                 const view = new DataView(bufferWithHeader);
-                view.setUint32(0, index);                // 4字节切片索引
-                view.setUint32(4, chunkBuffer.byteLength); // 4字节数据长度
-
-                // 复制数据部分
+                view.setUint32(0, index);
+                view.setUint32(4, chunkBuffer.byteLength);
                 new Uint8Array(bufferWithHeader, headerSize).set(new Uint8Array(chunkBuffer));
 
-                // 检查缓冲区是否已满，若满则暂停发送
-                if (channel.bufferedAmount < 256 * 1024) {  // 设置缓冲区阈值
-                    channel.send(bufferWithHeader);
-                    chunksSent++;
-                    if (onProgress) {
-                        onProgress(Math.min((chunksSent / totalChunks) * 100, 100));
+                const send = () => {
+                    if (aborted) return;
+                    if (channel.bufferedAmount < 256 * 1024) {
+                        channel.send(bufferWithHeader);
+                        chunksSent++;
+                        if (onProgress) {
+                            let progress = Math.min((chunksSent / totalChunks) * 100, 100)
+                            onProgress(progress);
+                            if (progress >= 100 || progress === null || progress === 0) {
+                                this.isSendingFile = false
+
+                            } else { this.isSendingFile = true }
+                        }
+                    } else {
+                        setTimeout(send, 100); // 缓冲区满了，重试
                     }
-                    console.log(`已发送切片 ${index}，大小：${chunkBuffer.byteLength}`);
-                } else {
-                    console.warn(`缓冲区满，暂停发送切片 ${index}`);
-                    // 暂停发送，直到缓冲区有足够空间
-                    setTimeout(() => sendChunk(index), 100);
-                }
+                };
+
+                send();
             } catch (err) {
-                console.error(`切片 ${index} 发送失败:`, err);
+                if (!aborted) {
+                    console.error(`切片 ${index} 发送失败:`, err);
+                }
             }
         };
 
-        // 控制并发的队列
-        const activeTasks: Promise<void>[] = [];
         const enqueue = async () => {
-            while (currentIndex < totalChunks) {
+            while (currentIndex < totalChunks && !aborted) {
                 if (activeTasks.length >= maxConcurrentReads) {
                     await Promise.race(activeTasks);
                 }
@@ -739,14 +762,21 @@ class RealTimeColab {
             }
         };
 
+        // 🔁 等待所有切片任务完成（或中止）
         await enqueue();
-        await Promise.all(activeTasks);
+        await Promise.allSettled(activeTasks);
 
-        if (onProgress) {
-            onProgress(100);
+        // if (!aborted && onProgress) {
+        //     onProgress(100);
+        // }
+
+        if (!aborted) {
+            console.log("✅ 文件发送完成");
         }
-        console.log("✅ 文件发送完成");
+
+        return abort;
     }
+
 
     public generateUUID(): string {
         return Math.random().toString(36).substring(2, 8);
