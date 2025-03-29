@@ -10,7 +10,7 @@ export default function Index() {
   return (
     <HashRouter>
       <Routes>
-        <Route path="/" element={<Share open={true} />} />
+        <Route path="/" element={<Share />} />
         {/* <Route path="/i" element={<Home />} /> */}
         {/* <Route path="/chat" element={<Chat />} /> */}
         <Route path="/paynow" element={<PayNowComponent />}></Route>

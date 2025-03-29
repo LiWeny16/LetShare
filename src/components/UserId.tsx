@@ -39,7 +39,6 @@ const EditableUserId = ({ onEditDone }: { onEditDone?: (newId: string) => void }
         originalIdRef.current = cleanId;
         setError(false);
         setEditing(false);
-
         if (onEditDone) onEditDone(cleanId);
     };
 

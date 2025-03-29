@@ -29,6 +29,7 @@ import alertUseMUI from "@App/alert";
 import AlertPortal from "../components/Alert";
 import { Footer } from "../components/Footer";
 import EditableUserId from "../components/UserId";
+import StartupPage from "../components/StartupPage";
 
 const url = "wss://md-server-md-server-bndnqhexdf.cn-hangzhou.fcapp.run";
 // const url = "ws://192.168.1.13:9000";
@@ -58,7 +59,7 @@ type ConnectedUser = {
     name?: string;
 };
 
-export default function Settings(props: { open: boolean; }) {
+export default function Settings() {
     const buttonStyle = {
         borderRadius: "5px",
         borderColor: "#e0e0e0",
@@ -76,6 +77,7 @@ export default function Settings(props: { open: boolean; }) {
     const [textInput, setTextInput] = useState("");
     const [fileTransferProgress, setFileTransferProgress] = useState<number | null>(null);
     const [loadingPage, setLoadingPage] = useState(true);
+    const [startUpVisibility, setStartUpVisibility] = useState(true);
     const searchButtonRef = useRef(null)
     const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
         const file = event.target.files?.[0] || null;
@@ -162,28 +164,26 @@ export default function Settings(props: { open: boolean; }) {
             console.error("发送失败：", error);
         }
     };
-
     useEffect(() => {
-        if (props.open) {
-            realTimeColab.connect(
-                url,
-                (incomingMsg: string | null) => {
-                    // 当接收到新消息时，显示对话框以便用户决定是否接受
-                    setMsgFromSharing(incomingMsg);
-                    setOpenDialog(true);
-                },
-                (incomingFile: Blob | null) => {
-                    setFileFromSharing(incomingFile);
-                    setOpenDialog(true);
-                },
-                updateConnectedUsers
-            ).catch(console.error);
-        }
+        setTimeout(() => { setStartUpVisibility(false) }, 1000)
+        realTimeColab.connect(
+            url,
+            (incomingMsg: string | null) => {
+                // 当接收到新消息时，显示对话框以便用户决定是否接受
+                setMsgFromSharing(incomingMsg);
+                setOpenDialog(true);
+            },
+            (incomingFile: Blob | null) => {
+                setFileFromSharing(incomingFile);
+                setOpenDialog(true);
+            },
+            updateConnectedUsers
+        ).catch(console.error);
 
         return () => {
             realTimeColab.disconnect(setMsgFromSharing, setFileFromSharing);
         };
-    }, [props.open]);
+    }, [startUpVisibility]);
     useEffect(() => {
         if (msgFromSharing || fileFromSharing) {
             setOpenDialog(true);
@@ -292,7 +292,7 @@ export default function Settings(props: { open: boolean; }) {
     return (
         <>
             <Dialog
-                open={props.open}
+                open={startUpVisibility ? false : true}
                 hideBackdrop
                 PaperProps={{
                     sx: {
@@ -476,6 +476,7 @@ export default function Settings(props: { open: boolean; }) {
 
                 <DialogContent>
                     <TextField
+                        autoFocus={true}
                         value={textInput}
                         onChange={(e) => setTextInput(e.target.value)}
                         multiline
@@ -526,11 +527,12 @@ export default function Settings(props: { open: boolean; }) {
                 </Box>
             )}
             <Backdrop
-                sx={{ color: '#fff', zIndex: (theme) => theme.zIndex.drawer + 999 }}
+                sx={{ color: '#fff', zIndex: (theme) => theme.zIndex.drawer + 99 }}
                 open={loadingPage}
             >
                 <CircularProgress color="inherit" />
             </Backdrop>
+            <StartupPage open={startUpVisibility} />
             <AlertPortal />
         </>
     );
