@@ -31,6 +31,7 @@ import { Footer } from "../components/Footer";
 import EditableUserId from "../components/UserId";
 
 const url = "wss://md-server-md-server-bndnqhexdf.cn-hangzhou.fcapp.run";
+// const url = "ws://192.168.1.13:9000";
 const settingsBodyContentBoxStyle = {
     transition: "background-color 0.4s ease, box-shadow 0.4s ease",
     position: "relative",
@@ -89,7 +90,17 @@ export default function Settings(props: { open: boolean; }) {
         setTextInputDialogOpen(true);  // 打开输入弹窗
     };
 
+    const updateConnectedUsers = (list: string[]) => {
+        const users = list.map((fullId) => {
+            const parts = fullId.split(":");
+            return {
+                id: fullId,
+                name: parts[0] || fullId, // 万一没冒号，就用完整 ID
+            };
+        });
 
+        setConnectedUsers(users);
+    }
     async function handleClickSearch() {
         setLoading(true);
         try {
@@ -106,10 +117,7 @@ export default function Settings(props: { open: boolean; }) {
                         setFileFromSharing(incomingFile);
                         setOpenDialog(true);
                     },
-                    (list: string[]) => {
-                        const users = list.map((id) => ({ id, name: id }));
-                        setConnectedUsers(users);
-                    }
+                    updateConnectedUsers
                 ).catch(console.error);
             }
             realTimeColab.broadcastSignal({
@@ -168,10 +176,7 @@ export default function Settings(props: { open: boolean; }) {
                     setFileFromSharing(incomingFile);
                     setOpenDialog(true);
                 },
-                (list: string[]) => {
-                    const users = list.map((id) => ({ id, name: id }));
-                    setConnectedUsers(users);
-                }
+                updateConnectedUsers
             ).catch(console.error);
         }
 
@@ -251,7 +256,7 @@ export default function Settings(props: { open: boolean; }) {
                     }
                 }
             }
-        }, 5000); // 每5秒检测一次
+        }, 2000); // 每5秒检测一次
 
         return () => clearInterval(interval);
     }, [connectedUsers]);

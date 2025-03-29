@@ -1,15 +1,6 @@
 import alertUseMUI from "./alert";
 
-// 获取存储的状态
-export function getStatesMemorable(): { memorable: { localLANId: string } } {
-    const storedState = localStorage.getItem("memorableState");
-    return storedState ? JSON.parse(storedState) : { memorable: { localLANId: "none" } };
-}
 
-// 更新存储的状态
-export function changeStatesMemorable(newState: { memorable: { localLANId: string } }) {
-    localStorage.setItem("memorableState", JSON.stringify(newState));
-}
 interface NegotiationState {
     isNegotiating: boolean;    // 是否正在进行一次Offer/Answer
     queue: any[];              // 暂存要处理的Offer或Answer
@@ -18,6 +9,7 @@ interface NegotiationState {
 class RealTimeColab {
     private static instance: RealTimeColab | null = null;
     private static userId: string | null = null;
+    private static uniqId: string | null = null
     private static peers: Map<string, RTCPeerConnection> = new Map();
     private dataChannels: Map<string, RTCDataChannel> = new Map();
     private ws: WebSocket | null = null;
@@ -41,21 +33,32 @@ class RealTimeColab {
     private negotiationMap = new Map<string, NegotiationState>();
     private discoverQueue: any[] = [];
     private discoverLock = false; // 用于保证同一时刻只处理一个 discover
-
-
-    private constructor() {
-        const currentState = getStatesMemorable().memorable;
-        RealTimeColab.userId =
-            currentState.localLANId !== "none"
-                ? currentState.localLANId
-                : this.generateUUID();
-
-        if (currentState.localLANId === "none") {
-            changeStatesMemorable({ memorable: { localLANId: RealTimeColab.userId } });
-        }
-        this.knownUsers.add(RealTimeColab.userId!); // Add self to known users
+    // 获取存储的状态
+    public getStatesMemorable(): { memorable: { localLANId: string } } {
+        const storedState = localStorage.getItem("memorableState");
+        return storedState ? JSON.parse(storedState) : { memorable: { localLANId: "none" } };
     }
 
+    // 更新存储的状态
+    public changeStatesMemorable(newState: { memorable: { localLANId: string } }) {
+        localStorage.setItem("memorableState", JSON.stringify(newState));
+    }
+    private constructor() {
+        const storedState = this.getStatesMemorable();
+        let userId = storedState.memorable.localLANId;
+
+        const isNewUser = userId === "none";
+
+        if (isNewUser) {
+            userId = this.generateUUID();
+            this.changeStatesMemorable({ memorable: { localLANId: userId } });
+        }
+
+        RealTimeColab.userId = userId;
+        RealTimeColab.uniqId = userId + ":" + this.generateUUID();
+
+        this.knownUsers.add(RealTimeColab.uniqId!);
+    }
 
     public static getInstance(): RealTimeColab {
         if (!RealTimeColab.instance) {
@@ -65,11 +68,17 @@ class RealTimeColab {
     }
 
     public getUniqId(): string | null {
+        return RealTimeColab.uniqId;
+    }
+    public getUserId(): string | null {
         return RealTimeColab.userId;
     }
-
-    public setUniqId(id: string) {
+    public setUserId(id: string) {
         RealTimeColab.userId = id;
+        this.changeStatesMemorable({ memorable: { localLANId: id } });
+    }
+    public setUniqId(id: string) {
+        RealTimeColab.uniqId = id;
     }
 
     public async connect(
@@ -118,33 +127,27 @@ class RealTimeColab {
     }
     private cleanUpConnections(): void {
         console.warn("🔌 WebSocket disconnected, cleaning up only WS-related state.");
-
         // 清理 WebSocket 状态，但不要干掉 WebRTC
         if (this.ws) {
             this.ws.onclose = null;
             this.ws.close();
             this.ws = null;
         }
-
-        // 注意：以下 WebRTC 不清理，保持现有 peer 连接和 dataChannel 不动
-        // 如果你确实要处理 WebRTC 断线，要从 onconnectionstatechange 单独处理
-
         if (this.updateConnectedUsers) {
             this.updateConnectedUsers(this.getAllUsers());
         }
     }
 
 
-    private async handleSignal(
-        event: MessageEvent,
-    ): Promise<void> {
-        const reader = new FileReader();
-        reader.readAsText(event.data, "utf-8");
-        reader.onload = async () => {
-            const data = JSON.parse(reader.result as string);
+    private async handleSignal(event: MessageEvent): Promise<void> {
+        try {
+            const data = JSON.parse(event.data); // ✅ 不需要 FileReader
             if (!data) return;
 
             switch (data.type) {
+                case "discover":
+                    await this.handleDiscover(data);
+                    break;
                 case "offer":
                     await this.handleOffer(data);
                     break;
@@ -154,17 +157,17 @@ class RealTimeColab {
                 case "candidate":
                     await this.handleCandidate(data);
                     break;
-                case "discover":
-                    await this.handleDiscover(data);
-                    break;
                 case "leave":
                     this.handleLeave(data);
                     break;
                 default:
                     console.warn("Unknown message type", data.type);
             }
-        };
+        } catch (err) {
+            console.error("🚨 Failed to parse WebSocket message:", event.data, err);
+        }
     }
+
 
     private async handleDiscover(data: any) {
         const fromId = data.id;
@@ -172,15 +175,6 @@ class RealTimeColab {
 
         // 如果对方已经在 knownUsers 中，就说明我们已经处理过，不必二次处理
         if (this.knownUsers.has(fromId)) {
-            // 但如果对方还需要 reply discover，也可以做一次轻量回复
-            // if (!data.isReply && !data.processed) {
-            //     this.broadcastSignal({
-            //         type: "discover",
-            //         id: this.getUniqId(),
-            //         isReply: true,
-            //         processed: true
-            //     });
-            // }
             return;
         }
 
@@ -209,7 +203,7 @@ class RealTimeColab {
                 this.knownUsers.add(fromId);
 
                 // 做一下随机延迟，减少与对方对撞发起连接
-                await new Promise(res => setTimeout(res, Math.random() * 1000));
+                await new Promise(res => setTimeout(res, Math.random() * 500));
 
                 // 单向连接策略
                 if (fromId > this.getUniqId()!) {
@@ -218,6 +212,7 @@ class RealTimeColab {
                 }
 
                 // 处理 discover 回复
+                alertUseMUI("收到链接请求", 2000, { kind: "success" })
                 if (!data.isReply && !data.processed) {
                     this.broadcastSignal({
                         type: "discover",
@@ -325,8 +320,7 @@ class RealTimeColab {
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
             const fullSignal = {
                 ...signal,
-                from: RealTimeColab.userId,
-                name: RealTimeColab.userId?.slice(0, 8), // ✅ 自动添加 name
+                from: this.getUniqId(),
             };
             this.ws.send(JSON.stringify(fullSignal));
         }
@@ -613,7 +607,7 @@ class RealTimeColab {
                         console.log(`Retrying connection to ${id}`);
                         this.connectToUser(id);
                     }
-                }, 5000);
+                }, 2000);
             }
         } finally {
             this.connectionQueue.delete(id);
@@ -755,7 +749,7 @@ class RealTimeColab {
     }
 
     public generateUUID(): string {
-        return "ID" + Math.random().toString(36).substring(2, 8);
+        return Math.random().toString(36).substring(2, 8);
     }
 
     public isConnected(): boolean {
