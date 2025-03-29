@@ -115,6 +115,3 @@ const url = "ws://localhost:9000";
 
 MIT License © 2025
 
----
-
-Let me know if you want this tailored for deployment (e.g., Vercel, Netlify) or want to generate badges, a Chinese version, or a full `package.json` starter template.
