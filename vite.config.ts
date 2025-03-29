@@ -42,8 +42,8 @@ export default defineConfig({
   },
   plugins: [
     react(),
-    viteCompression({
-      threshold: 16000, // 对大于 32kb 的文件进行压缩
-    }),
+    // viteCompression({
+    //   threshold: 16000, // 对大于 32kb 的文件进行压缩
+    // }),
   ],
 })
