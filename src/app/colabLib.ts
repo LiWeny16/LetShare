@@ -261,6 +261,11 @@ class RealTimeColab {
             iceServers: [
                 { urls: "stun:stun.l.google.com:19302" },
                 // 添加备用STUN服务器
+                { urls: "stun:stun.counterpath.net" },
+                { urls: "stun:stun.internetcalls.com" },
+                { urls: "stun:stun.voip.aebc.com" },
+                { urls: "stun:stun.voipbuster.com" },
+                { urls: "stun:stun.xten.com" },
                 { urls: "stun:global.stun.twilio.com:3478" }
             ],
             iceTransportPolicy: "all",
@@ -761,6 +766,46 @@ class RealTimeColab {
         return this.getAllUsers();
     }
 }
+
+// async function testSTUNServers(stunServers) {
+//     for (const stunServer of stunServers) {
+//         try {
+//             console.log(`Testing STUN server: ${stunServer}`);
+//             const pc = new RTCPeerConnection({
+//                 iceServers: [{ urls: `stun:${stunServer}` }]
+//             });
+
+//             const timeout = new Promise((resolve) => setTimeout(() => resolve('timeout'), 5000)); // 5s 超时
+//             const testPromise = new Promise((resolve) => {
+//                 pc.onicecandidate = (event) => {
+//                     if (event.candidate) {
+//                         const candidate = event.candidate.candidate;
+//                         if (candidate.includes("srflx")) {
+//                             resolve(`✅ STUN ${stunServer} is WORKING. Public IP: ${candidate.split(" ")[4]}`);
+//                         }
+//                     }
+//                 };
+
+//                 pc.createDataChannel("test");
+//                 pc.createOffer()
+//                     .then((offer) => pc.setLocalDescription(offer))
+//                     .catch(() => resolve(`❌ STUN ${stunServer} FAILED (offer error)`));
+//             });
+
+//             const result = await Promise.race([testPromise, timeout]);
+//             console.log(result);
+//             pc.close();
+//         } catch (error) {
+//             console.log(`❌ STUN ${stunServer} ERROR:`, error);
+//         }
+//     }
+// }
+
+// 测试 STUN 服务器列表
+// const stunList = [
+//     "sip1.lakedestiny.cordiaip.com",
+// ];
+
 
 const realTimeColab = RealTimeColab.getInstance();
 export default realTimeColab;
