@@ -1,5 +1,14 @@
 # 🔗 Real-Time Local Sharing App
+
 [中文版](./documents/README-CN.md)
+
+![React](https://img.shields.io/badge/React-18.x-blue?logo=react)
+![WebRTC](https://img.shields.io/badge/WebRTC-P2P-brightgreen?logo=webrtc)
+![WebSocket](https://img.shields.io/badge/WebSocket-Connected-orange?logo=websocket)
+![License](https://img.shields.io/badge/License-MIT-yellow)
+![Platform](https://img.shields.io/badge/Platform-LAN%20only-lightgrey)
+
+
 A lightweight real-time collaboration and file-sharing app designed for seamless communication within the same local network. Built with **React**, **WebRTC**, and **WebSocket**, it supports sharing **files**, **text**, and **clipboard content** with nearby users.
 
 ---
