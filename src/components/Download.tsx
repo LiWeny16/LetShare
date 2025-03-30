@@ -10,29 +10,27 @@ import {
 import { buttonStyleNormal } from "../pages/share";
 import React from "react";
 import alertUseMUI from "@App/alert";
+import realTimeColab from "@App/colabLib";
 
 export default function DownloadDrawerSlide({
     open,
     progress,
     setProgress,
     onClose,
-    abortFileTransfer
 }: {
     open: boolean;
     progress: number | null;
     setProgress: (value: number) => void;
     onClose: () => void;
-    abortFileTransfer: () => Promise<void>;
+    targetUserId?: string | null
 }) {
     const theme = useTheme();
 
     const handleCancel = async () => {
         alertUseMUI("终止传输", 2000, { kind: "error" })
         try {
-            if (typeof abortFileTransfer === "function") {
-                setProgress(0)
-                await abortFileTransfer();
-            }
+            realTimeColab.abortFileTransferToUser();
+            setProgress(0)
         } catch (err) {
             console.error("取消传输失败：", err);
         } finally {

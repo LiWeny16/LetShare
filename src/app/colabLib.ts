@@ -11,6 +11,7 @@ class RealTimeColab {
     private static userId: string | null = null;
     private static uniqId: string | null = null
     private static peers: Map<string, RTCPeerConnection> = new Map();
+    private aborted = false
     private dataChannels: Map<string, RTCDataChannel> = new Map();
     private ws: WebSocket | null = null;
     private knownUsers: Set<string> = new Set();
@@ -20,7 +21,7 @@ class RealTimeColab {
     public fileMetaInfo = { name: "default_received_file" }
     private lastPongTimes: Map<string, number> = new Map();
     public isSendingFile = false
-
+    private timeoutHandles = new Set();
     public receivingFile: {
         name: string;
         size: number;
@@ -36,30 +37,93 @@ class RealTimeColab {
     private discoverQueue: any[] = [];
     private discoverLock = false; // 用于保证同一时刻只处理一个 discover
     // 获取存储的状态
-    public getStatesMemorable(): { memorable: { localLANId: string } } {
-        const storedState = localStorage.getItem("memorableState");
-        return storedState ? JSON.parse(storedState) : { memorable: { localLANId: "none" } };
+    // 更清晰的结构
+    public getStatesMemorable(): {
+        memorable: {
+            userId: string | null;
+            uniqId: string | null;
+        };
+    } {
+        const stored = localStorage.getItem("memorableState");
+        if (!stored) {
+            return { memorable: { userId: null, uniqId: null } };
+        }
+        try {
+            const parsed = JSON.parse(stored);
+            return {
+                memorable: {
+                    userId: parsed.memorable?.userId ?? null,
+                    uniqId: parsed.memorable?.uniqId ?? null,
+                }
+            };
+        } catch (e) {
+            console.warn("🧹 解析 localStorage 失败，清理状态");
+            localStorage.removeItem("memorableState");
+            return { memorable: { userId: null, uniqId: null } };
+        }
     }
 
-    // 更新存储的状态
-    public changeStatesMemorable(newState: { memorable: { localLANId: string } }) {
-        localStorage.setItem("memorableState", JSON.stringify(newState));
+    // 更方便的设置
+    public changeStatesMemorable(newState: {
+        memorable: {
+            userId?: string;
+            uniqId?: string;
+        };
+    }) {
+        const current = this.getStatesMemorable().memorable;
+
+        const updated = {
+            userId: newState.memorable.userId ?? current.userId,
+            uniqId: newState.memorable.uniqId ?? current.uniqId
+        };
+
+        localStorage.setItem("memorableState", JSON.stringify({ memorable: updated }));
     }
+
     private constructor() {
-        const storedState = this.getStatesMemorable();
-        let userId = storedState.memorable.localLANId;
+        const state = this.getStatesMemorable();
+        let userId = state.memorable.userId;
+        let uniqId = state.memorable.uniqId;
 
-        const isNewUser = userId === "none";
-
-        if (isNewUser) {
+        if (!userId) {
             userId = this.generateUUID();
-            this.changeStatesMemorable({ memorable: { localLANId: userId } });
+            this.changeStatesMemorable({ memorable: { userId } });
+        }
+
+        if (!uniqId) {
+            uniqId = `${userId}:${this.generateUUID()}`;
+            this.changeStatesMemorable({ memorable: { uniqId } });
         }
 
         RealTimeColab.userId = userId;
-        RealTimeColab.uniqId = userId + ":" + this.generateUUID();
+        RealTimeColab.uniqId = uniqId;
 
         this.knownUsers.add(RealTimeColab.uniqId!);
+    }
+
+
+
+    public getUniqId(): string | null {
+        return RealTimeColab.uniqId;
+    }
+
+    public getUserId(): string | null {
+        return RealTimeColab.userId;
+    }
+
+    public setUserId(id: string) {
+        RealTimeColab.userId = id;
+        this.changeStatesMemorable({ memorable: { userId: id } });
+
+        // 同时更新 uniqId（重新拼接）
+        const uniqId = `${id}:${this.generateUUID()}`;
+        RealTimeColab.uniqId = uniqId;
+        this.changeStatesMemorable({ memorable: { uniqId } });
+    }
+
+    public setUniqId(id: string) {
+        RealTimeColab.uniqId = id;
+        this.changeStatesMemorable({ memorable: { uniqId: id } });
     }
 
     public static getInstance(): RealTimeColab {
@@ -67,20 +131,6 @@ class RealTimeColab {
             RealTimeColab.instance = new RealTimeColab();
         }
         return RealTimeColab.instance;
-    }
-
-    public getUniqId(): string | null {
-        return RealTimeColab.uniqId;
-    }
-    public getUserId(): string | null {
-        return RealTimeColab.userId;
-    }
-    public setUserId(id: string) {
-        RealTimeColab.userId = id;
-        this.changeStatesMemorable({ memorable: { localLANId: id } });
-    }
-    public setUniqId(id: string) {
-        RealTimeColab.uniqId = id;
     }
 
     public async connect(
@@ -143,7 +193,7 @@ class RealTimeColab {
 
     private async handleSignal(event: MessageEvent): Promise<void> {
         try {
-            const data = JSON.parse(event.data); // ✅ 不需要 FileReader
+            const data = JSON.parse(event.data);
             if (!data) return;
 
             switch (data.type) {
@@ -173,6 +223,8 @@ class RealTimeColab {
 
     private async handleDiscover(data: any) {
         const fromId = data.id;
+        console.log("fromId: ", fromId);
+        console.log(this.knownUsers);
         if (!fromId || fromId === this.getUniqId()) return; // 自己的 discover 直接忽略
 
         // 如果对方已经在 knownUsers 中，就说明我们已经处理过，不必二次处理
@@ -212,9 +264,6 @@ class RealTimeColab {
                     // 这里就是你原先的 connectToUser
                     await this.connectToUser(fromId);
                 }
-
-                // 处理 discover 回复
-                alertUseMUI("收到链接请求", 2000, { kind: "success" })
                 if (!data.isReply && !data.processed) {
                     this.broadcastSignal({
                         type: "discover",
@@ -232,26 +281,42 @@ class RealTimeColab {
 
     private handleLeave(data: any) {
         const leavingUserId = data.id;
-        if (this.knownUsers.has(leavingUserId)) {
-            this.knownUsers.delete(leavingUserId);
 
-            // 关闭相关连接和数据通道
-            const peer = RealTimeColab.peers.get(leavingUserId);
-            if (peer) {
-                peer.close();
-                RealTimeColab.peers.delete(leavingUserId);
-            }
+        console.warn(`📤 正在清理用户 ${leavingUserId} 的所有状态`);
 
-            const channel = this.dataChannels.get(leavingUserId);
-            if (channel) {
-                channel.close();
-                this.dataChannels.delete(leavingUserId);
-            }
+        // 1. 从 knownUsers 中移除
+        this.knownUsers.delete(leavingUserId);
 
-            this.updateConnectedUsers(this.getAllUsers());
-            console.log(`User ${leavingUserId} has left, cleaned up resources.`);
+        // 2. 关闭并移除 PeerConnection
+        const peer = RealTimeColab.peers.get(leavingUserId);
+        if (peer) {
+            peer.close();
+            RealTimeColab.peers.delete(leavingUserId);
         }
+
+        // 3. 关闭并移除 DataChannel
+        const channel = this.dataChannels.get(leavingUserId);
+        if (channel) {
+            channel.close();
+            this.dataChannels.delete(leavingUserId);
+        }
+
+        // 4. 移除协商队列
+        this.negotiationMap.delete(leavingUserId);
+
+        // 5. 移除连接中的状态
+        this.connectionQueue.delete(leavingUserId);
+        this.pendingOffers.delete(leavingUserId);
+
+        // 6. 清除心跳时间记录
+        this.lastPongTimes.delete(leavingUserId);
+
+        // 7. 更新 UI
+        this.updateConnectedUsers(this.getAllUsers());
+
+        console.log(`✅ 用户 ${leavingUserId} 清理完毕`);
     }
+
 
     private createPeerConnection(id: string): RTCPeerConnection {
         const peer = new RTCPeerConnection({
@@ -433,6 +498,10 @@ class RealTimeColab {
     // 修改handleCandidate方法
     private async handleCandidate(data: any): Promise<void> {
         const peer = RealTimeColab.peers.get(data.from);
+        if (!peer || !peer.remoteDescription) {
+            console.warn(`[ICE] ❌ 跳过 ICE，因 remoteDescription 尚未设置`);
+            return;
+        }
         if (peer && data.candidates) {
             for (const candidate of data.candidates) {
                 try {
@@ -453,11 +522,13 @@ class RealTimeColab {
         let heartbeatInterval: ReturnType<typeof setInterval> | null = null;
 
         channel.onopen = () => {
+            alertUseMUI("新用户已连接", 2000, { kind: "success" })
             console.log(`Data channel with user ${id} is open`);
             this.updateConnectedUsers(this.getAllUsers());
             // 启动心跳定时器
             heartbeatInterval = setInterval(() => {
                 if (channel.readyState === "open") {
+                    console.log("ping");
                     channel.send(JSON.stringify({ type: "ping" }));
                 }
             }, 2000); // 每 5 秒发送一次 ping
@@ -469,15 +540,21 @@ class RealTimeColab {
 
                 switch (message.type) {
                     case "file-meta":
-                        // Initialize file metadata when received
+                        // 关键：在开始新文件接收之前，清空旧的接收状态
+                        this.receivingFile = null;
+                        this.totalChunks = 0;
+                        this.receivedChunkCount = 0;
+
+                        // 现在再初始化新文件状态
                         this.receivingFile = {
                             name: message.name,
                             size: message.size,
                             receivedSize: 0,
-                            chunks: [], // An array to hold file chunks
+                            chunks: [],
                         };
-                        this.totalChunks = Math.ceil(this.receivingFile.size / (this.chunkSize)); // Assuming chunk size of 16KB
+                        this.totalChunks = Math.ceil(this.receivingFile.size / this.chunkSize);
                         realTimeColab.fileMetaInfo.name = message.name;
+                        alertUseMUI(`开始接受文件:${this.receivingFile.name}`, 5000, { kind: "success" })
                         console.log(`File meta received: ${this.receivingFile.name}, Size: ${this.receivingFile.size}`);
                         break;
                     case "ping":
@@ -532,7 +609,9 @@ class RealTimeColab {
                     const sortedChunks: ArrayBuffer[] = [];
                     for (let i = 0; i < this.totalChunks; i++) {
                         if (!this.receivingFile.chunks[i]) {
+                            alertUseMUI("文件传输缺少切片,请重新传输！ " + i, 1000, { kind: "error" })
                             console.error(`缺少切片 ${i}`);
+                            this.setFileFromSharing(null)
                             return;
                         }
                         sortedChunks.push(this.receivingFile.chunks[i]);
@@ -569,53 +648,63 @@ class RealTimeColab {
     }
 
 
-    // 修改connectToUser方法
     public async connectToUser(id: string): Promise<void> {
-        // 排队机制防止并发冲突
-        if (this.connectionQueue.has(id)) return;
+        if (this.connectionQueue.has(id)) {
+            console.warn(`[CONNECT] ${id} 正在连接中，跳过`);
+            return;
+        }
         this.connectionQueue.set(id, true);
 
         try {
-            if (!RealTimeColab.peers.has(id)) {
-                // 防止双向同时发起连接
-                if (id > this.getUniqId()!) {
-                    await new Promise(res => setTimeout(res, Math.random() * 500));
-                }
+            let peer = RealTimeColab.peers.get(id);
 
-                const peer = this.createPeerConnection(id);
-                if (this.pendingOffers.has(id)) {
+            if (peer) {
+                const state = peer.connectionState;
+                if (["connected", "connecting"].includes(state)) {
+                    console.log(`[CONNECT] 与 ${id} 的连接状态为 ${state}，无需重建`);
                     return;
                 }
 
-                this.pendingOffers.add(id);
-                const dataChannel = peer.createDataChannel("chat");
-                this.setupDataChannel(dataChannel, id);
-
-                const offer = await peer.createOffer({
-                    iceRestart: true, // 允许ICE重启
-                });
-
-                await peer.setLocalDescription(offer);
-
-                this.broadcastSignal({
-                    type: "offer",
-                    offer: peer.localDescription,
-                    to: id,
-                });
-
-                // 设置超时重试机制
-                setTimeout(() => {
-                    if (peer.iceConnectionState !== "connected") {
-                        console.log(`Retrying connection to ${id}`);
-                        this.connectToUser(id);
-                    }
-                }, 2000);
+                console.warn(`[CONNECT] 清除旧连接 ${id}，状态: ${state}`);
+                peer.close();
+                RealTimeColab.peers.delete(id);
             }
+
+            // 建立新连接
+            peer = this.createPeerConnection(id);
+            const dataChannel = peer.createDataChannel("chat");
+            this.setupDataChannel(dataChannel, id);
+
+            const offer = await peer.createOffer({ iceRestart: true });
+            await peer.setLocalDescription(offer);
+
+            console.log(`[CONNECT] ✅ 向 ${id} 发送 offer`);
+            this.broadcastSignal({
+                type: "offer",
+                offer: peer.localDescription,
+                to: id,
+            });
+
+            // 只允许一次超时重连（非递归）
+            setTimeout(() => {
+                const current = RealTimeColab.peers.get(id);
+                if (current && current.iceConnectionState !== "connected") {
+                    console.warn(`[CONNECT] 🚫 ${id} ICE 超时未连接，主动清除`);
+                    current.close();
+                    RealTimeColab.peers.delete(id);
+                    this.updateConnectedUsers(this.getAllUsers());
+                }
+            }, 3000);
+
+        } catch (e) {
+            console.error(`[CONNECT] ❌ 连接 ${id} 失败:`, e);
         } finally {
             this.connectionQueue.delete(id);
             this.pendingOffers.delete(id);
         }
     }
+
+
 
 
     public async sendMessageToUser(id: string, message: string): Promise<void> {
@@ -643,33 +732,43 @@ class RealTimeColab {
             console.error(`Failed to reconnect and send message to ${id}:`, err);
         }
     }
+    public abortFileTransferToUser() {
+        this.aborted = true;
+        this.isSendingFile = false;
 
+        // 取消所有 setTimeout 调用
+        if (this.timeoutHandles) {
+            for (const id of this.timeoutHandles) {
+                clearTimeout(id as number);
+            }
+            this.timeoutHandles.clear();
+        }
+    }
+    public isConnectedToUser(id: string): boolean {
+        const channel = this.dataChannels.get(id);
+        return !!channel && channel.readyState === "open";
+    }
+    
     public async sendFileToUser(
         id: string,
         file: File,
         onProgress?: (progress: number) => void
-    ): Promise<() => void> {
+    ): Promise<void> {
         const channel = this.dataChannels.get(id);
         if (!channel || channel.readyState !== "open") {
             console.error(`Data channel with user ${id} is not available.`);
-            return () => { };
+            return;
         }
 
         const totalChunks = Math.ceil(file.size / this.chunkSize);
         const maxConcurrentReads = 10;
         let chunksSent = 0;
         let currentIndex = 0;
-        let aborted = false;
+        // 解锁
+        this.aborted = false
+
 
         const activeTasks: Promise<void>[] = [];
-
-        // 🧨 返回的中断函数
-        const abort = () => {
-            aborted = true;
-            activeTasks.length = 0; // 清空活跃任务列表
-            this.isSendingFile = false
-            console.warn("⛔️ 文件传输已被中断");
-        };
 
         // 元信息
         const metaMessage = {
@@ -678,22 +777,23 @@ class RealTimeColab {
             size: file.size,
             totalChunks,
         };
-        channel.send(JSON.stringify(metaMessage));
-        console.log("已发送文件元数据:", metaMessage);
+        try {
+            channel.send(JSON.stringify(metaMessage));
+            console.log("📦 已发送文件元数据:", metaMessage);
+        } catch (err) {
+            console.error("❌ 无法发送文件元数据：", err);
+            return;
+        }
 
         const readChunk = (index: number): Promise<ArrayBuffer> => {
             return new Promise((resolve, reject) => {
-                if (aborted) {
-                    if (onProgress) {
-                        // onProgress(0);
-                    }
-                    return reject(new Error("读取中止"));
-                }
+                if (this.aborted) return reject(new Error("读取中止"));
 
                 const offset = index * this.chunkSize;
                 const slice = file.slice(offset, offset + this.chunkSize);
                 const reader = new FileReader();
                 reader.onload = () => {
+                    if (this.aborted) return reject(new Error("读取中止"));
                     if (reader.result instanceof ArrayBuffer) {
                         resolve(reader.result);
                     } else {
@@ -706,11 +806,11 @@ class RealTimeColab {
         };
 
         const sendChunk = async (index: number) => {
-            if (aborted) return;
+            if (this.aborted) return;
 
             try {
                 const chunkBuffer = await readChunk(index);
-                if (aborted) return;
+                if (this.aborted) return;
 
                 const headerSize = 8;
                 const bufferWithHeader = new ArrayBuffer(headerSize + chunkBuffer.byteLength);
@@ -720,33 +820,31 @@ class RealTimeColab {
                 new Uint8Array(bufferWithHeader, headerSize).set(new Uint8Array(chunkBuffer));
 
                 const send = () => {
-                    if (aborted) return;
+                    if (this.aborted) return;
                     if (channel.bufferedAmount < 256 * 1024) {
                         channel.send(bufferWithHeader);
                         chunksSent++;
                         if (onProgress) {
-                            let progress = Math.min((chunksSent / totalChunks) * 100, 100)
+                            const progress = Math.min((chunksSent / totalChunks) * 100, 100);
                             onProgress(progress);
-                            if (progress >= 100 || progress === null || progress === 0) {
-                                this.isSendingFile = false
-
-                            } else { this.isSendingFile = true }
+                            this.isSendingFile = progress < 100;
                         }
                     } else {
-                        setTimeout(send, 100); // 缓冲区满了，重试
+                        const timeoutId = setTimeout(send, 100);
+                        this.timeoutHandles.add(timeoutId);
                     }
                 };
 
                 send();
             } catch (err) {
-                if (!aborted) {
+                if (!this.aborted) {
                     console.error(`切片 ${index} 发送失败:`, err);
                 }
             }
         };
 
         const enqueue = async () => {
-            while (currentIndex < totalChunks && !aborted) {
+            while (currentIndex < totalChunks && !this.aborted) {
                 if (activeTasks.length >= maxConcurrentReads) {
                     await Promise.race(activeTasks);
                 }
@@ -762,19 +860,16 @@ class RealTimeColab {
             }
         };
 
-        // 🔁 等待所有切片任务完成（或中止）
         await enqueue();
         await Promise.allSettled(activeTasks);
 
-        // if (!aborted && onProgress) {
-        //     onProgress(100);
-        // }
-
-        if (!aborted) {
+        if (!this.aborted) {
             console.log("✅ 文件发送完成");
+        } else {
+            console.warn("🚫 文件发送被中止");
         }
 
-        return abort;
+        // this.abortedMap.delete(id); // 清理状态
     }
 
 
@@ -790,6 +885,9 @@ class RealTimeColab {
         return this.getAllUsers();
     }
 }
+
+const realTimeColab = RealTimeColab.getInstance();
+export default realTimeColab;
 
 // async function testSTUNServers(stunServers) {
 //     for (const stunServer of stunServers) {
@@ -830,6 +928,3 @@ class RealTimeColab {
 //     "sip1.lakedestiny.cordiaip.com",
 // ];
 
-
-const realTimeColab = RealTimeColab.getInstance();
-export default realTimeColab;

@@ -33,8 +33,8 @@ import EditableUserId from "../components/UserId";
 import StartupPage from "../components/StartupPage";
 import DownloadDrawer from "../components/Download";
 
-const url = "wss://md-server-md-server-bndnqhexdf.cn-hangzhou.fcapp.run";
-// const url = "ws://192.168.1.13:9000";
+// const url = "wss://md-server-md-server-bndnqhexdf.cn-hangzhou.fcapp.run";
+const url = "ws://192.168.1.13:9000";
 const settingsBodyContentBoxStyle = {
     transition: "background-color 0.4s ease, box-shadow 0.4s ease",
     position: "relative",
@@ -65,8 +65,7 @@ export const buttonStyleNormal = {
     borderColor: "#e0e0e0",
 };
 export default function Settings() {
-
-    const [abortFileTransfer, setAbortFileTransfer] = React.useState<any>(() => { });
+    // 父组件
     const [msgFromSharing, setMsgFromSharing] = useState<string | null>(null);
     const [fileFromSharing, setFileFromSharing] = useState<Blob | null>(null);
     const [openDialog, setOpenDialog] = useState(false);
@@ -130,12 +129,13 @@ export default function Settings() {
                     },
                     updateConnectedUsers
                 ).catch(console.error);
+            } else {
+                realTimeColab.broadcastSignal({
+                    type: "discover",
+                    id: realTimeColab.getUniqId(),
+                    // isReply: false
+                });
             }
-            realTimeColab.broadcastSignal({
-                type: "discover",
-                id: realTimeColab.getUniqId(),
-                isReply: false
-            });
             await kit.sleep(1000);
         } catch (error) {
             console.error("Search error:", error);
@@ -147,7 +147,10 @@ export default function Settings() {
 
     const handleClickOtherClients = async (_e: any, targetUserId: string) => {
         try {
-            // await realTimeColab.connectToUser(targetUserId);
+            if (!realTimeColab.isConnectedToUser(targetUserId)) {
+                alertUseMUI("当前未连接目标用户，请等待连接建立", 2000, { kind: "warning" });
+                return;
+            }
             if (selectedButton === "file" && selectedFile) {
                 if (realTimeColab.isSendingFile) {
                     alertUseMUI("有任务正在进行中！", 2000, { kind: "info" })
@@ -155,13 +158,14 @@ export default function Settings() {
                     return
                 }
                 setDwnloadPageState(true)
-                let abort = await realTimeColab.sendFileToUser(targetUserId, selectedFile, (progress) => {
+                // setTargetUserId(targetUserId); // 保存目标用户
+                await realTimeColab.sendFileToUser(targetUserId, selectedFile, (progress) => {
                     setFileTransferProgress(progress);
                     if (progress >= 100) {
                         setTimeout(() => setFileTransferProgress(null), 1500); // 自动隐藏
                     }
                 });
-                setAbortFileTransfer(() => abort)
+                // setAbortFileTransfer(() => abort)
 
             } else if (selectedButton === "text" && selectedText) {
                 await realTimeColab.sendMessageToUser(targetUserId, selectedText);
@@ -570,15 +574,35 @@ export default function Settings() {
                     },
                 }}
             >
-                <DialogTitle
+                <DialogActions
                     sx={{
-                        fontWeight: 600,
-                        fontSize: { xs: "1.1rem", sm: "1.25rem" },
+                        px: { xs: 2, sm: 3 },
+                        pb: { xs: 1, sm: 2 },
+                        justifyContent: "flex-end",
                     }}
                 >
-                    输入文本
-                </DialogTitle>
-
+                    <Typography variant="h6" sx={{ flexGrow: 1 }}>
+                        输入文本
+                    </Typography>
+                    <Button onClick={() => setTextInputDialogOpen(false)} color="secondary">
+                        取消
+                    </Button>
+                    <Button
+                        onClick={() => {
+                            if (textInput) {
+                                setSelectedText(textInput);
+                                setSelectedButton("text");
+                            } else {
+                                alertUseMUI("空啦", 1000, { kind: "info" })
+                            }
+                            setTextInputDialogOpen(false);
+                        }}
+                        color="primary"
+                        variant="contained"
+                    >
+                        确认
+                    </Button>
+                </DialogActions>
                 <DialogContent>
                     <TextField
                         autoFocus={true}
@@ -595,33 +619,9 @@ export default function Settings() {
                         }}
                     />
                 </DialogContent>
-
-                <DialogActions
-                    sx={{
-                        px: { xs: 2, sm: 3 },
-                        pb: { xs: 1, sm: 2 },
-                        justifyContent: "flex-end",
-                    }}
-                >
-                    <Button onClick={() => setTextInputDialogOpen(false)} color="secondary">
-                        取消
-                    </Button>
-                    <Button
-                        onClick={() => {
-                            setSelectedText(textInput);
-                            setSelectedButton("text");
-                            setTextInputDialogOpen(false);
-                        }}
-                        color="primary"
-                        variant="contained"
-                    >
-                        确认
-                    </Button>
-                </DialogActions>
-
             </Dialog>
 
-            <DownloadDrawer abortFileTransfer={abortFileTransfer} onClose={() => { setDwnloadPageState(false) }} open={downloadPageState} progress={fileTransferProgress} setProgress={setFileTransferProgress} />
+            <DownloadDrawer onClose={() => { setDwnloadPageState(false) }} open={downloadPageState} progress={fileTransferProgress} setProgress={setFileTransferProgress} />
             <Backdrop
                 sx={{ color: '#fff', zIndex: (theme) => theme.zIndex.drawer + 9999 }}
                 open={loadingPage}
