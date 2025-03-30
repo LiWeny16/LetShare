@@ -85,9 +85,9 @@ export default function Settings() {
     const searchButtonRef = useRef(null)
     const mainDialogRef = useRef<HTMLDivElement | null>(null);
     const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
-        event.preventDefault()
-        event.stopPropagation()
-        console.log(event);
+        // event.preventDefault()
+        // event.stopPropagation()
+        // console.log(event);
         const file = event.target.files?.[0] || null;
         if (file) {
             setSelectedFile(file);
