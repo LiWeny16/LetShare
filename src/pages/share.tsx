@@ -262,6 +262,7 @@ export default function Settings() {
                         const newChannel = realTimeColab["dataChannels"].get(user.id);
                         if (!newChannel || newChannel.readyState !== "open") {
                             console.warn(`重连失败，剔除 ${user.id}`);
+                            // realTimeColab.knownUsers.delete(user.id)
                             setConnectedUsers((prev) =>
                                 prev.filter((u) => u.id !== user.id)
                             );

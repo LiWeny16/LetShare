@@ -14,7 +14,7 @@ class RealTimeColab {
     private aborted = false
     private dataChannels: Map<string, RTCDataChannel> = new Map();
     private ws: WebSocket | null = null;
-    private knownUsers: Set<string> = new Set();
+    public knownUsers: Set<string> = new Set();
     private setMsgFromSharing: (msg: string | null) => void = () => { }
     private setFileFromSharing: (file: Blob | null) => void = () => { }
     private updateConnectedUsers: (list: string[]) => void = () => { }
@@ -36,6 +36,10 @@ class RealTimeColab {
     private negotiationMap = new Map<string, NegotiationState>();
     private discoverQueue: any[] = [];
     private discoverLock = false; // 用于保证同一时刻只处理一个 discover
+    private lastConnectAttempt: Map<string, number> = new Map();
+    private connectionTimeouts: Map<string, number> = new Map();
+    private recentlyResetPeers: Map<string, number> = new Map();
+
     // 获取存储的状态
     // 更清晰的结构
     public getStatesMemorable(): {
@@ -223,8 +227,6 @@ class RealTimeColab {
 
     private async handleDiscover(data: any) {
         const fromId = data.id;
-        console.log("fromId: ", fromId);
-        console.log(this.knownUsers);
         if (!fromId || fromId === this.getUniqId()) return; // 自己的 discover 直接忽略
 
         // 如果对方已经在 knownUsers 中，就说明我们已经处理过，不必二次处理
@@ -314,7 +316,6 @@ class RealTimeColab {
         // 7. 更新 UI
         this.updateConnectedUsers(this.getAllUsers());
 
-        console.log(`✅ 用户 ${leavingUserId} 清理完毕`);
     }
 
 
@@ -368,13 +369,26 @@ class RealTimeColab {
         peer.ondatachannel = (event) => {
             this.setupDataChannel(event.channel, id);
         };
-
         peer.onconnectionstatechange = () => {
             if (peer.connectionState === "failed" || peer.connectionState === "disconnected") {
-                console.log(`Peer connection with ${id} failed, attempting to reconnect.`);
-                this.connectToUser(id); // 重连逻辑
+                alertUseMUI("网络不稳定，断开连接并尝试重连", 2000, { kind: "error" });
+
+                // 只有 ID 小的一方尝试重连
+                if (this.getUniqId()! < id) {
+                    const now = Date.now();
+                    const lastAttempt = this.lastConnectAttempt.get(id) ?? 0;
+                    if (now - lastAttempt > 3000) { // 至少 3 秒内只能重连一次
+                        console.warn(`[STATE] ${id} 连接断开，尝试重连`);
+                        this.lastConnectAttempt.set(id, now);
+                        this.connectToUser(id);
+                    } else {
+                        console.warn(`[STATE] ${id} 最近已尝试重连，跳过`);
+                    }
+                }
             }
         };
+
+
 
         if (id) {
             RealTimeColab.peers.set(id, peer);
@@ -441,25 +455,60 @@ class RealTimeColab {
         }
     }
 
-    // 真正执行 handleOffer 的逻辑
-    private async doHandleOffer(peerId: string, remoteOffer: RTCSessionDescriptionInit) {
+    private async doHandleOffer(peerId: string, offer: RTCSessionDescriptionInit): Promise<void> {
         const peer = RealTimeColab.peers.get(peerId);
         if (!peer) return;
 
-        // === 1. setRemoteDescription(offer) ===
-        await peer.setRemoteDescription(new RTCSessionDescription(remoteOffer));
+        const polite = this.getUniqId()! > peerId; // ID 较大的是 polite
+        const isCollision = peer.signalingState === "have-local-offer" || peer.signalingState === "have-local-pranswer";
 
-        // === 2. createAnswer ===
+        if (isCollision) {
+            if (!polite) {
+                console.warn(`[OFFER] Impolite peer, ignoring incoming offer`);
+                return; // 忽略冲突
+            } else {
+                const now = Date.now();
+                const lastReset = this.recentlyResetPeers.get(peerId) ?? 0;
+                if (now - lastReset < 5000) {
+                    console.warn(`[OFFER] 最近刚 reset 过 ${peerId}，跳过`);
+                    return;
+                }
+
+                console.warn(`[OFFER] Polite peer, resetting connection with ${peerId}`);
+                this.recentlyResetPeers.set(peerId, now);
+
+                peer.close();
+                RealTimeColab.peers.delete(peerId);
+
+                const newPeer = this.createPeerConnection(peerId);
+                RealTimeColab.peers.set(peerId, newPeer);
+
+                // 不要递归调用，改为放入队列
+                const negoState = this.negotiationMap.get(peerId);
+                if (negoState) {
+                    negoState.queue.unshift({
+                        type: "offer",
+                        sdp: offer
+                    });
+                    this.processNegotiationQueue(peerId); // 重新处理队列
+                }
+                return;
+            }
+        }
+
+
+        await peer.setRemoteDescription(new RTCSessionDescription(offer));
         const answer = await peer.createAnswer();
         await peer.setLocalDescription(answer);
 
-        // === 3. 通过 WS 回发 answer
         this.broadcastSignal({
             type: "answer",
             answer: peer.localDescription,
             to: peerId,
         });
+
     }
+
 
     private async handleAnswer(data: any): Promise<void> {
         const fromId = data.from;
@@ -522,13 +571,17 @@ class RealTimeColab {
         let heartbeatInterval: ReturnType<typeof setInterval> | null = null;
 
         channel.onopen = () => {
+            const timeoutId = this.connectionTimeouts.get(id);
+            if (timeoutId) {
+                clearTimeout(timeoutId);
+                this.connectionTimeouts.delete(id);
+            }
+
             alertUseMUI("新用户已连接", 2000, { kind: "success" })
-            console.log(`Data channel with user ${id} is open`);
             this.updateConnectedUsers(this.getAllUsers());
             // 启动心跳定时器
             heartbeatInterval = setInterval(() => {
                 if (channel.readyState === "open") {
-                    console.log("ping");
                     channel.send(JSON.stringify({ type: "ping" }));
                 }
             }, 2000); // 每 5 秒发送一次 ping
@@ -555,7 +608,6 @@ class RealTimeColab {
                         this.totalChunks = Math.ceil(this.receivingFile.size / this.chunkSize);
                         realTimeColab.fileMetaInfo.name = message.name;
                         alertUseMUI(`开始接受文件:${this.receivingFile.name}`, 5000, { kind: "success" })
-                        console.log(`File meta received: ${this.receivingFile.name}, Size: ${this.receivingFile.size}`);
                         break;
                     case "ping":
                         // 回复 pong
@@ -619,7 +671,6 @@ class RealTimeColab {
                     const fileBlob = new Blob(sortedChunks);
                     const file = new File([fileBlob], this.receivingFile.name, { type: "application/octet-stream" });
                     this.setFileFromSharing(file); // 你的回调
-                    console.log("✅ 文件接收成功", file);
 
                     // 重置状态
                     this.receivingFile = null;
@@ -649,6 +700,14 @@ class RealTimeColab {
 
 
     public async connectToUser(id: string): Promise<void> {
+        const now = Date.now();
+        const lastAttempt = this.lastConnectAttempt.get(id) ?? 0;
+        if (now - lastAttempt < 2000) {
+            console.warn(`[CONNECT] 与 ${id} 的连接尝试太频繁，跳过`);
+            return;
+        }
+        this.lastConnectAttempt.set(id, now);
+
         if (this.connectionQueue.has(id)) {
             console.warn(`[CONNECT] ${id} 正在连接中，跳过`);
             return;
@@ -685,16 +744,26 @@ class RealTimeColab {
                 to: id,
             });
 
-            // 只允许一次超时重连（非递归）
-            setTimeout(() => {
+            // 设置连接超时（避免长时间挂起）
+            const timeoutId = window.setTimeout(() => {
                 const current = RealTimeColab.peers.get(id);
-                if (current && current.iceConnectionState !== "connected") {
-                    console.warn(`[CONNECT] 🚫 ${id} ICE 超时未连接，主动清除`);
+                if (
+                    current &&
+                    current.iceConnectionState !== "connected" &&
+                    current.iceConnectionState !== "checking"
+                ) {
+                    console.warn(`[CONNECT] ⏰ ${id} 连接长时间未建立，强制关闭`);
                     current.close();
                     RealTimeColab.peers.delete(id);
                     this.updateConnectedUsers(this.getAllUsers());
+                } else {
+                    console.log(`[CONNECT] ${id} 正在连接中，延长等待`);
                 }
-            }, 3000);
+                this.connectionTimeouts.delete(id);
+            }, 6000); // 比之前多给几秒余地
+
+            this.connectionTimeouts.set(id, timeoutId);
+
 
         } catch (e) {
             console.error(`[CONNECT] ❌ 连接 ${id} 失败:`, e);
@@ -717,20 +786,20 @@ class RealTimeColab {
 
         console.warn(`Channel not open with user ${id}. Attempting reconnection...`);
 
-        try {
-            await this.connectToUser(id); // 重新建立连接
-            await new Promise(res => setTimeout(res, 500)); // 等待连接稳定
+        // try {
+        //     await this.connectToUser(id); // 重新建立连接
+        //     await new Promise(res => setTimeout(res, 500)); // 等待连接稳定
 
-            const newChannel = this.dataChannels.get(id);
-            if (newChannel?.readyState === "open") {
-                newChannel.send(JSON.stringify({ msg: message, type: "text" }));
-                console.log(`Message re-sent after reconnecting to user ${id}`);
-            } else {
-                console.error(`Reconnected but channel still not open with ${id}`);
-            }
-        } catch (err) {
-            console.error(`Failed to reconnect and send message to ${id}:`, err);
-        }
+        //     const newChannel = this.dataChannels.get(id);
+        //     if (newChannel?.readyState === "open") {
+        //         newChannel.send(JSON.stringify({ msg: message, type: "text" }));
+        //         console.log(`Message re-sent after reconnecting to user ${id}`);
+        //     } else {
+        //         console.error(`Reconnected but channel still not open with ${id}`);
+        //     }
+        // } catch (err) {
+        //     console.error(`Failed to reconnect and send message to ${id}:`, err);
+        // }
     }
     public abortFileTransferToUser() {
         this.aborted = true;
@@ -748,7 +817,7 @@ class RealTimeColab {
         const channel = this.dataChannels.get(id);
         return !!channel && channel.readyState === "open";
     }
-    
+
     public async sendFileToUser(
         id: string,
         file: File,
