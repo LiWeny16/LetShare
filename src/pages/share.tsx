@@ -33,8 +33,8 @@ import EditableUserId from "../components/UserId";
 import StartupPage from "../components/StartupPage";
 import DownloadDrawer from "../components/Download";
 
-// const url = "wss://md-server-md-server-bndnqhexdf.cn-hangzhou.fcapp.run";
-const url = "ws://192.168.1.13:9000";
+const url = "wss://md-server-md-server-bndnqhexdf.cn-hangzhou.fcapp.run";
+// const url = "ws://192.168.1.13:9000";
 const settingsBodyContentBoxStyle = {
     transition: "background-color 0.4s ease, box-shadow 0.4s ease",
     position: "relative",
