@@ -58,7 +58,7 @@ export class RealTimeColab {
         setInterval(async () => {
             for (const [id, user] of this.userList.entries()) {
                 if (user.status === "waiting") {
-                    if (user.attempts >= 2) {
+                    if (user.attempts >= 3) {
                         console.warn(`[USER CHECK] ${id} 重试次数过多，标记为 disconnected`);
                         user.status = "disconnected";
                         this.userList.set(id, user);

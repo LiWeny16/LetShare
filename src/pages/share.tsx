@@ -153,7 +153,8 @@ export default function Settings() {
     const handleClickOtherClients = async (_e: any, targetUserId: string) => {
         try {
             if (!realTimeColab.isConnectedToUser(targetUserId)) {
-                alertUseMUI("当前未连接目标用户，请等待连接建立", 2000, { kind: "warning" });
+                alertUseMUI("正在连接目标用户，请等待连接建立", 2000, { kind: "warning" });
+                realTimeColab.connectToUser(targetUserId)
                 return;
             }
             if (selectedButton === "file" && selectedFile) {
