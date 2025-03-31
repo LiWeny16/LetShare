@@ -169,10 +169,10 @@ export default function Settings() {
                 await realTimeColab.sendMessageToUser(targetUserId, selectedText);
             } else if (selectedButton === "clip") {
                 let clipText = await readClipboard();
-                if (!clipText) {
-                    alertUseMUI("剪切板为空", 2000, { kind: "error" });
-                } else {
+                if (clipText != "") {
                     await realTimeColab.sendMessageToUser(targetUserId, clipText ?? "读取剪切板失败");
+                } else {
+                    alertUseMUI("剪切板为空, 浏览器不支持", 2000, { kind: "error" });
                 }
             } else {
                 alertUseMUI("未选择发送内容", 2000, { kind: "info" });
@@ -453,6 +453,8 @@ export default function Settings() {
                                     <DevicesIcon />
                                     <Typography>{user.name}</Typography>
                                 </Box>
+
+
                             </Box>
                         ))}
                     </Box>

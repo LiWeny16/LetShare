@@ -34,7 +34,11 @@ const AlertPortal: React.FC = () => {
     <Snackbar
       open={open}
       autoHideDuration={duration}
-      onClose={() => setOpen(false)}
+      onClose={(e) => {
+        e.preventDefault()
+        e.stopPropagation()
+        setOpen(false)
+      }}
       anchorOrigin={{ vertical: "top", horizontal: "center" }}
       style={{ zIndex }}
     >

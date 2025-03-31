@@ -5,10 +5,6 @@ import alertUseMUI from "./alert";
  * @returns {Promise<string>}
  */
 export async function readClipboard(): Promise<string> {
-  if (!navigator.clipboard?.readText) {
-    alertUseMUI("当前浏览器不支持读取剪切板，请手动粘贴。", 3000, { kind: "warning" });
-  }
-
   // 检查是否支持 navigator.clipboard API
   if (navigator.clipboard && typeof navigator.clipboard.readText === "function") {
     try {
@@ -16,26 +12,14 @@ export async function readClipboard(): Promise<string> {
       return text || "";
     } catch (err) {
       console.error("Failed to read clipboard contents via clipboard API: ", err);
+      alertUseMUI("读取剪贴板内容失败，请检查权限或手动粘贴。", 3000, { kind: "error" });
     }
   }
 
-  // 降级方案：尝试使用 document.execCommand
-  try {
-    const textArea = document.createElement("textarea");
-    document.body.appendChild(textArea);
-    textArea.style.position = "absolute";
-    textArea.style.left = "-9999px"; // 将文本区域移出屏幕
-    textArea.focus();
-    document.execCommand("paste"); // 触发粘贴命令
-    const text = textArea.value;
-    document.body.removeChild(textArea); // 清理 DOM
-    return text || "";
-  } catch (err) {
-    console.error("Failed to read clipboard contents via execCommand: ", err);
-  }
+  // 提示用户浏览器不支持剪贴板 API
+  alertUseMUI("当前浏览器不支持读取剪贴板", 3000, { kind: "warning" });
 
   // 如果都不支持，返回空字符串
-  console.warn("Clipboard API and execCommand are not supported on this device.");
   return "";
 }
 
@@ -50,7 +34,7 @@ export async function writeClipboard(text: string): Promise<boolean> {
   if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
     try {
       await navigator.clipboard.writeText(text);
-      
+
       // ✅ 关键：写入后读取回来做校验（适用于大多数现代浏览器）
       if (typeof navigator.clipboard.readText === "function") {
         try {
