@@ -132,7 +132,7 @@ export default function Settings() {
             } else {
                 realTimeColab.broadcastSignal({
                     type: "discover",
-                    id: realTimeColab.getUniqId(),
+                    // id: realTimeColab.getUniqId(),
                     // isReply: false
                 });
             }
@@ -158,14 +158,12 @@ export default function Settings() {
                     return
                 }
                 setDwnloadPageState(true)
-                // setTargetUserId(targetUserId); // 保存目标用户
                 await realTimeColab.sendFileToUser(targetUserId, selectedFile, (progress) => {
                     setFileTransferProgress(progress);
                     if (progress >= 100) {
                         setTimeout(() => setFileTransferProgress(null), 1500); // 自动隐藏
                     }
                 });
-                // setAbortFileTransfer(() => abort)
 
             } else if (selectedButton === "text" && selectedText) {
                 await realTimeColab.sendMessageToUser(targetUserId, selectedText);
@@ -185,6 +183,7 @@ export default function Settings() {
         }
     };
     useEffect(() => {
+        realTimeColab.init()
         setTimeout(() => { setStartUpVisibility(false) }, 1000)
         realTimeColab.connect(
             url,
@@ -245,44 +244,6 @@ export default function Settings() {
         };
 
     }, [textInputDialogOpen, openDialog]);
-    useEffect(() => {
-        const interval = setInterval(async () => {
-            // searchButtonRef.current!.click()
-            const currentUsers = [...connectedUsers];
-
-            for (const user of currentUsers) {
-                const channel = realTimeColab["dataChannels"].get(user.id);
-
-                if (!channel || channel.readyState !== "open") {
-                    console.warn(`通道不通，尝试重连 ${user.id}`);
-                    try {
-                        await realTimeColab.connectToUser(user.id);
-                        await new Promise((res) => setTimeout(res, 500));
-
-                        const newChannel = realTimeColab["dataChannels"].get(user.id);
-                        if (!newChannel || newChannel.readyState !== "open") {
-                            console.warn(`重连失败，剔除 ${user.id}`);
-                            // realTimeColab.knownUsers.delete(user.id)
-                            setConnectedUsers((prev) =>
-                                prev.filter((u) => u.id !== user.id)
-                            );
-                        } else {
-                            console.log(`用户 ${user.id} 重连成功`);
-                        }
-                    } catch (err) {
-                        console.error(`连接用户 ${user.id} 失败`, err);
-                        setConnectedUsers((prev) =>
-                            prev.filter((u) => u.id !== user.id)
-                        );
-                    }
-                }
-            }
-        }, 3500); // 每5秒检测一次
-
-        return () => clearInterval(interval);
-    }, [connectedUsers]);
-
-
     const handleAcceptMessage = () => {
         try {
             if (msgFromSharing) {
