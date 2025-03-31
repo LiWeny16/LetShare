@@ -1,4 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
+const url = "wss://md-server-md-server-bndnqhexdf.cn-hangzhou.fcapp.run";
+// const url = "ws://192.168.1.13:9000";
 import Dialog from "@mui/material/Dialog";
 import DevicesIcon from "@mui/icons-material/Devices";
 import CachedIcon from '@mui/icons-material/Cached';
@@ -19,7 +21,7 @@ import {
     Fab,
     Fade,
 } from "@mui/material";
-import realTimeColab from "@App/colabLib";
+import realTimeColab, { UserInfo, UserStatus } from "@App/colabLib";
 import FileIcon from "@mui/icons-material/Description";
 import FolderIcon from "@mui/icons-material/Folder";
 import TextIcon from "@mui/icons-material/TextFields";
@@ -33,8 +35,7 @@ import EditableUserId from "../components/UserId";
 import StartupPage from "../components/StartupPage";
 import DownloadDrawer from "../components/Download";
 
-const url = "wss://md-server-md-server-bndnqhexdf.cn-hangzhou.fcapp.run";
-// const url = "ws://192.168.1.13:9000";
+
 const settingsBodyContentBoxStyle = {
     transition: "background-color 0.4s ease, box-shadow 0.4s ease",
     position: "relative",
@@ -57,8 +58,9 @@ const badgeStyle = {
 };
 
 type ConnectedUser = {
-    id: string;
+    uniqId: string;
     name?: string;
+    status: UserStatus
 };
 export const buttonStyleNormal = {
     borderRadius: "5px",
@@ -100,16 +102,19 @@ export default function Settings() {
         setTextInputDialogOpen(true);  // 打开输入弹窗
     };
 
-    const updateConnectedUsers = (list: string[]) => {
-        const users = list.map((fullId) => {
-            const parts = fullId.split(":");
-            return {
-                id: fullId,
-                name: parts[0] || fullId, // 万一没冒号，就用完整 ID
-            };
-        });
-
-        setConnectedUsers(users);
+    const updateConnectedUsers = (userList: Map<string, UserInfo>) => {
+        const usersArray: ConnectedUser[] = Array.from(userList.entries()).map(
+            ([id, userInfo]) => {
+                // 从 id 中提取 name (兼容 "name:id" 或纯 id)
+                const [namePart, idPart] = id.split(":");
+                return {
+                    uniqId: idPart ? `${namePart}:${idPart}` : id, // 保持完整 ID
+                    name: namePart || id,                      // 没有冒号时用 id 作为 name
+                    status: userInfo.status                   // 携带状态
+                };
+            }
+        );
+        setConnectedUsers(usersArray);
     }
     async function handleClickSearch() {
         setLoading(true);
@@ -172,7 +177,7 @@ export default function Settings() {
                 if (clipText != "") {
                     await realTimeColab.sendMessageToUser(targetUserId, clipText ?? "读取剪切板失败");
                 } else {
-                    alertUseMUI("剪切板为空, 浏览器不支持", 2000, { kind: "error" });
+                    alertUseMUI("剪切板为空, 或浏览器不支持", 2000, { kind: "info" });
                 }
             } else {
                 alertUseMUI("未选择发送内容", 2000, { kind: "info" });
@@ -445,16 +450,45 @@ export default function Settings() {
                     <Box sx={{ flexGrow: 1, overflowY: "auto" }}>
                         {connectedUsers.map((user) => (
                             <Box
-                                key={user.id}
-                                sx={{ ...settingsBodyContentBoxStyle, width: "93%" }}
-                                onClick={(e) => handleClickOtherClients(e, user.id)}
+                                key={user.uniqId}
+                                sx={{
+                                    ...settingsBodyContentBoxStyle,
+                                    width: "93%",
+                                    backgroundColor: user.status === 'waiting'
+                                        ? 'rgba(0, 0, 0, 0.08)'
+                                        : 'background.paper',
+                                    opacity: user.status === 'waiting' ? 0.7 : 1,
+                                    transition: 'all 0.3s ease-in-out',
+                                    '&:hover': {
+                                        boxShadow: user.status === 'connected' ? 2 : 1,
+                                        bgcolor: user.status === 'waiting'
+                                            ? 'rgba(0, 0, 0, 0.12)'
+                                            : 'background.default'
+                                    }
+                                }}
+                                onClick={(e) => handleClickOtherClients(e, user.uniqId)}
                             >
-                                <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-                                    <DevicesIcon />
-                                    <Typography>{user.name}</Typography>
+                                <Box sx={{
+                                    display: "flex",
+                                    alignItems: "center",
+                                    gap: 1,
+                                    // 内容渐变效果
+                                    transition: 'opacity 0.3s ease',
+                                    opacity: user.status === 'waiting' ? 0.8 : 1
+                                }}>
+                                    <DevicesIcon sx={{
+                                        transition: 'color 0.3s ease'
+                                    }} />
+
+                                    <Typography sx={{
+                                        color: user.status === 'connected'
+                                            ? 'text.primary'
+                                            : 'text.secondary',
+                                        transition: 'color 0.3s ease'
+                                    }}>
+                                        {user.name}
+                                    </Typography>
                                 </Box>
-
-
                             </Box>
                         ))}
                     </Box>

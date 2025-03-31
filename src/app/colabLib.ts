@@ -7,9 +7,9 @@ interface NegotiationState {
     isNegotiating: boolean;    // 是否正在进行一次Offer/Answer
     queue: any[];              // 暂存要处理的Offer或Answer
 }
-type UserStatus = "waiting" | "connected" | "disconnected";
+export type UserStatus = "waiting" | "connected" | "disconnected";
 
-interface UserInfo {
+export interface UserInfo {
     status: UserStatus;
     attempts: number;
     lastSeen: number;
@@ -26,7 +26,7 @@ export class RealTimeColab {
     public userList: Map<string, UserInfo> = new Map();
     private setMsgFromSharing: (msg: string | null) => void = () => { }
     private setFileFromSharing: (file: Blob | null) => void = () => { }
-    private updateConnectedUsers: (list: string[]) => void = () => { }
+    public updateConnectedUsers: (userList: Map<string, UserInfo>) => void = () => { }
     public fileMetaInfo = { name: "default_received_file" }
     private lastPongTimes: Map<string, number> = new Map();
     private lastPingTimes: Map<string, number> = new Map();
@@ -50,7 +50,7 @@ export class RealTimeColab {
     public cleaningLock: boolean = false;
     public peerManager: PeerManager;
     public lastConnectAttempt: Map<string, number> = new Map();
-    private connectionTimeouts: Map<string, number> = new Map();
+    public connectionTimeouts: Map<string, number> = new Map();
     private recentlyResetPeers: Map<string, number> = new Map();
 
     public async init() {
@@ -195,7 +195,7 @@ export class RealTimeColab {
         url: string,
         setMsgFromSharing: (msg: string | null) => void,
         setFileFromSharing: (file: Blob | null) => void,
-        updateConnectedUsers: (users: string[]) => void
+        updateConnectedUsers: (userList: Map<string, UserInfo>) => void = () => { }
     ): Promise<void> {
         try {
             this.setMsgFromSharing = setMsgFromSharing
@@ -247,7 +247,7 @@ export class RealTimeColab {
             this.ws = null;
         }
         if (this.updateConnectedUsers) {
-            this.updateConnectedUsers(this.getConnectedUserIds());
+            this.updateConnectedUsers(this.userList);
 
         }
     }
@@ -329,7 +329,7 @@ export class RealTimeColab {
             }
         }
 
-        this.updateConnectedUsers(this.getConnectedUserIds());
+        this.updateConnectedUsers(this.userList);
     }
 
 
@@ -385,7 +385,7 @@ export class RealTimeColab {
             this.pongFailures.delete(leavingUserId);
 
             // 8. 更新 UI
-            this.updateConnectedUsers(this.getConnectedUserIds());
+            this.updateConnectedUsers(this.userList);
 
             // 9. 可选：延迟模拟异步清理更真实（比如500ms）
             await new Promise(res => setTimeout(res, 50)); // 模拟微小延迟
@@ -583,7 +583,7 @@ export class RealTimeColab {
             });
 
             alertUseMUI("新用户已连接: " + id.split(":")[0], 2000, { kind: "success" });
-            this.updateConnectedUsers(this.getConnectedUserIds());
+            this.updateConnectedUsers(this.userList);
 
             heartbeatInterval = setInterval(() => {
                 const myId = this.getUniqId()!;
@@ -633,7 +633,7 @@ export class RealTimeColab {
                         });
 
                         this.pongFailures.set(id, 0);
-                        this.updateConnectedUsers(this.getConnectedUserIds());
+                        this.updateConnectedUsers(this.userList);
 
                         if (channel.readyState === "open") {
                             channel.send(JSON.stringify({ type: "pong" }));
@@ -650,7 +650,7 @@ export class RealTimeColab {
                         });
 
                         this.pingFailures.set(id, 0);
-                        this.updateConnectedUsers(this.getConnectedUserIds());
+                        this.updateConnectedUsers(this.userList);
                         break;
 
                     case "text":
@@ -721,8 +721,8 @@ export class RealTimeColab {
                     heartbeatInterval = null;
                 }
                 this.userList.delete(id)
-                this.updateConnectedUsers(this.getAllUsers())
                 this.dataChannels.delete(id);
+                this.updateConnectedUsers(this.userList)
                 this.lastPongTimes.delete(id);
             };
             channel.onerror = (e) => {
@@ -738,7 +738,7 @@ export class RealTimeColab {
     public async connectToUser(id: string): Promise<void> {
         const now = Date.now();
         const lastAttempt = this.lastConnectAttempt.get(id) ?? 0;
-        if (now - lastAttempt < 2000) {
+        if (now - lastAttempt < 3000) {
             console.warn(`[CONNECT] 与 ${id} 的连接尝试太频繁，跳过`);
             return;
         }
@@ -791,13 +791,13 @@ export class RealTimeColab {
                     console.warn(`[CONNECT] ⏰ ${id} 连接长时间未建立，强制关闭`);
                     current.close();
                     RealTimeColab.peers.delete(id);
-                    this.updateConnectedUsers(this.getConnectedUserIds());
+                    this.updateConnectedUsers(this.userList);
 
                 } else {
                     console.log(`[CONNECT] ${id} 正在连接中，延长等待`);
                 }
                 this.connectionTimeouts.delete(id);
-            }, 3000); // 比之前多给几秒余地
+            }, 5000);
 
             this.connectionTimeouts.set(id, timeoutId);
 
@@ -973,9 +973,10 @@ export class RealTimeColab {
 
     public getConnectedUserIds(): string[] {
         return Array.from(this.userList.entries())
-            .filter(([_, info]) => info.status === "connected")
+            .filter(([_, info]) => info.status === "connected") // 加上 return 判断条件
             .map(([id]) => id);
     }
+
     private async waitForUnlock(lock: boolean): Promise<void> {
         const waitInterval = 200; // 轮询间隔
         const maxWaitTime = 10000; // 最多等待时间（防止死等）
