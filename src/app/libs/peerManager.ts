@@ -85,7 +85,11 @@ export class PeerManager {
     }
 
     private handlePeerDisconnection(id: string, state: RTCPeerConnectionState) {
-        alertUseMUI("网络不稳定", 2000, { kind: "info" });
+        const peerInfo = this.rtc.userList.get(id);
+        if (peerInfo && peerInfo.status === "waiting") {
+            alertUseMUI("网络不稳定", 2000, { kind: "info" });
+        }
+
 
         if (!this.rtc.compareUniqIdPriority(this.rtc.getUniqId()!, id)) {
             console.log(`[RECONNECT] 等待对方（${id}）重连`);

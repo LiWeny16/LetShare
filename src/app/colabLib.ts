@@ -755,10 +755,10 @@ export class RealTimeColab {
 
             if (peer) {
                 const state = peer.connectionState;
-                // if (["connected", "connecting"].includes(state)) {
-                //     console.log(`[CONNECT] 与 ${id} 的连接状态为 ${state}，无需重建`);
-                //     return;
-                // }
+                if (["connected", "connecting"].includes(state)) {
+                    console.log(`[CONNECT] 与 ${id} 的连接状态为 ${state}，无需重建`);
+                    return;
+                }
 
                 console.warn(`[CONNECT] 清除旧连接 ${id}，状态: ${state}`);
                 peer.close();
@@ -797,7 +797,7 @@ export class RealTimeColab {
                     console.log(`[CONNECT] ${id} 正在连接中，延长等待`);
                 }
                 this.connectionTimeouts.delete(id);
-            }, 6000); // 比之前多给几秒余地
+            }, 3000); // 比之前多给几秒余地
 
             this.connectionTimeouts.set(id, timeoutId);
 
