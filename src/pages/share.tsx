@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
-// const url = "wss://md-server-md-server-bndnqhexdf.cn-hangzhou.fcapp.run";
-const url = "ws://192.168.1.13:9000";
+const url = "wss://md-server-md-server-bndnqhexdf.cn-hangzhou.fcapp.run";
+// const url = "ws://192.168.1.13:9000";
 import Dialog from "@mui/material/Dialog";
 import DevicesIcon from "@mui/icons-material/Devices";
 import CachedIcon from '@mui/icons-material/Cached';
