@@ -31,6 +31,7 @@ export class RealTimeColab {
     private lastPongTimes: Map<string, number> = new Map();
     private lastPingTimes: Map<string, number> = new Map();
     public isSendingFile = false
+    private heartbeatIntervals = new Map<string, ReturnType<typeof setInterval>>();
     private timeoutHandles = new Set();
     public receivingFile: {
         name: string;
@@ -58,10 +59,11 @@ export class RealTimeColab {
         setInterval(async () => {
             for (const [id, user] of this.userList.entries()) {
                 if (user.status === "waiting") {
-                    if (user.attempts >= 3) {
+                    if (user.attempts >= 10) {
                         console.warn(`[USER CHECK] ${id} 重试次数过多，标记为 disconnected`);
                         user.status = "disconnected";
                         this.userList.set(id, user);
+                        this.updateConnectedUsers(this.userList);
                         continue;
                     }
                     try {
@@ -170,13 +172,16 @@ export class RealTimeColab {
     }
 
     public setUserId(id: string) {
-        RealTimeColab.userId = id;
-        this.changeStatesMemorable({ memorable: { userId: id } });
+        if (RealTimeColab.userId != id) {
+            RealTimeColab.userId = id;
+            this.changeStatesMemorable({ memorable: { userId: id } });
 
-        // 同时更新 uniqId（重新拼接）
-        const uniqId = `${id}:${this.generateUUID()}`;
-        RealTimeColab.uniqId = uniqId;
-        this.changeStatesMemorable({ memorable: { uniqId } });
+            // 同时更新 uniqId（重新拼接）
+            const uniqId = `${id}:${this.generateUUID()}`;
+            RealTimeColab.uniqId = uniqId;
+            this.changeStatesMemorable({ memorable: { uniqId } });
+        }
+
     }
 
     public setUniqId(id: string) {
@@ -245,10 +250,6 @@ export class RealTimeColab {
             this.ws.onclose = null;
             this.ws.close();
             this.ws = null;
-        }
-        if (this.updateConnectedUsers) {
-            this.updateConnectedUsers(this.userList);
-
         }
     }
 
@@ -322,7 +323,7 @@ export class RealTimeColab {
                     current.attempts = 0;
                 } catch (e) {
                     current.attempts++;
-                    if (current.attempts >= 2) {
+                    if (current.attempts >= 10) {
                         current.status = "disconnected";
                     }
                 }
@@ -567,6 +568,7 @@ export class RealTimeColab {
         channel.binaryType = "arraybuffer"; // 设置数据通道为二进制模式
 
         let heartbeatInterval: ReturnType<typeof setInterval> | null = null;
+        this.dataChannels.set(id, channel);
 
         channel.onopen = () => {
             const timeoutId = this.connectionTimeouts.get(id);
@@ -584,20 +586,24 @@ export class RealTimeColab {
 
             alertUseMUI("新用户已连接: " + id.split(":")[0], 2000, { kind: "success" });
             this.updateConnectedUsers(this.userList);
+            // 清除旧定时器（如果存在）
+            if (this.heartbeatIntervals.has(id)) {
+                clearInterval(this.heartbeatIntervals.get(id)!);
+                this.heartbeatIntervals.delete(id);
+            }
 
-            heartbeatInterval = setInterval(() => {
-                const myId = this.getUniqId()!;
-                const isSender = this.compareUniqIdPriority(myId, id);
-                if (isSender) {
-                    // 我是 ping 的一方
-                    if (channel.readyState === "open") {
-                        channel.send(JSON.stringify({ type: "ping" }));
-                    }
-                } else {
-                    // 我是接收 ping 的一方
-
+            const heartbeatInterval = setInterval(() => {
+                // const myId = this.getUniqId()!;
+                // const isSender = this.compareUniqIdPriority(myId, id);
+                // if (isSender) {
+                // 我是 ping 的一方
+                if (channel.readyState === "open") {
+                    channel.send(JSON.stringify({ type: "ping" }));
                 }
-            }, 2000);
+                // }
+            }, 3000);
+
+            this.heartbeatIntervals.set(id, heartbeatInterval);
         };
 
 
@@ -626,14 +632,14 @@ export class RealTimeColab {
                     case "ping":
                         this.lastPingTimes.set(id, Date.now());
 
-                        this.userList.set(id, {
-                            status: "connected",
-                            attempts: 0,
-                            lastSeen: Date.now(),
-                        });
+                        // this.userList.set(id, {
+                        //     status: "connected",
+                        //     attempts: 0,
+                        //     lastSeen: Date.now(),
+                        // });
 
                         this.pongFailures.set(id, 0);
-                        this.updateConnectedUsers(this.userList);
+                        // this.updateConnectedUsers(this.userList);
 
                         if (channel.readyState === "open") {
                             channel.send(JSON.stringify({ type: "pong" }));
@@ -713,28 +719,47 @@ export class RealTimeColab {
                 }
             };
 
-            channel.onclose = () => {
-                console.log(`Data channel with user ${id} is closed`);
-                alertUseMUI("与对方断开连接,请刷新页面", 2000, { kind: "error" })
-                if (heartbeatInterval) {
-                    clearInterval(heartbeatInterval);
-                    heartbeatInterval = null;
-                }
-                this.userList.delete(id)
-                this.dataChannels.delete(id);
-                this.updateConnectedUsers(this.userList)
-                this.lastPongTimes.delete(id);
-            };
-            channel.onerror = (e) => {
-                console.error("Data channel error:", e);
-            };
 
-            this.dataChannels.set(id, channel);
-            this.lastPongTimes.set(id, Date.now()); // 初始化心跳时间
+            // this.lastPongTimes.set(id, Date.now()); // 初始化心跳时间
         }
+        channel.onclose = () => {
+            console.log(`Data channel with user ${id} is closed`);
+            if (this.heartbeatIntervals.has(id)) {
+                clearInterval(this.heartbeatIntervals.get(id)!);
+                this.heartbeatIntervals.delete(id);
+            }
+            alertUseMUI("与对方断开连接,请刷新页面", 2000, { kind: "error" })
+            if (heartbeatInterval) {
+                clearInterval(heartbeatInterval);
+                heartbeatInterval = null;
+            }
+            this.userList.delete(id)
+            this.dataChannels.delete(id);
+            this.updateConnectedUsers(this.userList)
+            this.lastPongTimes.delete(id);
+        };
+        channel.onerror = () => {
+            this.cleanupDataChannel(id)
+        };
     }
 
-
+    private cleanupDataChannel(id: string): void {
+        const channel = this.dataChannels.get(id);
+        if (channel) {
+            // 强制关闭通道（触发 onclose）
+            channel.close();
+            // 清理心跳定时器
+            if (this.heartbeatIntervals.has(id)) {
+                clearInterval(this.heartbeatIntervals.get(id)!);
+                this.heartbeatIntervals.delete(id);
+            }
+            // 删除引用
+            this.dataChannels.delete(id);
+            this.userList.delete(id);
+            this.lastPongTimes.delete(id);
+            this.updateConnectedUsers(this.userList);
+        }
+    }
     public async connectToUser(id: string): Promise<void> {
         const now = Date.now();
         const lastAttempt = this.lastConnectAttempt.get(id) ?? 0;
@@ -754,20 +779,34 @@ export class RealTimeColab {
             let peer = RealTimeColab.peers.get(id);
 
             if (peer) {
-                const state = peer.connectionState;
-                if (["connected", "connecting"].includes(state)) {
-                    console.log(`[CONNECT] 与 ${id} 的连接状态为 ${state}，无需重建`);
+                const iceState = peer.connectionState;
+                const dataChannel = this.dataChannels.get(id);
+
+                // 双重状态检查
+                const isICEValid = ["connected", "connecting"].includes(iceState);
+                const isChannelValid = dataChannel?.readyState === "open";
+
+                if (isICEValid && isChannelValid) {
+                    console.log(`[CONNECT] ${id} 连接正常 (ICE: ${iceState}, Channel: open)`);
                     return;
                 }
 
-                console.warn(`[CONNECT] 清除旧连接 ${id}，状态: ${state}`);
+                // 需要清理的异常情况
+                console.warn(`[CONNECT] 清理 ${id} 的旧连接`,
+                    `ICE 状态: ${iceState}, 通道状态: ${dataChannel?.readyState || 'missing'}`);
+
+                // 执行清理操作
                 peer.close();
                 RealTimeColab.peers.delete(id);
+                this.cleanupDataChannel(id); // 这会清理 dataChannels、心跳等
+
+
             }
 
             // 建立新连接
             peer = this.peerManager.createPeerConnection(id);
             const dataChannel = peer.createDataChannel("chat");
+
             this.setupDataChannel(dataChannel, id);
 
             const offer = await peer.createOffer({ iceRestart: true });
@@ -791,13 +830,13 @@ export class RealTimeColab {
                     console.warn(`[CONNECT] ⏰ ${id} 连接长时间未建立，强制关闭`);
                     current.close();
                     RealTimeColab.peers.delete(id);
-                    this.updateConnectedUsers(this.userList);
+                    this.cleanupDataChannel(id); // 这会清理 dataChannels、心跳等
 
                 } else {
                     console.log(`[CONNECT] ${id} 正在连接中，延长等待`);
                 }
                 this.connectionTimeouts.delete(id);
-            }, 5000);
+            }, 6000);
 
             this.connectionTimeouts.set(id, timeoutId);
 

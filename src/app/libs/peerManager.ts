@@ -59,6 +59,11 @@ export class PeerManager {
 
             if (peer.iceConnectionState === "connected") {
                 console.log(`[CONNECT] ✅ ${id} 连接成功，取消超时`);
+                const user = this.rtc.userList.get(id)
+                if (user) {
+                    this.rtc.userList.set(id, { ...user, status: "connected" })
+                }
+
                 clearTimeout(this.rtc.connectionTimeouts.get(id));
             }
 

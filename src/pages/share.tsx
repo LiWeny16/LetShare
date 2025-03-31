@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
-const url = "wss://md-server-md-server-bndnqhexdf.cn-hangzhou.fcapp.run";
-// const url = "ws://192.168.1.13:9000";
+// const url = "wss://md-server-md-server-bndnqhexdf.cn-hangzhou.fcapp.run";
+const url = "ws://192.168.1.13:9000";
 import Dialog from "@mui/material/Dialog";
 import DevicesIcon from "@mui/icons-material/Devices";
 import CachedIcon from '@mui/icons-material/Cached';
@@ -154,7 +154,7 @@ export default function Settings() {
         try {
             if (!realTimeColab.isConnectedToUser(targetUserId)) {
                 alertUseMUI("正在连接目标用户，请等待连接建立", 2000, { kind: "warning" });
-                realTimeColab.connectToUser(targetUserId)
+                // realTimeColab.connectToUser()
                 return;
             }
             if (selectedButton === "file" && selectedFile) {
