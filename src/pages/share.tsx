@@ -34,6 +34,9 @@ import { Footer } from "../components/Footer";
 import EditableUserId from "../components/UserId";
 import StartupPage from "../components/StartupPage";
 import DownloadDrawer from "../components/Download";
+import JSZip from "jszip";
+
+// 确保状态类型正确
 
 
 const settingsBodyContentBoxStyle = {
@@ -73,7 +76,7 @@ export default function Settings() {
     const [openDialog, setOpenDialog] = useState(false);
     const [connectedUsers, setConnectedUsers] = useState<ConnectedUser[]>([]);
     const [loading, setLoading] = useState(false);
-    const [selectedButton, setSelectedButton] = useState<"file" | "text" | "clip" | null>("clip");
+    const [selectedButton, setSelectedButton] = useState<"file" | "text" | "clip" | "zip" | null>("clip");
     const [selectedFile, setSelectedFile] = useState<File | null>(null);
     const [selectedText, setSelectedText] = useState<string | null>(null);
     const [textInputDialogOpen, setTextInputDialogOpen] = useState(false);
@@ -86,16 +89,7 @@ export default function Settings() {
 
     const searchButtonRef = useRef(null)
     const mainDialogRef = useRef<HTMLDivElement | null>(null);
-    const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
-        // event.preventDefault()
-        // event.stopPropagation()
-        // console.log(event);
-        const file = event.target.files?.[0] || null;
-        if (file) {
-            setSelectedFile(file);
-            setSelectedButton("file");
-        }
-    };
+
 
     const handleTextSelect = () => {
         setTextInput("");  // 清空上次输入
@@ -148,8 +142,37 @@ export default function Settings() {
             setLoading(false);
         }
     }
+    const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
+        const file = event.target.files?.[0] || null;
+        if (file) {
+            setSelectedFile(file);
+            setSelectedButton("file");
+        }
+    };
+    const handleFolderSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
+        const files = event.target.files;
+        if (!files || files.length === 0) return;
 
+        try {
+            const zip = new JSZip();
+            // 添加所有文件到ZIP
+            Array.from(files).forEach(file => {
+                zip.file(file.name, file);
+            });
 
+            // 生成ZIP文件
+            const content = await zip.generateAsync({ type: "blob" });
+            const zipFile = new File([content], `LetShare_${Date.now()}.zip`, {
+                type: "application/zip",
+            });
+
+            setSelectedFile(zipFile);
+            setSelectedButton("zip");
+        } catch (error) {
+            console.error("压缩失败:", error);
+            alertUseMUI("文件压缩失败，请重试！", 2000, { kind: "error" });
+        }
+    };
     const handleClickOtherClients = async (_e: any, targetUserId: string) => {
         try {
             if (!realTimeColab.isConnectedToUser(targetUserId)) {
@@ -157,20 +180,24 @@ export default function Settings() {
                 // realTimeColab.connectToUser()
                 return;
             }
-            if (selectedButton === "file" && selectedFile) {
+            if ((selectedButton === "file" || selectedButton === "zip") && selectedFile) {
                 if (realTimeColab.isSendingFile) {
-                    alertUseMUI("有任务正在进行中！", 2000, { kind: "info" })
-                    setDwnloadPageState(true)
-                    return
+                    alertUseMUI("有任务正在进行中！", 2000, { kind: "info" });
+                    setDwnloadPageState(true);
+                    return;
                 }
-                setDwnloadPageState(true)
-                await realTimeColab.sendFileToUser(targetUserId, selectedFile, (progress) => {
-                    setFileTransferProgress(progress);
-                    if (progress >= 100) {
-                        setTimeout(() => setFileTransferProgress(null), 1500); // 自动隐藏
-                    }
-                });
 
+                setDwnloadPageState(true);
+                await realTimeColab.sendFileToUser(
+                    targetUserId,
+                    selectedFile,
+                    (progress) => {
+                        setFileTransferProgress(progress);
+                        if (progress >= 100) {
+                            setTimeout(() => setFileTransferProgress(null), 1500);
+                        }
+                    }
+                );
             } else if (selectedButton === "text" && selectedText) {
                 await realTimeColab.sendMessageToUser(targetUserId, selectedText);
             } else if (selectedButton === "clip") {
@@ -395,9 +422,37 @@ export default function Settings() {
 
                         <input id="file-input" type="file" hidden onChange={handleFileSelect} />
 
-                        <Button disabled variant="outlined" startIcon={<FolderIcon />} sx={buttonStyleNormal}>
-                            文件夹
-                        </Button>
+
+                        <Badge
+                            color="primary"
+                            badgeContent={selectedButton === "zip" ? 1 : 0}
+                            overlap="circular"
+                            sx={badgeStyle}
+                        >
+                            <Button
+                                variant="outlined"
+                                sx={buttonStyleNormal}
+                                startIcon={<FolderIcon />}
+                                onClick={() => {
+                                    const input = document.getElementById("folder-input") as HTMLInputElement;
+                                    if (input) {
+                                        input.value = "";
+                                        input.click();
+                                    }
+                                }}
+                            >
+                                压缩包
+                            </Button>
+                        </Badge>
+
+                        {/* 新增多文件输入框 */}
+                        <input
+                            id="folder-input"
+                            type="file"
+                            hidden
+                            multiple
+                            onChange={handleFolderSelect}
+                        />
 
                         <Badge
                             color="primary"
