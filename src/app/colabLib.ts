@@ -843,8 +843,8 @@ export class RealTimeColab {
                 if (
                     this.userList.get(id)?.status != "connected" &&
                     current &&
-                    current.iceConnectionState !== "connected"
-                    // current.iceConnectionState !== "checking"
+                    current.iceConnectionState !== "connected" &&
+                    current.iceConnectionState !== "checking"
                 ) {
                     console.warn(`[CONNECT] ⏰ ${id} 连接长时间未建立，强制关闭`);
                     current.close();
@@ -856,10 +856,10 @@ export class RealTimeColab {
                     this.cleanupDataChannel(id); // 这会清理 dataChannels、心跳等
 
                 } else {
-                    console.log(`[CONNECT] ${id} 正在连接中，延长等待 状态${current!.iceConnectionState}`);
+                    console.log(`[CONNECT] ${id} 正在连接中，延长等待 状态`);
                 }
                 this.connectionTimeouts.delete(id);
-            }, 6500);
+            }, 8000);
 
             this.connectionTimeouts.set(id, timeoutId);
 
