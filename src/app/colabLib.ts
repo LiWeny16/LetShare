@@ -7,7 +7,7 @@ interface NegotiationState {
     isNegotiating: boolean;    // 是否正在进行一次Offer/Answer
     queue: any[];              // 暂存要处理的Offer或Answer
 }
-export type UserStatus = "waiting" | "connected" | "disconnected";
+export type UserStatus = "waiting" | "connecting" | "connected" | "disconnected";
 
 export interface UserInfo {
     status: UserStatus;
@@ -41,7 +41,7 @@ export class RealTimeColab {
     } | null = null;
     private totalChunks = 0;
     private chunkSize = 16 * 1024 * 2; // 每个切片64KB
-    public coolingTime = 1800
+    public coolingTime = 3000
     private receivedChunkCount = 0;
     private connectionQueue = new Map<string, boolean>();
     private pendingOffers = new Set<string>();
@@ -59,7 +59,7 @@ export class RealTimeColab {
         setInterval(async () => {
             for (const [id, user] of this.userList.entries()) {
                 if (user.status === "waiting") {
-                    if (user.attempts >= 10) {
+                    if (user.attempts >= 3) {
                         console.warn(`[USER CHECK] ${id} 重试次数过多，标记为 disconnected`);
                         user.status = "disconnected";
                         this.userList.set(id, user);
@@ -68,6 +68,7 @@ export class RealTimeColab {
                     }
                     try {
                         await this.connectToUser(id);
+                        user.status = "connecting"
                         user.attempts += 1;
                         this.userList.set(id, user);
                     } catch (err) {
@@ -75,7 +76,7 @@ export class RealTimeColab {
                     }
                 }
             }
-        }, 4500);
+        }, 5000);
     }
 
     private constructor() {
@@ -302,11 +303,14 @@ export class RealTimeColab {
         } else {
             user.lastSeen = now;
             if (user.status === "disconnected") {
-                user.attempts = 0; // 可选：发现重新上线，清空失败记录
+                user.attempts = 2; // 可选：发现重新上线，清空失败记录
                 user.status = "waiting";
             }
             // 如果正在连接就不要重复尝试
             if (user.status === "waiting") {
+                return;
+            }
+            if (user.status === "connecting") {
                 return;
             }
             if (user.status === "connected") {
@@ -331,11 +335,14 @@ export class RealTimeColab {
                     await this.connectToUser(fromId);
                     current.attempts = 0;
                 } catch (e) {
+                    console.warn("发送错误");
                     current.attempts++;
                     if (current.attempts >= 10) {
                         current.status = "disconnected";
                     }
                 }
+            } else if (current.status === "connecting") {
+                return
             }
         }
 
@@ -737,7 +744,9 @@ export class RealTimeColab {
                 clearInterval(this.heartbeatIntervals.get(id)!);
                 this.heartbeatIntervals.delete(id);
             }
-            alertUseMUI("与对方断开连接,请刷新页面", 2000, { kind: "error" })
+            if (this.userList.get(id)?.status === "connected") {
+                alertUseMUI("与对方断开连接,请刷新页面", 2000, { kind: "error" })
+            }
             if (heartbeatInterval) {
                 clearInterval(heartbeatInterval);
                 heartbeatInterval = null;
@@ -832,20 +841,25 @@ export class RealTimeColab {
             const timeoutId = window.setTimeout(() => {
                 const current = RealTimeColab.peers.get(id);
                 if (
+                    this.userList.get(id)?.status != "connected" &&
                     current &&
-                    current.iceConnectionState !== "connected" &&
-                    current.iceConnectionState !== "checking"
+                    current.iceConnectionState !== "connected"
+                    // current.iceConnectionState !== "checking"
                 ) {
                     console.warn(`[CONNECT] ⏰ ${id} 连接长时间未建立，强制关闭`);
                     current.close();
+                    const user = this.userList.get(id);
+                    if (user) {
+                        this.userList.set(id, { ...user, status: "disconnected" });
+                    }
                     RealTimeColab.peers.delete(id);
                     this.cleanupDataChannel(id); // 这会清理 dataChannels、心跳等
 
                 } else {
-                    console.log(`[CONNECT] ${id} 正在连接中，延长等待`);
+                    console.log(`[CONNECT] ${id} 正在连接中，延长等待 状态${current!.iceConnectionState}`);
                 }
                 this.connectionTimeouts.delete(id);
-            }, 6000);
+            }, 6500);
 
             this.connectionTimeouts.set(id, timeoutId);
 
