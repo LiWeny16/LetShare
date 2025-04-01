@@ -42,10 +42,11 @@ export class RealTimeColab {
         totalChunks: number;
         receivedSize: number;
         receivedChunkCount: number;
+        chunkSize: number;
         chunks: ArrayBuffer[];
     }> = new Map();
     public receivedFiles: Map<string, File> = new Map();
-    private chunkSize = 16 * 1024 * 2; // 每个切片64KB
+    // private chunkSize = 16 * 1024 * 2; // 每个切片64KB
     public coolingTime = 3000
     private connectionQueue = new Map<string, boolean>();
     private pendingOffers = new Set<string>();
@@ -58,6 +59,33 @@ export class RealTimeColab {
     public connectionTimeouts: Map<string, number> = new Map();
     private recentlyResetPeers: Map<string, number> = new Map();
     public setFileSendingTargetUser: StringSetter = () => { }
+    private transferConfig: {
+        chunkSize: number;
+        maxConcurrentReads: number;
+        bufferThreshold: number;
+    } = {
+            chunkSize: 32 * 1024,
+            maxConcurrentReads: 10,
+            bufferThreshold: 256 * 1024,
+        };
+
+    public initTransferConfig() {
+        const deviceType = getDeviceType();
+        if (deviceType === "apple" || deviceType === "android") {
+            this.transferConfig = {
+                chunkSize: 4 * 32 * 1024,
+                maxConcurrentReads: 8,
+                bufferThreshold: 128 * 1024,
+            };
+        } else {
+            this.transferConfig = {
+                chunkSize: 32 * 1024,
+                maxConcurrentReads: 8,
+                bufferThreshold: 256 * 1024,
+            };
+        }
+
+    }
     public async init(
         setFileSendingTargetUser: StringSetter,
         setMsgFromSharing: (msg: string | null) => void,
@@ -70,6 +98,7 @@ export class RealTimeColab {
         this.setDownloadPageState = setDownloadPageState
         this.updateConnectedUsers = updateConnectedUsers
         this.setFileTransferProgress = setFileTransferProgress
+        this.initTransferConfig()
         kit.sleep(this.coolingTime)
         setInterval(async () => {
             for (const [id, user] of this.userList.entries()) {
@@ -328,7 +357,7 @@ export class RealTimeColab {
                 type: "discover",
                 to: fromId,
                 isReply: true,
-                userType: getDeviceType() 
+                userType: getDeviceType()
             });
         }
 
@@ -639,8 +668,9 @@ export class RealTimeColab {
                         this.receivingFiles.set(id, {
                             name: message.name,
                             size: message.size,
-                            totalChunks: Math.ceil(message.size / this.chunkSize),
-                            chunks: new Array(Math.ceil(message.size / this.chunkSize)),
+                            totalChunks: Math.ceil(message.size / message.chunkSize),
+                            chunks: new Array(Math.ceil(message.size / message.chunkSize)),
+                            chunkSize: message.chunkSize,
                             receivedSize: 0,
                             receivedChunkCount: 0
                         });
@@ -911,8 +941,8 @@ export class RealTimeColab {
             return;
         }
 
-        const totalChunks = Math.ceil(file.size / this.chunkSize);
-        const maxConcurrentReads = 10;
+        const totalChunks = Math.ceil(file.size / this.transferConfig.chunkSize);
+        let maxConcurrentReads = this.transferConfig.maxConcurrentReads
         let chunksSent = 0;
         let currentIndex = 0;
         // 解锁
@@ -927,6 +957,7 @@ export class RealTimeColab {
             name: file.name,
             size: file.size,
             totalChunks,
+            chunkSize: this.transferConfig.chunkSize
         };
         try {
             channel.send(JSON.stringify(metaMessage));
@@ -940,8 +971,8 @@ export class RealTimeColab {
             return new Promise((resolve, reject) => {
                 if (this.aborted) return reject(new Error("读取中止"));
 
-                const offset = index * this.chunkSize;
-                const slice = file.slice(offset, offset + this.chunkSize);
+                const offset = index * this.transferConfig.chunkSize;
+                const slice = file.slice(offset, offset + this.transferConfig.chunkSize);
                 const reader = new FileReader();
                 reader.onload = () => {
                     if (this.aborted) return reject(new Error("读取中止"));
@@ -972,7 +1003,8 @@ export class RealTimeColab {
 
                 const send = () => {
                     if (this.aborted) return;
-                    if (channel.bufferedAmount < 256 * 1024) {
+                    if (channel.bufferedAmount < this.transferConfig.bufferThreshold) {
+                        console.log(channel.bufferedAmount);
                         channel.send(bufferWithHeader);
                         chunksSent++;
                         const progress = Math.min((chunksSent / totalChunks) * 100, 100);
