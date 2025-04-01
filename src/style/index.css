@@ -43,3 +43,22 @@ body {
   height: 100px;
   /* 方块高度 */
 }
+
+
+.uniformed-scroller::-webkit-scrollbar {
+  width: 8px;
+}
+
+.uniformed-scroller::-webkit-scrollbar-thumb {
+  background-color: rgba(0, 0, 0, 0.2);
+  border-radius: 4px;
+}
+
+.uniformed-scroller::-webkit-scrollbar-track {
+  background-color: transparent;
+}
+
+.uniformed-scroller {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(0, 0, 0, 0.2) transparent;
+}

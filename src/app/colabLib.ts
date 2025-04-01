@@ -1,6 +1,7 @@
 import kit from "bigonion-kit";
 import alertUseMUI from "./alert";
 import { PeerManager } from "./libs/peerManager";
+import { getDeviceType } from "./libs/tools";
 
 
 interface NegotiationState {
@@ -13,6 +14,7 @@ export interface UserInfo {
     status: UserStatus;
     attempts: number;
     lastSeen: number;
+    userType: UserType
 }
 
 export class RealTimeColab {
@@ -25,7 +27,8 @@ export class RealTimeColab {
     private ws: WebSocket | null = null;
     public userList: Map<string, UserInfo> = new Map();
     private setMsgFromSharing: (msg: string | null) => void = () => { }
-    private setFileFromSharing: (file: Blob | null) => void = () => { }
+    public setFileTransferProgress: React.Dispatch<React.SetStateAction<number | null>> = () => { }
+    private setDownloadPageState: React.Dispatch<React.SetStateAction<boolean>> = () => { };
     public updateConnectedUsers: (userList: Map<string, UserInfo>) => void = () => { }
     public fileMetaInfo = { name: "default_received_file" }
     private lastPongTimes: Map<string, number> = new Map();
@@ -33,16 +36,17 @@ export class RealTimeColab {
     public isSendingFile = false
     private heartbeatIntervals = new Map<string, ReturnType<typeof setInterval>>();
     private timeoutHandles = new Set();
-    public receivingFile: {
+    public receivingFiles: Map<string, {
         name: string;
         size: number;
+        totalChunks: number;
         receivedSize: number;
+        receivedChunkCount: number;
         chunks: ArrayBuffer[];
-    } | null = null;
-    private totalChunks = 0;
+    }> = new Map();
+    public receivedFiles: Map<string, File> = new Map();
     private chunkSize = 16 * 1024 * 2; // 每个切片64KB
     public coolingTime = 3000
-    private receivedChunkCount = 0;
     private connectionQueue = new Map<string, boolean>();
     private pendingOffers = new Set<string>();
     public negotiationMap = new Map<string, NegotiationState>();
@@ -53,8 +57,19 @@ export class RealTimeColab {
     public lastConnectAttempt: Map<string, number> = new Map();
     public connectionTimeouts: Map<string, number> = new Map();
     private recentlyResetPeers: Map<string, number> = new Map();
-
-    public async init() {
+    public setFileSendingTargetUser: StringSetter = () => { }
+    public async init(
+        setFileSendingTargetUser: StringSetter,
+        setMsgFromSharing: (msg: string | null) => void,
+        setDownloadPageState: React.Dispatch<React.SetStateAction<boolean>>,
+        updateConnectedUsers: (userList: Map<string, UserInfo>) => void = () => { },
+        setFileTransferProgress: React.Dispatch<React.SetStateAction<number | null>>
+    ) {
+        this.setFileSendingTargetUser = setFileSendingTargetUser
+        this.setMsgFromSharing = setMsgFromSharing
+        this.setDownloadPageState = setDownloadPageState
+        this.updateConnectedUsers = updateConnectedUsers
+        this.setFileTransferProgress = setFileTransferProgress
         kit.sleep(this.coolingTime)
         setInterval(async () => {
             for (const [id, user] of this.userList.entries()) {
@@ -160,10 +175,6 @@ export class RealTimeColab {
     }
 
 
-
-
-
-
     public getUniqId(): string | null {
         return RealTimeColab.uniqId;
     }
@@ -199,23 +210,17 @@ export class RealTimeColab {
 
     public async connect(
         url: string,
-        setMsgFromSharing: (msg: string | null) => void,
-        setFileFromSharing: (file: Blob | null) => void,
-        updateConnectedUsers: (userList: Map<string, UserInfo>) => void = () => { }
+
     ): Promise<void> {
         try {
-            this.setMsgFromSharing = setMsgFromSharing
-            this.setFileFromSharing = setFileFromSharing
-            this.updateConnectedUsers = updateConnectedUsers
+
             this.ws = new WebSocket(url);
             this.ws.onopen = async () => {
                 await this.waitForUnlock(this.cleaningLock);
                 setTimeout(() => {
-                    this.broadcastSignal({ type: "discover" });
+                    this.broadcastSignal({ type: "discover", userType: getDeviceType() });
                 }, 2500);
             };
-
-
 
             this.ws.onmessage = (event) =>
                 this.handleSignal(event);
@@ -234,10 +239,8 @@ export class RealTimeColab {
     }
 
     public async disconnect(setMsgFromSharing?: React.Dispatch<React.SetStateAction<string | null>>
-        , setFileFromSharing?: React.Dispatch<React.SetStateAction<Blob | null>>
     ): Promise<void> {
-        if (setFileFromSharing && setMsgFromSharing) {
-            setFileFromSharing(null)
+        if (setMsgFromSharing) {
             setMsgFromSharing(null)
         }
         // this.broadcastSignal({ type: "leave", id: this.getUniqId() });
@@ -299,6 +302,7 @@ export class RealTimeColab {
                 status: "waiting",
                 attempts: 0,
                 lastSeen: now,
+                userType: data.userType
             });
         } else {
             user.lastSeen = now;
@@ -324,6 +328,7 @@ export class RealTimeColab {
                 type: "discover",
                 to: fromId,
                 isReply: true,
+                userType: getDeviceType() 
             });
         }
 
@@ -353,8 +358,6 @@ export class RealTimeColab {
 
     private async handleLeave(data: any) {
         const leavingUserId = data.id;
-        const now = Date.now();
-
         if (this.cleaningLock) {
             console.warn("⛔️ 当前正在清理其他连接，跳过本次 handleLeave");
             return;
@@ -364,13 +367,12 @@ export class RealTimeColab {
 
         try {
             console.warn(`📤 正在清理用户 ${leavingUserId} 的所有状态`);
-
-            // 1. 设置 userList 状态为 disconnected
-            this.userList.set(leavingUserId, {
-                status: "disconnected",
-                attempts: 0,
-                lastSeen: now,
-            });
+            // 1. 仅更新 userList 中的状态为 disconnected，不改变其他属性
+            const user = this.userList.get(leavingUserId);
+            if (user) {
+                user.status = "disconnected";
+                this.userList.set(leavingUserId, user);
+            }
 
             // 2. 关闭并移除 PeerConnection
             const peer = RealTimeColab.peers.get(leavingUserId);
@@ -593,12 +595,11 @@ export class RealTimeColab {
                 this.connectionTimeouts.delete(id);
             }
 
-            const now = Date.now();
-            this.userList.set(id, {
-                status: "connected",
-                attempts: 0,
-                lastSeen: now,
-            });
+            const user = this.userList.get(id);
+            if (user) {
+                user.status = "connected";
+                this.userList.set(id, user);
+            }
 
             alertUseMUI("新用户已连接: " + id.split(":")[0], 2000, { kind: "success" });
             this.updateConnectedUsers(this.userList);
@@ -623,40 +624,42 @@ export class RealTimeColab {
         };
 
 
+        // 用于每个用户维护独立的文件接收状态
+        if (!this.receivingFiles) {
+            this.receivingFiles = new Map();
+        }
+
         channel.onmessage = (event) => {
             if (typeof event.data === "string") {
                 const message = JSON.parse(event.data);
 
                 switch (message.type) {
                     case "file-meta":
-                        // 关键：在开始新文件接收之前，清空旧的接收状态
-                        this.receivingFile = null;
-                        this.totalChunks = 0;
-                        this.receivedChunkCount = 0;
-
-                        // 现在再初始化新文件状态
-                        this.receivingFile = {
+                        // 初始化新的接收状态
+                        this.receivingFiles.set(id, {
                             name: message.name,
                             size: message.size,
+                            totalChunks: Math.ceil(message.size / this.chunkSize),
+                            chunks: new Array(Math.ceil(message.size / this.chunkSize)),
                             receivedSize: 0,
-                            chunks: [],
-                        };
-                        this.totalChunks = Math.ceil(this.receivingFile.size / this.chunkSize);
+                            receivedChunkCount: 0
+                        });
+
                         realTimeColab.fileMetaInfo.name = message.name;
-                        alertUseMUI(`开始接受文件:${this.receivingFile.name}`, 5000, { kind: "success" })
+                        this.setDownloadPageState(true)
+                        // alertUseMUI(`开始接受来自 ${id} 的文件: ${message.name}`, 5000, { kind: "success" });
+                        break;
+
+                    case "abort":
+                        realTimeColab.abortFileTransferToUser?.();
+                        this.setFileTransferProgress(null)
+                        this.setDownloadPageState(false)
+                        alertUseMUI("对方取消了传输！", 2000, { kind: 'error' })
+
                         break;
                     case "ping":
                         this.lastPingTimes.set(id, Date.now());
-
-                        // this.userList.set(id, {
-                        //     status: "connected",
-                        //     attempts: 0,
-                        //     lastSeen: Date.now(),
-                        // });
-
                         this.pongFailures.set(id, 0);
-                        // this.updateConnectedUsers(this.userList);
-
                         if (channel.readyState === "open") {
                             channel.send(JSON.stringify({ type: "pong" }));
                         }
@@ -665,12 +668,11 @@ export class RealTimeColab {
                     case "pong":
                         this.lastPongTimes.set(id, Date.now());
 
-                        this.userList.set(id, {
-                            status: "connected",
-                            attempts: 0,
-                            lastSeen: Date.now(),
-                        });
-
+                        const user = this.userList.get(id);
+                        if (user) {
+                            user.status = "connected";
+                            this.userList.set(id, user);
+                        }
                         this.pingFailures.set(id, 0);
                         this.updateConnectedUsers(this.userList);
                         break;
@@ -681,63 +683,59 @@ export class RealTimeColab {
                         break;
                 }
             } else {
-                // 非文本消息认为是二进制数据，解析固定头部后提取切片数据
+                // 非文本消息：二进制数据
                 const buffer = event.data as ArrayBuffer;
-                const headerSize = 8; // 4字节切片索引 + 4字节数据长度
+                const headerSize = 8; // 4字节索引 + 4字节长度
                 if (buffer.byteLength < headerSize) {
                     console.error("接收到的二进制数据太小");
                     return;
                 }
+
                 const view = new DataView(buffer);
-                const index = view.getUint32(0);          // 切片索引
-                const chunkLength = view.getUint32(4);      // 该切片数据的长度
-                const chunkData = buffer.slice(headerSize); // 提取实际数据部分
+                const index = view.getUint32(0);
+                const chunkLength = view.getUint32(4);
+                const chunkData = buffer.slice(headerSize);
 
-                // 校验数据完整性
                 if (chunkData.byteLength !== chunkLength) {
-                    console.error(`切片 ${index} 数据长度不匹配: 声明 ${chunkLength}，实际 ${chunkData.byteLength}`);
-                    return;
-                }
-                if (!this.receivingFile) {
-                    console.error("尚未接收到文件元数据，无法处理切片");
+                    console.error(`切片 ${index} 长度不匹配：应为 ${chunkLength}，实际为 ${chunkData.byteLength}`);
                     return;
                 }
 
-                // 将切片数据存储到对应索引位置（防止重复存储）
-                if (!this.receivingFile.chunks[index]) {
-                    this.receivingFile.chunks[index] = chunkData;
-                    this.receivingFile.receivedSize += chunkData.byteLength;
-                    this.receivedChunkCount++;
-                    // console.log(`✅ 接收到切片 ${index}: ${chunkData.byteLength} 字节`);
+                const fileInfo = this.receivingFiles.get(id);
+                if (!fileInfo) {
+                    console.error("尚未收到文件元数据，无法处理切片");
+                    return;
                 }
 
-                // 检查是否所有切片均已接收
-                if (this.receivedChunkCount === this.totalChunks) {
-                    // 按索引顺序重组文件
+                if (!fileInfo.chunks[index]) {
+                    fileInfo.chunks[index] = chunkData;
+                    fileInfo.receivedSize += chunkData.byteLength;
+                    fileInfo.receivedChunkCount++;
+                }
+
+                if (fileInfo.receivedChunkCount === fileInfo.totalChunks) {
                     const sortedChunks: ArrayBuffer[] = [];
-                    for (let i = 0; i < this.totalChunks; i++) {
-                        if (!this.receivingFile.chunks[i]) {
-                            alertUseMUI("文件传输缺少切片,请重新传输！ " + i, 1000, { kind: "error" })
+                    for (let i = 0; i < fileInfo.totalChunks; i++) {
+                        if (!fileInfo.chunks[i]) {
+                            alertUseMUI(`文件传输缺少切片 ${i}，请重新传输！`, 1000, { kind: "error" });
                             console.error(`缺少切片 ${i}`);
-                            this.setFileFromSharing(null)
+                            this.receivingFiles.delete(id);
                             return;
                         }
-                        sortedChunks.push(this.receivingFile.chunks[i]);
+                        sortedChunks.push(fileInfo.chunks[i]);
                     }
+
                     const fileBlob = new Blob(sortedChunks);
-                    const file = new File([fileBlob], this.receivingFile.name, { type: "application/octet-stream" });
-                    this.setFileFromSharing(file); // 你的回调
-
-                    // 重置状态
-                    this.receivingFile = null;
-                    this.totalChunks = 0;
-                    this.receivedChunkCount = 0;
+                    const file = new File([fileBlob], fileInfo.name, { type: "application/octet-stream" });
+                    this.receivedFiles.set(id + "::" + file.name, file);
+                    this.receivingFiles.delete(id);
+                    alertUseMUI("成功接受来自" + id.split(":")[0] + "的文件！")
+                    // this.setDownloadPageState(false)
+                    // console.log(`✅ 成功接收来自 ${id} 的文件：${fileInfo.name}`);
                 }
-            };
+            }
+        };
 
-
-            // this.lastPongTimes.set(id, Date.now()); // 初始化心跳时间
-        }
         channel.onclose = () => {
             console.log(`Data channel with user ${id} is closed`);
             if (this.heartbeatIntervals.has(id)) {
@@ -904,9 +902,10 @@ export class RealTimeColab {
     public async sendFileToUser(
         id: string,
         file: File,
-        onProgress?: (progress: number) => void
+        // onProgress?: (progress: number) => void
     ): Promise<void> {
         const channel = this.dataChannels.get(id);
+        this.setFileSendingTargetUser(id)
         if (!channel || channel.readyState !== "open") {
             console.error(`Data channel with user ${id} is not available.`);
             return;
@@ -976,11 +975,14 @@ export class RealTimeColab {
                     if (channel.bufferedAmount < 256 * 1024) {
                         channel.send(bufferWithHeader);
                         chunksSent++;
-                        if (onProgress) {
-                            const progress = Math.min((chunksSent / totalChunks) * 100, 100);
-                            onProgress(progress);
-                            this.isSendingFile = progress < 100;
+                        const progress = Math.min((chunksSent / totalChunks) * 100, 100);
+                        this.setFileTransferProgress(progress);
+                        // 发送完成
+                        if (progress >= 100) {
+                            setTimeout(() => this.setFileTransferProgress(null), 1500);
+                            this.setDownloadPageState(false)
                         }
+                        this.isSendingFile = progress < 100 && progress > 0;
                     } else {
                         const timeoutId = setTimeout(send, 100);
                         this.timeoutHandles.add(timeoutId);

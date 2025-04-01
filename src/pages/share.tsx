@@ -2,7 +2,6 @@ import React, { useEffect, useRef, useState } from "react";
 const url = "wss://md-server-md-server-bndnqhexdf.cn-hangzhou.fcapp.run";
 // const url = "ws://192.168.1.13:9000";
 import Dialog from "@mui/material/Dialog";
-import DevicesIcon from "@mui/icons-material/Devices";
 import CachedIcon from '@mui/icons-material/Cached';
 import DownloadIcon from "@mui/icons-material/Download";
 import {
@@ -35,6 +34,10 @@ import EditableUserId from "../components/UserId";
 import StartupPage from "../components/StartupPage";
 import DownloadDrawer from "../components/Download";
 import JSZip from "jszip";
+import AppleIcon from "@mui/icons-material/Apple";
+import PhonelinkRingIcon from "@mui/icons-material/PhonelinkRing";
+import PhonelinkIcon from "@mui/icons-material/Phonelink";
+import { getDeviceType } from "@App/libs/tools";
 
 // 确保状态类型正确
 
@@ -62,6 +65,7 @@ const badgeStyle = {
 
 type ConnectedUser = {
     uniqId: string;
+    userType: UserType
     name?: string;
     status: UserStatus
 };
@@ -69,10 +73,12 @@ export const buttonStyleNormal = {
     borderRadius: "5px",
     borderColor: "#e0e0e0",
 };
+
+
 export default function Settings() {
     // 父组件
     const [msgFromSharing, setMsgFromSharing] = useState<string | null>(null);
-    const [fileFromSharing, setFileFromSharing] = useState<Blob | null>(null);
+    // const [fileFromSharing, setFileFromSharing] = useState<Blob | null>(null);
     const [openDialog, setOpenDialog] = useState(false);
     const [connectedUsers, setConnectedUsers] = useState<ConnectedUser[]>([]);
     const [loading, setLoading] = useState(false);
@@ -86,11 +92,23 @@ export default function Settings() {
     const [startUpVisibility, setStartUpVisibility] = useState(true);
     const [downloadPageState, setDwnloadPageState] = useState(false);
     const [isDraggingOver, setIsDraggingOver] = React.useState(false);
-
+    const [fileSendingTargetUser, setFileSendingTargetUser] = React.useState("");
     const searchButtonRef = useRef(null)
     const mainDialogRef = useRef<HTMLDivElement | null>(null);
 
 
+    const getUserTypeIcon = (userType: string) => {
+        switch (userType) {
+            case "apple":
+                return <AppleIcon sx={{ transition: "color 0.3s ease" }} />;
+            case "android":
+                return <PhonelinkRingIcon sx={{ transition: "color 0.3s ease" }} />;
+            case "desktop":
+                return <PhonelinkIcon sx={{ transition: "color 0.3s ease" }} />;
+            default:
+                return <PhonelinkIcon sx={{ transition: "color 0.3s ease" }} />;
+        }
+    };
     const handleTextSelect = () => {
         setTextInput("");  // 清空上次输入
         setTextInputDialogOpen(true);  // 打开输入弹窗
@@ -104,35 +122,26 @@ export default function Settings() {
                 return {
                     uniqId: idPart ? `${namePart}:${idPart}` : id, // 保持完整 ID
                     name: namePart || id,                      // 没有冒号时用 id 作为 name
-                    status: userInfo.status                   // 携带状态
+                    status: userInfo.status,               // 携带状态
+                    userType: userInfo.userType
                 };
             }
         );
         setConnectedUsers(usersArray);
     }
-    async function handleClickSearch() {
+    const handleClickSearch = async () => {
         setLoading(true);
         try {
             // 检查ws 的连接状态
             if (!realTimeColab.isConnected()) {
                 await realTimeColab.connect(
                     url,
-                    (incomingMsg: string | null) => {
-                        // 当接收到新消息时，显示对话框以便用户决定是否接受
-                        setMsgFromSharing(incomingMsg);
-                        setOpenDialog(true);
-                    },
-                    (incomingFile: Blob | null) => {
-                        setFileFromSharing(incomingFile);
-                        setOpenDialog(true);
-                    },
-                    updateConnectedUsers
+
                 ).catch(console.error);
             } else {
                 realTimeColab.broadcastSignal({
                     type: "discover",
-                    // id: realTimeColab.getUniqId(),
-                    // isReply: false
+                    userType: getDeviceType() 
                 });
             }
             await kit.sleep(1000);
@@ -177,7 +186,7 @@ export default function Settings() {
         try {
             if (!realTimeColab.isConnectedToUser(targetUserId)) {
                 alertUseMUI("正在连接目标用户，请等待连接建立", 2000, { kind: "warning" });
-                // realTimeColab.connectToUser()
+                realTimeColab.connectToUser(targetUserId)
                 return;
             }
             if ((selectedButton === "file" || selectedButton === "zip") && selectedFile) {
@@ -191,12 +200,6 @@ export default function Settings() {
                 await realTimeColab.sendFileToUser(
                     targetUserId,
                     selectedFile,
-                    (progress) => {
-                        setFileTransferProgress(progress);
-                        if (progress >= 100) {
-                            setTimeout(() => setFileTransferProgress(null), 1500);
-                        }
-                    }
                 );
             } else if (selectedButton === "text" && selectedText) {
                 await realTimeColab.sendMessageToUser(targetUserId, selectedText);
@@ -215,32 +218,27 @@ export default function Settings() {
             console.error("发送失败：", error);
         }
     };
+
     useEffect(() => {
-        realTimeColab.init()
-        setTimeout(() => { setStartUpVisibility(false) }, 1000)
-        realTimeColab.connect(
-            url,
+        realTimeColab.init(setFileSendingTargetUser,
             (incomingMsg: string | null) => {
-                // 当接收到新消息时，显示对话框以便用户决定是否接受
                 setMsgFromSharing(incomingMsg);
                 setOpenDialog(true);
             },
-            (incomingFile: Blob | null) => {
-                setFileFromSharing(incomingFile);
-                setOpenDialog(true);
-            },
-            updateConnectedUsers
+            setDwnloadPageState,
+            updateConnectedUsers,
+            setFileTransferProgress,
+        )
+        setTimeout(() => { setStartUpVisibility(false) }, 1000)
+        realTimeColab.connect(
+            url,
         ).catch(console.error);
 
         return () => {
-            realTimeColab.disconnect(setMsgFromSharing, setFileFromSharing);
+            realTimeColab.disconnect(setMsgFromSharing);
         };
     }, [startUpVisibility]);
-    useEffect(() => {
-        if (msgFromSharing || fileFromSharing) {
-            setOpenDialog(true);
-        }
-    }, [msgFromSharing, fileFromSharing]);
+
     useEffect(() => {
         const handlePaste = async (event: ClipboardEvent) => {
             // 如果当前有弹窗打开，就不处理粘贴事件
@@ -282,21 +280,22 @@ export default function Settings() {
             if (msgFromSharing) {
                 writeClipboard(msgFromSharing);
                 alertUseMUI("成功写入剪贴板", 2000, { kind: "success" });
-            } else if (fileFromSharing) {
-                const blob = new Blob([fileFromSharing]);
-                const a = document.createElement("a");
-                a.href = URL.createObjectURL(blob);
-                a.download = realTimeColab.fileMetaInfo.name || "shared_file";
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
             }
+            // else if (fileFromSharing) {
+            //     const blob = new Blob([fileFromSharing]);
+            //     const a = document.createElement("a");
+            //     a.href = URL.createObjectURL(blob);
+            //     a.download = realTimeColab.fileMetaInfo.name || "shared_file";
+            //     document.body.appendChild(a);
+            //     a.click();
+            //     document.body.removeChild(a);
+            // }
         } catch (e) {
             console.error("处理接受失败", e);
         } finally {
             setOpenDialog(false);
             setTimeout(() => {
-                setFileFromSharing(null);
+                // setFileFromSharing(null);
                 setMsgFromSharing(null);
             }, 500);
         }
@@ -505,16 +504,9 @@ export default function Settings() {
 
                     <Box sx={{ flexGrow: 1, overflowY: "auto" }}>
                         {[...connectedUsers].sort((a, b) => {
-                            // 优先排已连接的
-                            // if (a.status === 'connected' && b.status !== 'connected') return -1;
-                            // if (a.status !== 'connected' && b.status === 'connected') return 1;
-
-                            // 都是 connected，用 compareUniqIdPriority 排序（大的排前面）
                             if (a.status === 'connected' && b.status === 'connected') {
                                 return realTimeColab.compareUniqIdPriority(a.uniqId, b.uniqId) ? -1 : 1;
                             }
-
-                            // 都不是 connected，不排序
                             return 0;
                         }).map((user) => (
                             <Box
@@ -544,9 +536,7 @@ export default function Settings() {
                                     transition: 'opacity 0.3s ease',
                                     opacity: user.status === 'waiting' ? 0.8 : 1
                                 }}>
-                                    <DevicesIcon sx={{
-                                        transition: 'color 0.3s ease'
-                                    }} />
+                                    {getUserTypeIcon(user.userType)}
 
                                     <Typography sx={{
                                         color: user.status === 'connected'
@@ -585,7 +575,7 @@ export default function Settings() {
                     setOpenDialog(false)
                     setTimeout(() => {
                         setMsgFromSharing(null)
-                        setFileFromSharing(null)
+                        // setFileFromSharing(null)
                     }, 300)
                 }}>
                 <DialogTitle>✨ 新分享</DialogTitle>
@@ -620,7 +610,7 @@ export default function Settings() {
                     <Button onClick={() => {
                         setOpenDialog(false);
                         setMsgFromSharing(null)
-                        setFileFromSharing(null)
+                        // setFileFromSharing(null)
                     }} color="secondary">拒绝</Button>
                     <Button onClick={handleAcceptMessage} color="primary" autoFocus>接受</Button>
                 </DialogActions>
@@ -687,7 +677,11 @@ export default function Settings() {
                 </DialogContent>
             </Dialog>
 
-            <DownloadDrawer onClose={() => { setDwnloadPageState(false) }} open={downloadPageState} progress={fileTransferProgress} setProgress={setFileTransferProgress} />
+            <DownloadDrawer
+                targetUserId={fileSendingTargetUser}
+                onClose={() => { setDwnloadPageState(false) }}
+                open={downloadPageState} progress={fileTransferProgress}
+                setProgress={setFileTransferProgress} />
             <Backdrop
                 sx={{ color: '#fff', zIndex: (theme) => theme.zIndex.drawer + 9999 }}
                 open={loadingPage}
