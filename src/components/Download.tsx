@@ -55,7 +55,6 @@ export default function DownloadDrawerSlide({
         setVisible(false);
         onClose();
     };
-    // GSAP
     const receivingMap = realTimeColab.receivingFiles as Map<string, any>;
     const receivedMap = realTimeColab.receivedFiles as Map<string, File>;
 

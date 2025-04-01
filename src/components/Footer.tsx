@@ -9,7 +9,7 @@ const Footer = () => {
     const handleOpen = () => setOpen(true);
     const handleClose = () => setOpen(false);
 
-    const shareUrl = 'https://bit.ly/4j0NA74';
+    const shareUrl = 'https://bigonion.cn/shortlink';
     const githubUrl = 'https://github.com/LiWeny16/LetShare'
     // const theme = useTheme(); // 获取 MUI 主题
     // const grayColor = theme.palette.text.secondary;
