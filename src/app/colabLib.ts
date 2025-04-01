@@ -1004,7 +1004,6 @@ export class RealTimeColab {
                 const send = () => {
                     if (this.aborted) return;
                     if (channel.bufferedAmount < this.transferConfig.bufferThreshold) {
-                        console.log(channel.bufferedAmount);
                         channel.send(bufferWithHeader);
                         chunksSent++;
                         const progress = Math.min((chunksSent / totalChunks) * 100, 100);
