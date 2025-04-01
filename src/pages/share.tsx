@@ -504,7 +504,19 @@ export default function Settings() {
                     <Divider sx={{ my: 2 }} />
 
                     <Box sx={{ flexGrow: 1, overflowY: "auto" }}>
-                        {connectedUsers.map((user) => (
+                        {[...connectedUsers].sort((a, b) => {
+                            // 优先排已连接的
+                            // if (a.status === 'connected' && b.status !== 'connected') return -1;
+                            // if (a.status !== 'connected' && b.status === 'connected') return 1;
+
+                            // 都是 connected，用 compareUniqIdPriority 排序（大的排前面）
+                            if (a.status === 'connected' && b.status === 'connected') {
+                                return realTimeColab.compareUniqIdPriority(a.uniqId, b.uniqId) ? -1 : 1;
+                            }
+
+                            // 都不是 connected，不排序
+                            return 0;
+                        }).map((user) => (
                             <Box
                                 key={user.uniqId}
                                 sx={{

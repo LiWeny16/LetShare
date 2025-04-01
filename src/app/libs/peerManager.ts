@@ -35,6 +35,14 @@ export class PeerManager {
         peer.onicecandidate = (event) => {
             if (event.candidate) {
                 iceBuffer.push(event.candidate);
+                let cand = event.candidate
+                const candidateStr = cand.candidate;
+                const parts = candidateStr.split(' ');
+                const ip = parts[4];
+                const type = parts[7];
+                if (type === 'host' && this.isPrivateIP(ip)) {
+                    // localHostCandidates.push(ip);
+                }
                 if (!isProcessing) {
                     isProcessing = true;
                     setTimeout(() => {
@@ -94,6 +102,13 @@ export class PeerManager {
         this.rtc.lastConnectAttempt.delete(id);
         this.rtc.userList.delete(id)
         console.log(`🧹 已清除与 ${id} 的连接资源`);
+    }
+    public isPrivateIP(ip: string) {
+        return (
+            ip.startsWith('10.') ||
+            ip.startsWith('192.168.') ||
+            ip.match(/^172\.(1[6-9]|2\d|3[0-1])\./)
+        );
     }
 
 }

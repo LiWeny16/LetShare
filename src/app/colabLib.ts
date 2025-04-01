@@ -211,7 +211,7 @@ export class RealTimeColab {
                 await this.waitForUnlock(this.cleaningLock);
                 setTimeout(() => {
                     this.broadcastSignal({ type: "discover" });
-                }, 2000);
+                }, 2500);
             };
 
 
@@ -239,7 +239,6 @@ export class RealTimeColab {
             setFileFromSharing(null)
             setMsgFromSharing(null)
         }
-        // 向其他用户广播leave消息，让他们清除自己
         // this.broadcastSignal({ type: "leave", id: this.getUniqId() });
         this.cleanUpConnections();
     }
@@ -283,7 +282,9 @@ export class RealTimeColab {
         }
     }
 
-
+    /**
+     * @description 处理广播
+    */
     private async handleDiscover(data: any) {
         const fromId = data.from;
         const isReply = data.isReply;
@@ -300,16 +301,24 @@ export class RealTimeColab {
             });
         } else {
             user.lastSeen = now;
-            // if (user.status === "disconnected") {
-            user.attempts = 0; // 可选：发现重新上线，清空失败记录
-            user.status = "waiting";
-            // }
+            if (user.status === "disconnected") {
+                user.attempts = 0; // 可选：发现重新上线，清空失败记录
+                user.status = "waiting";
+            }
+            // 如果正在连接就不要重复尝试
+            if (user.status === "waiting") {
+                return;
+            }
+            if (user.status === "connected") {
+                return;
+            }
         }
 
         // 如果不是回应 discover，发送一个回应
         if (!isReply) {
             this.broadcastSignal({
                 type: "discover",
+                to: fromId,
                 isReply: true,
             });
         }
@@ -763,7 +772,7 @@ export class RealTimeColab {
     public async connectToUser(id: string): Promise<void> {
         const now = Date.now();
         const lastAttempt = this.lastConnectAttempt.get(id) ?? 0;
-        if (now - lastAttempt < 3000) {
+        if (now - lastAttempt < 4000) {
             console.warn(`[CONNECT] 与 ${id} 的连接尝试太频繁，跳过`);
             return;
         }
