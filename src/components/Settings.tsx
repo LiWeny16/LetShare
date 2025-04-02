@@ -25,8 +25,6 @@ const SettingsPage = () => {
     const originalRoomIdRef = React.useRef(settingsStore.get("roomId"));
 
     const handleChangeRoomId = (key: SettingsKey, value: any) => {
-
-
         settingsStore.update(key, value);
     };
 

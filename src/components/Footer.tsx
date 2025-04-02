@@ -14,7 +14,6 @@ const Footer = () => {
     const theme = useTheme();
     const shareUrl = 'https://bigonion.cn/shortlink';
     const githubUrl = 'https://github.com/LiWeny16/LetShare';
-
     return (
         <>
             <Box
@@ -63,7 +62,7 @@ const Footer = () => {
                     }
                 }}
             >
-                <Box sx={{ bgcolor: 'background.paper', borderRadius: 2, }}>
+                <Box sx={{ padding: 1, bgcolor: 'background.paper', borderRadius: 2, }}>
                     <DialogTitle>分享·一触即发</DialogTitle>
                     <Divider></Divider>
                     <DialogContent
@@ -81,7 +80,7 @@ const Footer = () => {
                             <Typography
                                 variant="body1"
                                 color="text.secondary"
-                                sx={{ mb: 2, wordBreak: 'break-word', whiteSpace: 'pre-wrap' }}
+                                sx={{ mb: 0, wordBreak: 'break-word', whiteSpace: 'pre-wrap' }}
                             >
                                 扫描二维码以加入房间: <br></br><strong>{settingsStore.get("roomId")}</strong>
                             </Typography>
@@ -89,7 +88,7 @@ const Footer = () => {
                                 value={shareUrl}
                                 eyeRadius={1}
                                 style={{ borderRadius: 5 }}
-                                size={180}
+                                size={150}
                                 bgColor={theme.palette.background.paper}
                                 fgColor={theme.palette.text.primary}
                                 ecLevel="H"
@@ -102,9 +101,9 @@ const Footer = () => {
                                 href={shareUrl}
                                 target="_blank"
                                 rel="noopener noreferrer"
-                                sx={{ mt: 2, textDecoration: 'none' }}
+                                sx={{ mb: 0, wordBreak: 'break-word', textDecoration: "none", whiteSpace: 'pre-wrap' }}
                             >
-                                https://letshare.fun
+                               https://letshare.fun
                             </Typography>
                         </Box>
                     </DialogContent>

@@ -501,7 +501,7 @@ function Share() {
 
                     <Divider sx={{ my: 2 }} />
 
-                    <Box sx={{ flexGrow: 1, overflowY: "auto" }}>
+                    <Box className="uniformed-scroller" sx={{ flexGrow: 1, overflowY: "auto" }}>
                         {(connectedUsers.length == 0) && (settingsStore.get("isNewUser")) ? <><Box
                             sx={{
                                 display: 'flex',
