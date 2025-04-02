@@ -17,7 +17,8 @@ const EditableUserId = ({ onEditDone }: { onEditDone?: (newId: string) => void }
 
     }, []);
 
-    const validPattern = /^[\u4e00-\u9fa5a-zA-Z0-9]*$/;
+    const validPattern = /^[\u4e00-\u9fa5a-zA-Z0-9\u{1F000}-\u{1FFFF}]*$/u;
+
 
     const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const value = e.target.value;
@@ -27,7 +28,7 @@ const EditableUserId = ({ onEditDone }: { onEditDone?: (newId: string) => void }
 
     const handleSave = () => {
         const cleanId = userId.trim();
-       
+
         if (!validPattern.test(cleanId) || !cleanId) {
             setUserId(originalIdRef.current);
             setError(true);
@@ -57,9 +58,10 @@ const EditableUserId = ({ onEditDone }: { onEditDone?: (newId: string) => void }
                     autoFocus
                     variant="standard"
                     error={error}
-                    helperText={error ? "只允许输入字母、数字和汉字" : " "}
+                    helperText={error ? "只允许12字符以内的字母、数字和汉字" : " "}
                     inputProps={{
-                        style: { textAlign: "center" }
+                        style: { textAlign: "center" },
+                        maxLength: 12
                     }}
                     sx={{ mt: 2, display: "block", mx: "auto" }}
                 />

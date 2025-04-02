@@ -34,11 +34,11 @@ const SettingsPage = () => {
     const handleChangeLanguage = () => {
 
     }
-    const handleClose = () => {
+    const handleClose = async () => {
         const currentRoomId = settingsStore.get("roomId");
 
         if (originalRoomIdRef.current !== currentRoomId) {
-            realTimeColab.connectToServer()
+            await realTimeColab.handleRename()
             alertUseMUI(`成功加入房间："${currentRoomId}"`)
             originalRoomIdRef.current = currentRoomId
         }

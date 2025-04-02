@@ -221,6 +221,10 @@ function Share() {
     };
 
     useEffect(() => {
+        realTimeColab.connectToServer().then(() => {
+            realTimeColab.broadcastSignal({ type: "discover", userType: getDeviceType() });
+        })
+
         realTimeColab.init(setFileSendingTargetUser,
             (incomingMsg: string | null) => {
                 setMsgFromSharing(incomingMsg);
@@ -231,7 +235,6 @@ function Share() {
             setFileTransferProgress,
         )
         setTimeout(() => { setStartUpVisibility(false) }, 1000)
-        realTimeColab.connectToServer().catch(console.error);
 
         return () => {
             realTimeColab.disconnect();
@@ -485,7 +488,7 @@ function Share() {
                         </Badge>
                     </Box>
 
-                    <Box sx={{ display: "flex", justifyContent: "space-between", mt: 3 }}>
+                    <Box sx={{ display: "flex", justifyContent: "space-between", mt: 2 }}>
                         <Button
                             ref={searchButtonRef}
                             onClick={handleClickSearch}
@@ -499,9 +502,9 @@ function Share() {
                         </Button>
                     </Box>
 
-                    <Divider sx={{ my: 2 }} />
+                    <Divider sx={{ mb: 0.5, mt: 2 }} />
 
-                    <Box className="uniformed-scroller" sx={{ flexGrow: 1, overflowY: "auto" }}>
+                    <Box className="uniformed-scroller" sx={{ mt: 0, p: 0, flexGrow: 1, overflowY: "auto" }}>
                         {(connectedUsers.length == 0) && (settingsStore.get("isNewUser")) ? <><Box
                             sx={{
                                 display: 'flex',
@@ -533,8 +536,8 @@ function Share() {
                                 onClick={(e) => handleClickOtherClients(e, user.uniqId)}
                                 sx={{
                                     ...settingsBodyContentBoxStyle,
-                                    width: "93%",
-                                    textAlign: "left", // 👈 内容左对齐
+                                    width: "96%",
+                                    textAlign: "inherit",
                                     backgroundColor: user.status === 'waiting'
                                         ? theme.palette.action.hover
                                         : theme.palette.background.paper,
@@ -553,8 +556,10 @@ function Share() {
                             >
                                 <Box sx={{
                                     display: "flex",
-                                    alignItems: "center",
+                                    alignItems: "flex-start",
+                                    textAlign: "left",
                                     gap: 1,
+                                    width: "100%",
                                     transition: 'opacity 0.3s ease',
                                     opacity: user.status === 'waiting' ? 0.8 : 1
                                 }}>
@@ -563,6 +568,8 @@ function Share() {
                                     <Typography
                                         variant="body1"
                                         sx={{
+                                            width: "100%",
+                                            textAlign: "left",
                                             color: user.status === 'connected'
                                                 ? 'text.primary'
                                                 : 'text.secondary',

@@ -18,11 +18,17 @@ export interface UserInfo {
 }
 
 export class RealTimeColab {
+    private static instance: RealTimeColab | null = null;
+    private static userId: string | null = null;
+    private static uniqId: string | null = null;
+    public static peers: Map<string, RTCPeerConnection> = new Map();
+
     private constructor() {
         const state = this.getStatesMemorable();
         let userId = state.memorable.userId;
         let uniqId = state.memorable.uniqId;
         this.peerManager = new PeerManager(this);
+
         if (!userId) {
             userId = this.generateUUID();
             this.changeStatesMemorable({ memorable: { userId } });
@@ -35,28 +41,14 @@ export class RealTimeColab {
 
         RealTimeColab.userId = userId;
         RealTimeColab.uniqId = uniqId;
-
     }
+
     private ably: Ably.Realtime | null = null;
     public ablyChannel: ReturnType<Ably.Realtime["channels"]["get"]> | null = null;
-    private static instance: RealTimeColab | null = null;
-    private static userId: string | null = null;
-    private static uniqId: string | null = null
-    public static peers: Map<string, RTCPeerConnection> = new Map();
-    private aborted = false
-    public dataChannels: Map<string, RTCDataChannel> = new Map();
     private ws: WebSocket | null = null;
+
     public userList: Map<string, UserInfo> = new Map();
-    private setMsgFromSharing: (msg: string | null) => void = () => { }
-    public setFileTransferProgress: React.Dispatch<React.SetStateAction<number | null>> = () => { }
-    private setDownloadPageState: React.Dispatch<React.SetStateAction<boolean>> = () => { };
-    public updateConnectedUsers: (userList: Map<string, UserInfo>) => void = () => { }
-    public fileMetaInfo = { name: "default_received_file" }
-    private lastPongTimes: Map<string, number> = new Map();
-    private lastPingTimes: Map<string, number> = new Map();
-    public isSendingFile = false
-    private heartbeatIntervals = new Map<string, ReturnType<typeof setInterval>>();
-    private timeoutHandles = new Set();
+    public dataChannels: Map<string, RTCDataChannel> = new Map();
     public receivingFiles: Map<string, {
         name: string;
         size: number;
@@ -67,19 +59,34 @@ export class RealTimeColab {
         chunks: ArrayBuffer[];
     }> = new Map();
     public receivedFiles: Map<string, File> = new Map();
-    // private chunkSize = 16 * 1024 * 2; // 每个切片64KB
-    public coolingTime = 2000
+
+    private lastPingTimes: Map<string, number> = new Map();
+    private lastPongTimes: Map<string, number> = new Map();
+    private heartbeatIntervals = new Map<string, ReturnType<typeof setInterval>>();
+    private timeoutHandles = new Set();
     private connectionQueue = new Map<string, boolean>();
     private pendingOffers = new Set<string>();
     public negotiationMap = new Map<string, NegotiationState>();
-    private pingFailures = new Map<string, number>();  // 对方没回 pong 的次数
-    private pongFailures = new Map<string, number>();  // 对方没发 ping 的次数
-    public cleaningLock: boolean = false;
-    public peerManager: PeerManager;
+    private pingFailures = new Map<string, number>();
+    private pongFailures = new Map<string, number>();
+    private recentlyResetPeers: Map<string, number> = new Map();
     public lastConnectAttempt: Map<string, number> = new Map();
     public connectionTimeouts: Map<string, number> = new Map();
-    private recentlyResetPeers: Map<string, number> = new Map();
-    public setFileSendingTargetUser: StringSetter = () => { }
+    private currentRoomId: string | null = null;
+
+    public isSendingFile = false;
+    public fileMetaInfo = { name: "default_received_file" };
+    public coolingTime = 2000;
+    public cleaningLock: boolean = false;
+
+    public setFileTransferProgress: React.Dispatch<React.SetStateAction<number | null>> = () => { };
+    private setDownloadPageState: React.Dispatch<React.SetStateAction<boolean>> = () => { };
+    private setMsgFromSharing: (msg: string | null) => void = () => { };
+    public updateConnectedUsers: (userList: Map<string, UserInfo>) => void = () => { };
+    public setFileSendingTargetUser: StringSetter = () => { };
+
+    public peerManager: PeerManager;
+
     private transferConfig: {
         chunkSize: number;
         maxConcurrentReads: number;
@@ -89,6 +96,8 @@ export class RealTimeColab {
             maxConcurrentReads: 10,
             bufferThreshold: 256 * 1024,
         };
+
+    private aborted = false;
 
     public initTransferConfig() {
         const deviceType = getDeviceType();
@@ -145,14 +154,18 @@ export class RealTimeColab {
 
 
     public async connectToServer(): Promise<void> {
+        const roomId = settingsStore.get("roomId") || "default-room";
 
-        if (!validateRoomName(settingsStore.get("roomId")).isValid) {
-            settingsStore.updateUnrmb("settingsPageState", true)
-            return
+        if (!validateRoomName(roomId).isValid) {
+            settingsStore.updateUnrmb("settingsPageState", true);
+            return;
         }
+
+        // 已连接则不重复连接
         if (this.ably?.connection?.state === "connected") {
             return;
         }
+
         try {
             this.ably = new Ably.Realtime({ key: settingsStore.get("ablyKey") });
 
@@ -161,32 +174,68 @@ export class RealTimeColab {
                 this.ably!.connection.once("failed", reject);
             });
 
-            const roomId = settingsStore.get("roomId") || "default-room";
-            this.ablyChannel = this.ably!.channels.get(roomId);
-
-            const myId = this.getUniqId();
-
-            // 订阅针对自己的消息
-            this.ablyChannel.subscribe(`signal:${myId}`, (message: any) => {
-                this.handleSignal({
-                    data: JSON.stringify(message.data)
-                } as MessageEvent);
-            });
-
-            // 订阅广播消息（同房间所有人）
-            this.ablyChannel.subscribe("signal:all", (message: any) => {
-                this.handleSignal({
-                    data: JSON.stringify(message.data)
-                } as MessageEvent);
-            });
-            setTimeout(() => {
-                this.broadcastSignal({ type: "discover", userType: getDeviceType() });
-            }, 2500);
+            this.subscribeToRoom(roomId);
         } catch (err) {
-            alertUseMUI("Ably 连接失败，切换为备用 WebSocket 模式", 2000, { kind: "error" })
+            alertUseMUI("Ably 连接失败，切换为备用 WebSocket 模式", 2000, { kind: "error" });
             await this.connectToBackupWs();
         }
     }
+
+    private subscribeToRoom(roomId: string) {
+        if (!this.ably) return;
+
+        if (this.ablyChannel) {
+            this.ablyChannel.unsubscribe();
+            console.log(`🔌 离开旧房间: ${this.currentRoomId}`);
+        }
+
+        this.ablyChannel = this.ably.channels.get(roomId);
+        this.currentRoomId = roomId;
+
+        const myId = this.getUniqId();
+
+        this.ablyChannel.subscribe(`signal:${myId}`, (message: any) => {
+            this.handleSignal({ data: JSON.stringify(message.data) } as MessageEvent);
+        });
+
+        this.ablyChannel.subscribe("signal:all", (message: any) => {
+            this.handleSignal({ data: JSON.stringify(message.data) } as MessageEvent);
+        });
+
+        this.ably.connection.once("connected", () => {
+            this.broadcastSignal({ type: "discover", userType: getDeviceType() });
+        });
+
+
+        // console.log(`✅ 加入房间频道: ${roomId}`);
+    }
+
+    public async handleRename(): Promise<void> {
+        const newRoomId = settingsStore.get("roomId") || "default-room";
+
+        const validation = validateRoomName(newRoomId);
+        if (!validation.isValid) {
+            alertUseMUI(validation.message || "房间名不合法");
+            return;
+        }
+
+        if (!this.ably || this.ably.connection.state !== "connected") {
+            console.log("未连接 Ably 尝试连接...");
+            await this.connectToServer();
+        }
+
+        if (!this.ably || this.ably.connection.state !== "connected") {
+            alertUseMUI("无法连接服务器，你丫在地球吗", 2000, { kind: "error" });
+            return;
+        }
+
+        if (this.currentRoomId === newRoomId) {
+            return;
+        }
+
+        this.subscribeToRoom(newRoomId);
+    }
+
 
 
     private async connectToBackupWs(): Promise<void> {
@@ -719,9 +768,15 @@ export class RealTimeColab {
                 this.connectionTimeouts.delete(id);
             }
 
-            const user = this.userList.get(id);
-            if (user) {
-                user.status = "connected";
+            let user = this.userList.get(id);
+            if (!user) {
+                console.warn("⚠️ user 不存在，在通道打开时自动添加:", id);
+                user = {
+                    status: "connected",
+                    attempts: 0,
+                    lastSeen: Date.now(),
+                    userType: "desktop" // 或 fallback 推测
+                };
                 this.userList.set(id, user);
             }
 
