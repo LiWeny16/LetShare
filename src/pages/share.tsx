@@ -3,8 +3,8 @@ import React, { useEffect, useRef, useState } from "react";
 import Dialog from "@mui/material/Dialog";
 import CachedIcon from '@mui/icons-material/Cached';
 import DownloadIcon from "@mui/icons-material/Download";
-import { createTheme, ThemeProvider } from '@mui/material/styles';
-import { CssBaseline } from '@mui/material';
+import { createTheme, ThemeProvider, useTheme } from '@mui/material/styles';
+import { ButtonBase, CssBaseline, GlobalStyles } from '@mui/material';
 
 import {
     Box,
@@ -47,7 +47,6 @@ import settingsStore from "@App/libs/mobx";
 
 
 const settingsBodyContentBoxStyle = {
-    transition: "background-color 0.4s ease, box-shadow 0.4s ease",
     position: "relative",
     padding: "10px",
     borderRadius: "8px",
@@ -55,7 +54,6 @@ const settingsBodyContentBoxStyle = {
     flexDirection: "column",
     mt: "10px",
     mb: "5px",
-    backgroundColor: "white",
     boxShadow: "0 2px 8px rgba(0, 0, 0, 0.1)",
     overflow: "hidden",
     cursor: "pointer",
@@ -80,7 +78,7 @@ export const buttonStyleNormal = {
 
 function Share() {
 
-
+    const theme = useTheme();
     // 父组件
     const [msgFromSharing, setMsgFromSharing] = useState<string | null>(null);
     // const [fileFromSharing, setFileFromSharing] = useState<Blob | null>(null);
@@ -380,7 +378,7 @@ function Share() {
                                     width: "100%",
                                     height: "100%",
                                     zIndex: 1000,
-                                    backgroundColor: "rgba(0, 0, 0, 0.5)",
+                                    backgroundColor: "rgba(0, 0, 0, 0.4)",
                                     borderRadius: 2,
                                     display: "flex",
                                     alignItems: "center",
@@ -504,51 +502,77 @@ function Share() {
                     <Divider sx={{ my: 2 }} />
 
                     <Box sx={{ flexGrow: 1, overflowY: "auto" }}>
+                        {(connectedUsers.length == 0) && (settingsStore.get("isNewUser")) ? <><Box
+                            sx={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                textAlign: 'left',
+                                height: '100%', // 父容器需要有固定高度才能垂直居中
+                                px: 2,
+                            }}
+                        >
+                            <Box>  <Typography
+                                variant="body2"
+                                color="text.secondary"
+                                sx={{ whiteSpace: 'pre-line' }}
+                            >
+                                使用指南🎉：
+                                {"\n"}1. 两个设备连接到<strong>同一个</strong>局域网（部分公共 WiFi 不可用）
+                                {"\n"}2. 两个设备房间号<strong>必须相同</strong>！
+                            </Typography></Box>
+                        </Box></> : <></>}
                         {[...connectedUsers].sort((a, b) => {
                             if (a.status === 'connected' && b.status === 'connected') {
                                 return compareUniqIdPriority(a.uniqId, b.uniqId) ? -1 : 1;
                             }
                             return 0;
                         }).map((user) => (
-                            <Box
+                            <ButtonBase
                                 key={user.uniqId}
+                                onClick={(e) => handleClickOtherClients(e, user.uniqId)}
                                 sx={{
                                     ...settingsBodyContentBoxStyle,
                                     width: "93%",
+                                    textAlign: "left", // 👈 内容左对齐
                                     backgroundColor: user.status === 'waiting'
-                                        ? 'rgba(0, 0, 0, 0.08)'
-                                        : 'background.paper',
+                                        ? theme.palette.action.hover
+                                        : theme.palette.background.paper,
                                     opacity: user.status === 'waiting' ? 0.7 : 1,
                                     transition: 'all 0.3s ease-in-out',
                                     '&:hover': {
                                         boxShadow: user.status === 'connected' ? 2 : 1,
                                         bgcolor: user.status === 'waiting'
                                             ? 'rgba(0, 0, 0, 0.12)'
-                                            : 'background.default'
-                                    }
+                                            : 'background.default',
+                                    },
+                                    padding: 1.5,
+                                    borderRadius: 2,
+                                    display: "block", // 👈 避免默认 inline-flex
                                 }}
-                                onClick={(e) => handleClickOtherClients(e, user.uniqId)}
                             >
                                 <Box sx={{
                                     display: "flex",
                                     alignItems: "center",
                                     gap: 1,
-                                    // 内容渐变效果
                                     transition: 'opacity 0.3s ease',
                                     opacity: user.status === 'waiting' ? 0.8 : 1
                                 }}>
                                     {getUserTypeIcon(user.userType)}
 
-                                    <Typography sx={{
-                                        color: user.status === 'connected'
-                                            ? 'text.primary'
-                                            : 'text.secondary',
-                                        transition: 'color 0.3s ease'
-                                    }}>
+                                    <Typography
+                                        variant="body1"
+                                        sx={{
+                                            color: user.status === 'connected'
+                                                ? 'text.primary'
+                                                : 'text.secondary',
+                                            transition: 'color 0.3s ease'
+                                        }}
+                                    >
                                         {user.name}
                                     </Typography>
                                 </Box>
-                            </Box>
+                            </ButtonBase>
                         ))}
                     </Box>
 
@@ -595,7 +619,6 @@ function Share() {
                                 border: "none",
                                 maxHeight: 300,
                                 overflowY: "auto",
-                                backgroundColor: "#f5f5f5",
                                 borderRadius: 1,
                                 mt: 1,
                                 fontSize: { xs: "14px", sm: "15px" },
@@ -753,9 +776,10 @@ const themes = {
     }),
 };
 
+
+
 const ThemedShare = observer(() => {
     const userTheme = settingsStore.get("userTheme") || "system";
-
     const systemPrefersDark = window.matchMedia?.("(prefers-color-scheme: dark)").matches;
 
     const resolvedThemeKey: keyof typeof themes =
@@ -767,9 +791,24 @@ const ThemedShare = observer(() => {
 
     const theme = themes[resolvedThemeKey] ?? themes.light;
 
+    // 延迟应用的实际 theme
+    const [actualTheme, setActualTheme] = useState(theme);
+
+    useEffect(() => {
+        setActualTheme(theme); // ⏳ 延迟替换主题，防止闪
+    }, [theme]);
+
     return (
-        <ThemeProvider theme={theme}>
+        <ThemeProvider theme={actualTheme}>
             <CssBaseline />
+            <GlobalStyles
+                styles={(theme) => ({
+                    '::selection': {
+                        backgroundColor: theme.palette.primary.light,
+                        color: theme.palette.getContrastText(theme.palette.primary.light),
+                    },
+                })}
+            />
             <Share />
         </ThemeProvider>
     );

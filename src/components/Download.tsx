@@ -360,12 +360,11 @@ export default function DownloadDrawerSlide({
                                                         py: 1.5,
                                                         borderRadius: 2,
                                                         boxShadow: 1,
-                                                        backgroundColor: "#f9f9f9",
                                                         cursor: "pointer",
                                                         transition: "0.2s",
                                                         "&:hover": {
                                                             boxShadow: 3,
-                                                            backgroundColor: "#f0f0f0",
+                                                            backgroundColor: theme.palette.action.hover,
                                                         },
                                                     }}
                                                 >

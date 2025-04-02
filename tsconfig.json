@@ -21,6 +21,10 @@
     "paths": {
       "@App": ["./src/app/"],
       "@App/*": ["./src/app/*"],
+      "@lib": ["./src/app/lib"],
+      "@lib/*": ["./src/app/lib/*"],
+      "@Com": ["./src/components/"],
+      "@Com/*": ["./src/components/*"],
     },
     "types": [],
 

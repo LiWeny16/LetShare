@@ -11,8 +11,10 @@ const themes = [
     { key: "coolGray", color: "#90a4ae", label: "冷灰" },
 ];
 
+export type ThemeKey = typeof themes[number]["key"];
+
 const ThemeSelector = () => {
-    const selected = settingsStore.get("userTheme") || "system";
+    const selected = settingsStore.get("userTheme") || "light";
 
     const handleSelect = (key: string) => {
         settingsStore.update("userTheme", key);
@@ -23,7 +25,7 @@ const ThemeSelector = () => {
             sx={{
                 borderRadius: "50%",
                 display: "flex",
-                gap: 2,
+                gap: 1.3,
                 justifyContent: "center",
                 alignItems: "center",
                 flexWrap: "wrap",
@@ -43,8 +45,8 @@ const ThemeSelector = () => {
                         whileHover={{ scale: 1.2 }}
                         transition={{ type: "spring", stiffness: 300, damping: 15 }}
                         style={{
-                            width: 26,
-                            height: 26,
+                            width: 24,
+                            height: 24,
                             borderRadius: "50%",
                             backgroundColor: theme.color,
                             cursor: "pointer",

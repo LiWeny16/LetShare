@@ -1,4 +1,13 @@
-@import url(./chat.css);
+
+/* 可放在 index.css, global.css, 或 styled-components 全局样式中 */
+body,
+html {
+  transition: background-color 0.4s ease, color 0.4s ease;
+}
+
+* {
+  transition: background-color 0.4s ease, color 0.4s ease, border-color 0.4s ease;
+}
 
 body {
   margin: 0;

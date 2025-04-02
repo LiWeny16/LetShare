@@ -35,6 +35,10 @@ export default defineConfig({
     alias: {
       "@App": resolve(__dirname, "./src/app"),
       "@App/*": resolve(__dirname, "./src/app/*"),
+      "@lib": resolve(__dirname, "./src/app/lib"),
+      "@lib/*": resolve(__dirname, "./src/app/lib/*"),
+      "@Com": resolve(__dirname, "./src/components/"),
+      "@Com/*": resolve(__dirname, "./src/components/*"),
     },
   },
   server: {

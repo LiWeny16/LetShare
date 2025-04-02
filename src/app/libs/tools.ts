@@ -42,3 +42,34 @@ export function compareUniqIdPriority(myId: string, fromId: string): boolean {
     }
     return myId > fromId ? true : (myId === fromId ? false : false);
 }
+
+
+/**
+ * 校验房间名是否合法
+ * @param name 输入的房间名
+ * @returns { isValid: boolean, message: string }
+ */
+export function validateRoomName(name: string | undefined | null): { isValid: boolean; message: string } {
+
+    if (!name) {
+        return { isValid: false, message: '房间名不能为空' };
+    }
+
+    if (name.length < 2) {
+        return { isValid: false, message: '房间名太短啦，至少两个字符' };
+    }
+
+    if (name.length > 12) {
+        return { isValid: false, message: '房间名最多 12 个字符' };
+    }
+
+    const allowedPattern = /^[\u4e00-\u9fa5a-zA-Z0-9 _-]+$/;
+    if (!allowedPattern.test(name)) {
+        return {
+            isValid: false,
+            message: '只能使用中文、字母、数字、空格、下划线或中划线',
+        };
+    }
+
+    return { isValid: true, message: '房间名合法' };
+}

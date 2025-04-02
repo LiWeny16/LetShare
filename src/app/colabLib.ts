@@ -1,6 +1,6 @@
 import alertUseMUI from "./alert";
 import { PeerManager } from "./libs/peerManager";
-import { compareUniqIdPriority, getDeviceType } from "./libs/tools";
+import { compareUniqIdPriority, getDeviceType, validateRoomName } from "./libs/tools";
 import Ably from "ably";
 import settingsStore from "./libs/mobx";
 
@@ -145,6 +145,14 @@ export class RealTimeColab {
 
 
     public async connectToServer(): Promise<void> {
+
+        if (!validateRoomName(settingsStore.get("roomId")).isValid) {
+            settingsStore.updateUnrmb("settingsPageState", true)
+            return
+        }
+        if (this.ably?.connection?.state === "connected") {
+            return;
+        }
         try {
             this.ably = new Ably.Realtime({ key: settingsStore.get("ablyKey") });
 
@@ -420,7 +428,7 @@ export class RealTimeColab {
         } else {
             user.lastSeen = now;
             if (user.status === "disconnected") {
-                user.attempts = 2; // 可选：发现重新上线，清空失败记录
+                user.attempts = 0; // 可选：发现重新上线，清空失败记录
                 user.status = "waiting";
             }
             // 如果正在连接就不要重复尝试
@@ -704,6 +712,7 @@ export class RealTimeColab {
         this.dataChannels.set(id, channel);
 
         channel.onopen = () => {
+            settingsStore.update("isNewUser", false)
             const timeoutId = this.connectionTimeouts.get(id);
             if (timeoutId) {
                 clearTimeout(timeoutId);
@@ -962,10 +971,11 @@ export class RealTimeColab {
                 ) {
                     console.warn(`[CONNECT] ⏰ ${id} 连接长时间未建立，强制关闭`);
                     current.close();
-                    const user = this.userList.get(id);
-                    if (user) {
-                        this.userList.set(id, { ...user, status: "disconnected" });
-                    }
+                    // const user = this.userList.get(id);
+                    // if (user) {
+                    //     this.userList.set(id, { ...user, status: "disconnected" });
+                    // }
+                    this.userList.delete(id)
                     RealTimeColab.peers.delete(id);
                     this.cleanupDataChannel(id); // 这会清理 dataChannels、心跳等
 

@@ -1,26 +1,34 @@
+import { ThemeKey } from '@Com/Theme/ThemeSelector';
 import { makeAutoObservable, reaction, runInAction } from 'mobx';
 
 const STORAGE_KEY = 'user_settings';
 
 const DEFAULT_SETTINGS = {
     roomId: '',
-    userTheme: 'system', // 'light' | 'dark' | 'system'
-    userLanguage: 'system', // 'zh' | 'en' | 'system'
+    userTheme: 'light' as ThemeKey | 'light',
+    userLanguage: 'system',
     backupBackWsUrl: "wss://md-server-md-server-bndnqhexdf.cn-hangzhou.fcapp.run",
-    ablyKey:"4TtssQ.e9OvDA:wYBGdtWQNgicbeIKNtgeV_s5XEKmfLKD_Gue5XQrWuw"
+    ablyKey: "4TtssQ.e9OvDA:wYBGdtWQNgicbeIKNtgeV_s5XEKmfLKD_Gue5XQrWuw",
+    version: "3.3.0",
+    isNewUser: true
+};
+export type SettingsKey = keyof typeof DEFAULT_SETTINGS;
+
+const DEFAULT_UNRMB = {
+    settingsPageState: false
 };
 
-
-
-export type SettingsKey = keyof typeof DEFAULT_SETTINGS;
+type UnrmbKey = keyof typeof DEFAULT_UNRMB;
 
 class SettingsStore {
     settings: Record<SettingsKey, any> = { ...DEFAULT_SETTINGS };
+    unrmb: Record<UnrmbKey, any> = { ...DEFAULT_UNRMB }; // 🆕 临时状态
 
     constructor() {
         makeAutoObservable(this);
         this.loadFromLocalStorage();
 
+        // 自动保存 settings 到 localStorage（unrmb 不存）
         reaction(
             () => this.settings,
             (newSettings) => {
@@ -29,19 +37,17 @@ class SettingsStore {
         );
     }
 
-    update<K extends SettingsKey>(key: K, value: typeof DEFAULT_SETTINGS[K] | Partial<typeof DEFAULT_SETTINGS[K]>) {
+    update<K extends SettingsKey>(
+        key: K,
+        value: typeof DEFAULT_SETTINGS[K] | Partial<typeof DEFAULT_SETTINGS[K]>
+    ) {
         if (!(key in DEFAULT_SETTINGS)) {
             throw new Error(`❌ update() 不允许的设置项: ${key}`);
         }
 
         const current = this.settings[key];
 
-        if (
-            typeof value === 'object' &&
-            value !== null &&
-            typeof current === 'object' &&
-            !Array.isArray(current)
-        ) {
+        if (typeof value === 'object' && value !== null && typeof current === 'object' && !Array.isArray(current)) {
             this.settings[key] = { ...current, ...value };
         } else {
             this.settings[key] = value;
@@ -55,6 +61,20 @@ class SettingsStore {
             throw new Error(`❌ get() 不允许的设置项: ${key}`);
         }
         return this.settings[key];
+    }
+
+    getUnrmb<K extends UnrmbKey>(key: K): typeof DEFAULT_UNRMB[K] | undefined {
+        if (!(key in DEFAULT_UNRMB)) {
+            throw new Error(`❌ getUnrmb() 不允许的字段: ${key}`);
+        }
+        return this.unrmb[key];
+    }
+
+    updateUnrmb<K extends UnrmbKey>(key: K, value: typeof DEFAULT_UNRMB[K]) {
+        if (!(key in DEFAULT_UNRMB)) {
+            throw new Error(`❌ updateUnrmb() 不允许的字段: ${key}`);
+        }
+        this.unrmb[key] = value;
     }
 
     getAllSettings(): Record<SettingsKey, any> {
