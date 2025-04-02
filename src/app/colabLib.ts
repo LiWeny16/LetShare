@@ -1,8 +1,8 @@
-import kit from "bigonion-kit";
 import alertUseMUI from "./alert";
 import { PeerManager } from "./libs/peerManager";
-import { getDeviceType } from "./libs/tools";
-
+import { compareUniqIdPriority, getDeviceType } from "./libs/tools";
+import Ably from "ably";
+import settingsStore from "./libs/mobx";
 
 interface NegotiationState {
     isNegotiating: boolean;    // 是否正在进行一次Offer/Answer
@@ -18,6 +18,27 @@ export interface UserInfo {
 }
 
 export class RealTimeColab {
+    private constructor() {
+        const state = this.getStatesMemorable();
+        let userId = state.memorable.userId;
+        let uniqId = state.memorable.uniqId;
+        this.peerManager = new PeerManager(this);
+        if (!userId) {
+            userId = this.generateUUID();
+            this.changeStatesMemorable({ memorable: { userId } });
+        }
+
+        if (!uniqId) {
+            uniqId = `${userId}:${this.generateUUID()}`;
+            this.changeStatesMemorable({ memorable: { uniqId } });
+        }
+
+        RealTimeColab.userId = userId;
+        RealTimeColab.uniqId = uniqId;
+
+    }
+    private ably: Ably.Realtime | null = null;
+    public ablyChannel: ReturnType<Ably.Realtime["channels"]["get"]> | null = null;
     private static instance: RealTimeColab | null = null;
     private static userId: string | null = null;
     private static uniqId: string | null = null
@@ -47,7 +68,7 @@ export class RealTimeColab {
     }> = new Map();
     public receivedFiles: Map<string, File> = new Map();
     // private chunkSize = 16 * 1024 * 2; // 每个切片64KB
-    public coolingTime = 3000
+    public coolingTime = 2000
     private connectionQueue = new Map<string, boolean>();
     private pendingOffers = new Set<string>();
     public negotiationMap = new Map<string, NegotiationState>();
@@ -99,7 +120,6 @@ export class RealTimeColab {
         this.updateConnectedUsers = updateConnectedUsers
         this.setFileTransferProgress = setFileTransferProgress
         this.initTransferConfig()
-        kit.sleep(this.coolingTime)
         setInterval(async () => {
             for (const [id, user] of this.userList.entries()) {
                 if (user.status === "waiting") {
@@ -123,44 +143,91 @@ export class RealTimeColab {
         }, 5000);
     }
 
-    private constructor() {
-        const state = this.getStatesMemorable();
-        let userId = state.memorable.userId;
-        let uniqId = state.memorable.uniqId;
-        this.peerManager = new PeerManager(this);
-        if (!userId) {
-            userId = this.generateUUID();
-            this.changeStatesMemorable({ memorable: { userId } });
+
+    public async connectToServer(): Promise<void> {
+        try {
+            this.ably = new Ably.Realtime({ key: settingsStore.get("ablyKey") });
+
+            await new Promise((resolve, reject) => {
+                this.ably!.connection.once("connected", resolve);
+                this.ably!.connection.once("failed", reject);
+            });
+
+            const roomId = settingsStore.get("roomId") || "default-room";
+            this.ablyChannel = this.ably!.channels.get(roomId);
+
+            const myId = this.getUniqId();
+
+            // 订阅针对自己的消息
+            this.ablyChannel.subscribe(`signal:${myId}`, (message: any) => {
+                this.handleSignal({
+                    data: JSON.stringify(message.data)
+                } as MessageEvent);
+            });
+
+            // 订阅广播消息（同房间所有人）
+            this.ablyChannel.subscribe("signal:all", (message: any) => {
+                this.handleSignal({
+                    data: JSON.stringify(message.data)
+                } as MessageEvent);
+            });
+            setTimeout(() => {
+                this.broadcastSignal({ type: "discover", userType: getDeviceType() });
+            }, 2500);
+        } catch (err) {
+            alertUseMUI("Ably 连接失败，切换为备用 WebSocket 模式", 2000, { kind: "error" })
+            await this.connectToBackupWs();
         }
-
-        if (!uniqId) {
-            uniqId = `${userId}:${this.generateUUID()}`;
-            this.changeStatesMemorable({ memorable: { uniqId } });
-        }
-
-        RealTimeColab.userId = userId;
-        RealTimeColab.uniqId = uniqId;
-
     }
-    public compareUniqIdPriority(myId: string, fromId: string): boolean {
-        // myId 自己的id id2 别人的
-        const [prefix1, main1] = myId.split(":");
-        const [prefix2, main2] = fromId.split(":");
-        if (!main1 || !main2) return false;
-        const mainCompare = main1.localeCompare(main2);
-        if (mainCompare > 0) {
-            return true;  // myId 的主键更大，发起连接
-        } else if (mainCompare < 0) {
-            return false; // id2 的主键更大，不发起
+
+
+    private async connectToBackupWs(): Promise<void> {
+        const url = settingsStore.get("backupBackWsUrl")!;
+
+        try {
+            this.ws = new WebSocket(url);
+
+            this.ws.onopen = async () => {
+                console.log("✅ 已连接备用 WebSocket");
+                await this.waitForUnlock(this.cleaningLock);
+                setTimeout(() => {
+                    this.broadcastSignal({ type: "discover", userType: getDeviceType() });
+                }, 2500);
+            };
+
+            this.ws.onmessage = (event) => this.handleSignal(event);
+
+            this.ws.onclose = () => this.cleanUpConnections();
+
+            this.ws.onerror = (error: Event) =>
+                console.error("WebSocket error:", error);
+
+            window.addEventListener("beforeunload", () => { });
+            window.addEventListener("pagehide", () => { });
+        } catch (error) {
+            console.error("❌ 备用 WebSocket 连接失败:", error);
         }
-        const prefixCompare = prefix1.localeCompare(prefix2);
-        if (prefixCompare > 0) {
-            return true;
-        } else if (prefixCompare < 0) {
-            return false;
-        }
-        return myId > fromId ? true : (myId === fromId ? false : false);
     }
+
+    public broadcastSignal(signal: any): void {
+        const fullSignal = {
+            ...signal,
+            from: this.getUniqId(),
+        };
+
+        if (this.ablyChannel) {
+            // 如果指定了目标用户，只发一个专属消息
+            if (signal.to) {
+                this.ablyChannel.publish(`signal:${signal.to}`, fullSignal);
+            } else {
+                this.ablyChannel.publish("signal:all", fullSignal);
+            }
+        } else if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            this.ws.send(JSON.stringify(fullSignal));
+        }
+    }
+
+
     public getStatesMemorable(): {
         memorable: {
             userId: string | null;
@@ -237,6 +304,23 @@ export class RealTimeColab {
         return RealTimeColab.instance;
     }
 
+    public async disconnect(): Promise<void> {
+        this.ablyChannel?.unsubscribe();
+        this.ably?.close();
+        this.ably = null;
+        this.ablyChannel = null;
+    }
+
+    private cleanUpConnections(): void {
+        console.warn("🔌 Ably disconnected, cleaning up.");
+        this.ablyChannel?.unsubscribe();
+        this.ably = null;
+        this.ablyChannel = null;
+    }
+    /**
+     * @description 连接Ably
+    */
+
     public async connect(
         url: string,
 
@@ -267,23 +351,23 @@ export class RealTimeColab {
         }
     }
 
-    public async disconnect(setMsgFromSharing?: React.Dispatch<React.SetStateAction<string | null>>
-    ): Promise<void> {
-        if (setMsgFromSharing) {
-            setMsgFromSharing(null)
-        }
-        // this.broadcastSignal({ type: "leave", id: this.getUniqId() });
-        this.cleanUpConnections();
-    }
-    private cleanUpConnections(): void {
-        console.warn("🔌 WebSocket disconnected, cleaning up only WS-related state.");
-        // 清理 WebSocket 状态，但不要干掉 WebRTC
-        if (this.ws) {
-            this.ws.onclose = null;
-            this.ws.close();
-            this.ws = null;
-        }
-    }
+    // public async disconnect(setMsgFromSharing?: React.Dispatch<React.SetStateAction<string | null>>
+    // ): Promise<void> {
+    //     if (setMsgFromSharing) {
+    //         setMsgFromSharing(null)
+    //     }
+    //     // this.broadcastSignal({ type: "leave", id: this.getUniqId() });
+    //     this.cleanUpConnections();
+    // }
+    // private cleanUpConnections(): void {
+    //     console.warn("🔌 WebSocket disconnected, cleaning up only WS-related state.");
+    //     // 清理 WebSocket 状态，但不要干掉 WebRTC
+    //     if (this.ws) {
+    //         this.ws.onclose = null;
+    //         this.ws.close();
+    //         this.ws = null;
+    //     }
+    // }
 
 
     private async handleSignal(event: MessageEvent): Promise<void> {
@@ -362,7 +446,7 @@ export class RealTimeColab {
         }
 
         // 连接逻辑只由 ID 大的那方执行
-        if (this.compareUniqIdPriority(this.getUniqId()!, fromId)) {
+        if (compareUniqIdPriority(this.getUniqId()!, fromId)) {
             const current = this.userList.get(fromId)!;
             if (current.status === "waiting") {
                 try {
@@ -442,15 +526,17 @@ export class RealTimeColab {
         }
     }
 
-    public broadcastSignal(signal: any): void {
-        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-            const fullSignal = {
-                ...signal,
-                from: this.getUniqId(),
-            };
-            this.ws.send(JSON.stringify(fullSignal));
-        }
-    }
+    // public broadcastSignal(signal: any): void {
+    //     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+    //         const fullSignal = {
+    //             ...signal,
+    //             from: this.getUniqId(),
+    //         };
+    //         this.ws.send(JSON.stringify(fullSignal));
+    //     }
+    // }
+
+
 
 
 

@@ -1,9 +1,11 @@
 import React, { useEffect, useRef, useState } from "react";
-const url = "wss://md-server-md-server-bndnqhexdf.cn-hangzhou.fcapp.run";
 // const url = "ws://192.168.1.13:9000";
 import Dialog from "@mui/material/Dialog";
 import CachedIcon from '@mui/icons-material/Cached';
 import DownloadIcon from "@mui/icons-material/Download";
+import { createTheme, ThemeProvider } from '@mui/material/styles';
+import { CssBaseline } from '@mui/material';
+
 import {
     Box,
     Button,
@@ -37,7 +39,9 @@ import JSZip from "jszip";
 import AppleIcon from "@mui/icons-material/Apple";
 import PhonelinkRingIcon from "@mui/icons-material/PhonelinkRing";
 import PhonelinkIcon from "@mui/icons-material/Phonelink";
-import { getDeviceType } from "@App/libs/tools";
+import { compareUniqIdPriority, getDeviceType } from "@App/libs/tools";
+import { observer } from "mobx-react-lite";
+import settingsStore from "@App/libs/mobx";
 
 // 确保状态类型正确
 
@@ -74,8 +78,9 @@ export const buttonStyleNormal = {
     borderColor: "#e0e0e0",
 };
 
+function Share() {
 
-export default function Settings() {
+
     // 父组件
     const [msgFromSharing, setMsgFromSharing] = useState<string | null>(null);
     // const [fileFromSharing, setFileFromSharing] = useState<Blob | null>(null);
@@ -133,15 +138,13 @@ export default function Settings() {
         setLoading(true);
         try {
             // 检查ws 的连接状态
-            if (!realTimeColab.isConnected()) {
-                await realTimeColab.connect(
-                    url,
-
-                ).catch(console.error);
-            } else {
+            if (!realTimeColab.ablyChannel && !realTimeColab.isConnected()) {
+                await realTimeColab.connectToServer()
+            }
+            else {
                 realTimeColab.broadcastSignal({
                     type: "discover",
-                    userType: getDeviceType() 
+                    userType: getDeviceType()
                 });
             }
             await kit.sleep(1000);
@@ -230,14 +233,12 @@ export default function Settings() {
             setFileTransferProgress,
         )
         setTimeout(() => { setStartUpVisibility(false) }, 1000)
-        realTimeColab.connect(
-            url,
-        ).catch(console.error);
+        realTimeColab.connectToServer().catch(console.error);
 
         return () => {
-            realTimeColab.disconnect(setMsgFromSharing);
+            realTimeColab.disconnect();
         };
-    }, [startUpVisibility]);
+    }, []);
 
     useEffect(() => {
         const handlePaste = async (event: ClipboardEvent) => {
@@ -355,7 +356,7 @@ export default function Settings() {
                         top: "50%",
                         left: "50%",
                         transform: "translate(-50%, -50%)",
-                        width: { xs: "75%", sm: "80%", md: "60%" },
+                        width: { xs: "85%", sm: "80%", md: "60%" },
                         maxWidth: "900px",
                         height: "70vh",
                         p: 3,
@@ -486,7 +487,7 @@ export default function Settings() {
                         </Badge>
                     </Box>
 
-                    <Box sx={{ mt: 3 }}>
+                    <Box sx={{ display: "flex", justifyContent: "space-between", mt: 3 }}>
                         <Button
                             ref={searchButtonRef}
                             onClick={handleClickSearch}
@@ -505,7 +506,7 @@ export default function Settings() {
                     <Box sx={{ flexGrow: 1, overflowY: "auto" }}>
                         {[...connectedUsers].sort((a, b) => {
                             if (a.status === 'connected' && b.status === 'connected') {
-                                return realTimeColab.compareUniqIdPriority(a.uniqId, b.uniqId) ? -1 : 1;
+                                return compareUniqIdPriority(a.uniqId, b.uniqId) ? -1 : 1;
                             }
                             return 0;
                         }).map((user) => (
@@ -693,3 +694,86 @@ export default function Settings() {
         </>
     );
 }
+
+
+const themes = {
+    light: createTheme({
+        palette: {
+            mode: 'light',
+        },
+    }),
+    dark: createTheme({
+        palette: {
+            mode: 'dark',
+        },
+    }),
+    blue: createTheme({
+        palette: {
+            mode: 'light',
+            primary: { main: '#1976d2' },
+            secondary: { main: '#90caf9' },
+            background: {
+                default: '#e3f2fd',
+                paper: '#ffffff',
+            },
+        },
+    }),
+    green: createTheme({
+        palette: {
+            mode: 'light',
+            primary: { main: '#388e3c' },
+            secondary: { main: '#a5d6a7' },
+            background: {
+                default: '#f1f8e9',
+                paper: '#ffffff',
+            },
+        },
+    }),
+    sunset: createTheme({
+        palette: {
+            mode: 'light',
+            primary: { main: '#f57c00' },
+            secondary: { main: '#ffcc80' },
+            background: {
+                default: '#fff3e0',
+                paper: '#ffffff',
+            },
+        },
+    }),
+    coolGray: createTheme({
+        palette: {
+            mode: 'dark',
+            primary: { main: '#90a4ae' },
+            secondary: { main: '#cfd8dc' },
+            background: {
+                default: '#263238',
+                paper: '#37474f',
+            },
+        },
+    }),
+};
+
+const ThemedShare = observer(() => {
+    const userTheme = settingsStore.get("userTheme") || "system";
+
+    const systemPrefersDark = window.matchMedia?.("(prefers-color-scheme: dark)").matches;
+
+    const resolvedThemeKey: keyof typeof themes =
+        userTheme === "system"
+            ? systemPrefersDark
+                ? "dark"
+                : "light"
+            : (userTheme as keyof typeof themes);
+
+    const theme = themes[resolvedThemeKey] ?? themes.light;
+
+    return (
+        <ThemeProvider theme={theme}>
+            <CssBaseline />
+            <Share />
+        </ThemeProvider>
+    );
+});
+
+
+export default ThemedShare;

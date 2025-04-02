@@ -3,9 +3,12 @@ import { Box, IconButton, Typography, Dialog, DialogTitle, DialogContent, } from
 import GitHubIcon from '@mui/icons-material/GitHub';
 import QrCodeScannerIcon from '@mui/icons-material/QrCodeScanner';
 import { QRCode } from 'react-qrcode-logo';
+import SettingsIcon from '@mui/icons-material/Settings';
+import SettingsPage from './Settings';
 
 const Footer = () => {
     const [open, setOpen] = useState(false);
+    const [settingsPageOpen, setSettingsPageOpen] = useState(false);
     const handleOpen = () => setOpen(true);
     const handleClose = () => setOpen(false);
 
@@ -33,9 +36,9 @@ const Footer = () => {
                 <Typography variant="body2" color="text.secondary">
                     © 2025 LetShare Copyright Author Onion
                 </Typography>
-
                 {/* 右侧图标按钮组合 */}
                 <Box sx={{ display: 'flex', alignItems: 'center' }}>
+
                     <IconButton
                         aria-label="GitHub"
                         component="a"
@@ -47,6 +50,9 @@ const Footer = () => {
                     </IconButton>
                     <IconButton aria-label="QR Code" onClick={handleOpen}>
                         <QrCodeScannerIcon />
+                    </IconButton>
+                    <IconButton onClick={() => { setSettingsPageOpen(true) }}>
+                        <SettingsIcon />
                     </IconButton>
                 </Box>
             </Box>
@@ -72,6 +78,9 @@ const Footer = () => {
                         quietZone={10}
                     />
                 </DialogContent>
+            </Dialog>
+            <Dialog sx={{ backgroundColor: "transparent" }} open={settingsPageOpen} onClose={() => setSettingsPageOpen(false)}>
+                <SettingsPage setSettingsPageOpen={setSettingsPageOpen} />
             </Dialog>
         </>
     );
