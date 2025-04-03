@@ -24,7 +24,7 @@ import {
 } from "@mui/material";
 import realTimeColab, { UserInfo, UserStatus } from "@App/colabLib";
 import FileIcon from "@mui/icons-material/Description";
-import FolderIcon from "@mui/icons-material/Folder";
+import ImageIcon from "@mui/icons-material/Image";
 import TextIcon from "@mui/icons-material/TextFields";
 import ClipboardIcon from "@mui/icons-material/ContentPaste";
 import kit from "bigonion-kit";
@@ -85,7 +85,7 @@ function Share() {
     const [openDialog, setOpenDialog] = useState(false);
     const [connectedUsers, setConnectedUsers] = useState<ConnectedUser[]>([]);
     const [loading, setLoading] = useState(false);
-    const [selectedButton, setSelectedButton] = useState<"file" | "text" | "clip" | "zip" | null>("clip");
+    const [selectedButton, setSelectedButton] = useState<"file" | "text" | "clip" | "image" | null>("clip");
     const [selectedFile, setSelectedFile] = useState<File | null>(null);
     const [selectedText, setSelectedText] = useState<string | null>(null);
     const [textInputDialogOpen, setTextInputDialogOpen] = useState(false);
@@ -152,32 +152,38 @@ function Share() {
             setLoading(false);
         }
     }
-    const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
-        const file = event.target.files?.[0] || null;
-        if (file) {
-            setSelectedFile(file);
-            setSelectedButton("file");
-        }
-    };
-    const handleFolderSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const handleImageSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
+        setSelectedButton("image")
+        handleMultiFileSelect(event, true)
+    }
+    const handleMultiFileSelect = async (event: React.ChangeEvent<HTMLInputElement>, isImg: boolean | undefined) => {
         const files = event.target.files;
         if (!files || files.length === 0) return;
-
+        // 单文件不需要压缩
+        if (isImg) {
+            setSelectedButton("image");
+        } else {
+            setSelectedButton("file");
+        }
+        if (files.length === 1) {
+            const file = event.target.files?.[0] || null;
+            if (file) {
+                setSelectedFile(file);
+            }
+            return
+        }
         try {
             const zip = new JSZip();
             // 添加所有文件到ZIP
             Array.from(files).forEach(file => {
                 zip.file(file.name, file);
             });
-
             // 生成ZIP文件
             const content = await zip.generateAsync({ type: "blob" });
             const zipFile = new File([content], `LetShare_${Date.now()}.zip`, {
                 type: "application/zip",
             });
-
             setSelectedFile(zipFile);
-            setSelectedButton("zip");
         } catch (error) {
             console.error("压缩失败:", error);
             alertUseMUI("文件压缩失败，请重试！", 2000, { kind: "error" });
@@ -190,7 +196,7 @@ function Share() {
                 realTimeColab.connectToUser(targetUserId)
                 return;
             }
-            if ((selectedButton === "file" || selectedButton === "zip") && selectedFile) {
+            if ((selectedButton === "file" || selectedButton === "image") && selectedFile) {
                 if (realTimeColab.isSendingFile) {
                     alertUseMUI("有任务正在进行中！", 2000, { kind: "info" });
                     setDwnloadPageState(true);
@@ -221,8 +227,10 @@ function Share() {
     };
 
     useEffect(() => {
-        realTimeColab.connectToServer().then(() => {
-            realTimeColab.broadcastSignal({ type: "discover", userType: getDeviceType() });
+        realTimeColab.connectToServer().then((e) => {
+            if (e) {
+                realTimeColab.broadcastSignal({ type: "discover", userType: getDeviceType() });
+            }
         })
 
         realTimeColab.init(setFileSendingTargetUser,
@@ -283,15 +291,6 @@ function Share() {
                 writeClipboard(msgFromSharing);
                 alertUseMUI("成功写入剪贴板", 2000, { kind: "success" });
             }
-            // else if (fileFromSharing) {
-            //     const blob = new Blob([fileFromSharing]);
-            //     const a = document.createElement("a");
-            //     a.href = URL.createObjectURL(blob);
-            //     a.download = realTimeColab.fileMetaInfo.name || "shared_file";
-            //     document.body.appendChild(a);
-            //     a.click();
-            //     document.body.removeChild(a);
-            // }
         } catch (e) {
             console.error("处理接受失败", e);
         } finally {
@@ -338,10 +337,14 @@ function Share() {
 
         const files = e.dataTransfer.files;
         if (files.length > 0) {
-            // 你已有的上传逻辑：
-            handleFileSelect({ target: { files } } as unknown as React.ChangeEvent<HTMLInputElement>);
+            const fakeEvent = {
+                target: { files }
+            } as unknown as React.ChangeEvent<HTMLInputElement>;
+
+            handleMultiFileSelect(fakeEvent, false);
         }
     };
+
 
     return (
         <>
@@ -398,6 +401,8 @@ function Share() {
                     <Footer />
 
                     <Box sx={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
+
+
                         <Badge
                             color="primary"
                             badgeContent={selectedButton === "file" ? 1 : 0}
@@ -409,50 +414,54 @@ function Share() {
                                 sx={buttonStyleNormal}
                                 startIcon={<FileIcon />}
                                 onClick={() => {
-                                    const input = document.getElementById("file-input") as HTMLInputElement;
-                                    if (input) {
-                                        input.value = ""; // <-- 关键点：重置 value
-                                        input.click();
-                                    }
-                                }}
-
-                            >
-                                文件
-                            </Button>
-                        </Badge>
-
-                        <input id="file-input" type="file" hidden onChange={handleFileSelect} />
-
-
-                        <Badge
-                            color="primary"
-                            badgeContent={selectedButton === "zip" ? 1 : 0}
-                            overlap="circular"
-                            sx={badgeStyle}
-                        >
-                            <Button
-                                variant="outlined"
-                                sx={buttonStyleNormal}
-                                startIcon={<FolderIcon />}
-                                onClick={() => {
-                                    const input = document.getElementById("folder-input") as HTMLInputElement;
+                                    const input = document.getElementById("multi-file-input") as HTMLInputElement;
                                     if (input) {
                                         input.value = "";
                                         input.click();
                                     }
                                 }}
                             >
-                                压缩包
+                                文件
                             </Button>
                         </Badge>
 
                         {/* 新增多文件输入框 */}
                         <input
-                            id="folder-input"
+                            id="multi-file-input"
                             type="file"
                             hidden
                             multiple
-                            onChange={handleFolderSelect}
+                            onChange={(e) => { handleMultiFileSelect(e, false) }}
+                        />
+                        <Badge
+                            color="primary"
+                            badgeContent={selectedButton === "image" ? 1 : 0}
+                            overlap="circular"
+                            sx={badgeStyle}
+                        >
+                            <Button
+                                variant="outlined"
+                                sx={buttonStyleNormal}
+                                startIcon={<ImageIcon />}
+                                onClick={() => {
+                                    const input = document.getElementById("image-input") as HTMLInputElement;
+                                    if (input) {
+                                        input.value = "";
+                                        input.click();
+                                    }
+                                }}
+                            >
+                                图片
+                            </Button>
+                        </Badge>
+
+                        <input
+                            id="image-input"
+                            type="file"
+                            hidden
+                            accept="image/*"
+                            multiple
+                            onChange={handleImageSelect}
                         />
 
                         <Badge

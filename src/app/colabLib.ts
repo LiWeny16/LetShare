@@ -3,6 +3,7 @@ import { PeerManager } from "./libs/peerManager";
 import { compareUniqIdPriority, getDeviceType, validateRoomName } from "./libs/tools";
 import Ably from "ably";
 import settingsStore from "./libs/mobx";
+import JSZip from "jszip";
 
 interface NegotiationState {
     isNegotiating: boolean;    // 是否正在进行一次Offer/Answer
@@ -153,17 +154,15 @@ export class RealTimeColab {
     }
 
 
-    public async connectToServer(): Promise<void> {
-        const roomId = settingsStore.get("roomId") || "default-room";
-
+    public async connectToServer(): Promise<boolean> {
+        const roomId = settingsStore.get("roomId")
         if (!validateRoomName(roomId).isValid) {
             settingsStore.updateUnrmb("settingsPageState", true);
-            return;
+            return false
         }
-
         // 已连接则不重复连接
         if (this.ably?.connection?.state === "connected") {
-            return;
+            return false
         }
 
         try {
@@ -174,19 +173,26 @@ export class RealTimeColab {
                 this.ably!.connection.once("failed", reject);
             });
 
-            this.subscribeToRoom(roomId);
+            this.subscribeToRoom(roomId!);
+            return true
         } catch (err) {
             alertUseMUI("Ably 连接失败，切换为备用 WebSocket 模式", 2000, { kind: "error" });
             await this.connectToBackupWs();
+            return false
+
         }
     }
 
     private subscribeToRoom(roomId: string) {
+        if (!validateRoomName(roomId).isValid) {
+            settingsStore.updateUnrmb("settingsPageState", true);
+            return false
+        }
         if (!this.ably) return;
 
         if (this.ablyChannel) {
             this.ablyChannel.unsubscribe();
-            console.log(`🔌 离开旧房间: ${this.currentRoomId}`);
+            console.log(`[A]离开旧房间: ${this.currentRoomId}`);
         }
 
         this.ablyChannel = this.ably.channels.get(roomId);
@@ -202,20 +208,15 @@ export class RealTimeColab {
             this.handleSignal({ data: JSON.stringify(message.data) } as MessageEvent);
         });
 
-        this.ably.connection.once("connected", () => {
-            this.broadcastSignal({ type: "discover", userType: getDeviceType() });
-        });
-
-
         // console.log(`✅ 加入房间频道: ${roomId}`);
     }
 
     public async handleRename(): Promise<void> {
-        const newRoomId = settingsStore.get("roomId") || "default-room";
+        const newRoomId = settingsStore.get("roomId")
 
         const validation = validateRoomName(newRoomId);
         if (!validation.isValid) {
-            alertUseMUI(validation.message || "房间名不合法");
+            alertUseMUI(validation.message || "房间名不合法", 2000, { kind: "error" });
             return;
         }
 
@@ -229,11 +230,8 @@ export class RealTimeColab {
             return;
         }
 
-        if (this.currentRoomId === newRoomId) {
-            return;
-        }
-
-        this.subscribeToRoom(newRoomId);
+        this.subscribeToRoom(newRoomId!);
+        this.broadcastSignal({ type: "discover", userType: getDeviceType() });
     }
 
 
@@ -808,7 +806,7 @@ export class RealTimeColab {
             this.receivingFiles = new Map();
         }
 
-        channel.onmessage = (event) => {
+        channel.onmessage = async (event) => {
             if (typeof event.data === "string") {
                 const message = JSON.parse(event.data);
 
@@ -908,10 +906,42 @@ export class RealTimeColab {
                     const fileBlob = new Blob(sortedChunks);
                     const file = new File([fileBlob], fileInfo.name, { type: "application/octet-stream" });
                     this.receivedFiles.set(id + "::" + file.name, file);
-                    this.receivingFiles.delete(id);
+
+
+
+                    // 复制一份当前的 Map（避免边改边遍历）
+                    const zipEntries = Array.from(this.receivedFiles.entries()).filter(([_, file]) =>
+                        file.name.startsWith("LetShare_") && file.name.endsWith(".zip")
+                    );
+                    if (zipEntries) {
+                        alertUseMUI("解压中，请耐心等待...", 2000, { kind: "info" })
+                    }
+
+                    for (const [fullKey, zipFile] of zipEntries) {
+                        try {
+                            const zip = await JSZip.loadAsync(zipFile);
+
+                            // 提取 ID，例如从 key = "user123::LetShare_12345.zip"
+                            const [id] = fullKey.split("::");
+
+                            for (const [fileName, zipEntry] of Object.entries(zip.files)) {
+                                if (!zipEntry.dir) {
+                                    const blob = await zipEntry.async("blob");
+                                    const extractedFile = new File([blob], fileName);
+
+                                    // 生成新 key，例如 "user123::innerFile.txt"
+                                    const newKey = `${id}::${fileName}`;
+                                    this.receivedFiles.set(newKey, extractedFile);
+                                }
+                            }
+                            this.receivedFiles.delete(fullKey);
+                        } catch (err) {
+                            console.error("解压失败:", err);
+                        }
+                    }
                     alertUseMUI("成功接受来自" + id.split(":")[0] + "的文件！")
-                    // this.setDownloadPageState(false)
-                    // console.log(`✅ 成功接收来自 ${id} 的文件：${fileInfo.name}`);
+
+                    this.receivingFiles.delete(id);
                 }
             }
         };

@@ -6,6 +6,7 @@ import {
     useTheme,
     Backdrop,
     Button,
+    IconButton,
 } from "@mui/material";
 import {
     InsertDriveFile,
@@ -19,11 +20,12 @@ import {
     Slideshow,       // PPT
     Subject,         // Word
 } from "@mui/icons-material";
-
+import DownloadIcon from "@mui/icons-material/Download"; // 确保导入这个
 import { buttonStyleNormal } from "../pages/share";
 import React from "react";
 import alertUseMUI from "@App/alert";
 import realTimeColab from "@App/colabLib";
+import JSZip from "jszip";
 
 export default function DownloadDrawerSlide({
     open,
@@ -60,6 +62,29 @@ export default function DownloadDrawerSlide({
 
     const receivingList = Array.from(receivingMap.entries());
     const receivedList = Array.from(receivedMap.entries());
+    const downloadAllAsZip = async () => {
+        if (receivedList.length === 0) return;
+
+        const zip = new JSZip();
+        receivedList.forEach(([_key, file]) => {
+            zip.file(file.name, file);
+        });
+
+        try {
+            const content = await zip.generateAsync({ type: "blob" });
+            const url = URL.createObjectURL(content);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = `Received_${Date.now()}.zip`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        } catch (err) {
+            console.error("打包下载失败:", err);
+            alertUseMUI("打包下载失败，请重试！", 2000, { kind: "error" });
+        }
+    };
 
     const handleCancelReceive = (userId: string) => {
         const channel = realTimeColab.dataChannels.get(userId)
@@ -344,9 +369,13 @@ export default function DownloadDrawerSlide({
                                 {/* ✅ 已接收文件展示 - 列表样式 */}
                                 {receivedList.length > 0 && (
                                     <Box>
-                                        <Typography variant="subtitle2" sx={{ mt: 2, mb: 1 }}>
-                                            📁 已接收的文件
-                                        </Typography>
+                                        <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", mt: 2, mb: 1 }}>
+                                            <Typography variant="subtitle2">📁 已接收的文件</Typography>
+                                            <IconButton onClick={downloadAllAsZip} size="small" >
+                                                <DownloadIcon fontSize="small" />
+                                            </IconButton>
+                                        </Box>
+
                                         <Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
                                             {receivedList.map(([key, file]) => (
                                                 <Box
@@ -375,7 +404,6 @@ export default function DownloadDrawerSlide({
                                                 </Box>
                                             ))}
                                         </Box>
-
                                     </Box>
                                 )}
                             </>
