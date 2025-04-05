@@ -53,7 +53,7 @@ export default function DownloadDrawerSlide({
     React.useEffect(() => {
         const interval = setInterval(() => {
             forceUpdate(); // 刷新进度
-        }, 300);
+        }, 350);
         return () => clearInterval(interval);
     }, []);
     const handleSlideExited = () => {
@@ -75,19 +75,34 @@ export default function DownloadDrawerSlide({
 
         try {
             const content = await zip.generateAsync({ type: "blob" });
-            const url = URL.createObjectURL(content);
-            const a = document.createElement("a");
-            a.href = url;
-            a.download = `Received_${Date.now()}.zip`;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            URL.revokeObjectURL(url);
+            const zipFileName = `Received_${Date.now()}.zip`;
+
+            const zipFile = new File([content], zipFileName, {
+                type: "application/zip",
+            });
+
+            if (isApp) {
+                await saveBinaryToApp(zipFile);
+
+                alertUseMUI(`${zipFileName} 已成功保存到路径: /Download/letshare/`, 3000, {
+                    kind: "success",
+                });
+            } else {
+                const url = URL.createObjectURL(zipFile);
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = zipFileName;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            }
         } catch (err) {
             console.error("打包下载失败:", err);
             alertUseMUI("打包下载失败，请重试！", 2000, { kind: "error" });
         }
     };
+
 
     const handleCancelReceive = (userId: string) => {
         const channel = realTimeColab.dataChannels.get(userId)
@@ -175,7 +190,15 @@ export default function DownloadDrawerSlide({
     const downloadFile = async (file: File) => {
         if (isApp) {
             await saveBinaryToApp(file);
-            alertUseMUI(file.name + "成功保存到路径:/Download")
+
+            const isImage = /\.(png|jpe?g|webp)$/i.test(file.name);
+            const location = isImage
+                ? "/Pictures/letshare/"
+                : "/Download/letshare/";
+
+            alertUseMUI(`${file.name} 已成功保存到路径: ${location}`, 3000, {
+                kind: "success",
+            });
         } else {
             // 浏览器下载 fallback
             const blob = new Blob([file]);
@@ -187,6 +210,7 @@ export default function DownloadDrawerSlide({
             URL.revokeObjectURL(url);
         }
     };
+
 
 
     const hasContent =

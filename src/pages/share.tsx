@@ -365,7 +365,7 @@ function Share() {
                         transform: "translate(-50%, -50%)",
                         width: { xs: "89%", sm: "80%", md: "60%" },
                         maxWidth: "900px",
-                        height: isApp ? "90svh" : "75vh",
+                        height: isApp ? "85svh" : "75vh",
                         p: 3,
                         m: "auto",
                         boxShadow: isApp ? 8 : 8,

@@ -12,11 +12,13 @@
     "app": "tsc && vite build && npx cap sync android",
     "app-start": "npx cap open android",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "gen-img": "npx @capacitor/assets generate"
   },
   "dependencies": {
     "@capacitor/android": "^7.1.0",
     "@capacitor/cli": "^7.1.0",
+    "@capacitor/clipboard": "^7.0.1",
     "@capacitor/core": "^7.1.0",
     "@emotion/react": "^11.13.3",
     "@emotion/styled": "^11.13.0",
