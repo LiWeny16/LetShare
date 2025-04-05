@@ -42,6 +42,7 @@ import PhonelinkIcon from "@mui/icons-material/Phonelink";
 import { compareUniqIdPriority, getDeviceType } from "@App/libs/tools";
 import { observer } from "mobx-react-lite";
 import settingsStore from "@App/libs/mobx";
+import { isApp } from "@App/libs/capacitor/user";
 
 // 确保状态类型正确
 
@@ -75,6 +76,7 @@ export const buttonStyleNormal = {
     borderRadius: "5px",
     borderColor: "#e0e0e0",
 };
+
 
 function Share() {
 
@@ -346,6 +348,7 @@ function Share() {
     };
 
 
+
     return (
         <>
             {!startUpVisibility && (
@@ -360,12 +363,12 @@ function Share() {
                         top: "50%",
                         left: "50%",
                         transform: "translate(-50%, -50%)",
-                        width: { xs: "85%", sm: "80%", md: "60%" },
+                        width: { xs: "89%", sm: "80%", md: "60%" },
                         maxWidth: "900px",
-                        height: "70vh",
+                        height: isApp ? "90svh" : "75vh",
                         p: 3,
                         m: "auto",
-                        boxShadow: 8,
+                        boxShadow: isApp ? 8 : 8,
                         borderRadius: 2,
                         backgroundColor: "background.paper",
                         zIndex: (theme) => theme.zIndex.modal,
@@ -811,8 +814,15 @@ const ThemedShare = observer(() => {
     const [actualTheme, setActualTheme] = useState(theme);
 
     useEffect(() => {
-        setActualTheme(theme); // ⏳ 延迟替换主题，防止闪
-    }, [theme]);
+        setActualTheme(theme);
+
+        const themeColor = theme.palette.background.default;
+        const meta = document.querySelector('meta[name="theme-color"]');
+        if (meta && themeColor) {
+            meta.setAttribute("content", themeColor);
+        }
+    }, [settingsStore.get("userTheme")]);
+
 
     return (
         <ThemeProvider theme={actualTheme}>

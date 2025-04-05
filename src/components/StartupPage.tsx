@@ -21,7 +21,8 @@ const StartupPage: React.FC<StartupPageProps> = ({ open }) => {
                     flexDirection: "column",
                     justifyContent: "center",
                     alignItems: "center",
-                    background: "linear-gradient(135deg, #1e3c72 0%, #2a5298 100%)",
+                    backgroundColor: (theme) => theme.palette.background.default,
+
                     color: "white",
                     textAlign: "center",
                     p: 2,
@@ -55,14 +56,30 @@ const StartupPage: React.FC<StartupPageProps> = ({ open }) => {
                         </Fade>
                     </Box>
 
-                    <Typography variant="h6" sx={{ fontWeight: 300 }}>
+                    <Typography
+                        variant="h6"
+                        sx={{
+                            fontWeight: 300,
+                            color: (theme) => theme.palette.getContrastText(theme.palette.background.default),
+                        }}
+                    >
                         Connect To The World
                     </Typography>
-                    <Typography variant="subtitle1" sx={{ opacity: 0.85 }}>
+
+                    <Typography
+                        variant="subtitle1"
+                        sx={{
+                            opacity: 0.85,
+                            color: (theme) => theme.palette.getContrastText(theme.palette.background.default),
+                        }}
+                    >
                         轻触，开启通往世界的大门
                     </Typography>
                     <Box mt={4}>
-                        <CircularProgress color="inherit" />
+                        <CircularProgress sx={{
+                            opacity: 0.85,
+                            color: (theme) => theme.palette.getContrastText(theme.palette.background.default),
+                        }} color="inherit" />
                     </Box>
                 </Box>
             </Box>

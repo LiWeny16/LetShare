@@ -137,7 +137,7 @@ export class RealTimeColab {
                         console.warn(`[USER CHECK] ${id} 重试次数过多，标记为 disconnected`);
                         user.status = "disconnected";
                         this.userList.set(id, user);
-                        this.updateConnectedUsers(this.userList);
+                        this.updateUI()
                         continue;
                     }
                     try {
@@ -252,7 +252,10 @@ export class RealTimeColab {
 
             this.ws.onmessage = (event) => this.handleSignal(event);
 
-            this.ws.onclose = () => this.cleanUpConnections();
+            this.ws.onclose = () => {
+                this.cleanUpConnections()
+                // this.clearCache();
+            }
 
             this.ws.onerror = (error: Event) =>
                 console.error("WebSocket error:", error);
@@ -443,9 +446,9 @@ export class RealTimeColab {
                 case "candidate":
                     await this.handleCandidate(data);
                     break;
-                case "leave":
-                    this.handleLeave(data);
-                    break;
+                // case "leave":
+                //     this.handleLeave(data);
+                //     break;
                 default:
                     console.warn("Unknown message type", data.type);
             }
@@ -519,67 +522,112 @@ export class RealTimeColab {
             }
         }
 
-        this.updateConnectedUsers(this.userList);
+        this.updateUI()
     }
 
 
 
-    private async handleLeave(data: any) {
-        const leavingUserId = data.id;
-        if (this.cleaningLock) {
-            console.warn("⛔️ 当前正在清理其他连接，跳过本次 handleLeave");
-            return;
+    // private async handleLeave(data: any) {
+    //     const leavingUserId = data.id;
+    //     if (this.cleaningLock) {
+    //         console.warn("⛔️ 当前正在清理其他连接，跳过本次 handleLeave");
+    //         return;
+    //     }
+
+    //     this.cleaningLock = true;
+
+    //     try {
+    //         console.warn(`📤 正在清理用户 ${leavingUserId} 的所有状态`);
+    //         // 1. 仅更新 userList 中的状态为 disconnected，不改变其他属性
+    //         const user = this.userList.get(leavingUserId);
+    //         if (user) {
+    //             user.status = "disconnected";
+    //             this.userList.set(leavingUserId, user);
+    //         }
+
+    //         // 2. 关闭并移除 PeerConnection
+    //         const peer = RealTimeColab.peers.get(leavingUserId);
+    //         if (peer) {
+    //             peer.close();
+    //             RealTimeColab.peers.delete(leavingUserId);
+    //         }
+
+    //         // 3. 关闭并移除 DataChannel
+    //         const channel = this.dataChannels.get(leavingUserId);
+    //         if (channel) {
+    //             channel.close();
+    //             this.dataChannels.delete(leavingUserId);
+    //         }
+
+    //         // 4. 移除协商队列
+    //         this.negotiationMap.delete(leavingUserId);
+
+    //         // 5. 移除连接中的状态
+    //         this.connectionQueue.delete(leavingUserId);
+    //         this.pendingOffers.delete(leavingUserId);
+
+    //         // 6. 清除心跳记录
+    //         this.lastPongTimes.delete(leavingUserId);
+    //         this.lastPingTimes.delete?.(leavingUserId);
+
+    //         // 7. 重置失败次数（可选）
+    //         this.pingFailures.delete(leavingUserId);
+    //         this.pongFailures.delete(leavingUserId);
+
+    //         // 8. 更新 UI
+    //         this.updateUI()
+
+    //         // 9. 可选：延迟模拟异步清理更真实（比如500ms）
+    //         await new Promise(res => setTimeout(res, 50)); // 模拟微小延迟
+    //     } finally {
+    //         this.cleaningLock = false;
+    //     }
+    // }
+    public clearCache(id: string): void {
+        console.warn(`🧹 清理连接相关状态：${id}`);
+
+        // 关闭并移除 PeerConnection
+        const peer = RealTimeColab.peers.get(id);
+        if (peer) {
+            peer.close();
+            RealTimeColab.peers.delete(id);
         }
 
-        this.cleaningLock = true;
-
-        try {
-            console.warn(`📤 正在清理用户 ${leavingUserId} 的所有状态`);
-            // 1. 仅更新 userList 中的状态为 disconnected，不改变其他属性
-            const user = this.userList.get(leavingUserId);
-            if (user) {
-                user.status = "disconnected";
-                this.userList.set(leavingUserId, user);
-            }
-
-            // 2. 关闭并移除 PeerConnection
-            const peer = RealTimeColab.peers.get(leavingUserId);
-            if (peer) {
-                peer.close();
-                RealTimeColab.peers.delete(leavingUserId);
-            }
-
-            // 3. 关闭并移除 DataChannel
-            const channel = this.dataChannels.get(leavingUserId);
-            if (channel) {
-                channel.close();
-                this.dataChannels.delete(leavingUserId);
-            }
-
-            // 4. 移除协商队列
-            this.negotiationMap.delete(leavingUserId);
-
-            // 5. 移除连接中的状态
-            this.connectionQueue.delete(leavingUserId);
-            this.pendingOffers.delete(leavingUserId);
-
-            // 6. 清除心跳记录
-            this.lastPongTimes.delete(leavingUserId);
-            this.lastPingTimes.delete?.(leavingUserId);
-
-            // 7. 重置失败次数（可选）
-            this.pingFailures.delete(leavingUserId);
-            this.pongFailures.delete(leavingUserId);
-
-            // 8. 更新 UI
-            this.updateConnectedUsers(this.userList);
-
-            // 9. 可选：延迟模拟异步清理更真实（比如500ms）
-            await new Promise(res => setTimeout(res, 50)); // 模拟微小延迟
-        } finally {
-            this.cleaningLock = false;
+        // 关闭并移除 DataChannel
+        const channel = this.dataChannels.get(id);
+        if (channel) {
+            channel.close();
+            this.dataChannels.delete(id);
         }
+
+        // 协商、连接队列
+        this.negotiationMap.delete(id);
+        this.pendingOffers.delete(id);
+        this.connectionQueue.delete(id);
+
+        // 心跳/超时
+        const interval = this.heartbeatIntervals.get(id);
+        if (interval) {
+            clearInterval(interval);
+            this.heartbeatIntervals.delete(id);
+        }
+
+        const timeout = this.connectionTimeouts.get(id);
+        if (timeout) {
+            clearTimeout(timeout);
+            this.connectionTimeouts.delete(id);
+        }
+
+        this.lastPingTimes.delete(id);
+        this.lastPongTimes.delete(id);
+        this.pingFailures.delete(id);
+        this.pongFailures.delete(id);
+        this.recentlyResetPeers.delete(id);
+
+
     }
+
+
 
     // public broadcastSignal(signal: any): void {
     //     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
@@ -754,10 +802,7 @@ export class RealTimeColab {
 
     public setupDataChannel(channel: RTCDataChannel, id: string): void {
         channel.binaryType = "arraybuffer"; // 设置数据通道为二进制模式
-
-        let heartbeatInterval: ReturnType<typeof setInterval> | null = null;
         this.dataChannels.set(id, channel);
-
         channel.onopen = () => {
             settingsStore.update("isNewUser", false)
             const timeoutId = this.connectionTimeouts.get(id);
@@ -779,7 +824,7 @@ export class RealTimeColab {
             }
 
             alertUseMUI("新用户已连接: " + id.split(":")[0], 2000, { kind: "success" });
-            this.updateConnectedUsers(this.userList);
+            this.updateUI()
             // 清除旧定时器（如果存在）
             if (this.heartbeatIntervals.has(id)) {
                 clearInterval(this.heartbeatIntervals.get(id)!);
@@ -787,10 +832,6 @@ export class RealTimeColab {
             }
 
             const heartbeatInterval = setInterval(() => {
-                // const myId = this.getUniqId()!;
-                // const isSender = this.compareUniqIdPriority(myId, id);
-                // if (isSender) {
-                // 我是 ping 的一方
                 if (channel.readyState === "open") {
                     channel.send(JSON.stringify({ type: "ping" }));
                 }
@@ -852,7 +893,7 @@ export class RealTimeColab {
                             this.userList.set(id, user);
                         }
                         this.pingFailures.set(id, 0);
-                        this.updateConnectedUsers(this.userList);
+                        this.updateUI()
                         break;
 
                     case "text":
@@ -946,24 +987,33 @@ export class RealTimeColab {
             }
         };
 
+        // channel.onclose = () => {
+        //     console.log(`Data channel with user ${id} is closed`);
+        //     if (this.heartbeatIntervals.has(id)) {
+        //         clearInterval(this.heartbeatIntervals.get(id)!);
+        //         this.heartbeatIntervals.delete(id);
+        //     }
+        //     if (this.userList.get(id)?.status === "connected") {
+        //         alertUseMUI("与对方断开连接,请刷新页面", 2000, { kind: "error" })
+        //     }
+        //     if (heartbeatInterval) {
+        //         clearInterval(heartbeatInterval);
+        //         heartbeatInterval = null;
+        //     }
+
+        //     this.dataChannels.delete(id);
+        //     this.updateConnectedUsers(this.userList)
+        //     this.lastPongTimes.delete(id);
+        // };
         channel.onclose = () => {
-            console.log(`Data channel with user ${id} is closed`);
-            if (this.heartbeatIntervals.has(id)) {
-                clearInterval(this.heartbeatIntervals.get(id)!);
-                this.heartbeatIntervals.delete(id);
-            }
-            if (this.userList.get(id)?.status === "connected") {
-                alertUseMUI("与对方断开连接,请刷新页面", 2000, { kind: "error" })
-            }
-            if (heartbeatInterval) {
-                clearInterval(heartbeatInterval);
-                heartbeatInterval = null;
-            }
+            console.warn(`🧹 DataChannel closed for ${id}，执行 clearCache(${id})`);
+            this.clearCache(id);
             this.userList.delete(id)
-            this.dataChannels.delete(id);
-            this.updateConnectedUsers(this.userList)
-            this.lastPongTimes.delete(id);
+            this.updateUI()
+            // 如果你想保留提示也没问题：
+            alertUseMUI("与对方断开连接，请等待或刷新页面", 2000, { kind: "error" });
         };
+
         channel.onerror = () => {
             this.cleanupDataChannel(id)
         };
@@ -983,7 +1033,7 @@ export class RealTimeColab {
             this.dataChannels.delete(id);
             this.userList.delete(id);
             this.lastPongTimes.delete(id);
-            this.updateConnectedUsers(this.userList);
+            this.updateUI()
         }
     }
     public async connectToUser(id: string): Promise<void> {
@@ -1022,11 +1072,16 @@ export class RealTimeColab {
                     `ICE 状态: ${iceState}, 通道状态: ${dataChannel?.readyState || 'missing'}`);
 
                 // 执行清理操作
-                peer.close();
-                RealTimeColab.peers.delete(id);
-                this.cleanupDataChannel(id); // 这会清理 dataChannels、心跳等
-
-
+                // peer.close();
+                // RealTimeColab.peers.delete(id);
+                // this.cleanupDataChannel(id); // 这会清理 dataChannels、心跳等
+                this.clearCache(id);
+                // const user = this.userList.get(id);
+                // if (user) {
+                //     user.status = "disconnected";
+                //     this.userList.set(id, user);
+                // }
+                // this.updateUI()
             }
 
             // 建立新连接
@@ -1055,20 +1110,15 @@ export class RealTimeColab {
                     current.iceConnectionState !== "checking"
                 ) {
                     console.warn(`[CONNECT] ⏰ ${id} 连接长时间未建立，强制关闭`);
-                    current.close();
-                    // const user = this.userList.get(id);
-                    // if (user) {
-                    //     this.userList.set(id, { ...user, status: "disconnected" });
-                    // }
+                    this.clearCache(id)
                     this.userList.delete(id)
-                    RealTimeColab.peers.delete(id);
-                    this.cleanupDataChannel(id); // 这会清理 dataChannels、心跳等
+                    this.updateUI()
 
                 } else {
                     console.log(`[CONNECT] ${id} 正在连接中，延长等待 状态`);
                 }
                 this.connectionTimeouts.delete(id);
-            }, 8000);
+            }, 5000);
 
             this.connectionTimeouts.set(id, timeoutId);
 
@@ -1082,7 +1132,7 @@ export class RealTimeColab {
     }
 
 
-
+    public updateUI() { this.updateConnectedUsers(this.userList); }
 
     public async sendMessageToUser(id: string, message: string): Promise<void> {
         const channel = this.dataChannels.get(id);

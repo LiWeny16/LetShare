@@ -26,6 +26,9 @@ import React from "react";
 import alertUseMUI from "@App/alert";
 import realTimeColab from "@App/colabLib";
 import JSZip from "jszip";
+import { isApp } from "@App/libs/capacitor/user";
+import { saveBinaryToApp } from "@App/libs/capacitor/file";
+
 
 export default function DownloadDrawerSlide({
     open,
@@ -168,23 +171,23 @@ export default function DownloadDrawerSlide({
         return <InsertDriveFile fontSize="medium" />;
     };
 
-    const downloadFile = (file: File) => {
-        // first
-        const blob = new Blob([file]);
-        const a = document.createElement("a");
-        a.href = URL.createObjectURL(blob);
-        a.download = file.name || "shared_file";
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
 
-        // second
-        // const link = document.createElement("a");
-        // link.href = URL.createObjectURL(file);
-        // link.download = file.name;
-        // link.click();
-        // URL.revokeObjectURL(link.href);
+    const downloadFile = async (file: File) => {
+        if (isApp) {
+            await saveBinaryToApp(file);
+            alertUseMUI(file.name + "成功保存到路径:/Download")
+        } else {
+            // 浏览器下载 fallback
+            const blob = new Blob([file]);
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = file.name;
+            a.click();
+            URL.revokeObjectURL(url);
+        }
     };
+
 
     const hasContent =
         progress !== null || receivingList.length > 0 || receivedList.length > 0;
