@@ -61,28 +61,46 @@ export class PeerManager {
         peer.ondatachannel = (event) => {
             this.rtc.setupDataChannel(event.channel, id);
         };
+        peer.onconnectionstatechange = () => {
+            console.log(`[CONNECT] ${id} 状态:`, peer.connectionState);
 
-        peer.oniceconnectionstatechange = () => {
-            console.log(`[CONNECT] ${id} ICE 状态:`, peer.iceConnectionState);
-
-            if (peer.iceConnectionState === "connected") {
+            if (peer.connectionState === "connected") {
                 console.log(`[CONNECT] ✅ ${id} 连接成功，取消超时`);
-                const user = this.rtc.userList.get(id)
+                const user = this.rtc.userList.get(id);
                 if (user) {
-                    this.rtc.userList.set(id, { ...user, status: "connected" })
+                    this.rtc.userList.set(id, { ...user, status: "connected" });
                 }
-
                 clearTimeout(this.rtc.connectionTimeouts.get(id));
             }
 
-            if (peer.iceConnectionState === "failed" || peer.iceConnectionState === "disconnected") {
-                console.warn(`[CONNECT] ❌ ${id} ICE 连接失败，立即关闭`);
-                // clearTimeout(this.rtc.connectionTimeouts.get(id));
+            if (["failed", "disconnected", "closed"].includes(peer.connectionState)) {
+                console.warn(`[CONNECT] ❌ ${id} 连接失败或断开，立即关闭`);
                 peer.close();
                 RealTimeColab.peers.delete(id);
                 this.rtc.updateConnectedUsers(this.rtc.userList);
             }
         };
+        // peer.oniceconnectionstatechange = () => {
+        //     console.log(`[CONNECT] ${id} ICE 状态:`, peer.iceConnectionState);
+
+        //     if (peer.iceConnectionState === "connected") {
+        //         console.log(`[CONNECT] ✅ ${id} 连接成功，取消超时`);
+        //         const user = this.rtc.userList.get(id)
+        //         if (user) {
+        //             this.rtc.userList.set(id, { ...user, status: "connected" })
+        //         }
+
+        //         clearTimeout(this.rtc.connectionTimeouts.get(id));
+        //     }
+
+        //     if (peer.iceConnectionState === "failed" || peer.iceConnectionState === "disconnected") {
+        //         console.warn(`[CONNECT] ❌ ${id} ICE 连接失败，立即关闭`);
+        //         // clearTimeout(this.rtc.connectionTimeouts.get(id));
+        //         peer.close();
+        //         RealTimeColab.peers.delete(id);
+        //         this.rtc.updateConnectedUsers(this.rtc.userList);
+        //     }
+        // };
         if (id) {
             RealTimeColab.peers.set(id, peer);
         }

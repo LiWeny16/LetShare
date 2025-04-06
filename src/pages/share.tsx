@@ -43,6 +43,7 @@ import { compareUniqIdPriority, getDeviceType } from "@App/libs/tools";
 import { observer } from "mobx-react-lite";
 import settingsStore from "@App/libs/mobx";
 import { isApp } from "@App/libs/capacitor/user";
+import { Trans, useTranslation } from "react-i18next";
 
 // 确保状态类型正确
 
@@ -79,7 +80,7 @@ export const buttonStyleNormal = {
 
 
 function Share() {
-
+    const { t } = useTranslation();
     const theme = useTheme();
     // 父组件
     const [msgFromSharing, setMsgFromSharing] = useState<string | null>(null);
@@ -187,20 +188,19 @@ function Share() {
             });
             setSelectedFile(zipFile);
         } catch (error) {
-            console.error("压缩失败:", error);
-            alertUseMUI("文件压缩失败，请重试！", 2000, { kind: "error" });
+            alertUseMUI(t('toast.zipFailed'), 2000, { kind: "error" });
         }
     };
     const handleClickOtherClients = async (_e: any, targetUserId: string) => {
         try {
             if (!realTimeColab.isConnectedToUser(targetUserId)) {
-                alertUseMUI("正在连接目标用户，请等待连接建立", 2000, { kind: "warning" });
+                alertUseMUI(t('toast.connectingUser'), 2000, { kind: "warning" });
                 realTimeColab.connectToUser(targetUserId)
                 return;
             }
             if ((selectedButton === "file" || selectedButton === "image") && selectedFile) {
                 if (realTimeColab.isSendingFile) {
-                    alertUseMUI("有任务正在进行中！", 2000, { kind: "info" });
+                    alertUseMUI(t('toast.taskInProgress'), 2000, { kind: "info" });
                     setDwnloadPageState(true);
                     return;
                 }
@@ -217,10 +217,10 @@ function Share() {
                 if (clipText != "") {
                     await realTimeColab.sendMessageToUser(targetUserId, clipText ?? "读取剪切板失败");
                 } else {
-                    alertUseMUI("剪切板为空, 或浏览器不支持", 2000, { kind: "info" });
+                    alertUseMUI(t('toast.clipboardEmpty'), 2000, { kind: "info" });
                 }
             } else {
-                alertUseMUI("未选择发送内容", 2000, { kind: "info" });
+                alertUseMUI(t('toast.noContentSelected'), 2000, { kind: "info" });
                 // await realTimeColab.sendMessageToUser(targetUserId, "配对成功!");
             }
         } catch (error) {
@@ -291,7 +291,7 @@ function Share() {
         try {
             if (msgFromSharing) {
                 writeClipboard(msgFromSharing);
-                alertUseMUI("成功写入剪贴板", 2000, { kind: "success" });
+                alertUseMUI(t('toast.copiedToClipboard'), 2000, { kind: "success" });
             }
         } catch (e) {
             console.error("处理接受失败", e);
@@ -396,7 +396,7 @@ function Share() {
                                 }}
                             >
                                 <Typography variant="h6" color="white">
-                                    松手上传文件
+                                    {t('prompt.dropToUpload')}
                                 </Typography>
                             </Box>
                         </Fade>
@@ -424,7 +424,7 @@ function Share() {
                                     }
                                 }}
                             >
-                                文件
+                                {t('button.file')}
                             </Button>
                         </Badge>
 
@@ -454,7 +454,7 @@ function Share() {
                                     }
                                 }}
                             >
-                                图片
+                                {t('button.image')}
                             </Button>
                         </Badge>
 
@@ -479,7 +479,7 @@ function Share() {
                                 startIcon={<TextIcon />}
                                 sx={buttonStyleNormal}
                             >
-                                文本
+                                {t('button.text')}
                             </Button>
                         </Badge>
 
@@ -495,7 +495,7 @@ function Share() {
                                 startIcon={<ClipboardIcon />}
                                 sx={buttonStyleNormal}
                             >
-                                剪贴板
+                                {t('button.clipboard')}
                             </Button>
                         </Badge>
                     </Box>
@@ -510,7 +510,7 @@ function Share() {
                             }
                             disabled={loading}
                         >
-                            {loading ? '搜索同WIFI下用户' : '搜索同WIFI下用户'}
+                            {t('button.searchUsers')}
                         </Button>
                     </Box>
 
@@ -532,9 +532,9 @@ function Share() {
                                 color="text.secondary"
                                 sx={{ whiteSpace: 'pre-line' }}
                             >
-                                使用指南🎉：
-                                {"\n"}1. 两个设备连接到<strong>同一个</strong>局域网（部分公共 WiFi 不可用）
-                                {"\n"}2. 两个设备房间号<strong>必须相同</strong>！
+                                {t('guide.title')}
+                                {"\n"}<Trans i18nKey="guide.step1" components={{ strong: <strong /> }} />
+                                {"\n"}<Trans i18nKey="guide.step2" components={{ strong: <strong /> }} />
                             </Typography></Box>
                         </Box></> : <></>}
                         {[...connectedUsers].sort((a, b) => {
@@ -622,9 +622,9 @@ function Share() {
                         // setFileFromSharing(null)
                     }, 300)
                 }}>
-                <DialogTitle>✨ 新分享</DialogTitle>
+                <DialogTitle>{t('dialog.newShare')}</DialogTitle>
                 <DialogContent sx={{ width: { sx: 200, sm: 200, md: 400, lg: 400, } }} >
-                    <DialogContentText>您有来自外部的消息，是否接受？</DialogContentText>
+                    <DialogContentText>{t('dialog.incomingMessage')}</DialogContentText>
                     {msgFromSharing && (
                         <TextField
                             value={msgFromSharing ?? ""}
@@ -654,8 +654,8 @@ function Share() {
                         setOpenDialog(false);
                         setMsgFromSharing(null)
                         // setFileFromSharing(null)
-                    }} color="secondary">拒绝</Button>
-                    <Button onClick={handleAcceptMessage} color="primary" autoFocus>接受</Button>
+                    }} color="secondary">{t('button.reject')}</Button>
+                    <Button onClick={handleAcceptMessage} color="primary" autoFocus>{t('button.accept')}</Button>
                 </DialogActions>
             </Dialog>
 
@@ -667,57 +667,58 @@ function Share() {
                 PaperProps={{
                     sx: {
                         borderRadius: 2,
-                        px: { xs: 1, sm: 4 },
-                        py: 2,
+                        maxWidth: 500,
                         mx: { xs: 1, sm: "auto" },
                     },
                 }}
             >
-                <DialogActions
-                    sx={{
-                        px: { xs: 2, sm: 3 },
-                        pb: { xs: 1, sm: 2 },
-                        justifyContent: "flex-end",
-                    }}
-                >
-                    <Typography variant="h6" sx={{ flexGrow: 1 }}>
-                        输入文本
-                    </Typography>
-                    <Button onClick={() => setTextInputDialogOpen(false)} color="secondary">
-                        取消
-                    </Button>
-                    <Button
-                        onClick={() => {
-                            if (textInput) {
-                                setSelectedText(textInput);
-                                setSelectedButton("text");
-                            } else {
-                                alertUseMUI("空啦", 1000, { kind: "info" })
-                            }
-                            setTextInputDialogOpen(false);
-                        }}
-                        color="primary"
-                        variant="contained"
-                    >
-                        确认
-                    </Button>
-                </DialogActions>
-                <DialogContent>
-                    <TextField
-                        autoFocus={true}
-                        value={textInput}
-                        onChange={(e) => setTextInput(e.target.value)}
-                        multiline
-                        rows={6}
-                        fullWidth
-                        variant="outlined"
-                        placeholder="请输入要发送的文本..."
+                <Box sx={{ padding: "20px" }}>
+                    <DialogActions
                         sx={{
-                            mt: 1,
-                            fontSize: { xs: "14px", sm: "16px" },
+
+                            justifyContent: "space-between",
                         }}
-                    />
-                </DialogContent>
+                    >
+                        <Typography variant="h6" sx={{ flexGrow: 1 }}>
+                            {t('dialog.inputText')}
+                        </Typography>
+                        <Button onClick={() => setTextInputDialogOpen(false)} color="secondary">
+                            {t('button.cancel')}
+                        </Button>
+                        <Button
+                            onClick={() => {
+                                if (textInput) {
+                                    setSelectedText(textInput);
+                                    setSelectedButton("text");
+                                } else {
+                                    alertUseMUI(t('toast.emptyInput'), 1000, { kind: "info" })
+                                }
+                                setTextInputDialogOpen(false);
+                            }}
+                            color="primary"
+                            variant="contained"
+                        >
+                            {t('button.confirm')}
+                        </Button>
+                    </DialogActions>
+                    <DialogContent>
+                        <TextField
+                            autoFocus={true}
+                            value={textInput}
+                            onChange={(e) => setTextInput(e.target.value)}
+                            multiline
+                            rows={5}
+                            fullWidth
+                            variant="outlined"
+                            placeholder={`${t('placeholder.inputText')}...`}
+                            sx={{
+
+                                px: 0,
+                                fontSize: { xs: "14px", sm: "16px" },
+                            }}
+                        />
+                    </DialogContent>
+                </Box>
             </Dialog>
 
             <DownloadDrawer
@@ -817,11 +818,23 @@ const ThemedShare = observer(() => {
         setActualTheme(theme);
 
         const themeColor = theme.palette.background.default;
+
+        // 设置浏览器地址栏颜色（PWA 样式用）
         const meta = document.querySelector('meta[name="theme-color"]');
         if (meta && themeColor) {
             meta.setAttribute("content", themeColor);
         }
+
+        if (isApp) {
+            import('@hugotomazi/capacitor-navigation-bar').then(({ NavigationBar }) => {
+                NavigationBar.setColor({
+                    color: themeColor,
+                    darkButtons: resolvedThemeKey !== 'dark' // true = 黑按钮, false = 白按钮
+                });
+            });
+        }
     }, [settingsStore.get("userTheme")]);
+
 
 
     return (

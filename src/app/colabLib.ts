@@ -4,13 +4,14 @@ import { compareUniqIdPriority, getDeviceType, validateRoomName } from "./libs/t
 import Ably from "ably";
 import settingsStore from "./libs/mobx";
 import JSZip from "jszip";
+import i18n from "./libs/i18n/i18n";
 
 interface NegotiationState {
     isNegotiating: boolean;    // 是否正在进行一次Offer/Answer
     queue: any[];              // 暂存要处理的Offer或Answer
 }
 export type UserStatus = "waiting" | "connecting" | "connected" | "disconnected";
-
+const t = i18n.t
 export interface UserInfo {
     status: UserStatus;
     attempts: number;
@@ -216,7 +217,7 @@ export class RealTimeColab {
 
         const validation = validateRoomName(newRoomId);
         if (!validation.isValid) {
-            alertUseMUI(validation.message || "房间名不合法", 2000, { kind: "error" });
+            alertUseMUI(validation.message || t('alert.invalidRoom'), 2000, { kind: "error" });
             return;
         }
 
@@ -823,7 +824,8 @@ export class RealTimeColab {
                 this.userList.set(id, user);
             }
 
-            alertUseMUI("新用户已连接: " + id.split(":")[0], 2000, { kind: "success" });
+            alertUseMUI(t('alert.newUser', { name: id.split(":")[0] }), 2000, { kind: "success" });
+
             this.updateUI()
             // 清除旧定时器（如果存在）
             if (this.heartbeatIntervals.has(id)) {
@@ -873,7 +875,7 @@ export class RealTimeColab {
                         realTimeColab.abortFileTransferToUser?.();
                         this.setFileTransferProgress(null)
                         this.setDownloadPageState(false)
-                        alertUseMUI("对方取消了传输！", 2000, { kind: 'error' })
+                        alertUseMUI(t('alert.transferCancelled'), 2000, { kind: 'error' })
 
                         break;
                     case "ping":
@@ -936,7 +938,7 @@ export class RealTimeColab {
                     const sortedChunks: ArrayBuffer[] = [];
                     for (let i = 0; i < fileInfo.totalChunks; i++) {
                         if (!fileInfo.chunks[i]) {
-                            alertUseMUI(`文件传输缺少切片 ${i}，请重新传输！`, 1000, { kind: "error" });
+                            alertUseMUI(t('alert.chunkMissing', { index: i }), 1000, { kind: "error" });
                             console.error(`缺少切片 ${i}`);
                             this.receivingFiles.delete(id);
                             return;
@@ -955,7 +957,7 @@ export class RealTimeColab {
                         file.name.startsWith("LetShare_") && file.name.endsWith(".zip")
                     );
                     if (zipEntries) {
-                        alertUseMUI("解压中，请耐心等待...", 2000, { kind: "info" })
+                        alertUseMUI(t('alert.unzipping'), 2000, { kind: "info" })
                     }
 
                     for (const [fullKey, zipFile] of zipEntries) {
@@ -980,7 +982,7 @@ export class RealTimeColab {
                             console.error("解压失败:", err);
                         }
                     }
-                    alertUseMUI("成功接受来自" + id.split(":")[0] + "的文件！")
+                    alertUseMUI(t('alert.fileReceived', { name: id.split(":")[0] }))
 
                     this.receivingFiles.delete(id);
                 }
@@ -1011,7 +1013,7 @@ export class RealTimeColab {
             this.userList.delete(id)
             this.updateUI()
             // 如果你想保留提示也没问题：
-            alertUseMUI("与对方断开连接，请等待或刷新页面", 2000, { kind: "error" });
+            alertUseMUI(t('alert.disconnected'), 2000, { kind: "error" });
         };
 
         channel.onerror = () => {

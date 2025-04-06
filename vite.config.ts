@@ -50,12 +50,13 @@ export default defineConfig({
       registerType: 'autoUpdate',
       // includeAssets: ['favicon.svg', 'robots.txt', 'apple-touch-icon.png'],
       manifest: {
+        
         name: 'LetShare',
         short_name: 'LetShare',
         start_url: '/',
         display: 'standalone',
         background_color: '#ffffff',
-        theme_color: '#317EFB',
+        theme_color: '#ffffff',
         icons: [
           {
             src: 'public/icons/192x192.png',

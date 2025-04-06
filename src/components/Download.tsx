@@ -28,6 +28,7 @@ import realTimeColab from "@App/colabLib";
 import JSZip from "jszip";
 import { isApp } from "@App/libs/capacitor/user";
 import { saveBinaryToApp } from "@App/libs/capacitor/file";
+import { Trans, useTranslation } from "react-i18next";
 
 
 export default function DownloadDrawerSlide({
@@ -43,6 +44,7 @@ export default function DownloadDrawerSlide({
     onClose: () => void;
     targetUserId?: string | null;
 }) {
+    const { t } = useTranslation();
     const theme = useTheme();
     const [visible, setVisible] = React.useState(open);
     const [_, forceUpdate] = React.useReducer((x) => x + 1, 0);
@@ -62,7 +64,6 @@ export default function DownloadDrawerSlide({
     };
     const receivingMap = realTimeColab.receivingFiles as Map<string, any>;
     const receivedMap = realTimeColab.receivedFiles as Map<string, File>;
-
     const receivingList = Array.from(receivingMap.entries());
     const receivedList = Array.from(receivedMap.entries());
     const downloadAllAsZip = async () => {
@@ -288,7 +289,8 @@ export default function DownloadDrawerSlide({
                                         }}
                                     >
                                         <Typography variant="body2" color="text.secondary">
-                                            📤 正在发送文件给 <strong>{targetUserId?.split(":")[0] ?? "未知用户"}</strong>
+                                            {/* 📤 正在发送文件给 <strong>{targetUserId?.split(":")[0] ?? "未知用户"}</strong> */}
+                                            <Trans i18nKey="transfer.sending" values={{ name: targetUserId?.split(":")[0] ?? "未知用户" }} components={{ strong: <strong /> }} />
                                         </Typography>
                                         <Box
                                             sx={{
@@ -347,8 +349,11 @@ export default function DownloadDrawerSlide({
                                             }}
                                         >
                                             <Typography variant="body2" color="text.secondary">
-                                                📥 正在接收来自 <strong>{userId.split(":")[0]}</strong> 的文件：
-                                                {file.name}
+                                                {/* 📥 正在接收来自 <strong>{userId.split(":")[0]}</strong> 的文件： */}
+                                                {/* {file.name} */}
+                                                <Trans i18nKey="transfer.receiving"
+                                                    values={{ name: userId.split(":")[0], filename: file.name }}
+                                                    components={{ strong: <strong /> }} />
                                             </Typography>
                                             <Box
                                                 sx={{
@@ -363,7 +368,7 @@ export default function DownloadDrawerSlide({
                                                         color="text.secondary"
                                                     >
                                                         {receiveProgress.toFixed(1)}%（
-                                                        {file.receivedSize} / {file.size} 字节）
+                                                        {file.receivedSize} / {file.size}   {t('transfer.byte')}）
                                                     </Typography>
                                                     <LinearProgress
                                                         variant="determinate"
@@ -397,7 +402,7 @@ export default function DownloadDrawerSlide({
                                 {receivedList.length > 0 && (
                                     <Box>
                                         <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", mt: 2, mb: 1 }}>
-                                            <Typography variant="subtitle2">📁 已接收的文件</Typography>
+                                            <Typography variant="subtitle2">{t('transfer.receivedFiles')}</Typography>
                                             <IconButton onClick={downloadAllAsZip} size="small" >
                                                 <DownloadIcon fontSize="small" />
                                             </IconButton>
@@ -443,7 +448,7 @@ export default function DownloadDrawerSlide({
                                     py: 2,
                                 }}
                             >
-                                没有进行中的任务
+                                {t('transfer.noTasks')}
                             </Box>
                         )}
 

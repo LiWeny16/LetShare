@@ -1,8 +1,10 @@
 import { useState, useEffect, useRef } from "react";
 import { Typography, TextField } from "@mui/material";
 import realTimeColab from "@App/colabLib";
+import { useTranslation } from "react-i18next";
 
 const EditableUserId = ({ onEditDone }: { onEditDone?: (newId: string) => void }) => {
+    const { t } = useTranslation();
     const [editing, setEditing] = useState(false);
     const [userId, setUserId] = useState("");
     const [error, setError] = useState(false);
@@ -58,7 +60,7 @@ const EditableUserId = ({ onEditDone }: { onEditDone?: (newId: string) => void }
                     autoFocus
                     variant="standard"
                     error={error}
-                    helperText={error ? "只允许12字符以内的字母、数字和汉字" : " "}
+                    helperText={error ? t('userId.inputError') : ""}
                     inputProps={{
                         style: { textAlign: "center" },
                         maxLength: 12
@@ -73,7 +75,7 @@ const EditableUserId = ({ onEditDone }: { onEditDone?: (newId: string) => void }
                     sx={{ mt: 2, cursor: "pointer" }}
                     onClick={() => setEditing(true)}
                 >
-                    你的ID: {userId}
+                    {t('userId.display')}: {userId}
                 </Typography>
             )}
         </>

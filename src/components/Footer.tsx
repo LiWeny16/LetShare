@@ -6,8 +6,10 @@ import { QRCode } from 'react-qrcode-logo';
 import SettingsIcon from '@mui/icons-material/Settings';
 import SettingsPage from './Settings';
 import settingsStore from '@App/libs/mobx';
+import { useTranslation } from 'react-i18next';
 
 const Footer = () => {
+     const { t } = useTranslation();
     const [open, setOpen] = useState(false);
     const handleOpen = () => setOpen(true);
     const handleClose = () => setOpen(false);
@@ -63,7 +65,7 @@ const Footer = () => {
                 }}
             >
                 <Box sx={{ padding: 1, bgcolor: 'background.paper', borderRadius: 2, }}>
-                    <DialogTitle>分享·一触即发</DialogTitle>
+                    <DialogTitle>{t('footer.shareTitle')}</DialogTitle>
                     <Divider></Divider>
                     <DialogContent
                         sx={{
@@ -82,7 +84,7 @@ const Footer = () => {
                                 color="text.secondary"
                                 sx={{ mb: 0, wordBreak: 'break-word', whiteSpace: 'pre-wrap' }}
                             >
-                                扫描二维码以加入房间: <br></br><strong>{settingsStore.get("roomId")}</strong>
+                                {t('footer.qrPrompt')} <br></br><strong>{settingsStore.get("roomId")}</strong>
                             </Typography>
                             <QRCode
                                 value={shareUrl}

@@ -5,8 +5,8 @@ const STORAGE_KEY = 'user_settings';
 
 const DEFAULT_SETTINGS = {
     roomId: '',
-    userTheme: 'light' as ThemeKey | 'light',
-    userLanguage: 'system',
+    userTheme: 'light' as ThemeKey,
+    userLanguage: 'system' as LanguageType,
     backupBackWsUrl: "wss://md-server-md-server-bndnqhexdf.cn-hangzhou.fcapp.run",
     ablyKey: "4TtssQ.e9OvDA:wYBGdtWQNgicbeIKNtgeV_s5XEKmfLKD_Gue5XQrWuw",
     version: "3.3.0",
