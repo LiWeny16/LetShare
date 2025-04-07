@@ -44,7 +44,7 @@ const StartupPage: React.FC<StartupPageProps> = ({ open }) => {
                         <Fade in={imgLoaded} timeout={600}>
                             <Box
                                 component="img"
-                                src="/icons/512x512.png"
+                                src="/icons/512x512_trans.png"
                                 alt="Logo"
                                 onLoad={() => setImgLoaded(true)}
                                 sx={{

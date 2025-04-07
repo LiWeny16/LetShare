@@ -1,117 +1,93 @@
-# 🔗 Real-Time Local Sharing App
+
+# LetShare – Effortless File & Text Sharing Across Devices 🚀
+
+
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)  
+[![Website](https://img.shields.io/badge/Website-letshare.fun-blue)](https://letshare.fun)  
+[![Built with Vite](https://img.shields.io/badge/built%20with-vite-646cff)](https://vitejs.dev)  
+[![MUI](https://img.shields.io/badge/UI-MUI-007FFF)](https://mui.com)  
+[![Capacitor](https://img.shields.io/badge/Native-Capacitor-4ECDC4)](https://capacitorjs.com)
 
 [中文版](./documents/README-CN.md)
 
-![React](https://img.shields.io/badge/React-18.x-blue?logo=react)
-![WebRTC](https://img.shields.io/badge/WebRTC-P2P-brightgreen?logo=webrtc)
-![WebSocket](https://img.shields.io/badge/WebSocket-Connected-orange?logo=websocket)
-![License](https://img.shields.io/badge/License-MIT-yellow)
-![Platform](https://img.shields.io/badge/Platform-LAN%20only-lightgrey)
+LetShare is a blazing-fast, lightweight tool for sharing files, text, images, and clipboard content between devices — no login, no cloud, no nonsense.
 
+Share anywhere. Phone to laptop. Android to browser. Clipboard to clipboard.
 
-A lightweight real-time collaboration and file-sharing app designed for seamless communication within the same local network. Built with **React**, **WebRTC**, and **WebSocket**, it supports sharing **files**, **text**, and **clipboard content** with nearby users.
+![alt text](documents/googleplay/pc-images/green.png)
 
 ---
 
 ## ✨ Features
 
-- 📁 **File Transfer**: Send files peer-to-peer without uploading to a server.
-- 📝 **Text & Clipboard Sharing**: Share custom text or clipboard content instantly.
-- 🌐 **LAN Peer Discovery**: Automatically find other users connected to the same Wi-Fi.
-- 🔄 **Reconnection Mechanism**: Auto-reconnect to disconnected users.
-- 🔥 **Drag & Drop Upload**: Easily drag files into the app window to share.
-- 🚫 **Abort Transfer**: Cancel file sending in real-time.
-- 🧊 **Material UI Components**: Clean, responsive interface using MUI.
+- 📡 **Peer-to-peer** local sharing via WebRTC  
+- 💻 **Cross-platform** support: browser & native Android app  
+- 🔒 **Private & offline-first** – no cloud upload, all local  
+- 🧾 **Text, file, image, clipboard** – share anything instantly  
+- 🌐 **Multi-language UI** (English / 中文 / Bahasa Melayu / Indonesia)  
+- 🖼️ **QR-code based pairing** – scan & connect  
+- 🎨 **Clean Material UI**, responsive design  
+- ⚙️ **Built with Vite**, React, MobX, Capacitor
 
 ---
 
-## 📦 Technologies Used
+## 🧪 Tech Stack
 
-- **React (TypeScript)**
-- **Material UI (MUI)**
-- **WebSocket** for signaling and peer discovery
-- **WebRTC** for direct peer-to-peer data transfer
-- **Clipboard API** for sharing copied content
-- **Custom Utility Kit** for delay, ID management, etc.
+- React + Vite + TypeScript  
+- MUI 5 (Material Design UI)  
+- WebRTC + Ably for real-time messaging  
+- MobX for state management  
+- Capacitor for Android native support  
+- i18next + detector for language handling  
+- JSZip, Clipboard API, react-qrcode-logo
 
 ---
 
-## 🚀 Getting Started
-
-### Prerequisites
-
-- Node.js (v16+ recommended)
-- Yarn or npm
-
-### Installation
+## 🔧 Scripts (via Yarn)
 
 ```bash
-# Install dependencies
-npm install
-
-# Or
-yarn install
+yarn dev        # Run development server
+yarn build      # Build production web app
+yarn app        # Build & sync Android app (via Capacitor)
+yarn app-start  # Open Android Studio
+yarn preview    # Preview built site
 ```
 
-### Start the Development Server
+---
+
+## 🌍 Try It Now
+
+Visit the live app at:  
+👉 **https://letshare.fun**
+
+No install. No login. Works on any modern browser.
+
+---
+
+## 📲 Android App
+
+Build native Android app:
 
 ```bash
-npm run dev
-
-# Or
-yarn dev
+yarn app-create
+yarn app
+yarn app-start
 ```
 
----
-
-## 🌍 Usage
-
-1. Open the app in two different tabs or devices connected to the same network.
-2. Click **"Search Nearby Users"** to discover peers.
-3. Choose a file, input some text, or select clipboard mode.
-4. Click a discovered user to send your content.
-5. A dialog will appear on the receiver's screen to accept or decline.
+Requires Android Studio & Capacitor CLI.
 
 ---
 
-## 📁 File Transfer Notes
+## 📄 License
 
-- File transfer uses WebRTC **DataChannels**.
-- Signaling is handled via a lightweight **WebSocket server**.
-- Large files are chunked and transferred with progress feedback.
+MIT © 2025 Onion
 
 ---
 
-## 🧪 Developer Notes
+## ⭐️ Contribute
 
-- `colabLib.ts` handles all WebRTC + signaling logic.
-- The app automatically cleans up disconnected users.
-- Auto-reconnect checks run every ~3.5 seconds.
-- Clipboard support may vary depending on browser permissions.
+Found it useful? Give us a ⭐ at  
+https://github.com/LiWeny16/LetShare
 
----
-
-## ⚙️ Configuration
-
-The signaling server URL is defined in the code:
-```ts
-const url = "wss://your-server-url";
-```
-
-You can switch to a local server for development:
-```ts
-const url = "ws://localhost:9000";
-```
-
----
-
-## 📷 Screenshots
-
-> _Add your screenshots here to visualize the app's UX_
-
----
-
-## 📜 License
-
-MIT License © 2025
+Pull requests welcome. Let’s build frictionless sharing together!
 
