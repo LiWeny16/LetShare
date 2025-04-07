@@ -64,7 +64,7 @@ export default defineConfig({
             type: 'image/png'
           },
           {
-            src: 'public/icons/512x512.png',
+            src: 'public/icons/512x512_trans.png',
             sizes: '512x512',
             type: 'image/png'
           }
