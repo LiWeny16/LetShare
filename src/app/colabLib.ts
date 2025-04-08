@@ -131,6 +131,7 @@ export class RealTimeColab {
         this.updateConnectedUsers = updateConnectedUsers
         this.setFileTransferProgress = setFileTransferProgress
         this.initTransferConfig()
+        this.setupVisibilityWatcher()
         setInterval(async () => {
             for (const [id, user] of this.userList.entries()) {
                 if (user.status === "waiting") {
@@ -156,31 +157,62 @@ export class RealTimeColab {
 
 
     public async connectToServer(): Promise<boolean> {
-        const roomId = settingsStore.get("roomId")
+        const roomId = settingsStore.get("roomId");
+
         if (!validateRoomName(roomId).isValid) {
             settingsStore.updateUnrmb("settingsPageState", true);
-            return false
-        }
-        // 已连接则不重复连接
-        if (this.ably?.connection?.state === "connected") {
-            return false
+            return false;
         }
 
         try {
-            this.ably = new Ably.Realtime({ key: settingsStore.get("ablyKey") });
+            if (!this.ably) {
+                // 第一次连接或彻底断开后的重建
+                this.ably = new Ably.Realtime({ key: settingsStore.get("ablyKey") });
 
-            await new Promise((resolve, reject) => {
-                this.ably!.connection.once("connected", resolve);
-                this.ably!.connection.once("failed", reject);
-            });
+                await new Promise((resolve, reject) => {
+                    this.ably!.connection.once("connected", resolve);
+                    this.ably!.connection.once("failed", reject);
+                });
+
+            } else {
+                const state = this.ably.connection.state;
+                if (state === "closed" || state === "disconnected" || state === "suspended") {
+                    console.log(`当前连接状态为 ${state}，尝试重新连接 Ably...`);
+                    this.ably.connection.connect();
+
+                    await this.ably.connection.whenState("connected");
+                } else if (state === "connecting") {
+                    await this.ably.connection.whenState("connected");
+                } else if (state === "connected") {
+                    // 已连接则无需操作
+                    return true;
+                }
+            }
 
             this.subscribeToRoom(roomId!);
-            return true
+            return true;
+
         } catch (err) {
             alertUseMUI("Ably 连接失败，切换为备用 WebSocket 模式", 2000, { kind: "error" });
             await this.connectToBackupWs();
-            return false
+            return false;
+        }
+    }
 
+    public async disconnect(soft?: boolean): Promise<void> {
+        this.ablyChannel?.unsubscribe();
+        this.ablyChannel = null;
+
+        if (!this.ably) {
+            return;
+        }
+
+        if (soft) {
+            this.ably.connection.close(); // 状态会变成 'closed'
+        } else {
+            // “硬断开”：完全销毁
+            this.ably.connection.close();
+            this.ably = null;
         }
     }
 
@@ -363,12 +395,6 @@ export class RealTimeColab {
         return RealTimeColab.instance;
     }
 
-    public async disconnect(): Promise<void> {
-        this.ablyChannel?.unsubscribe();
-        this.ably?.close();
-        this.ably = null;
-        this.ablyChannel = null;
-    }
 
     private cleanUpConnections(): void {
         console.warn("🔌 Ably disconnected, cleaning up.");
@@ -1318,6 +1344,39 @@ export class RealTimeColab {
             await new Promise(res => setTimeout(res, waitInterval));
         }
     }
+    private setupVisibilityWatcher() {
+        let backgroundStartTime: number | null = null;
+        let ablyTimeoutHandle: ReturnType<typeof setTimeout> | null = null;
+        const overtime = 30_000
+        document.addEventListener("visibilitychange", () => {
+            if (document.visibilityState === "hidden") {
+                backgroundStartTime = Date.now();
+                ablyTimeoutHandle = setTimeout(() => {
+                    const now = Date.now();
+                    if (backgroundStartTime && now - backgroundStartTime >= overtime) {
+                        alertUseMUI(`⏱ 页面后台超过${overtime}秒，断开服务器连接节流`,3000)
+                        this.disconnect(true); // 你已有的断开方法
+                    }
+                }, overtime);
+            } else if (document.visibilityState === "visible") {
+                if (ablyTimeoutHandle) {
+                    clearTimeout(ablyTimeoutHandle);
+                    ablyTimeoutHandle = null;
+                }
+                if (!this.isConnected()) {
+                    // console.log("🔁 页面回到前台，重新连接Ably...");
+                }
+            }
+        });
+
+        // window.addEventListener("focus", () => {
+        //     if (!this.isConnected()) {
+        //         console.log("🧠 focus 检测触发连接");
+        //         this.connectToServer();
+        //     }
+        // });
+    }
+
 
 }
 
