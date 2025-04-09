@@ -1,6 +1,6 @@
 // import { alertEmitter } from "";
 import type { AlertColor } from "@mui/material";
-import { alertEmitter } from "../components/Alert";
+import { alertEmitter } from "../../components/Alert";
 
 /**
  * @description 使用 MUI 弹出全局提示

@@ -1,6 +1,6 @@
 import { Clipboard } from '@capacitor/clipboard';
 import alertUseMUI from './alert';
-import { isApp } from './libs/capacitor/user';
+import { isApp } from './capacitor/user';
 
 
 

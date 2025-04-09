@@ -11,12 +11,12 @@ import {
     SelectChangeEvent,
 } from '@mui/material';
 import { observer } from 'mobx-react-lite';
-import settingsStore, { SettingsKey } from '@App/libs/mobx';
+import settingsStore, { SettingsKey } from '@App/libs/mobx/mobx';
 import React from 'react';
-import alertUseMUI from '@App/alert';
+import alertUseMUI from '@App/libs/alert';
 import ThemeSelector from './Theme/ThemeSelector';
-import { validateRoomName } from '@App/libs/tools';
-import realTimeColab from '@App/colabLib';
+import { validateRoomName } from '@App/libs/tools/tools';
+import realTimeColab from '@App/libs/connection/colabLib';
 import i18n from '@App/libs/i18n/i18n';
 import { useTranslation } from 'react-i18next';
 

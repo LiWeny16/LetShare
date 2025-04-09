@@ -22,14 +22,14 @@ import {
     Fab,
     Fade,
 } from "@mui/material";
-import realTimeColab, { UserInfo, UserStatus } from "@App/colabLib";
+import realTimeColab, { UserInfo, UserStatus } from "@App/libs/connection/colabLib";
 import FileIcon from "@mui/icons-material/Description";
 import ImageIcon from "@mui/icons-material/Image";
 import TextIcon from "@mui/icons-material/TextFields";
 import ClipboardIcon from "@mui/icons-material/ContentPaste";
 import kit from "bigonion-kit";
-import { readClipboard, writeClipboard } from "@App/clipboard";
-import alertUseMUI from "@App/alert";
+import { readClipboard, writeClipboard } from "@App/libs/clipboard";
+import alertUseMUI from "@App/libs/alert";
 import AlertPortal from "../components/Alert";
 import { Footer } from "../components/Footer";
 import EditableUserId from "../components/UserId";
@@ -39,9 +39,9 @@ import JSZip from "jszip";
 import AppleIcon from "@mui/icons-material/Apple";
 import PhonelinkRingIcon from "@mui/icons-material/PhonelinkRing";
 import PhonelinkIcon from "@mui/icons-material/Phonelink";
-import { compareUniqIdPriority, getDeviceType } from "@App/libs/tools";
+import { compareUniqIdPriority, getDeviceType } from "@App/libs/tools/tools";
 import { observer } from "mobx-react-lite";
-import settingsStore from "@App/libs/mobx";
+import settingsStore from "@App/libs/mobx/mobx";
 import { isApp } from "@App/libs/capacitor/user";
 import { Trans, useTranslation } from "react-i18next";
 

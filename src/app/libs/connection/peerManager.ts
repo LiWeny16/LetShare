@@ -1,4 +1,4 @@
-import { RealTimeColab } from "@App/colabLib";
+import { RealTimeColab } from "@App/libs/connection/colabLib";
 export class PeerManager {
     private rtc: RealTimeColab;
     private rtcServers = [

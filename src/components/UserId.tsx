@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { Typography, TextField } from "@mui/material";
-import realTimeColab from "@App/colabLib";
+import realTimeColab from "@App/libs/connection/colabLib";
 import { useTranslation } from "react-i18next";
 
 const EditableUserId = ({ onEditDone }: { onEditDone?: (newId: string) => void }) => {

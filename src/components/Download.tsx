@@ -23,8 +23,8 @@ import {
 import DownloadIcon from "@mui/icons-material/Download"; // 确保导入这个
 import { buttonStyleNormal } from "../pages/share";
 import React from "react";
-import alertUseMUI from "@App/alert";
-import realTimeColab from "@App/colabLib";
+import alertUseMUI from "@App/libs/alert";
+import realTimeColab from "@App/libs/connection/colabLib";
 import JSZip from "jszip";
 import { isApp } from "@App/libs/capacitor/user";
 import { saveBinaryToApp } from "@App/libs/capacitor/file";

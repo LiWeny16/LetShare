@@ -1,10 +1,10 @@
-import alertUseMUI from "./alert";
-import { PeerManager } from "./libs/peerManager";
-import { compareUniqIdPriority, getDeviceType, validateRoomName } from "./libs/tools";
+import alertUseMUI from "../alert";
+import { PeerManager } from "./peerManager";
+import { compareUniqIdPriority, getDeviceType, validateRoomName } from "../tools/tools";
 import Ably from "ably";
-import settingsStore from "./libs/mobx";
+import settingsStore from "../mobx/mobx";
 import JSZip from "jszip";
-import i18n from "./libs/i18n/i18n";
+import i18n from "../i18n/i18n";
 
 interface NegotiationState {
     isNegotiating: boolean;    // 是否正在进行一次Offer/Answer
@@ -767,7 +767,12 @@ export class RealTimeColab {
             answer: peer.localDescription,
             to: peerId,
         });
-
+        //  处理缓存中的 ICE 候选
+        const cached = this.candidateCache.get(peerId);
+        if (cached && cached.length > 0) {
+            await this.handleCandidate({ from: peerId, candidates: cached });
+            this.candidateCache.delete(peerId);
+        }
     }
 
 
@@ -790,7 +795,7 @@ export class RealTimeColab {
         this.processNegotiationQueue(fromId);
     }
 
-    private async doHandleAnswer(peerId: string, remoteAnswer: RTCSessionDescriptionInit) {
+    public async doHandleAnswer(peerId: string, remoteAnswer: RTCSessionDescriptionInit) {
         const peer = RealTimeColab.peers.get(peerId);
         if (!peer) return;
 
@@ -800,28 +805,56 @@ export class RealTimeColab {
             return;
         }
 
-        // 正常情况：setRemoteDescription(answer)
         await peer.setRemoteDescription(new RTCSessionDescription(remoteAnswer));
+        //  清理并应用候选
+        const cached = this.candidateCache.get(peerId);
+        if (cached && cached.length > 0) {
+            await this.handleCandidate({ from: peerId, candidates: cached });
+            this.candidateCache.delete(peerId);
+        }
     }
 
 
-    // 修改handleCandidate方法
+    private candidateCache: Map<string, RTCIceCandidateInit[]> = new Map();
+    private processedCandidates: Map<string, Set<string>> = new Map();
+
     private async handleCandidate(data: any): Promise<void> {
         const peer = RealTimeColab.peers.get(data.from);
-        if (!peer || !peer.remoteDescription) {
-            console.warn(`[ICE] ❌ 跳过 ICE，因 remoteDescription 尚未设置`);
+        const fromId = data.from;
+
+        if (!peer) {
+            console.warn(`[ICE] ❌ 无 peer，跳过 ${fromId}`);
             return;
         }
-        if (peer && data.candidates) {
-            for (const candidate of data.candidates) {
-                try {
-                    await peer.addIceCandidate(new RTCIceCandidate(candidate));
-                } catch (err) {
-                    console.error("Error adding ICE candidate:", err);
-                }
+
+        // remoteDescription 未就绪时，缓存 ICE 候选
+        if (!peer.remoteDescription) {
+            console.warn(`[ICE] ⚠️ remoteDescription 尚未设置，缓存候选`);
+            const existing = this.candidateCache.get(fromId) || [];
+            this.candidateCache.set(fromId, existing.concat(data.candidates || []));
+            return;
+        }
+
+        // 获取已处理过的 ICE 字符串 Set
+        const seenSet = this.processedCandidates.get(fromId) || new Set<string>();
+        this.processedCandidates.set(fromId, seenSet);
+
+        for (const candidateInit of data.candidates || []) {
+            const key = JSON.stringify(candidateInit);
+            if (seenSet.has(key)) {
+                console.log(`[ICE] 🔁 跳过重复候选`);
+                continue;
+            }
+
+            try {
+                await peer.addIceCandidate(new RTCIceCandidate(candidateInit));
+                seenSet.add(key);
+            } catch (err) {
+                console.error("Error adding ICE candidate:", err);
             }
         }
     }
+
 
     public getAllUsers(): string[] {
         return Array.from(this.userList.keys());
@@ -1354,7 +1387,7 @@ export class RealTimeColab {
                 ablyTimeoutHandle = setTimeout(() => {
                     const now = Date.now();
                     if (backgroundStartTime && now - backgroundStartTime >= overtime) {
-                        alertUseMUI(`⏱ 页面后台超过${overtime}秒，断开服务器连接节流`,3000)
+                        alertUseMUI(`⏱ 页面后台超过${overtime}秒，断开服务器连接节流`, 3000)
                         this.disconnect(true); // 你已有的断开方法
                     }
                 }, overtime);

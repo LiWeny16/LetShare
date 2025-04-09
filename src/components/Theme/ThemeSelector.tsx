@@ -1,5 +1,5 @@
 import { Box, Tooltip } from "@mui/material";
-import settingsStore from "@App/libs/mobx";
+import settingsStore from "@App/libs/mobx/mobx";
 
 const themes = [
   { key: "light", color: "#f5f5f5", label: "亮色" },
