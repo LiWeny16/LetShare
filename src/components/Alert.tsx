@@ -88,7 +88,7 @@ const AlertPortal: React.FC = () => {
               padding: "10px 20px",
               borderRadius: "8px",
               fontSize: "14px",
-              maxWidth: "20vw",
+              minWidth: "250px",
               textAlign: "center",
               whiteSpace: "pre-wrap",
               wordBreak: "break-word",
