@@ -45,9 +45,9 @@ export class RealTimeColab {
         RealTimeColab.uniqId = uniqId;
     }
 
-    public ably: Ably.Realtime | null = null;
+    private ably: Ably.Realtime | null = null;
     public ablyChannel: ReturnType<Ably.Realtime["channels"]["get"]> | null = null;
-    public ws: WebSocket | null = null;
+    private ws: WebSocket | null = null;
 
     public userList: Map<string, UserInfo> = new Map();
     public dataChannels: Map<string, RTCDataChannel> = new Map();
@@ -81,7 +81,6 @@ export class RealTimeColab {
     public coolingTime = 2000;
     public cleaningLock: boolean = false;
 
-    public setIsConnectedToServer: any
     public setFileTransferProgress: React.Dispatch<React.SetStateAction<number | null>> = () => { };
     private setDownloadPageState: React.Dispatch<React.SetStateAction<boolean>> = () => { };
     private setMsgFromSharing: (msg: string | null) => void = () => { };
@@ -124,15 +123,13 @@ export class RealTimeColab {
         setMsgFromSharing: (msg: string | null) => void,
         setDownloadPageState: React.Dispatch<React.SetStateAction<boolean>>,
         updateConnectedUsers: (userList: Map<string, UserInfo>) => void = () => { },
-        setFileTransferProgress: React.Dispatch<React.SetStateAction<number | null>>,
-        setIsConnectedToServer: any
+        setFileTransferProgress: React.Dispatch<React.SetStateAction<number | null>>
     ) {
         this.setFileSendingTargetUser = setFileSendingTargetUser
         this.setMsgFromSharing = setMsgFromSharing
         this.setDownloadPageState = setDownloadPageState
         this.updateConnectedUsers = updateConnectedUsers
         this.setFileTransferProgress = setFileTransferProgress
-        this.setIsConnectedToServer = setIsConnectedToServer
         this.initTransferConfig()
         this.setupVisibilityWatcher()
         setInterval(async () => {
@@ -160,12 +157,6 @@ export class RealTimeColab {
 
 
     public async connectToServer(): Promise<boolean> {
-        const result = this.detectProxyByIPComparison();
-
-        if ((await result).usingProxy) {
-            alertUseMUI(t("alert.proxy"), 4000);
-        }
-
         const roomId = settingsStore.get("roomId");
 
         if (!validateRoomName(roomId).isValid) {
@@ -178,21 +169,9 @@ export class RealTimeColab {
                 // 第一次连接或彻底断开后的重建
                 this.ably = new Ably.Realtime({ key: settingsStore.get("ablyKey") });
 
-                await new Promise((_resolve, _reject) => {
-                    this.ably!.connection.once("connected", (_state) => {
-                        this.setIsConnectedToServer(true)
-                        _resolve(true)
-                    });
-                    this.ably!.connection.once("failed", (stateChange) => {
-                        console.error("❌ Ably 连接失败:", stateChange.reason);
-                        this.setIsConnectedToServer(false)
-                        if (stateChange.reason?.code === 40160) {
-                            alertUseMUI("Ably 套餐可能已超出！", 3000, { kind: "error" });
-                        }
-                        this.connectToBackupWs();
-                        _reject(false)
-
-                    });
+                await new Promise((resolve, reject) => {
+                    this.ably!.connection.once("connected", resolve);
+                    this.ably!.connection.once("failed", reject);
                 });
 
             } else {
@@ -572,63 +551,65 @@ export class RealTimeColab {
 
         this.updateUI()
     }
-    public async detectProxyByIPComparison(): Promise<{
-        usingProxy: boolean;
-        publicIP: string;
-        iceIPs: string[];
-    }> {
-        try {
-            // Step 1: 获取公网出口 IP（从 ipinfo.io）
-            const ipRes = await fetch("https://ipinfo.io/json?token=43b00e5b7d1add");
-            const ipData = await ipRes.json();
-            const publicIP = ipData.ip;
-
-            // Step 2: 获取 WebRTC 生成的 ICE 候选 IP 列表
-            const iceIPs = await new Promise<string[]>((resolve) => {
-                const ips = new Set<string>();
-                const pc = new RTCPeerConnection({
-                    iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
-                });
-
-                pc.createDataChannel("test");
-                pc.createOffer().then(offer => pc.setLocalDescription(offer));
-
-                pc.onicecandidate = (e) => {
-                    if (e.candidate && e.candidate.candidate) {
-                        const parts = e.candidate.candidate.split(" ");
-                        const ip = parts[4];
-                        const type = parts[7];
-                        if (type === "srflx") { // 只取服务器反射的公网 IP
-                            ips.add(ip);
-                        }
-                    } else if (e.candidate === null) {
-                        pc.close();
-                        resolve(Array.from(ips));
-                    }
-                };
-            });
-
-            // Step 3: 比较两个 IP 是否一致
-            const normalizedPublicIP = publicIP?.trim();
-            const matched = iceIPs.some(ip => ip.trim() === normalizedPublicIP);
-
-            return {
-                usingProxy: !matched,
-                publicIP: normalizedPublicIP,
-                iceIPs
-            };
-
-        } catch (err) {
-            console.error("❌ 检测失败:", err);
-            return {
-                usingProxy: false,
-                publicIP: "unknown",
-                iceIPs: []
-            };
-        }
-    }
 
 
+
+    // private async handleLeave(data: any) {
+    //     const leavingUserId = data.id;
+    //     if (this.cleaningLock) {
+    //         console.warn("⛔️ 当前正在清理其他连接，跳过本次 handleLeave");
+    //         return;
+    //     }
+
+    //     this.cleaningLock = true;
+
+    //     try {
+    //         console.warn(`📤 正在清理用户 ${leavingUserId} 的所有状态`);
+    //         // 1. 仅更新 userList 中的状态为 disconnected，不改变其他属性
+    //         const user = this.userList.get(leavingUserId);
+    //         if (user) {
+    //             user.status = "disconnected";
+    //             this.userList.set(leavingUserId, user);
+    //         }
+
+    //         // 2. 关闭并移除 PeerConnection
+    //         const peer = RealTimeColab.peers.get(leavingUserId);
+    //         if (peer) {
+    //             peer.close();
+    //             RealTimeColab.peers.delete(leavingUserId);
+    //         }
+
+    //         // 3. 关闭并移除 DataChannel
+    //         const channel = this.dataChannels.get(leavingUserId);
+    //         if (channel) {
+    //             channel.close();
+    //             this.dataChannels.delete(leavingUserId);
+    //         }
+
+    //         // 4. 移除协商队列
+    //         this.negotiationMap.delete(leavingUserId);
+
+    //         // 5. 移除连接中的状态
+    //         this.connectionQueue.delete(leavingUserId);
+    //         this.pendingOffers.delete(leavingUserId);
+
+    //         // 6. 清除心跳记录
+    //         this.lastPongTimes.delete(leavingUserId);
+    //         this.lastPingTimes.delete?.(leavingUserId);
+
+    //         // 7. 重置失败次数（可选）
+    //         this.pingFailures.delete(leavingUserId);
+    //         this.pongFailures.delete(leavingUserId);
+
+    //         // 8. 更新 UI
+    //         this.updateUI()
+
+    //         // 9. 可选：延迟模拟异步清理更真实（比如500ms）
+    //         await new Promise(res => setTimeout(res, 50)); // 模拟微小延迟
+    //     } finally {
+    //         this.cleaningLock = false;
+    //     }
+    // }
     public clearCache(id: string): void {
         console.warn(`🧹 清理连接相关状态：${id}`);
 
@@ -1373,14 +1354,9 @@ export class RealTimeColab {
         return Math.random().toString(36).substring(2, 8);
     }
 
-    public isWebSocketConnected(): boolean {
-        return this.ws?.readyState === WebSocket.OPEN;
+    public isConnected(): boolean {
+        return this.ws !== null && this.ws.readyState === WebSocket.OPEN;
     }
-
-    public isAblyConnected(): boolean {
-        return this.ably?.connection?.state === "connected";
-    }
-
 
     public getConnectedUserIds(): string[] {
         return Array.from(this.userList.entries())
@@ -1411,7 +1387,7 @@ export class RealTimeColab {
                 ablyTimeoutHandle = setTimeout(() => {
                     const now = Date.now();
                     if (backgroundStartTime && now - backgroundStartTime >= overtime) {
-                        alertUseMUI(`⏱ 页面后台超过${overtime / 1000}秒，断开服务器连接节流`, 3000)
+                        alertUseMUI(`⏱ 页面后台超过${overtime}秒，断开服务器连接节流`, 3000)
                         this.disconnect(true); // 你已有的断开方法
                     }
                 }, overtime);
@@ -1420,11 +1396,18 @@ export class RealTimeColab {
                     clearTimeout(ablyTimeoutHandle);
                     ablyTimeoutHandle = null;
                 }
-                
+                if (!this.isConnected()) {
+                    // console.log("🔁 页面回到前台，重新连接Ably...");
+                }
             }
         });
 
-
+        // window.addEventListener("focus", () => {
+        //     if (!this.isConnected()) {
+        //         console.log("🧠 focus 检测触发连接");
+        //         this.connectToServer();
+        //     }
+        // });
     }
 
 

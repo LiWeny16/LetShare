@@ -101,7 +101,6 @@ function Share() {
     const [fileSendingTargetUser, setFileSendingTargetUser] = React.useState("");
     const searchButtonRef = useRef(null)
     const mainDialogRef = useRef<HTMLDivElement | null>(null);
-    const [isConnectedToServer, setIsConnectedToServer] = useState(false);
 
 
     const getUserTypeIcon = (userType: string) => {
@@ -139,11 +138,9 @@ function Share() {
     const handleClickSearch = async () => {
         setLoading(true);
         try {
-            const ablyConnected = realTimeColab.ably?.connection?.state === "connected";
-            const wsConnected = realTimeColab.ws?.readyState === WebSocket.OPEN;
-
-            if (!ablyConnected && !wsConnected) {
-                await realTimeColab.connectToServer();
+            // 检查ws 的连接状态
+            if (!realTimeColab.ablyChannel && !realTimeColab.isConnected()) {
+                await realTimeColab.connectToServer()
             }
             else {
                 realTimeColab.broadcastSignal({
@@ -246,7 +243,6 @@ function Share() {
             setDwnloadPageState,
             updateConnectedUsers,
             setFileTransferProgress,
-            setIsConnectedToServer
         )
         setTimeout(() => { setStartUpVisibility(false) }, 1000)
 
@@ -509,11 +505,12 @@ function Share() {
                             ref={searchButtonRef}
                             onClick={handleClickSearch}
                             variant="contained"
-                            color={isConnectedToServer ? "primary" : "error"}
-                            endIcon={loading ? <CircularProgress size={20} color="inherit" /> : <CachedIcon />}
+                            endIcon={
+                                loading ? <CircularProgress size={20} color="inherit" /> : <CachedIcon />
+                            }
                             disabled={loading}
                         >
-                            {isConnectedToServer ? t('button.searchUsers') : t('button.disconnected')}
+                            {t('button.searchUsers')}
                         </Button>
                     </Box>
 
