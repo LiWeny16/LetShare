@@ -1,7 +1,7 @@
 import { RealTimeColab } from "@App/libs/connection/colabLib";
 export class PeerManager {
     private rtc: RealTimeColab;
-    private rtcServers = [
+    public rtcServers = [
         { urls: "stun:stun.l.google.com:19302" },
         { urls: "stun:stun.counterpath.net" },
         { urls: "stun:stun.internetcalls.com" },

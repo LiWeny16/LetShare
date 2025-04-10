@@ -11,6 +11,7 @@ const sharedMalayTranslation = {
             text: "Teks",
             clipboard: "Papan Klip",
             searchUsers: "Cari pengguna dalam Wi-Fi yang sama",
+            disconnected:"Server telah terputus",
             cancel: "Batal",
             confirm: "Sahkan",
             accept: "Terima",
@@ -80,7 +81,9 @@ const sharedMalayTranslation = {
             chunkMissing: "Kepingan {{index}} hilang. Sila hantar semula fail!",
             unzipping: "Sedang mengekstrak... sila tunggu",
             fileReceived: "Berjaya menerima fail daripada {{name}}!",
-            disconnected: "Terputus sambungan. Sila tunggu atau segarkan semula"
+            disconnected: "Terputus sambungan. Sila tunggu atau segarkan semula",
+            proxy:"IP virtual telah terdeteksi, mohon jangan gunakan proxy atau VPN, jika tidak, Anda mungkin tidak dapat terhubung!"
+
         }
     }
 }
@@ -99,6 +102,7 @@ export const resources = {
                 text: "Text",
                 clipboard: "Clipboard",
                 searchUsers: "Search Users in Same Wi-Fi",
+                disconnected:"The server has been disconnected",
                 cancel: "Cancel",
                 confirm: "Confirm",
                 accept: "Accept",
@@ -168,7 +172,8 @@ export const resources = {
                 chunkMissing: "Chunk {{index}} missing. Please resend the file!",
                 unzipping: "Unzipping... please wait",
                 fileReceived: "Successfully received file from {{name}}!",
-                disconnected: "Disconnected. Please wait or refresh the page"
+                disconnected: "Disconnected. Please wait or refresh the page",
+                proxy:"A virtual IP has been detected, please do not use a proxy or VPN, otherwise you may not be able to connect!"
             }
         }
     },
@@ -185,6 +190,7 @@ export const resources = {
                 text: "文本",
                 clipboard: "剪贴板",
                 searchUsers: "搜索同WIFI下用户",
+                disconnected:"服务器已断开连接",
                 cancel: "取消",
                 confirm: "确认",
                 accept: "接受",
@@ -255,7 +261,8 @@ export const resources = {
                 chunkMissing: "文件传输缺少切片 {{index}}，请重新传输！",
                 unzipping: "解压中，请耐心等待...",
                 fileReceived: "成功接受来自 {{name}} 的文件！",
-                disconnected: "与对方断开连接，请等待或刷新页面"
+                disconnected: "与对方断开连接，请等待或刷新页面",
+                proxy:"检测到虚拟IP，请不要使用代理或VPN，否则可能无法连接！"
             }
 
         }

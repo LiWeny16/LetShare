@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import ReactDOM from "react-dom";
 import mitt from "mitt";
-import { AlertColor } from "@mui/material";
+import { AlertColor, useTheme } from "@mui/material";
 import { v4 as uuidv4 } from "uuid";
 
 export const alertEmitter = mitt<{
@@ -22,6 +22,7 @@ interface Toast {
 }
 
 const AlertPortal: React.FC = () => {
+  const theme = useTheme()
   const [toasts, setToasts] = useState<Toast[]>([]);
   const containerRef = useRef<HTMLDivElement>(null);
   const recentMessageRef = useRef<{ message: string; timestamp: number } | null>(null);
@@ -82,12 +83,12 @@ const AlertPortal: React.FC = () => {
             key={toast.id}
             className={`toast ${toast.isExiting ? "toast-exit" : "toast-enter"}`}
             style={{
-              backgroundColor: "rgba(0, 0, 0, 0.85)", // 可替换为 MUI 主题色
-              color: "#fff",
+              backgroundColor: theme.palette.background.paper, // 可替换为 MUI 主题色
+              color: theme.palette.text.primary,
               padding: "10px 20px",
               borderRadius: "8px",
               fontSize: "14px",
-              maxWidth: "80vw",
+              maxWidth: "20vw",
               textAlign: "center",
               whiteSpace: "pre-wrap",
               wordBreak: "break-word",

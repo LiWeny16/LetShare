@@ -101,6 +101,7 @@ function Share() {
     const [fileSendingTargetUser, setFileSendingTargetUser] = React.useState("");
     const searchButtonRef = useRef(null)
     const mainDialogRef = useRef<HTMLDivElement | null>(null);
+    const [isConnectedToServer, setIsConnectedToServer] = useState(false);
 
 
     const getUserTypeIcon = (userType: string) => {
@@ -243,6 +244,7 @@ function Share() {
             setDwnloadPageState,
             updateConnectedUsers,
             setFileTransferProgress,
+            setIsConnectedToServer
         )
         setTimeout(() => { setStartUpVisibility(false) }, 1000)
 
@@ -505,12 +507,11 @@ function Share() {
                             ref={searchButtonRef}
                             onClick={handleClickSearch}
                             variant="contained"
-                            endIcon={
-                                loading ? <CircularProgress size={20} color="inherit" /> : <CachedIcon />
-                            }
+                            color={isConnectedToServer ? "primary" : "error"}
+                            endIcon={loading ? <CircularProgress size={20} color="inherit" /> : <CachedIcon />}
                             disabled={loading}
                         >
-                            {t('button.searchUsers')}
+                            {isConnectedToServer ? t('button.searchUsers') : t('button.disconnected')}
                         </Button>
                     </Box>
 
