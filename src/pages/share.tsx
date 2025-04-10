@@ -139,9 +139,11 @@ function Share() {
     const handleClickSearch = async () => {
         setLoading(true);
         try {
-            // 检查ws 的连接状态
-            if (!realTimeColab.ablyChannel && !realTimeColab.isConnected()) {
-                await realTimeColab.connectToServer()
+            const ablyConnected = realTimeColab.ably?.connection?.state === "connected";
+            const wsConnected = realTimeColab.ws?.readyState === WebSocket.OPEN;
+
+            if (!ablyConnected && !wsConnected) {
+                await realTimeColab.connectToServer();
             }
             else {
                 realTimeColab.broadcastSignal({

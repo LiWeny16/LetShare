@@ -45,9 +45,9 @@ export class RealTimeColab {
         RealTimeColab.uniqId = uniqId;
     }
 
-    private ably: Ably.Realtime | null = null;
+    public ably: Ably.Realtime | null = null;
     public ablyChannel: ReturnType<Ably.Realtime["channels"]["get"]> | null = null;
-    private ws: WebSocket | null = null;
+    public ws: WebSocket | null = null;
 
     public userList: Map<string, UserInfo> = new Map();
     public dataChannels: Map<string, RTCDataChannel> = new Map();
@@ -181,6 +181,7 @@ export class RealTimeColab {
                 await new Promise((_resolve, _reject) => {
                     this.ably!.connection.once("connected", (_state) => {
                         this.setIsConnectedToServer(true)
+                        _resolve(true)
                     });
                     this.ably!.connection.once("failed", (stateChange) => {
                         console.error("❌ Ably 连接失败:", stateChange.reason);
@@ -188,8 +189,9 @@ export class RealTimeColab {
                         if (stateChange.reason?.code === 40160) {
                             alertUseMUI("Ably 套餐可能已超出！", 3000, { kind: "error" });
                         }
-
                         this.connectToBackupWs();
+                        _reject(false)
+
                     });
                 });
 
@@ -1371,9 +1373,14 @@ export class RealTimeColab {
         return Math.random().toString(36).substring(2, 8);
     }
 
-    public isConnected(): boolean {
-        return this.ws !== null && this.ws.readyState === WebSocket.OPEN;
+    public isWebSocketConnected(): boolean {
+        return this.ws?.readyState === WebSocket.OPEN;
     }
+
+    public isAblyConnected(): boolean {
+        return this.ably?.connection?.state === "connected";
+    }
+
 
     public getConnectedUserIds(): string[] {
         return Array.from(this.userList.entries())
@@ -1413,9 +1420,7 @@ export class RealTimeColab {
                     clearTimeout(ablyTimeoutHandle);
                     ablyTimeoutHandle = null;
                 }
-                if (!this.isConnected()) {
-                    // console.log("🔁 页面回到前台，重新连接Ably...");
-                }
+                
             }
         });
 
