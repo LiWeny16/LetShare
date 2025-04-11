@@ -1,10 +1,12 @@
 import alertUseMUI from "../alert";
 import { PeerManager } from "./peerManager";
-import { compareUniqIdPriority, detectProxyByIPComparison, getDeviceType, validateRoomName } from "../tools/tools";
+import { compareUniqIdPriority, getDeviceType, testIp, validateRoomName } from "../tools/tools";
 import Ably from "ably";
 import settingsStore from "../mobx/mobx";
 import JSZip from "jszip";
 import i18n from "../i18n/i18n";
+import VConsole from 'vconsole';
+import { VideoManager } from "../video/video";
 
 interface NegotiationState {
     isNegotiating: boolean;    // 是否正在进行一次Offer/Answer
@@ -24,12 +26,14 @@ export class RealTimeColab {
     private static userId: string | null = null;
     private static uniqId: string | null = null;
     public static peers: Map<string, RTCPeerConnection> = new Map();
+    public staticIp: string | null = null
 
     private constructor() {
         const state = this.getStatesMemorable();
         let userId = state.memorable.userId;
         let uniqId = state.memorable.uniqId;
         this.peerManager = new PeerManager(this);
+        this.video = new VideoManager(this); // ✅ 初始化 video
 
         if (!userId) {
             userId = this.generateUUID();
@@ -88,7 +92,7 @@ export class RealTimeColab {
     public setFileSendingTargetUser: StringSetter = () => { };
 
     public peerManager: PeerManager;
-
+    public video: VideoManager;
     private transferConfig: {
         chunkSize: number;
         maxConcurrentReads: number;
@@ -118,6 +122,9 @@ export class RealTimeColab {
         }
 
     }
+    /**
+     * @description Init @jInit
+    */
     public async init(
         setFileSendingTargetUser: StringSetter,
         setMsgFromSharing: (msg: string | null) => void,
@@ -125,6 +132,12 @@ export class RealTimeColab {
         updateConnectedUsers: (userList: Map<string, UserInfo>) => void = () => { },
         setFileTransferProgress: React.Dispatch<React.SetStateAction<number | null>>
     ) {
+        if (import.meta.env.MODE !== 'production') {
+            new VConsole();
+            console.log(" vConsole 已加载");
+        }
+
+        // console.log("sss",this.staticIp);
         this.setFileSendingTargetUser = setFileSendingTargetUser
         this.setMsgFromSharing = setMsgFromSharing
         this.setDownloadPageState = setDownloadPageState
@@ -152,17 +165,15 @@ export class RealTimeColab {
                     }
                 }
             }
-        }, 5000);
+        }, 4000);
     }
 
 
+    /**
+     * @description Connect To Server@jServer
+    */
     public async connectToServer(): Promise<boolean> {
-        const result = await detectProxyByIPComparison();
-
-        if (result.usingProxy) {
-            alertUseMUI(t("alert.proxy"),3000);
-            await this.connectToBackupWs();
-        }
+        this.staticIp = await testIp();
         const roomId = settingsStore.get("roomId");
 
         if (!validateRoomName(roomId).isValid) {
@@ -558,64 +569,10 @@ export class RealTimeColab {
         this.updateUI()
     }
 
-
-
-    // private async handleLeave(data: any) {
-    //     const leavingUserId = data.id;
-    //     if (this.cleaningLock) {
-    //         console.warn("⛔️ 当前正在清理其他连接，跳过本次 handleLeave");
-    //         return;
-    //     }
-
-    //     this.cleaningLock = true;
-
-    //     try {
-    //         console.warn(`📤 正在清理用户 ${leavingUserId} 的所有状态`);
-    //         // 1. 仅更新 userList 中的状态为 disconnected，不改变其他属性
-    //         const user = this.userList.get(leavingUserId);
-    //         if (user) {
-    //             user.status = "disconnected";
-    //             this.userList.set(leavingUserId, user);
-    //         }
-
-    //         // 2. 关闭并移除 PeerConnection
-    //         const peer = RealTimeColab.peers.get(leavingUserId);
-    //         if (peer) {
-    //             peer.close();
-    //             RealTimeColab.peers.delete(leavingUserId);
-    //         }
-
-    //         // 3. 关闭并移除 DataChannel
-    //         const channel = this.dataChannels.get(leavingUserId);
-    //         if (channel) {
-    //             channel.close();
-    //             this.dataChannels.delete(leavingUserId);
-    //         }
-
-    //         // 4. 移除协商队列
-    //         this.negotiationMap.delete(leavingUserId);
-
-    //         // 5. 移除连接中的状态
-    //         this.connectionQueue.delete(leavingUserId);
-    //         this.pendingOffers.delete(leavingUserId);
-
-    //         // 6. 清除心跳记录
-    //         this.lastPongTimes.delete(leavingUserId);
-    //         this.lastPingTimes.delete?.(leavingUserId);
-
-    //         // 7. 重置失败次数（可选）
-    //         this.pingFailures.delete(leavingUserId);
-    //         this.pongFailures.delete(leavingUserId);
-
-    //         // 8. 更新 UI
-    //         this.updateUI()
-
-    //         // 9. 可选：延迟模拟异步清理更真实（比如500ms）
-    //         await new Promise(res => setTimeout(res, 50)); // 模拟微小延迟
-    //     } finally {
-    //         this.cleaningLock = false;
-    //     }
-    // }
+    /**
+     * @description Clean The Cache Of User Id
+     * @param id 
+    */
     public clearCache(id: string): void {
         console.warn(`🧹 清理连接相关状态：${id}`);
 
@@ -1103,6 +1060,9 @@ export class RealTimeColab {
             this.updateUI()
         }
     }
+    /**
+     * @description Connect To User @jUser
+    */
     public async connectToUser(id: string): Promise<void> {
         const now = Date.now();
         const lastAttempt = this.lastConnectAttempt.get(id) ?? 0;
@@ -1185,7 +1145,7 @@ export class RealTimeColab {
                     console.log(`[CONNECT] ${id} 正在连接中，延长等待 状态`);
                 }
                 this.connectionTimeouts.delete(id);
-            }, 5000);
+            }, 3000);
 
             this.connectionTimeouts.set(id, timeoutId);
 

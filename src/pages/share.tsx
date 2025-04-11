@@ -44,6 +44,7 @@ import { observer } from "mobx-react-lite";
 import settingsStore from "@App/libs/mobx/mobx";
 import { isApp } from "@App/libs/capacitor/user";
 import { Trans, useTranslation } from "react-i18next";
+// import VideoPanel from "@Com/VideoPannel/VideoPannel";
 
 // 确保状态类型正确
 
@@ -738,6 +739,7 @@ function Share() {
             </Backdrop>
             <StartupPage open={startUpVisibility} />
             <AlertPortal />
+            {/* <Dialog open={true}><VideoPanel /></Dialog> */}
         </>
     );
 }

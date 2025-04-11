@@ -3,6 +3,8 @@ import react from "@vitejs/plugin-react"
 import viteCompression from "vite-plugin-compression"
 import { resolve } from "path"
 import { VitePWA } from 'vite-plugin-pwa'
+import fs from 'fs';
+import path from 'path';
 export default defineConfig({
   base: "./",
   build: {
@@ -42,6 +44,10 @@ export default defineConfig({
     },
   },
   server: {
+    // https: {
+    //   key: fs.readFileSync(path.resolve(__dirname, 'certs/192.168.1.200+2-key.pem')),
+    //   cert: fs.readFileSync(path.resolve(__dirname, 'certs/192.168.1.200+2.pem')),
+    // },
     host: "0.0.0.0",
   },
   plugins: [
@@ -50,7 +56,7 @@ export default defineConfig({
       registerType: 'autoUpdate',
       // includeAssets: ['favicon.svg', 'robots.txt', 'apple-touch-icon.png'],
       manifest: {
-        
+
         name: 'LetShare',
         short_name: 'LetShare',
         start_url: '/',

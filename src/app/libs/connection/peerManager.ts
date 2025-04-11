@@ -1,7 +1,9 @@
 import { RealTimeColab } from "@App/libs/connection/colabLib";
+import alertUseMUI from "../alert";
+import { t } from "i18next";
 export class PeerManager {
     private rtc: RealTimeColab;
-    public rtcServers = [
+    public static rtcServers = [
         { urls: "stun:stun.l.google.com:19302" },
         { urls: "stun:stun.counterpath.net" },
         { urls: "stun:stun.internetcalls.com" },
@@ -16,7 +18,7 @@ export class PeerManager {
 
     public createPeerConnection(id: string): RTCPeerConnection {
         const peer = new RTCPeerConnection({
-            iceServers: this.rtcServers,
+            iceServers: PeerManager.rtcServers,
             iceTransportPolicy: "all",
             bundlePolicy: "max-bundle",
             rtcpMuxPolicy: "require",
@@ -26,7 +28,9 @@ export class PeerManager {
             isNegotiating: false,
             queue: [],
         });
-
+        if (this.rtc.video) {
+            this.rtc.video.attachToPeer(peer, id);
+        }
         peer.onnegotiationneeded = async () => { /* 可扩展 */ };
 
         let iceBuffer: RTCIceCandidate[] = [];
@@ -40,8 +44,9 @@ export class PeerManager {
                 const parts = candidateStr.split(' ');
                 const ip = parts[4];
                 const type = parts[7];
-                if (type === 'host' && this.isPrivateIP(ip)) {
-                    // localHostCandidates.push(ip);
+                // ✅ 新增：比对和公网 IP
+                if (this.rtc.staticIp && ip !== this.rtc.staticIp && type === "srflx") {
+                    alertUseMUI(t("alert.proxy"));
                 }
                 if (!isProcessing) {
                     isProcessing = true;
