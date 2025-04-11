@@ -140,7 +140,11 @@ function Share() {
         try {
             // 检查ws 的连接状态
             if (!realTimeColab.ablyChannel && !realTimeColab.isConnected()) {
-                await realTimeColab.connectToServer()
+                realTimeColab.connectToServer().then((e) => {
+                    if (e) {
+                        realTimeColab.broadcastSignal({ type: "discover", userType: getDeviceType() });
+                    }
+                })
             }
             else {
                 realTimeColab.broadcastSignal({
