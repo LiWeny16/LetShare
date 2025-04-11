@@ -11,11 +11,12 @@ const sharedMalayTranslation = {
             text: "Teks",
             clipboard: "Papan Klip",
             searchUsers: "Cari pengguna dalam Wi-Fi yang sama",
-            disconnected:"Server telah terputus",
+            disconnected: "Server telah terputus",
             cancel: "Batal",
             confirm: "Sahkan",
             accept: "Terima",
-            reject: "Tolak"
+            reject: "Tolak",
+            downloadAll: "Download All",
         },
         prompt: {
             dropToUpload: "Lepaskan untuk muat naik"
@@ -82,7 +83,7 @@ const sharedMalayTranslation = {
             unzipping: "Sedang mengekstrak... sila tunggu",
             fileReceived: "Berjaya menerima fail daripada {{name}}!",
             disconnected: "Terputus sambungan. Sila tunggu atau segarkan semula",
-            proxy:"IP virtual telah terdeteksi, mohon jangan gunakan proxy atau VPN, jika tidak, Anda mungkin tidak dapat terhubung!"
+            proxy: "IP virtual telah terdeteksi, mohon jangan gunakan proxy atau VPN, jika tidak, Anda mungkin tidak dapat terhubung!"
 
         }
     }
@@ -102,11 +103,12 @@ export const resources = {
                 text: "Text",
                 clipboard: "Clipboard",
                 searchUsers: "Search Users in Same Wi-Fi",
-                disconnected:"The server has been disconnected",
+                disconnected: "The server has been disconnected",
                 cancel: "Cancel",
                 confirm: "Confirm",
                 accept: "Accept",
                 reject: "Reject",
+                downloadAll: "Download All",
             },
             prompt: {
                 dropToUpload: "Drop to upload"
@@ -173,7 +175,7 @@ export const resources = {
                 unzipping: "Unzipping... please wait",
                 fileReceived: "Successfully received file from {{name}}!",
                 disconnected: "Disconnected. Please wait or refresh the page",
-                proxy:"A virtual IP has been detected, please do not use a proxy or VPN, otherwise you may not be able to connect!"
+                proxy: "A virtual IP has been detected, please do not use a proxy or VPN, otherwise you may not be able to connect!"
             }
         }
     },
@@ -190,11 +192,12 @@ export const resources = {
                 text: "文本",
                 clipboard: "剪贴板",
                 searchUsers: "搜索同WIFI下用户",
-                disconnected:"服务器已断开连接",
+                disconnected: "服务器已断开连接",
                 cancel: "取消",
                 confirm: "确认",
                 accept: "接受",
-                reject: "拒绝"
+                reject: "拒绝",
+                downloadAll: "全部下载",
             },
             prompt: {
                 dropToUpload: "松手上传文件"
@@ -262,7 +265,7 @@ export const resources = {
                 unzipping: "解压中，请耐心等待...",
                 fileReceived: "成功接受来自 {{name}} 的文件！",
                 disconnected: "与对方断开连接，请等待或刷新页面",
-                proxy:"检测到虚拟IP，请不要使用代理或VPN，否则可能无法连接！"
+                proxy: "检测到虚拟IP，请不要使用代理或VPN，否则可能无法连接！"
             }
 
         }

@@ -6,7 +6,6 @@ import {
     useTheme,
     Backdrop,
     Button,
-    IconButton,
 } from "@mui/material";
 import {
     InsertDriveFile,
@@ -403,9 +402,13 @@ export default function DownloadDrawerSlide({
                                     <Box>
                                         <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", mt: 2, mb: 1 }}>
                                             <Typography variant="subtitle2">{t('transfer.receivedFiles')}</Typography>
-                                            <IconButton onClick={downloadAllAsZip} size="small" >
+                                            <Button onClick={downloadAllAsZip} endIcon={<DownloadIcon/>}>
+                                                {t("button.downloadAll")}
+                                            </Button>
+                                            {/* <IconButton onClick={downloadAllAsZip} size="small" >
+
                                                 <DownloadIcon fontSize="small" />
-                                            </IconButton>
+                                            </IconButton> */}
                                         </Box>
 
                                         <Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>

@@ -1388,7 +1388,7 @@ export class RealTimeColab {
                     const now = Date.now();
                     if (backgroundStartTime && now - backgroundStartTime >= overtime) {
                         alertUseMUI(`⏱ 页面后台超过${overtime}秒，断开服务器连接节流`, 3000)
-                        this.disconnect(true); // 你已有的断开方法
+                        this.disconnect(); // 你已有的断开方法
                     }
                 }, overtime);
             } else if (document.visibilityState === "visible") {
