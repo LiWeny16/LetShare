@@ -1,6 +1,6 @@
 import alertUseMUI from "../alert";
 import { PeerManager } from "./peerManager";
-import { compareUniqIdPriority, getDeviceType, validateRoomName } from "../tools/tools";
+import { compareUniqIdPriority, detectProxyByIPComparison, getDeviceType, validateRoomName } from "../tools/tools";
 import Ably from "ably";
 import settingsStore from "../mobx/mobx";
 import JSZip from "jszip";
@@ -157,6 +157,12 @@ export class RealTimeColab {
 
 
     public async connectToServer(): Promise<boolean> {
+        const result = await detectProxyByIPComparison();
+
+        if (result.usingProxy) {
+            alertUseMUI(t("alert.proxy"),3000);
+            await this.connectToBackupWs();
+        }
         const roomId = settingsStore.get("roomId");
 
         if (!validateRoomName(roomId).isValid) {

@@ -73,3 +73,60 @@ export function validateRoomName(name: string | undefined | null): { isValid: bo
 
     return { isValid: true, message: '房间名合法' };
 }
+
+
+export async function detectProxyByIPComparison(): Promise<{
+    usingProxy: boolean;
+    publicIP: string;
+    iceIPs: string[];
+}> {
+    try {
+        // Step 1: 获取公网出口 IP（从 ipinfo.io）
+        const ipRes = await fetch("https://ipinfo.io/json?token=43b00e5b7d1add");
+        const ipData = await ipRes.json();
+        const publicIP = ipData.ip;
+
+        // Step 2: 获取 WebRTC 生成的 ICE 候选 IP 列表
+        const iceIPs = await new Promise<string[]>((resolve) => {
+            const ips = new Set<string>();
+            const pc = new RTCPeerConnection({
+                iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
+            });
+
+            pc.createDataChannel("test");
+            pc.createOffer().then(offer => pc.setLocalDescription(offer));
+
+            pc.onicecandidate = (e) => {
+                if (e.candidate && e.candidate.candidate) {
+                    const parts = e.candidate.candidate.split(" ");
+                    const ip = parts[4];
+                    const type = parts[7];
+                    if (type === "srflx") { // 只取服务器反射的公网 IP
+                        ips.add(ip);
+                    }
+                } else if (e.candidate === null) {
+                    pc.close();
+                    resolve(Array.from(ips));
+                }
+            };
+        });
+
+        // Step 3: 比较两个 IP 是否一致
+        const normalizedPublicIP = publicIP?.trim();
+        const matched = iceIPs.some(ip => ip.trim() === normalizedPublicIP);
+
+        return {
+            usingProxy: !matched,
+            publicIP: normalizedPublicIP,
+            iceIPs
+        };
+
+    } catch (err) {
+        console.error("❌ 检测失败:", err);
+        return {
+            usingProxy: false,
+            publicIP: "unknown",
+            iceIPs: []
+        };
+    }
+}
