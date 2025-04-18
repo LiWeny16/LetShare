@@ -44,6 +44,7 @@ i18n
         },
     }).then(() => {
         document.title = i18n.t('meta.title');
+        document.documentElement.lang = getEffectiveLang();
     });
 
 export default i18n;

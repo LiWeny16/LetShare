@@ -6,7 +6,7 @@ import settingsStore from "../mobx/mobx";
 import JSZip from "jszip";
 import i18n from "../i18n/i18n";
 import VConsole from 'vconsole';
-import { VideoManager } from "../video/video";
+// import { VideoManager } from "../video/video";
 
 interface NegotiationState {
     isNegotiating: boolean;    // 是否正在进行一次Offer/Answer
@@ -33,7 +33,6 @@ export class RealTimeColab {
         let userId = state.memorable.userId;
         let uniqId = state.memorable.uniqId;
         this.peerManager = new PeerManager(this);
-        this.video = new VideoManager(this); // ✅ 初始化 video
 
         if (!userId) {
             userId = this.generateUUID();
@@ -92,7 +91,6 @@ export class RealTimeColab {
     public setFileSendingTargetUser: StringSetter = () => { };
 
     public peerManager: PeerManager;
-    public video: VideoManager;
     private transferConfig: {
         chunkSize: number;
         maxConcurrentReads: number;

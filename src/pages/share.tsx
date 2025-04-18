@@ -45,6 +45,7 @@ import settingsStore from "@App/libs/mobx/mobx";
 import { isApp } from "@App/libs/capacitor/user";
 import { Trans, useTranslation } from "react-i18next";
 // import VideoPanel from "@Com/VideoPannel/VideoPannel";
+// import VideoPanel from "@Com/VideoPannel/VideoPannel";
 
 // 确保状态类型正确
 
@@ -89,7 +90,9 @@ function Share() {
     const [openDialog, setOpenDialog] = useState(false);
     const [connectedUsers, setConnectedUsers] = useState<ConnectedUser[]>([]);
     const [loading, setLoading] = useState(false);
-    const [selectedButton, setSelectedButton] = useState<"file" | "text" | "clip" | "image" | null>("clip");
+    // 修改状态的类型，增加 "video"
+    const [selectedButton, setSelectedButton] = useState<"file" | "text" | "clip" | "image" | "video">("clip");
+
     const [selectedFile, setSelectedFile] = useState<File | null>(null);
     const [selectedText, setSelectedText] = useState<string | null>(null);
     const [textInputDialogOpen, setTextInputDialogOpen] = useState(false);
@@ -102,6 +105,8 @@ function Share() {
     const [fileSendingTargetUser, setFileSendingTargetUser] = React.useState("");
     const searchButtonRef = useRef(null)
     const mainDialogRef = useRef<HTMLDivElement | null>(null);
+    // const [videoPanelOpen, setVideoPanelOpen] = useState(false);
+    // const [videoTargetUser, setVideoTargetUser] = useState<string | null>(null);
 
 
     const getUserTypeIcon = (userType: string) => {
@@ -487,6 +492,24 @@ function Share() {
                                 {t('button.text')}
                             </Button>
                         </Badge>
+                        {/* <Badge
+                            color="primary"
+
+                            badgeContent={selectedButton === "video" ? 1 : 0}
+                            overlap="circular"
+                            sx={badgeStyle}
+                        >
+                            <Button
+                                disabled
+                                variant="outlined"
+                                sx={buttonStyleNormal}
+                                // 这里使用一个适合的视频图标
+                                // startIcon={<YourVideoIconComponent />}
+                                onClick={() => setSelectedButton("video")}
+                            >
+                                视频
+                            </Button>
+                        </Badge> */}
 
                         <Badge
                             color="primary"
@@ -550,7 +573,20 @@ function Share() {
                         }).map((user) => (
                             <ButtonBase
                                 key={user.uniqId}
-                                onClick={(e) => handleClickOtherClients(e, user.uniqId)}
+                                onClick={(e) => {
+                                    if (selectedButton === "video") {
+                                        // 如果尚未建立视频连接，则主动发起连接
+                                        if (!realTimeColab.isConnectedToUser(user.uniqId)) {
+                                            realTimeColab.connectToUser(user.uniqId);
+                                        }
+                                        // 设置目标用户并打开视频面板
+                                        // setVideoTargetUser(user.uniqId);
+                                        // setVideoPanelOpen(true);
+                                    } else {
+                                        // 原有逻辑（文件/文本等消息）
+                                        handleClickOtherClients(e, user.uniqId);
+                                    }
+                                }}
                                 sx={{
                                     ...settingsBodyContentBoxStyle,
                                     width: "96%",
@@ -739,7 +775,24 @@ function Share() {
             </Backdrop>
             <StartupPage open={startUpVisibility} />
             <AlertPortal />
-            {/* <Dialog open={true}><VideoPanel /></Dialog> */}
+            {/* <Dialog
+                open={videoPanelOpen}
+                onClose={() => {
+                    setVideoPanelOpen(false);
+                    setVideoTargetUser(null);
+                }}
+                maxWidth="md"
+                fullWidth
+            >
+                <VideoPanel
+                    targetId={videoTargetUser}
+                    onClose={() => {
+                        setVideoPanelOpen(false);
+                        setVideoTargetUser(null);
+                    }}
+                />
+            </Dialog> */}
+
         </>
     );
 }

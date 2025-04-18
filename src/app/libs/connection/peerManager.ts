@@ -23,14 +23,13 @@ export class PeerManager {
             bundlePolicy: "max-bundle",
             rtcpMuxPolicy: "require",
         });
-
         this.rtc.negotiationMap.set(id, {
             isNegotiating: false,
             queue: [],
         });
-        if (this.rtc.video) {
-            this.rtc.video.attachToPeer(peer, id);
-        }
+        // if (this.rtc.video) {
+        //     setTimeout(() => { this.rtc.video.attachToPeer(peer, id); }, 5000)
+        // }
         peer.onnegotiationneeded = async () => { /* 可扩展 */ };
 
         let iceBuffer: RTCIceCandidate[] = [];
