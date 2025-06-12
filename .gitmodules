@@ -1,0 +1,3 @@
+[submodule "server"]
+	path = server
+	url = https://github.com/LiWeny16/letshare_server.git
