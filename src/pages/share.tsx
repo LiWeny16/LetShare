@@ -144,8 +144,8 @@ function Share() {
     const handleClickSearch = async () => {
         setLoading(true);
         try {
-            // 检查ws 的连接状态
-            if (!realTimeColab.ablyChannel && !realTimeColab.isConnected()) {
+            // 检查连接状态
+            if (!realTimeColab.isConnected()) {
                 realTimeColab.connectToServer().then((e) => {
                     if (e) {
                         realTimeColab.broadcastSignal({ type: "discover", userType: getDeviceType() });

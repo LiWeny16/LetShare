@@ -8,6 +8,9 @@ const DEFAULT_SETTINGS = {
     userTheme: 'light' as ThemeKey,
     userLanguage: 'system' as LanguageType,
     backupBackWsUrl: "wss://md-server-md-server-bndnqhexdf.cn-hangzhou.fcapp.run",
+    customServerUrl: "wss://your-custom-server.com", // 自定义服务器URL
+    customAuthToken: "", // 自定义服务器认证token
+    serverMode: "auto" as "auto" | "ably" | "custom", // 管理员优先级：auto=自动选择，ably=强制ably，custom=强制自定义
     ablyKey: "4TtssQ.e9OvDA:wYBGdtWQNgicbeIKNtgeV_s5XEKmfLKD_Gue5XQrWuw",
     version: "3.3.0",
     isNewUser: true

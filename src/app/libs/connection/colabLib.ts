@@ -1,11 +1,12 @@
 import alertUseMUI from "../alert";
 import { PeerManager } from "./peerManager";
 import { compareUniqIdPriority, getDeviceType, testIp, validateRoomName } from "../tools/tools";
-import Ably from "ably";
 import settingsStore from "../mobx/mobx";
 import JSZip from "jszip";
 import i18n from "../i18n/i18n";
 import VConsole from 'vconsole';
+import { ISignalTransport } from "./signalTransport";
+import { TransportManager } from "./transportConfig";
 // import { VideoManager } from "../video/video";
 
 interface NegotiationState {
@@ -46,11 +47,13 @@ export class RealTimeColab {
 
         RealTimeColab.userId = userId;
         RealTimeColab.uniqId = uniqId;
+        
+        // 初始化信号传输层 - 异步初始化，不阻塞构造函数
+        this.initializeSignalTransport();
     }
 
-    private ably: Ably.Realtime | null = null;
-    public ablyChannel: ReturnType<Ably.Realtime["channels"]["get"]> | null = null;
-    private ws: WebSocket | null = null;
+    // 使用抽象的信号传输接口
+    private signalTransport: ISignalTransport | null = null;
 
     public userList: Map<string, UserInfo> = new Map();
     public dataChannels: Map<string, RTCDataChannel> = new Map();
@@ -166,11 +169,36 @@ export class RealTimeColab {
         }, 4000);
     }
 
+    private async initializeSignalTransport(): Promise<void> {
+        try {
+            // 使用TransportManager自动选择最佳传输层
+            this.signalTransport = await TransportManager.createTransport(() => this.getUniqId());
+
+            // 设置消息处理器
+            this.signalTransport.setMessageHandler((event: MessageEvent) => {
+                this.handleSignal(event);
+            });
+        } catch (error) {
+            console.error("初始化信号传输层失败:", error);
+        }
+    }
 
     /**
      * @description Connect To Server@jServer
     */
     public async connectToServer(): Promise<boolean> {
+        // 如果 signalTransport 还没有初始化，等待初始化完成
+        if (!this.signalTransport) {
+            console.log("等待信号传输层初始化...");
+            await this.initializeSignalTransport();
+            
+            // 如果初始化后仍然没有 signalTransport，返回失败
+            if (!this.signalTransport) {
+                console.error("信号传输层初始化失败");
+                return false;
+            }
+        }
+
         this.staticIp = await testIp();
         const roomId = settingsStore.get("roomId");
 
@@ -180,83 +208,77 @@ export class RealTimeColab {
         }
 
         try {
-            if (!this.ably) {
-                // 第一次连接或彻底断开后的重建
-                this.ably = new Ably.Realtime({ key: settingsStore.get("ablyKey") });
-
-                await new Promise((resolve, reject) => {
-                    this.ably!.connection.once("connected", resolve);
-                    this.ably!.connection.once("failed", reject);
-                });
-
+            const success = await this.signalTransport!.connect(roomId!);
+            if (success) {
+                // 连接成功，重置Ably重试计数
+                TransportManager.resetAblyRetryCount();
+                return true;
             } else {
-                const state = this.ably.connection.state;
-                if (state === "closed" || state === "disconnected" || state === "suspended") {
-                    console.log(`当前连接状态为 ${state}，尝试重新连接 Ably...`);
-                    this.ably.connection.connect();
+                // 连接失败，处理重试逻辑
+                return await this.handleConnectionFailure(roomId!);
+            }
+        } catch (err) {
+            console.error("连接失败:", err);
+            return await this.handleConnectionFailure(roomId!);
+        }
+    }
 
-                    await this.ably.connection.whenState("connected");
-                } else if (state === "connecting") {
-                    await this.ably.connection.whenState("connected");
-                } else if (state === "connected") {
-                    // 已连接则无需操作
-                    return true;
+    private async handleConnectionFailure(roomId: string): Promise<boolean> {
+        const serverMode = settingsStore.get("serverMode") as "auto" | "ably" | "custom";
+        
+        // 如果当前使用的是Ably且处于auto模式，记录失败并尝试切换
+        if (serverMode === "auto") {
+            // 检查当前传输类型
+            const currentTransport = TransportManager.getTransportByPriority();
+            
+            if (currentTransport === "ably") {
+                TransportManager.recordAblyFailure();
+                
+                if (TransportManager.shouldSwitchToBackup()) {
+                    console.log("🔄 Ably重试次数已达上限，切换到自定义服务器");
+                    alertUseMUI("Ably连接失败，切换到自定义服务器", 2000, { kind: "warning" });
+                    
+                    // 重新创建传输实例（这次会选择custom）
+                    await this.signalTransport?.disconnect();
+                    this.signalTransport = await TransportManager.createTransport(() => this.getUniqId());
+                    this.signalTransport.setMessageHandler((event: MessageEvent) => {
+                        this.handleSignal(event);
+                    });
+                    
+                    // 尝试连接自定义服务器
+                    try {
+                        const success = await this.signalTransport.connect(roomId);
+                        if (success) {
+                            console.log("✅ 已切换到自定义服务器");
+                            return true;
+                        }
+                    } catch (err) {
+                        console.error("自定义服务器连接也失败:", err);
+                    }
                 }
             }
-
-            this.subscribeToRoom(roomId!);
-            return true;
-
-        } catch (err) {
-            alertUseMUI("Ably 连接失败，切换为备用 WebSocket 模式", 2000, { kind: "error" });
-            await this.connectToBackupWs();
-            return false;
         }
+        
+        // 根据模式显示不同的错误信息
+        switch (serverMode) {
+            case "ably":
+                alertUseMUI("Ably连接失败，请检查网络或配置", 2000, { kind: "error" });
+                break;
+            case "custom":
+                alertUseMUI("自定义服务器连接失败，请检查服务器状态", 2000, { kind: "error" });
+                break;
+            case "auto":
+                alertUseMUI("所有服务器连接失败，请检查网络连接", 2000, { kind: "error" });
+                break;
+        }
+        
+        return false;
     }
 
     public async disconnect(soft?: boolean): Promise<void> {
-        this.ablyChannel?.unsubscribe();
-        this.ablyChannel = null;
-
-        if (!this.ably) {
-            return;
+        if (this.signalTransport) {
+            await this.signalTransport.disconnect(soft);
         }
-
-        if (soft) {
-            this.ably.connection.close(); // 状态会变成 'closed'
-        } else {
-            // “硬断开”：完全销毁
-            this.ably.connection.close();
-            this.ably = null;
-        }
-    }
-
-    private subscribeToRoom(roomId: string) {
-        if (!validateRoomName(roomId).isValid) {
-            settingsStore.updateUnrmb("settingsPageState", true);
-            return false
-        }
-        if (!this.ably) return;
-
-        if (this.ablyChannel) {
-            this.ablyChannel.unsubscribe();
-            console.log(`[A]离开旧房间: ${this.currentRoomId}`);
-        }
-
-        this.ablyChannel = this.ably.channels.get(roomId);
-        this.currentRoomId = roomId;
-
-        const myId = this.getUniqId();
-
-        this.ablyChannel.subscribe(`signal:${myId}`, (message: any) => {
-            this.handleSignal({ data: JSON.stringify(message.data) } as MessageEvent);
-        });
-
-        this.ablyChannel.subscribe("signal:all", (message: any) => {
-            this.handleSignal({ data: JSON.stringify(message.data) } as MessageEvent);
-        });
-
-        // console.log(`✅ 加入房间频道: ${roomId}`);
     }
 
     public async handleRename(): Promise<void> {
@@ -268,71 +290,25 @@ export class RealTimeColab {
             return;
         }
 
-        if (!this.ably || this.ably.connection.state !== "connected") {
-            console.log("未连接 Ably 尝试连接...");
+        if (!this.signalTransport || !this.signalTransport.isConnected()) {
+            console.log("未连接到信号服务器，尝试连接...");
             await this.connectToServer();
         }
 
-        if (!this.ably || this.ably.connection.state !== "connected") {
+        if (!this.signalTransport || !this.signalTransport.isConnected()) {
             alertUseMUI("无法连接服务器，你丫在地球吗", 2000, { kind: "error" });
             return;
         }
 
-        this.subscribeToRoom(newRoomId!);
+        await this.signalTransport.switchRoom(newRoomId!);
         this.broadcastSignal({ type: "discover", userType: getDeviceType() });
     }
 
-
-
-    private async connectToBackupWs(): Promise<void> {
-        const url = settingsStore.get("backupBackWsUrl")!;
-
-        try {
-            this.ws = new WebSocket(url);
-
-            this.ws.onopen = async () => {
-                console.log("✅ 已连接备用 WebSocket");
-                await this.waitForUnlock(this.cleaningLock);
-                setTimeout(() => {
-                    this.broadcastSignal({ type: "discover", userType: getDeviceType() });
-                }, 2500);
-            };
-
-            this.ws.onmessage = (event) => this.handleSignal(event);
-
-            this.ws.onclose = () => {
-                this.cleanUpConnections()
-                // this.clearCache();
-            }
-
-            this.ws.onerror = (error: Event) =>
-                console.error("WebSocket error:", error);
-
-            window.addEventListener("beforeunload", () => { });
-            window.addEventListener("pagehide", () => { });
-        } catch (error) {
-            console.error("❌ 备用 WebSocket 连接失败:", error);
-        }
-    }
-
     public broadcastSignal(signal: any): void {
-        const fullSignal = {
-            ...signal,
-            from: this.getUniqId(),
-        };
-
-        if (this.ablyChannel) {
-            // 如果指定了目标用户，只发一个专属消息
-            if (signal.to) {
-                this.ablyChannel.publish(`signal:${signal.to}`, fullSignal);
-            } else {
-                this.ablyChannel.publish("signal:all", fullSignal);
-            }
-        } else if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-            this.ws.send(JSON.stringify(fullSignal));
+        if (this.signalTransport) {
+            this.signalTransport.broadcastSignal(signal);
         }
     }
-
 
     public getStatesMemorable(): {
         memorable: {
@@ -353,7 +329,7 @@ export class RealTimeColab {
                 }
             };
         } catch (e) {
-            console.warn("🧹 解析 localStorage 失败，清理状态");
+            console.warn("�� 解析 localStorage 失败，清理状态");
             localStorage.removeItem("memorableState");
             return { memorable: { userId: null, uniqId: null } };
         }
@@ -410,65 +386,13 @@ export class RealTimeColab {
         return RealTimeColab.instance;
     }
 
-
     private cleanUpConnections(): void {
-        console.warn("🔌 Ably disconnected, cleaning up.");
-        this.ablyChannel?.unsubscribe();
-        this.ably = null;
-        this.ablyChannel = null;
-    }
-    /**
-     * @description 连接Ably
-    */
-
-    public async connect(
-        url: string,
-
-    ): Promise<void> {
-        try {
-
-            this.ws = new WebSocket(url);
-            this.ws.onopen = async () => {
-                await this.waitForUnlock(this.cleaningLock);
-                setTimeout(() => {
-                    this.broadcastSignal({ type: "discover", userType: getDeviceType() });
-                }, 2500);
-            };
-
-            this.ws.onmessage = (event) =>
-                this.handleSignal(event);
-
-            this.ws.onclose = () => this.cleanUpConnections();
-
-            this.ws.onerror = (error: Event) =>
-                console.error("WebSocket error:", error);
-
-            // 当页面关闭或刷新时主动通知其他用户离线
-            window.addEventListener("beforeunload", () => { });
-            window.addEventListener("pagehide", () => { });
-        } catch (error) {
-            console.log(error);
+        console.warn("🔌 信号服务器断开连接，清理状态。");
+        // 不再需要特定于Ably的清理
+        if (this.signalTransport) {
+            this.signalTransport.disconnect();
         }
     }
-
-    // public async disconnect(setMsgFromSharing?: React.Dispatch<React.SetStateAction<string | null>>
-    // ): Promise<void> {
-    //     if (setMsgFromSharing) {
-    //         setMsgFromSharing(null)
-    //     }
-    //     // this.broadcastSignal({ type: "leave", id: this.getUniqId() });
-    //     this.cleanUpConnections();
-    // }
-    // private cleanUpConnections(): void {
-    //     console.warn("🔌 WebSocket disconnected, cleaning up only WS-related state.");
-    //     // 清理 WebSocket 状态，但不要干掉 WebRTC
-    //     if (this.ws) {
-    //         this.ws.onclose = null;
-    //         this.ws.close();
-    //         this.ws = null;
-    //     }
-    // }
-
 
     private async handleSignal(event: MessageEvent): Promise<void> {
         try {
@@ -495,7 +419,7 @@ export class RealTimeColab {
                     console.warn("Unknown message type", data.type);
             }
         } catch (err) {
-            console.error("🚨 Failed to parse WebSocket message:", event.data, err);
+            console.error("🚨 Failed to parse signal message:", event.data, err);
         }
     }
 
@@ -614,22 +538,6 @@ export class RealTimeColab {
 
 
     }
-
-
-
-    // public broadcastSignal(signal: any): void {
-    //     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-    //         const fullSignal = {
-    //             ...signal,
-    //             from: this.getUniqId(),
-    //         };
-    //         this.ws.send(JSON.stringify(fullSignal));
-    //     }
-    // }
-
-
-
-
 
     private async handleOffer(data: any): Promise<void> {
         const fromId = data.from;
@@ -1009,24 +917,6 @@ export class RealTimeColab {
             }
         };
 
-        // channel.onclose = () => {
-        //     console.log(`Data channel with user ${id} is closed`);
-        //     if (this.heartbeatIntervals.has(id)) {
-        //         clearInterval(this.heartbeatIntervals.get(id)!);
-        //         this.heartbeatIntervals.delete(id);
-        //     }
-        //     if (this.userList.get(id)?.status === "connected") {
-        //         alertUseMUI("与对方断开连接,请刷新页面", 2000, { kind: "error" })
-        //     }
-        //     if (heartbeatInterval) {
-        //         clearInterval(heartbeatInterval);
-        //         heartbeatInterval = null;
-        //     }
-
-        //     this.dataChannels.delete(id);
-        //     this.updateConnectedUsers(this.userList)
-        //     this.lastPongTimes.delete(id);
-        // };
         channel.onclose = () => {
             console.warn(`🧹 DataChannel closed for ${id}，执行 clearCache(${id})`);
             this.clearCache(id);
@@ -1319,7 +1209,7 @@ export class RealTimeColab {
     }
 
     public isConnected(): boolean {
-        return this.ws !== null && this.ws.readyState === WebSocket.OPEN;
+        return this.signalTransport ? this.signalTransport.isConnected() : false;
     }
 
     public getConnectedUserIds(): string[] {
