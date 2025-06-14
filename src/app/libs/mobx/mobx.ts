@@ -8,13 +8,15 @@ const DEFAULT_SETTINGS = {
     userTheme: 'light' as ThemeKey,
     userLanguage: 'system' as LanguageType,
     backupBackWsUrl: "wss://md-server-md-server-bndnqhexdf.cn-hangzhou.fcapp.run",
-    customServerUrl: "wss://your-custom-server.com", // 自定义服务器URL
-    customAuthToken: "", // 自定义服务器认证token
-    serverMode: "auto" as "auto" | "ably" | "custom", // 管理员优先级：auto=自动选择，ably=强制ably，custom=强制自定义
+    customServerUrl: "wss://ecs.letshare.fun", // 自定义服务器URL - 修复为使用 wss:// 协议匹配服务器 TLS 配置
+    // customServerUrl: "ws://localhost", // 本地开发用
+    customAuthToken: "98d9a399675116e5256e9082c192bc06eb6434937af99f201252e9424c7a5652", // 自定义服务器认证token
+    serverMode: "custom" as "auto" | "ably" | "custom", // 管理员优先级：auto=自动选择，ably=强制ably，custom=强制自定义
     ablyKey: "4TtssQ.e9OvDA:wYBGdtWQNgicbeIKNtgeV_s5XEKmfLKD_Gue5XQrWuw",
     version: "3.3.0",
     isNewUser: true
 };
+
 export type SettingsKey = keyof typeof DEFAULT_SETTINGS;
 
 const DEFAULT_UNRMB = {

@@ -47,7 +47,7 @@ export class RealTimeColab {
 
         RealTimeColab.userId = userId;
         RealTimeColab.uniqId = uniqId;
-        
+
         // 初始化信号传输层 - 异步初始化，不阻塞构造函数
         this.initializeSignalTransport();
     }
@@ -80,7 +80,7 @@ export class RealTimeColab {
     private recentlyResetPeers: Map<string, number> = new Map();
     public lastConnectAttempt: Map<string, number> = new Map();
     public connectionTimeouts: Map<string, number> = new Map();
-    private currentRoomId: string | null = null;
+    // private currentRoomId: string | null = null;
 
     public isSendingFile = false;
     public fileMetaInfo = { name: "default_received_file" };
@@ -191,7 +191,7 @@ export class RealTimeColab {
         if (!this.signalTransport) {
             console.log("等待信号传输层初始化...");
             await this.initializeSignalTransport();
-            
+
             // 如果初始化后仍然没有 signalTransport，返回失败
             if (!this.signalTransport) {
                 console.error("信号传输层初始化失败");
@@ -225,26 +225,26 @@ export class RealTimeColab {
 
     private async handleConnectionFailure(roomId: string): Promise<boolean> {
         const serverMode = settingsStore.get("serverMode") as "auto" | "ably" | "custom";
-        
+
         // 如果当前使用的是Ably且处于auto模式，记录失败并尝试切换
         if (serverMode === "auto") {
             // 检查当前传输类型
             const currentTransport = TransportManager.getTransportByPriority();
-            
+
             if (currentTransport === "ably") {
                 TransportManager.recordAblyFailure();
-                
+
                 if (TransportManager.shouldSwitchToBackup()) {
                     console.log("🔄 Ably重试次数已达上限，切换到自定义服务器");
                     alertUseMUI("Ably连接失败，切换到自定义服务器", 2000, { kind: "warning" });
-                    
+
                     // 重新创建传输实例（这次会选择custom）
                     await this.signalTransport?.disconnect();
                     this.signalTransport = await TransportManager.createTransport(() => this.getUniqId());
                     this.signalTransport.setMessageHandler((event: MessageEvent) => {
                         this.handleSignal(event);
                     });
-                    
+
                     // 尝试连接自定义服务器
                     try {
                         const success = await this.signalTransport.connect(roomId);
@@ -258,7 +258,7 @@ export class RealTimeColab {
                 }
             }
         }
-        
+
         // 根据模式显示不同的错误信息
         switch (serverMode) {
             case "ably":
@@ -271,7 +271,7 @@ export class RealTimeColab {
                 alertUseMUI("所有服务器连接失败，请检查网络连接", 2000, { kind: "error" });
                 break;
         }
-        
+
         return false;
     }
 
@@ -329,7 +329,6 @@ export class RealTimeColab {
                 }
             };
         } catch (e) {
-            console.warn("�� 解析 localStorage 失败，清理状态");
             localStorage.removeItem("memorableState");
             return { memorable: { userId: null, uniqId: null } };
         }

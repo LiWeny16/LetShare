@@ -25,9 +25,13 @@ export class CustomServerTransport implements ISignalTransport {
         try {
             const serverUrl = this.getServerUrl();
             const authToken = this.getAuthToken();
+            const userId = this.getUserId();
             
-            // 构建包含认证信息的WebSocket URL
-            const wsUrl = `${serverUrl}?token=${encodeURIComponent(authToken)}`;
+            // 构建包含认证信息和用户ID的WebSocket URL
+            let wsUrl = `${serverUrl}?token=${encodeURIComponent(authToken)}`;
+            if (userId) {
+                wsUrl += `&userId=${encodeURIComponent(userId)}`;
+            }
             
             this.socket = new WebSocket(wsUrl);
 
@@ -59,7 +63,7 @@ export class CustomServerTransport implements ISignalTransport {
         }
     }
 
-    async disconnect(soft?: boolean): Promise<void> {
+    async disconnect(_soft?: boolean): Promise<void> {
         if (this.socket) {
             // 发送离开房间消息
             if (this.currentRoomId) {
@@ -149,27 +153,22 @@ export class CustomServerTransport implements ISignalTransport {
         this.currentRoomId = roomId;
         this.myId = this.getUserId();
 
-        // 订阅房间 - 模拟Ably的订阅机制
-        this.sendToServer({
-            type: "subscribe",
-            channel: roomId
-        });
-
-        // 订阅针对自己的消息
+        // 直接订阅需要的事件，而不是先订阅房间再订阅事件
         if (this.myId) {
+            // 订阅针对自己的消息
             this.sendToServer({
                 type: "subscribe",
                 channel: roomId,
                 event: `signal:${this.myId}`
             });
+            
+            // 订阅广播消息
+            this.sendToServer({
+                type: "subscribe",
+                channel: roomId,
+                event: "signal:all"
+            });
         }
-
-        // 订阅广播消息
-        this.sendToServer({
-            type: "subscribe",
-            channel: roomId,
-            event: "signal:all"
-        });
 
         console.log(`[C]已加入房间: ${roomId}`);
     }
@@ -191,6 +190,7 @@ export class CustomServerTransport implements ISignalTransport {
                     break;
                 case "subscribed":
                     console.log(`✅ 已订阅: ${message.channel}${message.event ? `:${message.event}` : ''}`);
+                    // 移除了额外的订阅逻辑，因为我们现在直接订阅需要的事件
                     break;
                 case "unsubscribed":
                     console.log(`❌ 已取消订阅: ${message.channel}${message.event ? `:${message.event}` : ''}`);
