@@ -276,9 +276,27 @@ export class RealTimeColab {
     }
 
     public async disconnect(soft?: boolean): Promise<void> {
+        console.warn("🔌 主动断开连接，开始清理状态", { soft });
+
+        // 1. 断开WebSocket信号层
         if (this.signalTransport) {
             await this.signalTransport.disconnect(soft);
         }
+
+        // 2. 清理可能导致重连问题的关键状态
+        console.warn("🧹 清理连接限制状态");
+        this.lastConnectAttempt.clear(); // 清理连接尝试时间限制
+        this.connectionQueue.clear(); // 清理连接队列状态
+
+        // 3. 重置所有用户状态为disconnected，为重连做准备
+        console.warn("🔄 重置所有用户状态为disconnected");
+        for (const [id, user] of this.userList) {
+            user.status = "disconnected";
+            user.attempts = 0;
+        }
+
+        // 4. 更新UI
+        this.updateUI();
     }
 
     public async handleRename(): Promise<void> {
@@ -954,7 +972,7 @@ export class RealTimeColab {
         const now = Date.now();
         const lastAttempt = this.lastConnectAttempt.get(id) ?? 0;
         if (now - lastAttempt < 4000) {
-            console.warn(`[CONNECT] 与 ${id} 的连接尝试太频繁，跳过`);
+            console.warn(`[CONNECT] 与 ${id} 的连接尝试太频繁，跳过 (距离上次: ${now - lastAttempt}ms)`);
             return;
         }
         this.lastConnectAttempt.set(id, now);
@@ -964,6 +982,8 @@ export class RealTimeColab {
             return;
         }
         this.connectionQueue.set(id, true);
+
+        console.log(`[CONNECT] 🚀 开始连接到用户 ${id}`);
 
         try {
             let peer = RealTimeColab.peers.get(id);
@@ -986,19 +1006,11 @@ export class RealTimeColab {
                     `ICE 状态: ${iceState}, 通道状态: ${dataChannel?.readyState || 'missing'}`);
 
                 // 执行清理操作
-                // peer.close();
-                // RealTimeColab.peers.delete(id);
-                // this.cleanupDataChannel(id); // 这会清理 dataChannels、心跳等
                 this.clearCache(id);
-                // const user = this.userList.get(id);
-                // if (user) {
-                //     user.status = "disconnected";
-                //     this.userList.set(id, user);
-                // }
-                // this.updateUI()
             }
 
             // 建立新连接
+            console.log(`[CONNECT] 🔗 为 ${id} 创建新的P2P连接`);
             peer = this.peerManager.createPeerConnection(id);
             const dataChannel = peer.createDataChannel("chat");
 
@@ -1233,7 +1245,7 @@ export class RealTimeColab {
     private setupVisibilityWatcher() {
         let backgroundStartTime: number | null = null;
         let ablyTimeoutHandle: ReturnType<typeof setTimeout> | null = null;
-        const overtime = 30_000
+        const overtime = 30_00
         document.addEventListener("visibilitychange", () => {
             if (document.visibilityState === "hidden") {
                 backgroundStartTime = Date.now();

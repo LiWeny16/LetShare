@@ -6,6 +6,8 @@ export class CustomServerTransport implements ISignalTransport {
     private messageHandler: ((event: MessageEvent) => void) | null = null;
     private currentRoomId: string | null = null;
     private myId: string | null = null;
+    private isSubscribed: boolean = false; // 新增：订阅状态标记
+    private subscriptionPromises: Map<string, { resolve: () => void; reject: (error: any) => void }> = new Map(); // 新增：订阅Promise管理
 
     constructor(
         private getServerUrl: () => string,
@@ -35,11 +37,24 @@ export class CustomServerTransport implements ISignalTransport {
             
             this.socket = new WebSocket(wsUrl);
 
-            return new Promise((resolve) => {
-                this.socket!.onopen = () => {
+            return new Promise((resolve, reject) => {
+                const connectionTimeout = setTimeout(() => {
+                    reject(new Error("连接超时"));
+                }, 10000); // 10秒超时
+
+                this.socket!.onopen = async () => {
                     console.log("✅ 已连接自定义服务器");
-                    this.subscribeToRoom(roomId);
-                    resolve(true);
+                    
+                    try {
+                        // 等待订阅完成
+                        await this.subscribeToRoom(roomId);
+                        clearTimeout(connectionTimeout);
+                        resolve(true);
+                    } catch (error) {
+                        clearTimeout(connectionTimeout);
+                        console.error("订阅房间失败:", error);
+                        reject(error);
+                    }
                 };
 
                 this.socket!.onmessage = (event) => {
@@ -48,12 +63,15 @@ export class CustomServerTransport implements ISignalTransport {
 
                 this.socket!.onclose = () => {
                     console.warn("🔌 自定义服务器连接断开");
+                    this.isSubscribed = false;
+                    clearTimeout(connectionTimeout);
                 };
 
                 this.socket!.onerror = (error) => {
                     console.error("自定义服务器连接错误:", error);
                     this.onError("连接自定义服务器失败");
-                    resolve(false);
+                    clearTimeout(connectionTimeout);
+                    reject(error);
                 };
             });
         } catch (error) {
@@ -63,49 +81,51 @@ export class CustomServerTransport implements ISignalTransport {
         }
     }
 
-    async disconnect(_soft?: boolean): Promise<void> {
+    async disconnect(soft?: boolean): Promise<void> {
+        console.warn("🔌 [Custom] 断开连接", { soft });
+        
+        this.isSubscribed = false;
+        this.subscriptionPromises.clear();
+        
         if (this.socket) {
-            // 发送离开房间消息
-            if (this.currentRoomId) {
-                this.sendToServer({
-                    type: "unsubscribe",
-                    channel: this.currentRoomId
-                });
+            if (this.socket.readyState === WebSocket.OPEN) {
+                // 发送取消订阅消息
+                if (this.currentRoomId && this.myId) {
+                    this.sendToServer({
+                        type: "unsubscribe",
+                        channel: this.currentRoomId,
+                        event: `signal:${this.myId}`
+                    });
+                    
+                    this.sendToServer({
+                        type: "unsubscribe",
+                        channel: this.currentRoomId,
+                        event: "signal:all"
+                    });
+                }
             }
             
             this.socket.close();
             this.socket = null;
         }
+        
+        this.currentRoomId = null;
+        this.myId = null;
+        this.messageHandler = null;
     }
 
     broadcastSignal(signal: any): void {
-        if (!this.socket || this.socket.readyState !== WebSocket.OPEN || !this.currentRoomId) {
+        if (!this.isConnected() || !this.currentRoomId) {
+            console.warn("未连接到服务器或未加入房间，无法发送信号");
             return;
         }
 
-        const fullSignal = {
-            ...signal,
-            from: this.getUserId(),
-        };
-
-        // 模拟Ably的发布机制
-        if (signal.to) {
-            // 发送给特定用户
-            this.sendToServer({
-                type: "publish",
-                channel: this.currentRoomId,
-                event: `signal:${signal.to}`,
-                data: fullSignal
-            });
-        } else {
-            // 广播给所有用户
-            this.sendToServer({
-                type: "publish",
-                channel: this.currentRoomId,
-                event: "signal:all",
-                data: fullSignal
-            });
-        }
+        this.sendToServer({
+            type: "publish",
+            channel: this.currentRoomId,
+            event: signal.to ? `signal:${signal.to}` : "signal:all",
+            data: signal
+        });
     }
 
     setMessageHandler(handler: (event: MessageEvent) => void): void {
@@ -113,7 +133,9 @@ export class CustomServerTransport implements ISignalTransport {
     }
 
     isConnected(): boolean {
-        return this.socket !== null && this.socket.readyState === WebSocket.OPEN;
+        return this.socket !== null && 
+               this.socket.readyState === WebSocket.OPEN && 
+               this.isSubscribed; // 修改：同时检查WebSocket状态和订阅状态
     }
 
     async switchRoom(roomId: string): Promise<void> {
@@ -123,87 +145,146 @@ export class CustomServerTransport implements ISignalTransport {
             return;
         }
 
-        if (this.currentRoomId === roomId) {
-            return; // 已经在目标房间
-        }
-
-        if (this.isConnected()) {
-            // 取消订阅当前房间
-            if (this.currentRoomId) {
-                this.sendToServer({
-                    type: "unsubscribe",
-                    channel: this.currentRoomId
-                });
-                console.log(`[C]离开旧房间: ${this.currentRoomId}`);
-            }
-            
-            // 订阅新房间
-            this.subscribeToRoom(roomId);
-        } else {
-            // 重新连接到新房间
-            await this.connect(roomId);
-        }
-    }
-
-    private subscribeToRoom(roomId: string): void {
         if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
+            await this.connect(roomId);
             return;
         }
 
-        this.currentRoomId = roomId;
-        this.myId = this.getUserId();
-
-        // 直接订阅需要的事件，而不是先订阅房间再订阅事件
-        if (this.myId) {
-            // 订阅针对自己的消息
+        // 取消当前房间订阅
+        if (this.currentRoomId && this.myId) {
             this.sendToServer({
-                type: "subscribe",
-                channel: roomId,
+                type: "unsubscribe",
+                channel: this.currentRoomId,
                 event: `signal:${this.myId}`
             });
             
-            // 订阅广播消息
             this.sendToServer({
-                type: "subscribe",
-                channel: roomId,
+                type: "unsubscribe",
+                channel: this.currentRoomId,
                 event: "signal:all"
             });
         }
 
-        console.log(`[C]已加入房间: ${roomId}`);
+        // 订阅新房间
+        await this.subscribeToRoom(roomId);
+    }
+
+    private async subscribeToRoom(roomId: string): Promise<void> {
+        if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
+            throw new Error("WebSocket未连接");
+        }
+
+        this.currentRoomId = roomId;
+        this.myId = this.getUserId();
+        this.isSubscribed = false;
+
+        if (!this.myId) {
+            throw new Error("用户ID未设置");
+        }
+
+        // 创建两个订阅Promise - 一个用于个人消息，一个用于广播消息
+        const personalSubscriptionPromise = new Promise<void>((resolve, reject) => {
+            const timeoutId = setTimeout(() => {
+                this.subscriptionPromises.delete(`${roomId}:signal:${this.myId}`);
+                reject(new Error("个人消息订阅超时"));
+            }, 5000); // 5秒超时
+
+            this.subscriptionPromises.set(`${roomId}:signal:${this.myId}`, {
+                resolve: () => {
+                    clearTimeout(timeoutId);
+                    this.subscriptionPromises.delete(`${roomId}:signal:${this.myId}`);
+                    resolve();
+                },
+                reject: (error) => {
+                    clearTimeout(timeoutId);
+                    this.subscriptionPromises.delete(`${roomId}:signal:${this.myId}`);
+                    reject(error);
+                }
+            });
+        });
+
+        const broadcastSubscriptionPromise = new Promise<void>((resolve, reject) => {
+            const timeoutId = setTimeout(() => {
+                this.subscriptionPromises.delete(`${roomId}:signal:all`);
+                reject(new Error("广播消息订阅超时"));
+            }, 5000); // 5秒超时
+
+            this.subscriptionPromises.set(`${roomId}:signal:all`, {
+                resolve: () => {
+                    clearTimeout(timeoutId);
+                    this.subscriptionPromises.delete(`${roomId}:signal:all`);
+                    resolve();
+                },
+                reject: (error) => {
+                    clearTimeout(timeoutId);
+                    this.subscriptionPromises.delete(`${roomId}:signal:all`);
+                    reject(error);
+                }
+            });
+        });
+
+        // 发送订阅请求
+        this.sendToServer({
+            type: "subscribe",
+            channel: roomId,
+            event: `signal:${this.myId}`
+        });
+        
+        this.sendToServer({
+            type: "subscribe",
+            channel: roomId,
+            event: "signal:all"
+        });
+
+        console.log(`[C]正在加入房间: ${roomId}`);
+
+        // 等待所有订阅确认
+        try {
+            await Promise.all([personalSubscriptionPromise, broadcastSubscriptionPromise]);
+            this.isSubscribed = true;
+            console.log(`[C]已成功加入房间: ${roomId}`);
+        } catch (error) {
+            // 清理所有等待中的Promise
+            this.subscriptionPromises.clear();
+            throw error;
+        }
     }
 
     private handleServerMessage(event: MessageEvent): void {
         try {
             const message = JSON.parse(event.data);
             
-            // 处理服务器的不同消息类型
-            switch (message.type) {
-                case "message":
-                    // 这是实际的信号消息，转发给消息处理器
-                    if (this.messageHandler && message.data) {
-                        // 模拟Ably的消息格式
-                        this.messageHandler({
-                            data: JSON.stringify(message.data)
-                        } as MessageEvent);
-                    }
-                    break;
-                case "subscribed":
-                    console.log(`✅ 已订阅: ${message.channel}${message.event ? `:${message.event}` : ''}`);
-                    // 移除了额外的订阅逻辑，因为我们现在直接订阅需要的事件
-                    break;
-                case "unsubscribed":
-                    console.log(`❌ 已取消订阅: ${message.channel}${message.event ? `:${message.event}` : ''}`);
-                    break;
-                case "error":
-                    console.error("服务器错误:", message.error);
-                    this.onError(message.error || "服务器错误");
-                    break;
-                default:
-                    console.warn("未知的服务器消息类型:", message.type);
+            // 处理订阅确认消息
+            if (message.type === "subscribed") {
+                const key = `${message.channel}:${message.event}`;
+                const promise = this.subscriptionPromises.get(key);
+                if (promise) {
+                    promise.resolve();
+                }
+                return;
             }
-        } catch (err) {
-            console.error("解析服务器消息失败:", err);
+
+            // 处理订阅错误
+            if (message.type === "error") {
+                console.error("服务器错误:", message.error);
+                // 如果有等待中的订阅Promise，拒绝它们
+                for (const [key, promise] of this.subscriptionPromises) {
+                    promise.reject(new Error(message.error?.message || "服务器错误"));
+                }
+                this.subscriptionPromises.clear();
+                return;
+            }
+
+            // 处理普通消息
+            if (message.type === "message" && this.messageHandler) {
+                // 创建兼容的MessageEvent对象
+                const compatibleEvent = new MessageEvent("message", {
+                    data: JSON.stringify(message.data)
+                });
+                this.messageHandler(compatibleEvent);
+            }
+        } catch (error) {
+            console.error("处理服务器消息失败:", error);
         }
     }
 

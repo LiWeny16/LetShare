@@ -79,16 +79,29 @@ export class AblySignalTransport implements ISignalTransport {
     }
 
     async disconnect(soft?: boolean): Promise<void> {
-        this.ablyChannel?.unsubscribe();
-        this.ablyChannel = null;
+        console.warn("🔌 [Ably] 断开连接", { soft });
+        
+        // 1. 取消订阅并清理频道
+        if (this.ablyChannel) {
+            this.ablyChannel.unsubscribe();
+            this.ablyChannel = null;
+        }
 
+        // 2. 清理状态
+        this.currentRoomId = null;
+        this.myId = null;
+        this.messageHandler = null;
+
+        // 3. 断开Ably连接
         if (!this.ably) {
             return;
         }
 
         if (soft) {
+            // soft断开：保留连接实例，只关闭连接
             this.ably.connection.close();
         } else {
+            // 硬断开：完全清理连接实例
             this.ably.connection.close();
             this.ably = null;
         }
