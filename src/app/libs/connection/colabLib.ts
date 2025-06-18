@@ -1,4 +1,4 @@
-import alertUseMUI from "../alert";
+import alertUseMUI from "../tools/alert";
 import { PeerManager } from "./peerManager";
 import {
   compareUniqIdPriority,
@@ -36,7 +36,7 @@ export class RealTimeColab {
   private static userId: string | null = null;
   private static uniqId: string | null = null;
   public static peers: Map<string, RTCPeerConnection> = new Map();
-  public staticIp: string | null = null;
+  // public staticIp: string | null = null;
 
   private constructor() {
     const state = this.getStatesMemorable();

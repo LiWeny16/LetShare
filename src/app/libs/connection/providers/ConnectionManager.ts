@@ -3,6 +3,7 @@ import { AblyConnectionProvider } from "./AblyConnectionProvider";
 import { CustomConnectionProvider } from "./CustomConnectionProvider";
 import settingsStore from "../../mobx/mobx";
 import { testIp } from "../../tools/tools";
+// import { CleaningServices } from "@mui/icons-material";
 
 // 定义IP测试结果类型
 interface IpTestResult {
@@ -79,9 +80,9 @@ export class ConnectionManager implements IConnectionProvider {
     private async connectAuto(roomId: string): Promise<boolean> {
         const ipResult = await testIp();
         const isOverseas = this.isOverseasRegion(ipResult);
-        
-        console.log(`🌍 检测到IP信息:`, ipResult);
-        console.log(`🌍 海外地区: ${isOverseas}`);
+        settingsStore.updateUnrmb("staticIp", ipResult.ip || "");
+        // console.log(`🌍 检测到IP信息:`, ipResult);
+        // console.log(`🌍 海外地区: ${isOverseas}`);
         
         // 海外优先使用 Ably，国内优先使用 Custom
         const primaryProvider = isOverseas ? 'ably' : 'custom';

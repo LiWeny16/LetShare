@@ -30,7 +30,7 @@ import TextIcon from "@mui/icons-material/TextFields";
 import ClipboardIcon from "@mui/icons-material/ContentPaste";
 import kit from "bigonion-kit";
 import { readClipboard, writeClipboard } from "@App/libs/clipboard";
-import alertUseMUI from "@App/libs/alert";
+import alertUseMUI from "@App/libs/tools/alert";
 import AlertPortal from "../components/Alert";
 import { Footer } from "../components/Footer";
 import EditableUserId from "../components/UserId";
@@ -543,7 +543,7 @@ const Share = observer(() => {
                             color={settingsStore.getUnrmb("isConnectedToServer") ? "primary" : "error"}
                             endIcon={
                                 loading ? <CircularProgress size={20} color="inherit" /> : 
-                                (realTimeColab.isConnected() ? <CachedIcon /> : <WifiOffIcon />)
+                                (settingsStore.getUnrmb("isConnectedToServer") ? <CachedIcon /> : <WifiOffIcon />)
                             }
                             disabled={loading}
                         >

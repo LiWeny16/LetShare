@@ -1,5 +1,5 @@
 import { Clipboard } from '@capacitor/clipboard';
-import alertUseMUI from './alert';
+import alertUseMUI from './tools/alert';
 import { isApp } from './capacitor/user';
 
 

@@ -18,7 +18,8 @@ export type SettingsKey = keyof typeof DEFAULT_SETTINGS;
 
 const DEFAULT_UNRMB = {
     settingsPageState: false,
-    isConnectedToServer: false
+    isConnectedToServer: false,
+    staticIp:"",
 };
 
 type UnrmbKey = keyof typeof DEFAULT_UNRMB;

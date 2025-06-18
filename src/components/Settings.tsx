@@ -22,7 +22,7 @@ import { invisibleScrollerSx } from '@Style/muiStyles';
 import { observer } from 'mobx-react-lite';
 import settingsStore, { SettingsKey } from '@App/libs/mobx/mobx';
 import React from 'react';
-import alertUseMUI from '@App/libs/alert';
+import alertUseMUI from '@App/libs/tools/alert';
 import ThemeSelector from './Theme/ThemeSelector';
 import { validateRoomName, getDeviceType } from '@App/libs/tools/tools';
 import realTimeColab from '@App/libs/connection/colabLib';
@@ -175,7 +175,7 @@ const SettingsPage = () => {
             <Box
                 ref={settingsRef}
                 sx={{
-                    maxWidth: 330,
+                    maxWidth: 310,
                     mx: 'auto',
                     bgcolor: 'background.paper',
                     borderRadius: 3,
@@ -325,6 +325,7 @@ const SettingsPage = () => {
                 <Box sx={{ 
                     px: 4.3,
                     pb: 3,
+                    pt:advancedOpen?2:0,
                     backgroundColor: 'background.paper',
                 }}>
                     <Button
