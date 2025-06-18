@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 // const url = "ws://192.168.1.13:9000";
 import Dialog from "@mui/material/Dialog";
 import CachedIcon from '@mui/icons-material/Cached';
+import WifiOffIcon from '@mui/icons-material/WifiOff';
 import DownloadIcon from "@mui/icons-material/Download";
 import { createTheme, ThemeProvider, useTheme } from '@mui/material/styles';
 import { ButtonBase, CssBaseline, GlobalStyles } from '@mui/material';
@@ -81,7 +82,7 @@ export const buttonStyleNormal = {
 };
 
 
-function Share() {
+const Share = observer(() => {
     const { t } = useTranslation();
     const theme = useTheme();
     // 父组件
@@ -145,14 +146,19 @@ function Share() {
         setLoading(true);
         try {
             // 检查ws 的连接状态
-            if (!realTimeColab.ablyChannel && !realTimeColab.isConnected()) {
-                realTimeColab.connectToServer().then((e) => {
-                    if (e) {
-                        realTimeColab.broadcastSignal({ type: "discover", userType: getDeviceType() });
-                    }
-                })
-            }
-            else {
+            if (!realTimeColab.isConnected()) {
+                // 如果未连接，先连接服务器
+                const connected = await realTimeColab.connectToServer();
+                if (connected) {
+                    settingsStore.updateUnrmb("isConnectedToServer", true);
+                    // 连接成功后广播发现信号
+                    realTimeColab.broadcastSignal({ type: "discover", userType: getDeviceType() });
+                } else {
+                    settingsStore.updateUnrmb("isConnectedToServer", false);
+                }
+            } else {
+                settingsStore.updateUnrmb("isConnectedToServer", true);
+                // 如果已连接，直接广播发现信号
                 realTimeColab.broadcastSignal({
                     type: "discover",
                     userType: getDeviceType()
@@ -161,6 +167,7 @@ function Share() {
             await kit.sleep(1000);
         } catch (error) {
             console.error("Search error:", error);
+            settingsStore.updateUnrmb("isConnectedToServer", false);
         } finally {
             setLoading(false);
         }
@@ -374,7 +381,7 @@ function Share() {
                         left: "50%",
                         transform: "translate(-50%, -50%)",
                         width: { xs: "89%", sm: "80%", md: "60%" },
-                        maxWidth: "900px",
+                        // maxWidth: "9000px",
                         height: isApp ? "85svh" : "75vh",
                         p: 3,
                         m: "auto",
@@ -533,8 +540,10 @@ function Share() {
                             ref={searchButtonRef}
                             onClick={handleClickSearch}
                             variant="contained"
+                            color={settingsStore.getUnrmb("isConnectedToServer") ? "primary" : "error"}
                             endIcon={
-                                loading ? <CircularProgress size={20} color="inherit" /> : <CachedIcon />
+                                loading ? <CircularProgress size={20} color="inherit" /> : 
+                                (realTimeColab.isConnected() ? <CachedIcon /> : <WifiOffIcon />)
                             }
                             disabled={loading}
                         >
@@ -775,27 +784,9 @@ function Share() {
             </Backdrop>
             <StartupPage open={startUpVisibility} />
             <AlertPortal />
-            {/* <Dialog
-                open={videoPanelOpen}
-                onClose={() => {
-                    setVideoPanelOpen(false);
-                    setVideoTargetUser(null);
-                }}
-                maxWidth="md"
-                fullWidth
-            >
-                <VideoPanel
-                    targetId={videoTargetUser}
-                    onClose={() => {
-                        setVideoPanelOpen(false);
-                        setVideoTargetUser(null);
-                    }}
-                />
-            </Dialog> */}
-
         </>
     );
-}
+});
 
 
 const themes = {

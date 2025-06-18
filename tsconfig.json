@@ -25,6 +25,8 @@
       "@lib/*": ["./src/app/lib/*"],
       "@Com": ["./src/components/"],
       "@Com/*": ["./src/components/*"],
+      "@Style": ["./src/style/"],
+      "@Style/*": ["./src/style/*"],
     },
     "types": [],
 

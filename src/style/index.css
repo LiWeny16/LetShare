@@ -1,4 +1,3 @@
-
 /* 可放在 index.css, global.css, 或 styled-components 全局样式中 */
 body,
 html {
@@ -70,4 +69,30 @@ body {
 .uniformed-scroller {
   scrollbar-width: thin;
   scrollbar-color: rgba(0, 0, 0, 0.2) transparent;
+}
+
+/* 隐藏滚动条且不占用空间的样式 */
+.invisible-scroller::-webkit-scrollbar {
+  width: 0px !important;
+  height: 0px !important;
+  background: transparent;
+}
+
+.invisible-scroller::-webkit-scrollbar-thumb {
+  background: transparent;
+}
+
+.invisible-scroller::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.invisible-scroller::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+.invisible-scroller {
+  /* Firefox */
+  scrollbar-width: none !important;
+  /* IE and Edge */
+  -ms-overflow-style: none !important;
 }

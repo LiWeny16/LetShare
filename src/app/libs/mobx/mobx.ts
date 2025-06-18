@@ -7,7 +7,9 @@ const DEFAULT_SETTINGS = {
     roomId: '',
     userTheme: 'light' as ThemeKey,
     userLanguage: 'system' as LanguageType,
-    backupBackWsUrl: "wss://md-server-md-server-bndnqhexdf.cn-hangzhou.fcapp.run",
+    serverMode: 'auto' as 'auto' | 'ably' | 'custom',
+    customServerUrl: "wss://ecs.letshare.fun/",
+    authToken: "98d9a399675116e5256e9082c192bc06eb6434937af99f201252e9424c7a5652",
     ablyKey: "4TtssQ.e9OvDA:wYBGdtWQNgicbeIKNtgeV_s5XEKmfLKD_Gue5XQrWuw",
     version: "3.3.0",
     isNewUser: true
@@ -15,7 +17,8 @@ const DEFAULT_SETTINGS = {
 export type SettingsKey = keyof typeof DEFAULT_SETTINGS;
 
 const DEFAULT_UNRMB = {
-    settingsPageState: false
+    settingsPageState: false,
+    isConnectedToServer: false
 };
 
 type UnrmbKey = keyof typeof DEFAULT_UNRMB;

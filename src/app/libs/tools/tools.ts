@@ -75,24 +75,95 @@ export function validateRoomName(name: string | undefined | null): { isValid: bo
 }
 
 /**
- * @description Network
-*/
-export async function testIp(): Promise<string | null> {
+ * IP测试结果接口
+ */
+interface IpTestResult {
+    ip: string | null;
+    region: string | null;
+    country: string | null;
+    countryCode: string | null;
+    lang: string | null;
+    source: 'ipinfo' | 'ipapi' | null;
+}
+
+/**
+ * @description Network - 智能IP检测服务
+ * 支持主备服务器，返回详细的地区信息
+ */
+export async function testIp(): Promise<IpTestResult> {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 2000); // 2 秒超时
+    const timeout = setTimeout(() => controller.abort(), 3000); // 3秒超时
+
+    // 主服务器：ipinfo.io
+    const tryIpInfo = async (): Promise<IpTestResult> => {
+        try {
+            const res = await fetch("https://ipinfo.io/json?token=43b00e5b7d1add", {
+                signal: controller.signal,
+            });
+
+            if (!res.ok) throw new Error("Response not OK");
+
+            const data = await res.json();
+            return {
+                ip: data.ip?.trim() || null,
+                region: data.region?.trim() || null,
+                country: data.country?.trim() || null,
+                countryCode: data.country?.trim() || null,
+                lang: null, // ipinfo 不提供语言信息
+                source: 'ipinfo'
+            };
+        } catch (err) {
+            console.warn("🌐 ipinfo.io 请求失败:", err);
+            throw err;
+        }
+    };
+
+    // 备用服务器：ipapi.co
+    const tryIpApi = async (): Promise<IpTestResult> => {
+        try {
+            const res = await fetch("https://ipapi.co/json/", {
+                signal: controller.signal,
+            });
+
+            if (!res.ok) throw new Error("Response not OK");
+
+            const data = await res.json();
+            return {
+                ip: data.ip?.trim() || null,
+                region: data.region?.trim() || null,
+                country: data.country_name?.trim() || null,
+                countryCode: data.country_code?.trim() || null,
+                lang: data.languages?.split(',')[0]?.trim() || null,
+                source: 'ipapi'
+            };
+        } catch (err) {
+            console.warn("🌐 ipapi.co 请求失败:", err);
+            throw err;
+        }
+    };
 
     try {
-        const res = await fetch("https://ipinfo.io/json?token=43b00e5b7d1add", {
-            signal: controller.signal,
-        });
-
-        if (!res.ok) throw new Error("Response not OK");
-
-        const data = await res.json();
-        return data.ip?.trim() ?? null;
-    } catch (err) {
-        console.warn("🌐 testIp 请求失败或超时:", err);
-        return null;
+        // 优先尝试主服务器
+        const result = await tryIpInfo();
+        console.log("✅ 使用主服务器 ipinfo.io 获取IP信息:", result);
+        return result;
+    } catch {
+        console.warn("⚠️ 主服务器失败，尝试备用服务器");
+        try {
+            const result = await tryIpApi();
+            console.log("✅ 使用备用服务器 ipapi.co 获取IP信息:", result);
+            return result;
+        } catch (err) {
+            console.error("❌ 所有IP检测服务都失败了:", err);
+            return {
+                ip: null,
+                region: null,
+                country: null,
+                countryCode: null,
+                lang: null,
+                source: null
+            };
+        }
     } finally {
         clearTimeout(timeout);
     }

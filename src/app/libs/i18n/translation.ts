@@ -65,7 +65,35 @@ const sharedMalayTranslation = {
                 helper: "Peranti mesti menggunakan ID bilik yang sama untuk berhubung"
             },
             saveButton: "Simpan Tetapan",
-            joinSuccess: "Berjaya sertai bilik"
+            joinSuccess: "Berjaya sertai bilik",
+            advanced: {
+                title: "Tetapan Lanjutan",
+                                    serverMode: {
+                        label: "Mod Pelayan",
+                        auto: "Automatik",
+                        global: "Global",
+                        china: "China",
+                        switchSuccess: "Berjaya beralih ke pelayan {{mode}}",
+                        switchError: "Gagal beralih ke pelayan {{mode}}"
+                    },
+                customServerUrl: {
+                    label: "URL Pelayan Tersuai",
+                    helper: "Hanya tersedia dalam mod tersuai",
+                    disabled: "Hanya tersedia dalam mod tersuai"
+                },
+                authToken: {
+                    label: "Token Pengesahan",
+                    helper: "Hanya tersedia dalam mod tersuai",
+                    disabled: "Hanya tersedia dalam mod tersuai"
+                },
+                ablyKey: {
+                    label: "Kunci Ably",
+                    helper: "Hanya tersedia dalam mod global",
+                    disabled: "Hanya tersedia dalam mod global"
+                },
+                resetAll: "Set Semula Semua Tetapan",
+                resetConfirm: "Adakah anda pasti mahu menetapkan semula semua tetapan? Ini akan memadamkan semua konfigurasi dan memuat semula halaman."
+            }
         },
         footer: {
             shareTitle: "Kongsi · Segera",
@@ -157,7 +185,35 @@ export const resources = {
                     helper: "Only Same RoomId Can Connect"
                 },
                 saveButton: "Save Settings",
-                joinSuccess: "Successfully joined room"
+                joinSuccess: "Successfully joined room",
+                advanced: {
+                    title: "Advanced Settings",
+                    serverMode: {
+                        label: "Server Mode",
+                        auto: "Auto",
+                        global: "Global",
+                        china: "China",
+                        switchSuccess: "Successfully switched to {{mode}} server",
+                        switchError: "Failed to switch to {{mode}} server"
+                    },
+                    customServerUrl: {
+                        label: "Custom Server URL",
+                        helper: "Only available in custom mode",
+                        disabled: "Only available in custom mode"
+                    },
+                    authToken: {
+                        label: "Auth Token",
+                        helper: "Only available in custom mode",
+                        disabled: "Only available in custom mode"
+                    },
+                    ablyKey: {
+                        label: "Ably Key",
+                        helper: "Only available in global mode",
+                        disabled: "Only available in global mode"
+                    },
+                    resetAll: "Reset All Settings",
+                    resetConfirm: "Are you sure you want to reset all settings? This will clear all configurations and refresh the page."
+                }
             },
             footer: {
                 shareTitle: "Share · Instantly",
@@ -247,7 +303,35 @@ export const resources = {
                     helper: "只有同一房间号才能互相连接哦"
                 },
                 saveButton: "保存设置",
-                joinSuccess: "成功加入房间"
+                joinSuccess: "成功加入房间",
+                advanced: {
+                    title: "高级设置",
+                    serverMode: {
+                        label: "服务器模式",
+                        auto: "自动",
+                        global: "海外",
+                        china: "中国",
+                        switchSuccess: "成功切换到{{mode}}服务器",
+                        switchError: "切换到{{mode}}服务器失败"
+                    },
+                    customServerUrl: {
+                        label: "自定义服务器URL",
+                        helper: "仅在自定义模式下可用",
+                        disabled: "仅在自定义模式下可用"
+                    },
+                    authToken: {
+                        label: "认证令牌 (Auth Token)",
+                        helper: "仅在自定义模式下可用",
+                        disabled: "仅在自定义模式下可用"
+                    },
+                    ablyKey: {
+                        label: "Ably 密钥",
+                        helper: "仅在海外模式下可用",
+                        disabled: "仅在海外模式下可用"
+                    },
+                    resetAll: "重置所有设置",
+                    resetConfirm: "确定要重置所有设置吗？这将清除所有配置并刷新页面。"
+                }
             },
             footer: {
                 shareTitle: "分享·一触即发",

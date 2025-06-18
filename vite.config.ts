@@ -41,6 +41,8 @@ export default defineConfig({
       "@lib/*": resolve(__dirname, "./src/app/lib/*"),
       "@Com": resolve(__dirname, "./src/components/"),
       "@Com/*": resolve(__dirname, "./src/components/*"),
+      "@Style": resolve(__dirname, "./src/style/"),
+      "@Style/*": resolve(__dirname, "./src/style/*"),
     },
   },
   server: {
