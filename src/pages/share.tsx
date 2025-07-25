@@ -6,7 +6,7 @@ import WifiOffIcon from '@mui/icons-material/WifiOff';
 import DownloadIcon from "@mui/icons-material/Download";
 import { createTheme, ThemeProvider, useTheme } from '@mui/material/styles';
 import { ButtonBase, CssBaseline, GlobalStyles } from '@mui/material';
-
+import PortableWifiOffIcon from '@mui/icons-material/PortableWifiOff';
 import {
     Box,
     Button,
@@ -22,6 +22,7 @@ import {
     Backdrop,
     Fab,
     Fade,
+    Chip,
 } from "@mui/material";
 import realTimeColab, { UserInfo, UserStatus } from "@App/libs/connection/colabLib";
 import FileIcon from "@mui/icons-material/Description";
@@ -40,6 +41,8 @@ import JSZip from "jszip";
 import AppleIcon from "@mui/icons-material/Apple";
 import PhonelinkRingIcon from "@mui/icons-material/PhonelinkRing";
 import PhonelinkIcon from "@mui/icons-material/Phonelink";
+import LinkIcon from "@mui/icons-material/Link";
+import SyncIcon from "@mui/icons-material/Sync";
 import { compareUniqIdPriority, getDeviceType } from "@App/libs/tools/tools";
 import { observer } from "mobx-react-lite";
 import settingsStore from "@App/libs/mobx/mobx";
@@ -108,6 +111,11 @@ const Share = observer(() => {
     const mainDialogRef = useRef<HTMLDivElement | null>(null);
     // const [videoPanelOpen, setVideoPanelOpen] = useState(false);
     // const [videoTargetUser, setVideoTargetUser] = useState<string | null>(null);
+
+    // 检查是否有P2P连接的用户
+    const hasP2PConnectedUsers = connectedUsers.some(user =>
+        realTimeColab.canSendFileToUser(user.uniqId)
+    );
 
 
     const getUserTypeIcon = (userType: string) => {
@@ -210,11 +218,28 @@ const Share = observer(() => {
     };
     const handleClickOtherClients = async (_e: any, targetUserId: string) => {
         try {
-            if (!realTimeColab.isConnectedToUser(targetUserId)) {
-                alertUseMUI(t('toast.connectingUser'), 2000, { kind: "warning" });
-                realTimeColab.connectToUser(targetUserId)
+            // 检查是否可以发送文件（需要P2P连接）
+            const canSendFile = realTimeColab.canSendFileToUser(targetUserId);
+            const canSendMessage = realTimeColab.canSendMessageToUser(targetUserId);
+
+            // 如果是文件操作但没有P2P连接
+            if ((selectedButton === "file" || selectedButton === "image") && !canSendFile) {
+                if (realTimeColab.isTextOnlyUser(targetUserId)) {
+                    alertUseMUI(t('alert.fileSendP2PRequired'), 2000, { kind: "warning" });
+                } else {
+                    alertUseMUI(t('toast.connectingUser'), 2000, { kind: "warning" });
+                    realTimeColab.connectToUser(targetUserId);
+                }
                 return;
             }
+
+            // 如果是文本操作但无法发送消息
+            if ((selectedButton === "text" || selectedButton === "clip") && !canSendMessage) {
+                alertUseMUI(t('toast.connectingUser'), 2000, { kind: "warning" });
+                realTimeColab.connectToUser(targetUserId);
+                return;
+            }
+
             if ((selectedButton === "file" || selectedButton === "image") && selectedFile) {
                 if (realTimeColab.isSendingFile) {
                     alertUseMUI(t('toast.taskInProgress'), 2000, { kind: "info" });
@@ -433,6 +458,7 @@ const Share = observer(() => {
                                 variant="outlined"
                                 sx={buttonStyleNormal}
                                 startIcon={<FileIcon />}
+                                disabled={!hasP2PConnectedUsers}
                                 onClick={() => {
                                     const input = document.getElementById("multi-file-input") as HTMLInputElement;
                                     if (input) {
@@ -463,6 +489,7 @@ const Share = observer(() => {
                                 variant="outlined"
                                 sx={buttonStyleNormal}
                                 startIcon={<ImageIcon />}
+                                disabled={!hasP2PConnectedUsers}
                                 onClick={() => {
                                     const input = document.getElementById("image-input") as HTMLInputElement;
                                     if (input) {
@@ -542,8 +569,8 @@ const Share = observer(() => {
                             variant="contained"
                             color={settingsStore.getUnrmb("isConnectedToServer") ? "primary" : "error"}
                             endIcon={
-                                loading ? <CircularProgress size={20} color="inherit" /> : 
-                                (settingsStore.getUnrmb("isConnectedToServer") ? <CachedIcon /> : <WifiOffIcon />)
+                                loading ? <CircularProgress size={20} color="inherit" /> :
+                                    (settingsStore.getUnrmb("isConnectedToServer") ? <CachedIcon /> : <WifiOffIcon />)
                             }
                             disabled={loading}
                         >
@@ -600,16 +627,20 @@ const Share = observer(() => {
                                     ...settingsBodyContentBoxStyle,
                                     width: "96%",
                                     textAlign: "inherit",
-                                    backgroundColor: user.status === 'waiting'
-                                        ? theme.palette.action.hover
-                                        : theme.palette.background.paper,
-                                    opacity: user.status === 'waiting' ? 0.7 : 1,
+                                    backgroundColor: user.status === 'connected'
+                                        ? 'rgba(76, 175, 80, 0.1)' // 淡绿色背景表示P2P连接成功
+                                        : user.status === 'connecting'
+                                            ? theme.palette.action.hover // 连接中保持灰色
+                                            : theme.palette.background.paper, // text-only和其他状态为白色
+                                    opacity: user.status === 'connecting' ? 0.7 : 1,
                                     transition: 'all 0.3s ease-in-out',
                                     '&:hover': {
                                         boxShadow: user.status === 'connected' ? 2 : 1,
-                                        bgcolor: user.status === 'waiting'
-                                            ? 'rgba(0, 0, 0, 0.12)'
-                                            : 'background.default',
+                                        bgcolor: user.status === 'connected'
+                                            ? 'rgba(76, 175, 80, 0.15)'
+                                            : user.status === 'connecting'
+                                                ? 'rgba(0, 0, 0, 0.12)'
+                                                : 'background.default',
                                     },
                                     padding: 1.5,
                                     borderRadius: 2,
@@ -623,9 +654,11 @@ const Share = observer(() => {
                                     gap: 1,
                                     width: "100%",
                                     transition: 'opacity 0.3s ease',
-                                    opacity: user.status === 'waiting' ? 0.8 : 1
+                                    opacity: user.status === 'connecting' ? 0.8 : 1
                                 }}>
                                     {getUserTypeIcon(user.userType)}
+
+
 
                                     <Typography
                                         variant="body1"
@@ -640,6 +673,37 @@ const Share = observer(() => {
                                     >
                                         {user.name}
                                     </Typography>
+                                    {/* 状态图标 */}
+                                    <Box sx={{ display: "flex", alignItems: "center", mr: "5px" }}>
+                                        {user.status === 'connected' && (
+                                            <LinkIcon sx={{ color: 'success.main', fontSize: 27 }} />
+                                        )}
+                                        {user.status === 'connecting' && (
+                                            <SyncIcon sx={{ color: 'text.secondary', fontSize: 27 }} />
+                                        )}
+                                        {(user.status === 'text-only' || user.status === 'waiting') && (
+                                            <Box sx={{ display: 'flex', flexDirection: "row", alignItems: "center" }}>
+                                                <Chip
+                                                    label={t('status.textOnly')}
+                                                    size="small"
+                                                    sx={{
+                                                        backgroundColor: 'text.secondary',
+                                                        color: 'background.paper',
+                                                        fontSize: '0.75rem',
+                                                        fontWeight: 'bold',
+                                                        borderRadius: '4px',
+                                                        px: 0.5,
+                                                        mr: "10px",
+                                                        py: 0.25,
+                                                        '& .MuiChip-label': {
+                                                            padding: 0,
+                                                        },
+                                                    }}
+                                                />
+                                                <PortableWifiOffIcon sx={{ color: 'text.secondary', fontSize: 27, mr: "5px" }} />
+                                            </Box>
+                                        )}
+                                    </Box>
                                 </Box>
                             </ButtonBase>
                         ))}

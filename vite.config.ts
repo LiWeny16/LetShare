@@ -50,11 +50,17 @@ export default defineConfig({
     //   key: fs.readFileSync(path.resolve(__dirname, 'certs/192.168.1.8+3-key.pem')),
     //   cert: fs.readFileSync(path.resolve(__dirname, 'certs/192.168.1.8+3.pem')),
     // },
+    open: true, // 设置服务启动时是否自动打开浏览器
+    cors: true, // 允许跨域
+    // port: 8080,
     host: "0.0.0.0",
   },
   plugins: [
     react(),
     VitePWA({
+      devOptions: {
+        enabled: true, // 在开发模式 (`npm run dev`) 中也启用 Service Worker，方便调试。
+      },
       registerType: 'autoUpdate',
       // includeAssets: ['favicon.svg', 'robots.txt', 'apple-touch-icon.png'],
       manifest: {
