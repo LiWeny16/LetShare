@@ -29,7 +29,6 @@ import FileIcon from "@mui/icons-material/Description";
 import ImageIcon from "@mui/icons-material/Image";
 import TextIcon from "@mui/icons-material/TextFields";
 import ClipboardIcon from "@mui/icons-material/ContentPaste";
-import kit from "bigonion-kit";
 import { readClipboard, writeClipboard } from "@App/libs/clipboard";
 import alertUseMUI from "@App/libs/tools/alert";
 import AlertPortal from "../components/Alert";
@@ -172,7 +171,7 @@ const Share = observer(() => {
                     userType: getDeviceType()
                 });
             }
-            await kit.sleep(1000);
+            await new Promise(resolve => setTimeout(resolve, 1000));
         } catch (error) {
             console.error("Search error:", error);
             settingsStore.updateUnrmb("isConnectedToServer", false);
