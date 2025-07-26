@@ -1,4 +1,4 @@
-import{r as o}from"./react-B4V_vTrs.js";import{i as v,p as L,m as M,j as I,A as j,s as k,a as O}from"./@remix-run-DspApiwr.js";/**
+import{r as o}from"./react-vendor-BgVi9I8H.js";import{i as v,p as L,m as M,j as I,A as j,s as k,a as O}from"./@remix-run-vendor-DspApiwr.js";/**
  * React Router v6.23.1
  *
  * Copyright (c) Remix Software Inc.

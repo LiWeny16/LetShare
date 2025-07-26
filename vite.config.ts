@@ -12,7 +12,7 @@ export default defineConfig({
     rollupOptions: {
       // 配置rollup的一些构建策略
       output: {
-        assetFileNames: "[hash].[name].[ext]",
+        assetFileNames: "static-[hash].[name].[ext]",
         manualChunks(id) {
           if (id.includes("style.css")) {
             // 需要单独分割那些资源 就写判断逻辑就行
@@ -24,7 +24,7 @@ export default defineConfig({
               .toString()
               .split("node_modules/")[1]
               .split("/")[0]
-              .toString()
+              .toString() + "-vendor"
           }
         },
       },
@@ -59,7 +59,7 @@ export default defineConfig({
     react(),
     VitePWA({
       devOptions: {
-        enabled: true, // 在开发模式 (`npm run dev`) 中也启用 Service Worker，方便调试。
+        enabled: false, // 在开发模式 (`npm run dev`) 中也启用 Service Worker，方便调试。
       },
       registerType: 'autoUpdate',
       // includeAssets: ['favicon.svg', 'robots.txt', 'apple-touch-icon.png'],

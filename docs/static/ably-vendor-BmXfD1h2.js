@@ -1,4 +1,4 @@
-import{c as Y,d as So}from"./@babel-LAXhhp6N.js";var Rs={exports:{}};/*@license Copyright 2015-2022 Ably Real-time Ltd (ably.com)
+import{c as Y,d as So}from"./@babel-vendor-LAXhhp6N.js";var Rs={exports:{}};/*@license Copyright 2015-2022 Ably Real-time Ltd (ably.com)
 
 Ably JavaScript Library v2.6.5
 https://github.com/ably/ably-js
