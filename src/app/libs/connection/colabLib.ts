@@ -30,6 +30,7 @@ export interface UserInfo {
   attempts: number;
   lastSeen: number;
   userType: UserType;
+  hadP2PConnection?: boolean; // 标记该用户是否曾经成功建立过P2P连接
 }
 
 export class RealTimeColab {
@@ -170,28 +171,50 @@ export class RealTimeColab {
     this.setFileTransferProgress = setFileTransferProgress;
     this.initTransferConfig();
     this.setupVisibilityWatcher();
+    this.setupPageUnloadHandler();
     setInterval(async () => {
       for (const [id, user] of this.userList.entries()) {
+        // 只处理connecting状态的用户
         if (user.status === "connecting") {
-          if (user.attempts >= 3) {
+          // 检查连接时间是否过长（超过10秒）
+          const connectionTimeout = this.connectionTimeouts.get(id);
+          const isStuckInConnecting = !connectionTimeout; // 如果没有超时器，说明可能卡住了
+
+          if (user.attempts >= 3 || isStuckInConnecting) {
             console.warn(
-              `[USER CHECK] ${id} 重试次数过多，切换到 text-only 模式`
+              `[USER CHECK] ${id} 连接尝试${user.attempts >= 3 ? '过多' : '卡住'}，切换到 text-only 模式`
             );
             user.status = "text-only";
             this.userList.set(id, user);
             this.updateUI();
             continue;
           }
-          try {
-            await this.connectToUser(id);
-            user.attempts += 1;
+
+          // 检查是否已有有效连接但状态没更新
+          const peer = RealTimeColab.peers.get(id);
+          const channel = this.dataChannels.get(id);
+
+          if (peer?.connectionState === "connected" && channel?.readyState === "open") {
+            console.log(`[USER CHECK] ✅ ${id} 连接已建立，更新状态`);
+            user.status = "connected";
+            user.hadP2PConnection = true;
             this.userList.set(id, user);
-          } catch (err) {
-            console.error(`[USER CHECK] 连接 ${id} 失败:`, err);
+            this.updateUI();
+            continue;
+          }
+
+          // 如果连接状态异常，重置为text-only
+          if (peer && ["failed", "closed"].includes(peer.connectionState)) {
+            console.warn(`[USER CHECK] ${id} 连接状态异常 (${peer.connectionState})，重置为text-only`);
+            this.clearCache(id);
+            user.status = "text-only";
+            user.attempts++;
+            this.userList.set(id, user);
+            this.updateUI();
           }
         }
       }
-    }, 4000);
+    }, 5000); // 调整为5秒检查一次
   }
 
   /**
@@ -219,8 +242,24 @@ export class RealTimeColab {
     return success;
   }
 
-  public async disconnect(soft?: boolean): Promise<void> {
+  public async disconnect(soft?: boolean, sendLeave?: boolean): Promise<void> {
+    // 在断开连接前广播离开消息（仅在明确指定时）
+    if (sendLeave && this.connectionManager.isConnected()) {
+      console.log(`[LEAVE] 📢 Broadcasting leave message before disconnect`);
+      this.broadcastSignal({
+        type: "leave",
+        userType: getDeviceType()
+      });
+
+      // 等待消息发送完成
+      await new Promise(resolve => setTimeout(resolve, 200));
+    }
+
     this.connectionManager.disconnect(soft);
+
+    // 更新连接状态
+    settingsStore.updateUnrmb("isConnectedToServer", false);
+    console.log(`[DISCONNECT] 🔌 Connection status updated to disconnected`);
   }
 
 
@@ -242,10 +281,10 @@ export class RealTimeColab {
       } else {
         // 没有活跃连接，建立新连接
         console.log(`🔄 没有活跃连接，建立新连接到房间: ${newRoomId}`);
-        
+
         // 重新设置信号处理器，确保新连接能接收到信号
         this.connectionManager.onSignalReceived(this.handleSignal.bind(this));
-        
+
         const success = await this.connectionManager.connect(newRoomId!);
         if (!success) {
           alertUseMUI(t("alert.serverConnectionFailed"), 2000, { kind: "error" });
@@ -253,7 +292,7 @@ export class RealTimeColab {
         }
         settingsStore.updateUnrmb("isConnectedToServer", true);
       }
-      
+
       // 等待一小段时间确保连接完全建立，然后广播discover信号
       await new Promise(resolve => setTimeout(resolve, 500));
       this.broadcastSignal({ type: "discover", userType: getDeviceType() }); // 切换/连接成功后广播
@@ -436,7 +475,7 @@ export class RealTimeColab {
     try {
       const data = JSON.parse(event.data);
       console.log(`🔔 接收到信号:`, data.type, `来自:`, data.from);
-      
+
       const signalData = data
       // 修正：应该检查 signalData.from 是否等于自己的 uniqId
       if (!signalData || signalData.from === this.getUniqId()) {
@@ -458,9 +497,9 @@ export class RealTimeColab {
         case "text":
           this.handleTextMessage(data);
           break;
-        // case "leave":
-        //     this.handleLeave(data);
-        //     break;
+        case "leave":
+          this.handleUserLeave(data);
+          break;
         default:
           console.warn("Unknown message type", data.type);
       }
@@ -478,27 +517,39 @@ export class RealTimeColab {
     if (!fromId || fromId === this.getUniqId()) return;
 
     const now = Date.now();
-    const user = this.userList.get(fromId);
+    let user = this.userList.get(fromId);
 
+    // 处理新用户或更新现有用户
     if (!user) {
       // 新用户默认为text-only状态，连接服务器后就可以发送文本消息
-      this.userList.set(fromId, {
+      user = {
         status: "text-only",
         attempts: 0,
         lastSeen: now,
         userType: data.userType,
-      });
-      console.log(`[DISCOVER] New user ${fromId} defaulted to text-only status`);
+      };
+      this.userList.set(fromId, user);
+      console.log(`[DISCOVER] 👋 New user ${fromId} joined, status: text-only`);
     } else {
+      // 更新现有用户的活跃时间
       user.lastSeen = now;
+
+      // 如果用户之前是disconnected状态，恢复为text-only
       if (user.status === "disconnected") {
-        user.attempts = 0; // 可选：发现重新上线，清空失败记录
-        user.status = "text-only"; // 重新上线时设置为text-only而不是waiting
+        user.status = "text-only";
+        user.attempts = 0; // 重置失败计数
+        console.log(`[DISCOVER] 🔄 User ${fromId} back online, status: disconnected -> text-only`);
       }
+
+      // 如果用户之前曾经建立过P2P连接但现在是text-only，可能需要重试P2P
+      if (user.hadP2PConnection && user.status === "text-only") {
+        console.log(`[DISCOVER] 🔁 User ${fromId} had P2P before, may retry connection`);
+      }
+
+      this.userList.set(fromId, user);
     }
 
-    // 🔧 修复：确保在状态检查和return之前先发送回复
-    // 如果不是回应 discover，发送一个回应
+    // 🔧 优先发送回复（避免discover风暴）
     if (!isReply) {
       this.broadcastSignal({
         type: "discover",
@@ -508,34 +559,75 @@ export class RealTimeColab {
       });
     }
 
-    // 现在处理P2P连接逻辑
-    const current = this.userList.get(fromId)!;
+    // 处理P2P连接逻辑
+    const currentUser = this.userList.get(fromId)!;
 
-    // 如果正在连接或已连接，不重复处理
-    if (current.status === "connecting" || current.status === "connected") {
-      this.updateUI();
-      return;
-    }
+    // 检查是否应该尝试建立P2P连接
+    const shouldAttemptP2P = this.shouldAttemptP2PConnection(fromId, currentUser);
 
-    // 连接逻辑只由 ID 大的那方执行，且仅对text-only状态的用户
-    if (compareUniqIdPriority(this.getUniqId()!, fromId) && current.status === "text-only") {
-      // console.log(`🔄 User ${fromId} attempting to establish P2P connection from text-only status`);
+    if (shouldAttemptP2P) {
+      console.log(`[DISCOVER] 🚀 Attempting P2P connection with ${fromId}`);
       try {
-        current.status = "connecting"; // 设置为connecting状态
-        current.attempts = 0; // 重置尝试次数
+        // 设置connecting状态
+        currentUser.status = "connecting";
+        currentUser.attempts = (currentUser.attempts || 0);
+        this.userList.set(fromId, currentUser);
+
+        // 尝试连接
         await this.connectToUser(fromId);
       } catch (e) {
-        console.warn("发送错误");
-        current.attempts++;
-        if (current.attempts >= 10) {
-          current.status = "text-only"; // 改为text-only而不是disconnected
-          console.log(`📱 User ${fromId} connection failed too many times, switching to text-only mode`);
+        console.warn(`[DISCOVER] ❌ P2P connection attempt failed:`, e);
+        currentUser.attempts++;
+
+        // 如果尝试次数过多，停止尝试P2P连接
+        if (currentUser.attempts >= 3) {
+          currentUser.status = "text-only";
+          console.log(`[DISCOVER] 📱 User ${fromId} P2P failed too many times, staying in text-only mode`);
           alertUseMUI(t("alert.p2pFailed", { name: fromId.split(":")[0] }), 2000, { kind: "warning" });
+        } else {
+          // 回退到text-only，等待下次discover重试
+          currentUser.status = "text-only";
         }
+
+        this.userList.set(fromId, currentUser);
       }
     }
 
     this.updateUI();
+  }
+
+  /**
+   * @description 判断是否应该尝试建立P2P连接
+   */
+  private shouldAttemptP2PConnection(userId: string, user: UserInfo): boolean {
+    // 如果已经在连接或已连接，不重复尝试
+    if (user.status === "connecting" || user.status === "connected") {
+      return false;
+    }
+
+    // 如果尝试次数过多，不再尝试
+    if (user.attempts >= 3) {
+      return false;
+    }
+
+    // 检查是否已有有效的P2P连接
+    const existingPeer = RealTimeColab.peers.get(userId);
+    const existingChannel = this.dataChannels.get(userId);
+
+    if (existingPeer?.connectionState === "connected" && existingChannel?.readyState === "open") {
+      console.log(`[DISCOVER] ✅ ${userId} already has valid P2P connection`);
+      user.status = "connected";
+      this.userList.set(userId, user);
+      return false;
+    }
+
+    // 只有ID较大的一方主动发起连接（避免冲突）
+    const shouldInitiate = compareUniqIdPriority(this.getUniqId()!, userId);
+
+    // 必须是text-only状态才尝试升级到P2P
+    const isTextOnlyStatus = user.status === "text-only";
+
+    return shouldInitiate && isTextOnlyStatus;
   }
 
   /**
@@ -576,6 +668,36 @@ export class RealTimeColab {
     // 显示收到的消息
     console.log(`[RECV MSG] ✅ Calling setMsgFromSharing to display message`);
     this.setMsgFromSharing(message);
+    this.updateUI();
+  }
+
+  /**
+   * @description 处理用户离开通知
+   */
+  private handleUserLeave(data: any): void {
+    const fromId = data.from;
+
+    if (!fromId || fromId === this.getUniqId()) {
+      return;
+    }
+
+    console.log(`[LEAVE] 🚪 User ${fromId} has left, cleaning up all data`);
+
+    // 完全清理该用户的所有数据
+    this.clearCache(fromId);
+    this.userList.delete(fromId);
+
+    // 清理文件传输相关数据
+    // this.receivingFiles.delete(fromId);
+
+    // 清理接收到的文件（以该用户ID开头的）
+    // for (const [key] of this.receivedFiles.entries()) {
+    //   if (key.startsWith(fromId + "::")) {
+    //     this.receivedFiles.delete(key);
+    //   }
+    // }
+
+    console.log(`[LEAVE] ✅ All data for user ${fromId} has been cleaned up`);
     this.updateUI();
   }
 
@@ -851,9 +973,17 @@ export class RealTimeColab {
           status: "connected",
           attempts: 0,
           lastSeen: Date.now(),
-          userType: "desktop", // Or fallback inference
+          userType: "desktop", // 或回退推断
+          hadP2PConnection: true,
         };
         this.userList.set(id, user);
+      } else {
+        // 更新现有用户状态为connected
+        user.status = "connected";
+        user.hadP2PConnection = true;
+        user.lastSeen = Date.now();
+        this.userList.set(id, user);
+        console.log(`[DATACHANNEL] ✅ ${id} DataChannel opened, status updated to connected`);
       }
 
       alertUseMUI(t("alert.newUser", { name: id.split(":")[0] }), 2000, {
@@ -1089,7 +1219,6 @@ export class RealTimeColab {
         user.status = "text-only";
         user.lastSeen = Date.now();
         this.userList.set(id, user);
-        console.log(`📱 User ${id} switched to text-only mode via cleanupDataChannel`);
       }
 
       this.lastPongTimes.delete(id);
@@ -1113,6 +1242,15 @@ export class RealTimeColab {
       return;
     }
     this.connectionQueue.set(id, true);
+
+    // 更新用户状态为connecting
+    const user = this.userList.get(id);
+    if (user && user.status !== "connected") {
+      user.status = "connecting";
+      this.userList.set(id, user);
+      this.updateUI();
+      console.log(`[CONNECT] 🔄 User ${id} status updated to connecting`);
+    }
 
     try {
       let peer = RealTimeColab.peers.get(id);
@@ -1432,19 +1570,6 @@ export class RealTimeColab {
       .map(([id]) => id);
   }
 
-  // private async waitForUnlock(lock: boolean): Promise<void> {
-  //   const waitInterval = 200; // 轮询间隔
-  //   const maxWaitTime = 10000; // 最多等待时间（防止死等）
-
-  //   const start = Date.now();
-  //   while (lock) {
-  //     if (Date.now() - start > maxWaitTime) {
-  //       console.warn("⚠️ Waiting for cleaningLock to unlock timed out, abandoning discover");
-  //       return;
-  //     }
-  //     await new Promise((res) => setTimeout(res, waitInterval));
-  //   }
-  // }
   private setupVisibilityWatcher() {
     let backgroundStartTime: number | null = null;
     let ablyTimeoutHandle: ReturnType<typeof setTimeout> | null = null;
@@ -1479,6 +1604,23 @@ export class RealTimeColab {
     //         this.connectToServer();
     //     }
     // });
+  }
+
+  private setupPageUnloadHandler() {
+    // 页面卸载前发送离开广播
+    const sendLeaveMessage = () => {
+      if (this.connectionManager.isConnected()) {
+        console.log(`[LEAVE] 📢 Broadcasting leave message on page unload`);
+        this.broadcastSignal({ type: "leave", userType: getDeviceType() });
+      }
+    };
+
+    // 只监听真正的页面卸载事件
+    window.addEventListener("beforeunload", sendLeaveMessage);
+    window.addEventListener("pagehide", sendLeaveMessage);
+
+    // 移除visibilitychange监听，因为它会在切换标签页时也触发
+    // 如果需要处理移动端的特殊情况，可以考虑更精确的判断
   }
 }
 
