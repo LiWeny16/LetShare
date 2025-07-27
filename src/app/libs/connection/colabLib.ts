@@ -519,7 +519,7 @@ export class RealTimeColab {
 
     // 连接逻辑只由 ID 大的那方执行，且仅对text-only状态的用户
     if (compareUniqIdPriority(this.getUniqId()!, fromId) && current.status === "text-only") {
-      console.log(`🔄 User ${fromId} attempting to establish P2P connection from text-only status`);
+      // console.log(`🔄 User ${fromId} attempting to establish P2P connection from text-only status`);
       try {
         current.status = "connecting"; // 设置为connecting状态
         current.attempts = 0; // 重置尝试次数

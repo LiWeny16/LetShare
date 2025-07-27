@@ -88,27 +88,7 @@ export class PeerManager {
         this.rtc.updateConnectedUsers(this.rtc.userList);
       }
     };
-    // peer.oniceconnectionstatechange = () => {
-    //     console.log(`[CONNECT] ${id} ICE 状态:`, peer.iceConnectionState);
-
-    //     if (peer.iceConnectionState === "connected") {
-    //         console.log(`[CONNECT] ✅ ${id} 连接成功，取消超时`);
-    //         const user = this.rtc.userList.get(id)
-    //         if (user) {
-    //             this.rtc.userList.set(id, { ...user, status: "connected" })
-    //         }
-
-    //         clearTimeout(this.rtc.connectionTimeouts.get(id));
-    //     }
-
-    //     if (peer.iceConnectionState === "failed" || peer.iceConnectionState === "disconnected") {
-    //         console.warn(`[CONNECT] ❌ ${id} ICE 连接失败，立即关闭`);
-    //         // clearTimeout(this.rtc.connectionTimeouts.get(id));
-    //         peer.close();
-    //         RealTimeColab.peers.delete(id);
-    //         this.rtc.updateConnectedUsers(this.rtc.userList);
-    //     }
-    // };
+  
     if (id) {
       RealTimeColab.peers.set(id, peer);
     }
