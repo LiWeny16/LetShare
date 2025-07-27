@@ -131,6 +131,7 @@ const SettingsPage = () => {
         const currentRoomId = settingsStore.get("roomId");
 
         if (originalRoomIdRef.current !== currentRoomId) {
+            console.log(`🔄 房间号变化: "${originalRoomIdRef.current}" → "${currentRoomId}"`);
             await realTimeColab.handleRename()
             alertUseMUI(`${t('settings.joinSuccess')}: "${currentRoomId}"`)
             originalRoomIdRef.current = currentRoomId

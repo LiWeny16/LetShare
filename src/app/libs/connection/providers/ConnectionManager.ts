@@ -126,7 +126,7 @@ export class ConnectionManager implements IConnectionProvider {
                 provider = new CustomConnectionProvider(this.config);
             }
 
-            // 设置信号回调
+            // 在连接前设置信号回调
             if (this.signalCallback) {
                 provider.onSignalReceived(this.signalCallback);
             }
@@ -136,6 +136,12 @@ export class ConnectionManager implements IConnectionProvider {
             
             if (success) {
                 this.currentProvider = provider;
+                
+                // 连接成功后再次确保信号回调已设置
+                if (this.signalCallback) {
+                    this.currentProvider.onSignalReceived(this.signalCallback);
+                }
+                
                 this.failureCount.set(providerType, 0); // 重置失败计数
                 console.log(`✅ 成功连接到 ${providerType} 提供者`);
                 return true;

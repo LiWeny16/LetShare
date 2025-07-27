@@ -67,7 +67,7 @@ export class RealTimeColab {
   private connectionManager: ConnectionManager;
   // private ably: Ably.Realtime | null = null;
   // public ablyChannel: ReturnType<Ably.Realtime["channels"]["get"]> | null =
-    // null;
+  // null;
   // private ws: WebSocket | null = null;
 
   public userList: Map<string, UserInfo> = new Map();
@@ -110,13 +110,13 @@ export class RealTimeColab {
 
   public setFileTransferProgress: React.Dispatch<
     React.SetStateAction<number | null>
-  > = () => {};
+  > = () => { };
   private setDownloadPageState: React.Dispatch<React.SetStateAction<boolean>> =
-    () => {};
-  private setMsgFromSharing: (msg: string | null) => void = () => {};
+    () => { };
+  private setMsgFromSharing: (msg: string | null) => void = () => { };
   public updateConnectedUsers: (userList: Map<string, UserInfo>) => void =
-    () => {};
-  public setFileSendingTargetUser: StringSetter = () => {};
+    () => { };
+  public setFileSendingTargetUser: StringSetter = () => { };
 
   public peerManager: PeerManager;
   private transferConfig: {
@@ -124,10 +124,10 @@ export class RealTimeColab {
     maxConcurrentReads: number;
     bufferThreshold: number;
   } = {
-    chunkSize: 32 * 1024,
-    maxConcurrentReads: 10,
-    bufferThreshold: 256 * 1024,
-  };
+      chunkSize: 32 * 1024,
+      maxConcurrentReads: 10,
+      bufferThreshold: 256 * 1024,
+    };
 
   private aborted = false;
 
@@ -154,7 +154,7 @@ export class RealTimeColab {
     setFileSendingTargetUser: StringSetter,
     setMsgFromSharing: (msg: string | null) => void,
     setDownloadPageState: React.Dispatch<React.SetStateAction<boolean>>,
-    updateConnectedUsers: (userList: Map<string, UserInfo>) => void = () => {},
+    updateConnectedUsers: (userList: Map<string, UserInfo>) => void = () => { },
     setFileTransferProgress: React.Dispatch<React.SetStateAction<number | null>>
   ) {
     if (import.meta.env.MODE !== "production") {
@@ -212,8 +212,6 @@ export class RealTimeColab {
     const success = await this.connectionManager.connect(roomId!);
     if (success) {
       settingsStore.updateUnrmb("isConnectedToServer", true);
-      // 连接成功后，可以立即广播一个 discover 消息
-      // 注意：discover 消息现在由 RealTimeColab 发起，并通过 manager 广播
       this.broadcastSignal({ type: "discover", userType: getDeviceType() });
     } else {
       alertUseMUI(t("alert.serverConnectionFailed"), 2000, { kind: "error" });
@@ -225,33 +223,6 @@ export class RealTimeColab {
     this.connectionManager.disconnect(soft);
   }
 
-  // private subscribeToRoom(roomId: string) {
-  //   if (!validateRoomName(roomId).isValid) {
-  //     settingsStore.updateUnrmb("settingsPageState", true);
-  //     return false;
-  //   }
-  //   if (!this.ably) return;
-
-  //   if (this.ablyChannel) {
-  //     this.ablyChannel.unsubscribe();
-  //     console.log(`[A]离开旧房间: ${this.currentRoomId}`);
-  //   }
-
-  //   this.ablyChannel = this.ably.channels.get(roomId);
-  //   this.currentRoomId = roomId;
-
-  //   const myId = this.getUniqId();
-
-  //   this.ablyChannel.subscribe(`signal:${myId}`, (message: any) => {
-  //     this.handleSignal({ data: JSON.stringify(message.data) } as MessageEvent);
-  //   });
-
-  //   this.ablyChannel.subscribe("signal:all", (message: any) => {
-  //     this.handleSignal({ data: JSON.stringify(message.data) } as MessageEvent);
-  //   });
-
-  //   // console.log(`✅ 加入房间频道: ${roomId}`);
-  // }
 
   public async handleRename(): Promise<void> {
     const newRoomId = settingsStore.get("roomId");
@@ -264,8 +235,29 @@ export class RealTimeColab {
       return;
     }
     try {
-      await this.connectionManager.switchRoom(newRoomId!);
-      this.broadcastSignal({ type: "discover", userType: getDeviceType() }); // 切换成功后广播
+      // 检查是否有活跃的连接提供者
+      if (this.connectionManager.isConnected()) {
+        // 有活跃连接，切换房间
+        await this.connectionManager.switchRoom(newRoomId!);
+      } else {
+        // 没有活跃连接，建立新连接
+        console.log(`🔄 没有活跃连接，建立新连接到房间: ${newRoomId}`);
+        
+        // 重新设置信号处理器，确保新连接能接收到信号
+        this.connectionManager.onSignalReceived(this.handleSignal.bind(this));
+        
+        const success = await this.connectionManager.connect(newRoomId!);
+        if (!success) {
+          alertUseMUI(t("alert.serverConnectionFailed"), 2000, { kind: "error" });
+          return;
+        }
+        settingsStore.updateUnrmb("isConnectedToServer", true);
+      }
+      
+      // 等待一小段时间确保连接完全建立，然后广播discover信号
+      await new Promise(resolve => setTimeout(resolve, 500));
+      this.broadcastSignal({ type: "discover", userType: getDeviceType() }); // 切换/连接成功后广播
+      console.log(`✅ 房间切换/连接完成，已广播discover信号`);
     } catch (error) {
       alertUseMUI(t("alert.roomSwitchFailed", { error: (error as Error).message }), 2000, {
         kind: "error",
@@ -443,10 +435,12 @@ export class RealTimeColab {
   private async handleSignal(event: MessageEvent): Promise<void> {
     try {
       const data = JSON.parse(event.data);
+      console.log(`🔔 接收到信号:`, data.type, `来自:`, data.from);
+      
       const signalData = data
       // 修正：应该检查 signalData.from 是否等于自己的 uniqId
       if (!signalData || signalData.from === this.getUniqId()) {
-           return;
+        return;
       }
       switch (data.type) {
         case "discover":
@@ -516,7 +510,7 @@ export class RealTimeColab {
 
     // 现在处理P2P连接逻辑
     const current = this.userList.get(fromId)!;
-    
+
     // 如果正在连接或已连接，不重复处理
     if (current.status === "connecting" || current.status === "connected") {
       this.updateUI();
@@ -550,14 +544,14 @@ export class RealTimeColab {
   private handleTextMessage(data: any): void {
     const fromId = data.from;
     const message = data.message;
-    
+
     console.log(`[RECV MSG] Received signal text message from ${fromId}: ${message}`);
-    
+
     if (!fromId || fromId === this.getUniqId() || !message) {
       console.warn(`[RECV MSG] ❌ Invalid message, skipping processing`);
       return;
     }
-    
+
     // 更新用户状态，确保用户存在于列表中
     const user = this.userList.get(fromId);
     if (user) {
@@ -578,7 +572,7 @@ export class RealTimeColab {
       });
       console.log(`[RECV MSG] Created new text-only user: ${fromId}`);
     }
-    
+
     // 显示收到的消息
     console.log(`[RECV MSG] ✅ Calling setMsgFromSharing to display message`);
     this.setMsgFromSharing(message);
@@ -1054,7 +1048,7 @@ export class RealTimeColab {
     channel.onclose = () => {
       console.warn(`🧹 DataChannel closed for ${id}, setting user to text-only status`);
       this.clearCache(id);
-      
+
       // 不删除用户，而是设置为text-only状态
       const user = this.userList.get(id);
       if (user) {
@@ -1067,7 +1061,7 @@ export class RealTimeColab {
         // 如果用户不存在，删除相关数据
         console.warn(`⚠️ User ${id} does not exist in user list, cleaning up directly`);
       }
-      
+
       this.updateUI();
     };
 
@@ -1088,7 +1082,7 @@ export class RealTimeColab {
       }
       // 删除引用
       this.dataChannels.delete(id);
-      
+
       // 不删除用户，而是设置为text-only状态
       const user = this.userList.get(id);
       if (user) {
@@ -1097,7 +1091,7 @@ export class RealTimeColab {
         this.userList.set(id, user);
         console.log(`📱 User ${id} switched to text-only mode via cleanupDataChannel`);
       }
-      
+
       this.lastPongTimes.delete(id);
       this.updateUI();
     }
@@ -1141,8 +1135,7 @@ export class RealTimeColab {
         // 需要清理的异常情况
         console.warn(
           `[CONNECT] Cleaning up old connection for ${id}`,
-          `ICE State: ${iceState}, Channel State: ${
-            dataChannel?.readyState || "missing"
+          `ICE State: ${iceState}, Channel State: ${dataChannel?.readyState || "missing"
           }`
         );
 
@@ -1179,7 +1172,7 @@ export class RealTimeColab {
       const timeoutId = window.setTimeout(() => {
         const current = RealTimeColab.peers.get(id);
         const user = this.userList.get(id);
-        
+
         if (
           user?.status !== "connected" &&
           current &&
@@ -1188,7 +1181,7 @@ export class RealTimeColab {
         ) {
           console.warn(`[CONNECT] ⏰ ${id} P2P connection timed out, setting to text-only status`);
           this.clearCache(id);
-          
+
           // 不删除用户，而是设置为text-only状态
           if (user) {
             user.status = "text-only";
@@ -1197,7 +1190,7 @@ export class RealTimeColab {
             console.log(`📱 User ${id} switched to text-only due to timeout`);
             alertUseMUI(t("alert.p2pTimeout", { name: id.split(":")[0] }), 2000, { kind: "warning" });
           }
-          
+
           this.updateUI();
         } else {
           console.log(`[CONNECT] ${id} already in connection, extending wait status`);
@@ -1281,12 +1274,12 @@ export class RealTimeColab {
     const isConnected = this.isConnectedToUser(id);
     const isTextOnly = this.isTextOnlyUser(id);
     const user = this.userList.get(id);
-    
+
     // 支持P2P连接、text-only、waiting和connecting状态发送文本消息
-    const canSendText = isConnected || isTextOnly || 
-                       user?.status === "waiting" || 
-                       user?.status === "connecting";
-    
+    const canSendText = isConnected || isTextOnly ||
+      user?.status === "waiting" ||
+      user?.status === "connecting";
+
     return canSendText;
   }
 

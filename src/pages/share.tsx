@@ -736,7 +736,7 @@ const Share = observer(() => {
                     }, 300)
                 }}>
                 <DialogTitle>{t('dialog.newShare')}</DialogTitle>
-                <DialogContent sx={{ width: { sx: 200, sm: 200, md: 400, lg: 400, } }} >
+                <DialogContent sx={{ width: { sx: 200, sm: 300, md: 400, lg: 400, } }} >
                     <DialogContentText>{t('dialog.incomingMessage')}</DialogContentText>
                     {msgFromSharing && (
                         <TextField
