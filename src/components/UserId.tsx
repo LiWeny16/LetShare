@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { Typography, TextField } from "@mui/material";
 import realTimeColab from "@App/libs/connection/colabLib";
 import { useTranslation } from "react-i18next";
+import { getDeviceType } from "@App/libs/tools/tools";
 
 const EditableUserId = ({ onEditDone }: { onEditDone?: (newId: string) => void }) => {
     const { t } = useTranslation();
@@ -28,7 +29,7 @@ const EditableUserId = ({ onEditDone }: { onEditDone?: (newId: string) => void }
         setError(!validPattern.test(value));
     };
 
-    const handleSave = () => {
+    const handleSave = async () => {
         const cleanId = userId.trim();
 
         if (!validPattern.test(cleanId) || !cleanId) {
@@ -37,12 +38,29 @@ const EditableUserId = ({ onEditDone }: { onEditDone?: (newId: string) => void }
             setEditing(false);
             return;
         }
-        // realTimeColab.changeStatesMemorable({ memorable: { localLANId: cleanId } });
-        realTimeColab.setUserId(cleanId);
-        originalIdRef.current = cleanId;
-        setError(false);
-        setEditing(false);
-        if (onEditDone) onEditDone(cleanId);
+        else {
+            // 🔐 在改名前发送离开消息，通知其他用户旧身份离开
+            if (realTimeColab.isConnected()) {
+                console.log(`[USER RENAME] 📢 Broadcasting leave message before changing name from ${originalIdRef.current} to ${cleanId}`);
+                realTimeColab.broadcastSignal({ 
+                    type: "leave", 
+                    userType: getDeviceType() 
+                });
+                
+                // 等待消息发送完成
+                await new Promise(resolve => setTimeout(resolve, 300));
+            }
+            
+            // 更新用户ID
+            realTimeColab.setUserId(cleanId);
+            originalIdRef.current = cleanId;
+            setError(false);
+            setEditing(false);
+            if (onEditDone) onEditDone(cleanId);
+            
+            // 刷新页面重新初始化连接和加密
+            window.location.reload();
+        }
     };
 
     return (

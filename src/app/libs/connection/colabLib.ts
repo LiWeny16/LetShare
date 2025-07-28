@@ -12,6 +12,8 @@ import i18n from "../i18n/i18n";
 import VConsole from "vconsole";
 import { ConnectionConfig } from "./providers/IConnectionProvider";
 import { ConnectionManager } from "./providers/ConnectionManager";
+import { SecureMessageWrapper } from "../security/SecureMessageWrapper";
+import { UserKeyInfo } from "../security/SimpleE2EEncryption";
 // import { VideoManager } from "../video/video";
 
 interface NegotiationState {
@@ -63,9 +65,16 @@ export class RealTimeColab {
       uniqId: uniqId,
     };
     this.connectionManager = new ConnectionManager(config);
+
+    // 🔐 初始化加密功能
+    this.secureWrapper = new SecureMessageWrapper();
   }
   // In RealTimeColab
   private connectionManager: ConnectionManager;
+
+  // 🔐 加密相关属性
+  private secureWrapper: SecureMessageWrapper;
+  private userPublicKeys: Map<string, UserKeyInfo> = new Map();
   // private ably: Ably.Realtime | null = null;
   // public ablyChannel: ReturnType<Ably.Realtime["channels"]["get"]> | null =
   // null;
@@ -172,6 +181,19 @@ export class RealTimeColab {
     this.initTransferConfig();
     this.setupVisibilityWatcher();
     this.setupPageUnloadHandler();
+
+    // 🔐 初始化加密功能
+    try {
+      const uniqId = this.getUniqId();
+      if (uniqId) {
+        const myKeyInfo = await this.secureWrapper.initialize(uniqId);
+        this.userPublicKeys.set(uniqId, myKeyInfo);
+        console.log("🔐 端到端加密功能已启用");
+      }
+    } catch (error) {
+      console.warn("⚠️ 加密功能初始化失败，将使用明文通信:", error);
+    }
+
     setInterval(async () => {
       for (const [id, user] of this.userList.entries()) {
         // 只处理connecting状态的用户
@@ -235,7 +257,12 @@ export class RealTimeColab {
     const success = await this.connectionManager.connect(roomId!);
     if (success) {
       settingsStore.updateUnrmb("isConnectedToServer", true);
-      this.broadcastSignal({ type: "discover", userType: getDeviceType() });
+      const myPublicKeys = this.userPublicKeys.get(this.getUniqId()!);
+      this.broadcastSignal({
+        type: "discover",
+        userType: getDeviceType(),
+        publicKeys: myPublicKeys // 🔐 在discover信号中包含公钥
+      });
     } else {
       alertUseMUI(t("alert.serverConnectionFailed"), 2000, { kind: "error" });
     }
@@ -418,63 +445,13 @@ export class RealTimeColab {
     return RealTimeColab.instance;
   }
 
-  // private cleanUpConnections(): void {
-  //   console.warn("🔌 Ably disconnected, cleaning up.");
-  //   this.ablyChannel?.unsubscribe();
-  //   this.ably = null;
-  //   this.ablyChannel = null;
-  // }
-  /**
-   * @description 连接Ably
-   */
 
-  // public async connect(url: string): Promise<void> {
-  //   try {
-  //     this.ws = new WebSocket(url);
-  //     this.ws.onopen = async () => {
-  //       await this.waitForUnlock(this.cleaningLock);
-  //       setTimeout(() => {
-  //         this.broadcastSignal({ type: "discover", userType: getDeviceType() });
-  //       }, 2500);
-  //     };
 
-  //     this.ws.onmessage = (event) => this.handleSignal(event);
-
-  //     this.ws.onclose = () => this.cleanUpConnections();
-
-  //     this.ws.onerror = (error: Event) =>
-  //       console.error("WebSocket error:", error);
-
-  //     // 当页面关闭或刷新时主动通知其他用户离线
-  //     window.addEventListener("beforeunload", () => {});
-  //     window.addEventListener("pagehide", () => {});
-  //   } catch (error) {
-  //     console.log(error);
-  //   }
-  // }
-
-  // public async disconnect(setMsgFromSharing?: React.Dispatch<React.SetStateAction<string | null>>
-  // ): Promise<void> {
-  //     if (setMsgFromSharing) {
-  //         setMsgFromSharing(null)
-  //     }
-  //     // this.broadcastSignal({ type: "leave", id: this.getUniqId() });
-  //     this.cleanUpConnections();
-  // }
-  // private cleanUpConnections(): void {
-  //     console.warn("🔌 WebSocket disconnected, cleaning up only WS-related state.");
-  //     // 清理 WebSocket 状态，但不要干掉 WebRTC
-  //     if (this.ws) {
-  //         this.ws.onclose = null;
-  //         this.ws.close();
-  //         this.ws = null;
-  //     }
-  // }
 
   private async handleSignal(event: MessageEvent): Promise<void> {
     try {
       const data = JSON.parse(event.data);
-      console.log(`🔔 接收到信号:`, data.type, `来自:`, data.from);
+      // console.log(`🔔 接收到信号:`, data.type, `来自:`, data.from);
 
       const signalData = data
       // 修正：应该检查 signalData.from 是否等于自己的 uniqId
@@ -495,7 +472,11 @@ export class RealTimeColab {
           await this.handleCandidate(data);
           break;
         case "text":
-          this.handleTextMessage(data);
+          await this.handleTextMessage(data);
+          break;
+        case "encrypted_text":
+          // 🔐 处理加密文本消息
+          await this.handleTextMessage(data);
           break;
         case "leave":
           this.handleUserLeave(data);
@@ -549,13 +530,25 @@ export class RealTimeColab {
       this.userList.set(fromId, user);
     }
 
+    // 🔐 处理公钥交换
+    if (data.publicKeys && this.secureWrapper.isReady()) {
+      try {
+        await this.secureWrapper.registerUserKeys(fromId, data.publicKeys);
+        console.log(`🔑 已注册用户 ${fromId} 的公钥`);
+      } catch (error) {
+        console.warn(`⚠️ 注册用户 ${fromId} 公钥失败:`, error);
+      }
+    }
+
     // 🔧 优先发送回复（避免discover风暴）
     if (!isReply) {
+      const myPublicKeys = this.userPublicKeys.get(this.getUniqId()!);
       this.broadcastSignal({
         type: "discover",
         to: fromId,
         isReply: true,
         userType: getDeviceType(),
+        publicKeys: myPublicKeys // 🔐 在回复中包含公钥
       });
     }
 
@@ -633,7 +626,7 @@ export class RealTimeColab {
   /**
    * @description 处理通过信令服务器发送的文本消息
    */
-  private handleTextMessage(data: any): void {
+  private async handleTextMessage(data: any): Promise<void> {
     const fromId = data.from;
     const message = data.message;
 
@@ -665,9 +658,25 @@ export class RealTimeColab {
       console.log(`[RECV MSG] Created new text-only user: ${fromId}`);
     }
 
+    // 🔐 解密消息（如果是加密消息）
+    let finalMessage = message;
+    try {
+      const unwrappedData = await this.secureWrapper.unwrapIncomingMessage(fromId, data);
+      if (unwrappedData.message) {
+        finalMessage = unwrappedData.message;
+        if (unwrappedData.error) {
+          console.error(`[RECV MSG] 🔒 加密消息解密失败`);
+        } else {
+          console.log(`[RECV MSG] 🔓 成功解密加密消息`);
+        }
+      }
+    } catch (error) {
+      console.warn(`[RECV MSG] ⚠️ 消息解密处理失败，使用原始消息:`, error);
+    }
+
     // 显示收到的消息
     console.log(`[RECV MSG] ✅ Calling setMsgFromSharing to display message`);
-    this.setMsgFromSharing(message);
+    this.setMsgFromSharing(finalMessage);
     this.updateUI();
   }
 
@@ -681,24 +690,11 @@ export class RealTimeColab {
       return;
     }
 
-    console.log(`[LEAVE] 🚪 User ${fromId} has left, cleaning up all data`);
-
-    // 完全清理该用户的所有数据
     this.clearCache(fromId);
     this.userList.delete(fromId);
-
-    // 清理文件传输相关数据
-    // this.receivingFiles.delete(fromId);
-
-    // 清理接收到的文件（以该用户ID开头的）
-    // for (const [key] of this.receivedFiles.entries()) {
-    //   if (key.startsWith(fromId + "::")) {
-    //     this.receivedFiles.delete(key);
-    //   }
-    // }
-
-    console.log(`[LEAVE] ✅ All data for user ${fromId} has been cleaned up`);
     this.updateUI();
+    console.log(`[LEAVE] ✅ All data for user ${fromId} has been cleaned up`);
+
   }
 
   /**
@@ -745,6 +741,10 @@ export class RealTimeColab {
     this.pingFailures.delete(id);
     this.pongFailures.delete(id);
     this.recentlyResetPeers.delete(id);
+
+    // 🔐 清理加密数据
+    this.secureWrapper.clearUserData(id);
+    this.userPublicKeys.delete(id);
   }
 
   // public broadcastSignal(signal: any): void {
@@ -1063,7 +1063,23 @@ export class RealTimeColab {
 
           case "text":
           default:
-            this.setMsgFromSharing(message.msg);
+            // 🔐 处理可能的加密消息
+            try {
+              const unwrappedMessage = await this.secureWrapper.unwrapIncomingMessage(id, message);
+              if (unwrappedMessage.message) {
+                this.setMsgFromSharing(unwrappedMessage.message);
+                if (unwrappedMessage.error) {
+                  console.error(`[P2P MSG] 🔒 加密消息解密失败`);
+                } else if (unwrappedMessage.type === "text" && message.type === "encrypted_text") {
+                  console.log(`[P2P MSG] 🔓 成功解密P2P加密消息`);
+                }
+              } else {
+                this.setMsgFromSharing(message.msg);
+              }
+            } catch (error) {
+              console.warn(`[P2P MSG] ⚠️ 消息解密处理失败，使用原始消息:`, error);
+              this.setMsgFromSharing(message.msg);
+            }
             break;
         }
       } else {
@@ -1353,21 +1369,63 @@ export class RealTimeColab {
     const channel = this.dataChannels.get(id);
     const user = this.userList.get(id);
 
+    // 🔐 准备要发送的消息对象
+    let messageObj = { msg: message, type: "text" };
+
     // 首先尝试通过P2P DataChannel发送
     if (channel?.readyState === "open") {
-      channel.send(JSON.stringify({ msg: message, type: "text" }));
-      return;
+      try {
+        // 🔐 加密P2P消息
+        const wrappedMessage = await this.secureWrapper.wrapOutgoingMessage(id, messageObj);
+        if (wrappedMessage.type === "encrypted_text") {
+          console.log(`[SEND MSG] 🔐 发送加密P2P消息给 ${id}`);
+        }
+        channel.send(JSON.stringify(wrappedMessage));
+        return;
+      } catch (error) {
+        console.warn(`[SEND MSG] ⚠️ P2P消息加密失败，使用明文:`, error);
+        channel.send(JSON.stringify(messageObj));
+        return;
+      }
     }
 
     // 如果P2P不可用，检查用户是否为可通过信令发送消息的状态
     if (user?.status === "text-only" || user?.status === "waiting" || user?.status === "connecting") {
-      this.broadcastSignal({
-        type: "text",
-        message: message,
-        to: id,
-        userType: getDeviceType()
-      });
-      return;
+      try {
+        // 🔐 加密信令消息
+        const wrappedMessage = await this.secureWrapper.wrapOutgoingMessage(id, {
+          type: "text",
+          message: message
+        });
+
+        if (wrappedMessage.type === "encrypted_text") {
+          console.log(`[SEND MSG] 🔐 发送加密信令消息给 ${id}`);
+          this.broadcastSignal({
+            type: "encrypted_text",
+            encryptedMessage: wrappedMessage.encryptedMessage,
+            to: id,
+            userType: getDeviceType()
+          });
+        } else {
+          // 回退到明文
+          this.broadcastSignal({
+            type: "text",
+            message: message,
+            to: id,
+            userType: getDeviceType()
+          });
+        }
+        return;
+      } catch (error) {
+        console.warn(`[SEND MSG] ⚠️ 信令消息加密失败，使用明文:`, error);
+        this.broadcastSignal({
+          type: "text",
+          message: message,
+          to: id,
+          userType: getDeviceType()
+        });
+        return;
+      }
     }
 
     console.warn(
@@ -1621,6 +1679,45 @@ export class RealTimeColab {
 
     // 移除visibilitychange监听，因为它会在切换标签页时也触发
     // 如果需要处理移动端的特殊情况，可以考虑更精确的判断
+  }
+
+  // 🔐 加密相关的公共方法
+
+  /**
+   * 检查是否可以与指定用户进行加密通信
+   */
+  public canEncryptWithUser(userId: string): boolean {
+    return this.secureWrapper.canEncryptForUser(userId);
+  }
+
+  /**
+   * 获取加密状态信息
+   */
+  public getEncryptionStatus() {
+    return this.secureWrapper.getEncryptionStatus();
+  }
+
+  /**
+   * 检查加密功能是否已启用
+   */
+  public isEncryptionEnabled(): boolean {
+    return this.secureWrapper.isReady();
+  }
+
+  /**
+   * 获取与用户的通信模式
+   */
+  public getUserCommunicationMode(userId: string): "encrypted" | "plaintext" | "unavailable" {
+    const user = this.userList.get(userId);
+    if (!user || user.status === "disconnected") {
+      return "unavailable";
+    }
+
+    if (this.canEncryptWithUser(userId)) {
+      return "encrypted";
+    }
+
+    return "plaintext";
   }
 }
 
