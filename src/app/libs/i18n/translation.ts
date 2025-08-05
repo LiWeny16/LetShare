@@ -233,6 +233,12 @@ export const resources = {
                 shareTitle: "Share · Instantly",
                 qrPrompt: "Scan the QR code to join room:",
             },
+            chat: {
+                noMessages: "No chat messages yet",
+                inputPlaceholder: "Type a message...",
+                deleteHistory: "Delete chat history",
+                sendFile: "Send file"
+            },
             userId: {
                 inputError: "Only letters, numbers",
                 display: "Your ID"
@@ -365,6 +371,12 @@ export const resources = {
             footer: {
                 shareTitle: "分享·一触即发",
                 qrPrompt: "扫描二维码以加入房间:",
+            },
+            chat: {
+                noMessages: "暂无聊天记录",
+                inputPlaceholder: "输入消息...",
+                deleteHistory: "删除聊天记录",
+                sendFile: "发送文件"
             },
             userId: {
                 inputError: "只允许12字符以内的字母、数字和汉字",

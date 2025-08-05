@@ -14,7 +14,29 @@ import { ConnectionConfig } from "./providers/IConnectionProvider";
 import { ConnectionManager } from "./providers/ConnectionManager";
 import { SecureMessageWrapper } from "../security/SecureMessageWrapper";
 import { UserKeyInfo } from "../security/SimpleE2EEncryption";
+import mitt from 'mitt';
 // import { VideoManager } from "../video/video";
+
+// 常量配置
+const CONFIG = {
+  USER_CHECK_INTERVAL: 5000,          // 用户状态检查间隔
+  CONNECTION_TIMEOUT: 3000,           // 连接超时时间
+  MAX_RETRY_ATTEMPTS: 3,              // 最大重试次数
+  CONNECT_ATTEMPT_COOLDOWN: 4000,     // 连接尝试冷却时间
+  HEARTBEAT_INTERVAL: 3000,           // 心跳间隔
+  PEER_RESET_COOLDOWN: 5000,          // 对等连接重置冷却时间
+  BACKGROUND_TIMEOUT: 30000,          // 后台超时时间
+  RETRY_SEND_DELAY: 100,              // 重试发送延迟
+  LEAVE_MESSAGE_DELAY: 200,           // 离开消息延迟
+  DISCOVER_REPLY_DELAY: 500,          // discover回复延迟
+  TRANSFER_COMPLETE_DELAY: 1500       // 传输完成延迟
+} as const;
+
+// 创建一个类型安全的事件发射器类型
+type ColabEvents = {
+  'message-sent': { to: string; message: string };
+  'message-received': { from: string; message: string };
+};
 
 interface NegotiationState {
   isNegotiating: boolean; // 是否正在进行一次Offer/Answer
@@ -37,10 +59,15 @@ export interface UserInfo {
 
 export class RealTimeColab {
   private static instance: RealTimeColab | null = null;
+  private static isCreating = false; // 防止并发创建
   private static userId: string | null = null;
   private static uniqId: string | null = null;
   public static peers: Map<string, RTCPeerConnection> = new Map();
+  public emitter = mitt<ColabEvents>(); // 实例化事件发射器
   // public staticIp: string | null = null;
+
+  // 活跃聊天用户ID状态管理
+  private activeChatUserId: string | null = null;
 
   private constructor() {
     const state = this.getStatesMemorable();
@@ -202,7 +229,7 @@ export class RealTimeColab {
           const connectionTimeout = this.connectionTimeouts.get(id);
           const isStuckInConnecting = !connectionTimeout; // 如果没有超时器，说明可能卡住了
 
-          if (user.attempts >= 3 || isStuckInConnecting) {
+          if (user.attempts >= CONFIG.MAX_RETRY_ATTEMPTS || isStuckInConnecting) {
             console.warn(
               `[USER CHECK] ${id} 连接尝试${user.attempts >= 3 ? '过多' : '卡住'}，切换到 text-only 模式`
             );
@@ -236,7 +263,7 @@ export class RealTimeColab {
           }
         }
       }
-    }, 5000); // 调整为5秒检查一次
+    }, CONFIG.USER_CHECK_INTERVAL);
   }
 
   /**
@@ -279,7 +306,7 @@ export class RealTimeColab {
       });
 
       // 等待消息发送完成
-      await new Promise(resolve => setTimeout(resolve, 200));
+      await new Promise(resolve => setTimeout(resolve, CONFIG.LEAVE_MESSAGE_DELAY));
     }
 
     this.connectionManager.disconnect(soft);
@@ -321,7 +348,7 @@ export class RealTimeColab {
       }
 
       // 等待一小段时间确保连接完全建立，然后广播discover信号
-      await new Promise(resolve => setTimeout(resolve, 500));
+      await new Promise(resolve => setTimeout(resolve, CONFIG.DISCOVER_REPLY_DELAY));
       this.broadcastSignal({ type: "discover", userType: getDeviceType() }); // 切换/连接成功后广播
       console.log(`✅ 房间切换/连接完成，已广播discover信号`);
     } catch (error) {
@@ -440,7 +467,22 @@ export class RealTimeColab {
 
   public static getInstance(): RealTimeColab {
     if (!RealTimeColab.instance) {
-      RealTimeColab.instance = new RealTimeColab();
+      if (RealTimeColab.isCreating) {
+        // 如果正在创建，等待创建完成
+        while (RealTimeColab.isCreating) {
+          // 简单的自旋等待
+        }
+        return RealTimeColab.instance!;
+      }
+      
+      RealTimeColab.isCreating = true;
+      try {
+        if (!RealTimeColab.instance) { // 双重检查
+          RealTimeColab.instance = new RealTimeColab();
+        }
+      } finally {
+        RealTimeColab.isCreating = false;
+      }
     }
     return RealTimeColab.instance;
   }
@@ -573,7 +615,7 @@ export class RealTimeColab {
         currentUser.attempts++;
 
         // 如果尝试次数过多，停止尝试P2P连接
-        if (currentUser.attempts >= 3) {
+        if (currentUser.attempts >= CONFIG.MAX_RETRY_ATTEMPTS) {
           currentUser.status = "text-only";
           console.log(`[DISCOVER] 📱 User ${fromId} P2P failed too many times, staying in text-only mode`);
           alertUseMUI(t("alert.p2pFailed", { name: fromId.split(":")[0] }), 2000, { kind: "warning" });
@@ -599,7 +641,7 @@ export class RealTimeColab {
     }
 
     // 如果尝试次数过多，不再尝试
-    if (user.attempts >= 3) {
+    if (user.attempts >= CONFIG.MAX_RETRY_ATTEMPTS) {
       return false;
     }
 
@@ -674,9 +716,16 @@ export class RealTimeColab {
       console.warn(`[RECV MSG] ⚠️ 消息解密处理失败，使用原始消息:`, error);
     }
 
-    // 显示收到的消息
-    console.log(`[RECV MSG] ✅ Calling setMsgFromSharing to display message`);
-    this.setMsgFromSharing(finalMessage);
+    // 显示收到的消息 - 但避免对当前活跃聊天用户重复提示
+    if (!this.isActiveChatUser(fromId)) {
+      console.log(`[RECV MSG] ✅ Calling setMsgFromSharing to display message (user not in active chat)`);
+      this.setMsgFromSharing(finalMessage);
+    } else {
+      console.log(`[RECV MSG] 📱 User ${fromId} is in active chat, skipping global message notification`);
+    }
+    
+    // 发出消息接收事件，由ChatIntegration处理历史记录保存
+    this.emitter.emit('message-received', { from: fromId, message: finalMessage });
     this.updateUI();
   }
 
@@ -822,7 +871,7 @@ export class RealTimeColab {
       } else {
         const now = Date.now();
         const lastReset = this.recentlyResetPeers.get(peerId) ?? 0;
-        if (now - lastReset < 5000) {
+        if (now - lastReset < CONFIG.PEER_RESET_COOLDOWN) {
           console.warn(`[OFFER] Recently reset ${peerId}, skipping`);
           return;
         }
@@ -1002,7 +1051,7 @@ export class RealTimeColab {
           channel.send(JSON.stringify({ type: "ping" }));
         }
         // }
-      }, 3000);
+      }, CONFIG.HEARTBEAT_INTERVAL);
 
       this.heartbeatIntervals.set(id, heartbeatInterval);
     };
@@ -1063,23 +1112,50 @@ export class RealTimeColab {
 
           case "text":
           default:
-            // 🔐 处理可能的加密消息
-            try {
-              const unwrappedMessage = await this.secureWrapper.unwrapIncomingMessage(id, message);
-              if (unwrappedMessage.message) {
-                this.setMsgFromSharing(unwrappedMessage.message);
-                if (unwrappedMessage.error) {
-                  console.error(`[P2P MSG] 🔒 加密消息解密失败`);
-                } else if (unwrappedMessage.type === "text" && message.type === "encrypted_text") {
-                  console.log(`[P2P MSG] 🔓 成功解密P2P加密消息`);
+                          // 🔐 处理可能的加密消息
+              try {
+                const unwrappedMessage = await this.secureWrapper.unwrapIncomingMessage(id, message);
+                let finalMessage;
+                if (unwrappedMessage.message) {
+                  finalMessage = unwrappedMessage.message;
+                  // 避免对当前活跃聊天用户重复提示
+                  if (!this.isActiveChatUser(id)) {
+                    this.setMsgFromSharing(finalMessage);
+                  } else {
+                    console.log(`[P2P MSG] 📱 User ${id} is in active chat, skipping global message notification`);
+                  }
+                  if (unwrappedMessage.error) {
+                    console.error(`[P2P MSG] 🔒 加密消息解密失败`);
+                  } else if (unwrappedMessage.type === "text" && message.type === "encrypted_text") {
+                    console.log(`[P2P MSG] 🔓 成功解密P2P加密消息`);
+                  }
+                } else {
+                  finalMessage = message.msg;
+                  // 避免对当前活跃聊天用户重复提示
+                  if (!this.isActiveChatUser(id)) {
+                    this.setMsgFromSharing(finalMessage);
+                  } else {
+                    console.log(`[P2P MSG] 📱 User ${id} is in active chat, skipping global message notification`);
+                  }
                 }
-              } else {
-                this.setMsgFromSharing(message.msg);
+                
+                // 发出P2P消息接收事件，由ChatIntegration处理历史记录保存
+                this.emitter.emit('message-received', { from: id, message: finalMessage });
+                          } catch (error) {
+                console.warn(`[P2P MSG] ⚠️ 消息解密处理失败，使用原始消息:`, error);
+                const fallbackMessage = message.msg;
+                // 避免对当前活跃聊天用户重复提示
+                if (!this.isActiveChatUser(id)) {
+                  this.setMsgFromSharing(fallbackMessage);
+                } else {
+                  console.log(`[P2P MSG] 📱 User ${id} is in active chat, skipping global message notification for fallback`);
+                }
+                
+                // 发出fallback消息接收事件
+                if (fallbackMessage) {
+                    this.emitter.emit('message-received', { from: id, message: fallbackMessage });
+                }
               }
-            } catch (error) {
-              console.warn(`[P2P MSG] ⚠️ 消息解密处理失败，使用原始消息:`, error);
-              this.setMsgFromSharing(message.msg);
-            }
             break;
         }
       } else {
@@ -1173,24 +1249,7 @@ export class RealTimeColab {
       }
     };
 
-    // channel.onclose = () => {
-    //     console.log(`Data channel with user ${id} is closed`);
-    //     if (this.heartbeatIntervals.has(id)) {
-    //         clearInterval(this.heartbeatIntervals.get(id)!);
-    //         this.heartbeatIntervals.delete(id);
-    //     }
-    //     if (this.userList.get(id)?.status === "connected") {
-    //         alertUseMUI("与对方断开连接,请刷新页面", 2000, { kind: "error" })
-    //     }
-    //     if (heartbeatInterval) {
-    //         clearInterval(heartbeatInterval);
-    //         heartbeatInterval = null;
-    //     }
-
-    //     this.dataChannels.delete(id);
-    //     this.updateConnectedUsers(this.userList)
-    //     this.lastPongTimes.delete(id);
-    // };
+  
     channel.onclose = () => {
       console.warn(`🧹 DataChannel closed for ${id}, setting user to text-only status`);
       this.clearCache(id);
@@ -1247,7 +1306,7 @@ export class RealTimeColab {
   public async connectToUser(id: string): Promise<void> {
     const now = Date.now();
     const lastAttempt = this.lastConnectAttempt.get(id) ?? 0;
-    if (now - lastAttempt < 4000) {
+    if (now - lastAttempt < CONFIG.CONNECT_ATTEMPT_COOLDOWN) {
       console.warn(`[CONNECT] Connection attempt to ${id} too frequent, skipping`);
       return;
     }
@@ -1350,7 +1409,7 @@ export class RealTimeColab {
           console.log(`[CONNECT] ${id} already in connection, extending wait status`);
         }
         this.connectionTimeouts.delete(id);
-      }, 3000);
+      }, CONFIG.CONNECTION_TIMEOUT);
 
       this.connectionTimeouts.set(id, timeoutId);
     } catch (e) {
@@ -1372,6 +1431,8 @@ export class RealTimeColab {
     // 🔐 准备要发送的消息对象
     let messageObj = { msg: message, type: "text" };
 
+    // 发送消息的历史记录保存由事件系统处理
+
     // 首先尝试通过P2P DataChannel发送
     if (channel?.readyState === "open") {
       try {
@@ -1381,10 +1442,12 @@ export class RealTimeColab {
           console.log(`[SEND MSG] 🔐 发送加密P2P消息给 ${id}`);
         }
         channel.send(JSON.stringify(wrappedMessage));
+        this.emitter.emit('message-sent', { to: id, message }); // 发出事件
         return;
       } catch (error) {
         console.warn(`[SEND MSG] ⚠️ P2P消息加密失败，使用明文:`, error);
         channel.send(JSON.stringify(messageObj));
+        this.emitter.emit('message-sent', { to: id, message }); // 发出事件
         return;
       }
     }
@@ -1415,6 +1478,8 @@ export class RealTimeColab {
             userType: getDeviceType()
           });
         }
+        console.log(`[SEND MSG] ✅ Signal message sent successfully to ${id}`);
+        this.emitter.emit('message-sent', { to: id, message }); // 发出事件
         return;
       } catch (error) {
         console.warn(`[SEND MSG] ⚠️ 信令消息加密失败，使用明文:`, error);
@@ -1424,6 +1489,8 @@ export class RealTimeColab {
           to: id,
           userType: getDeviceType()
         });
+        console.log(`[SEND MSG] ✅ Fallback signal message sent successfully to ${id}`);
+        this.emitter.emit('message-sent', { to: id, message }); // 发出事件
         return;
       }
     }
@@ -1566,12 +1633,12 @@ export class RealTimeColab {
             this.setFileTransferProgress(progress);
             // 发送完成
             if (progress >= 100) {
-              setTimeout(() => this.setFileTransferProgress(null), 1500);
+              setTimeout(() => this.setFileTransferProgress(null), CONFIG.TRANSFER_COMPLETE_DELAY);
               this.setDownloadPageState(false);
             }
             this.isSendingFile = progress < 100 && progress > 0;
           } else {
-            const timeoutId = setTimeout(send, 100);
+            const timeoutId = setTimeout(send, CONFIG.RETRY_SEND_DELAY);
             this.timeoutHandles.add(timeoutId);
           }
         };
@@ -1628,10 +1695,32 @@ export class RealTimeColab {
       .map(([id]) => id);
   }
 
+  /**
+   * 设置当前活跃的聊天用户ID
+   */
+  public setActiveChatUserId(userId: string | null): void {
+    console.log(`[ACTIVE CHAT] Setting active chat user: ${userId}`);
+    this.activeChatUserId = userId;
+  }
+
+  /**
+   * 获取当前活跃的聊天用户ID
+   */
+  public getActiveChatUserId(): string | null {
+    return this.activeChatUserId;
+  }
+
+  /**
+   * 检查指定用户是否为当前活跃的聊天用户
+   */
+  public isActiveChatUser(userId: string): boolean {
+    return this.activeChatUserId === userId;
+  }
+
   private setupVisibilityWatcher() {
     let backgroundStartTime: number | null = null;
     let ablyTimeoutHandle: ReturnType<typeof setTimeout> | null = null;
-    const overtime = 30_000;
+    const overtime = CONFIG.BACKGROUND_TIMEOUT;
     document.addEventListener("visibilitychange", () => {
       if (document.visibilityState === "hidden") {
         backgroundStartTime = Date.now();

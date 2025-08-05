@@ -23,6 +23,7 @@ import {
     Fab,
     Fade,
     Chip,
+    IconButton,
 } from "@mui/material";
 import realTimeColab, { UserInfo, UserStatus } from "@App/libs/connection/colabLib";
 import FileIcon from "@mui/icons-material/Description";
@@ -36,12 +37,15 @@ import { Footer } from "../components/Footer";
 import EditableUserId from "../components/UserId";
 import StartupPage from "../components/StartupPage";
 import DownloadDrawer from "../components/Download";
+import ChatPanel from "../components/Chat/ChatPanel";
+import ChatIntegration from "@App/libs/chat/ChatIntegration";
 import JSZip from "jszip";
 import AppleIcon from "@mui/icons-material/Apple";
 import PhonelinkRingIcon from "@mui/icons-material/PhonelinkRing";
 import PhonelinkIcon from "@mui/icons-material/Phonelink";
 import LinkIcon from "@mui/icons-material/Link";
 import SyncIcon from "@mui/icons-material/Sync";
+import ChatIcon from "@mui/icons-material/Chat";
 import { compareUniqIdPriority, getDeviceType } from "@App/libs/tools/tools";
 import { observer } from "mobx-react-lite";
 import settingsStore from "@App/libs/mobx/mobx";
@@ -106,10 +110,28 @@ const Share = observer(() => {
     const [downloadPageState, setDwnloadPageState] = useState(false);
     const [isDraggingOver, setIsDraggingOver] = React.useState(false);
     const [fileSendingTargetUser, setFileSendingTargetUser] = React.useState("");
+
+    // 聊天相关状态
+    const [chatPanelOpen, setChatPanelOpen] = useState<boolean>(false);
+    const [chatTargetUser, setChatTargetUser] = useState<string | null>(null);
     const searchButtonRef = useRef(null)
     const mainDialogRef = useRef<HTMLDivElement | null>(null);
     // const [videoPanelOpen, setVideoPanelOpen] = useState(false);
     // const [videoTargetUser, setVideoTargetUser] = useState<string | null>(null);
+
+    // 监听用户连接状态变化，自动关闭断开用户的聊天面板
+    useEffect(() => {
+        if (!chatPanelOpen || !chatTargetUser) return;
+
+        // 检查当前聊天目标用户是否还在连接列表中
+        const targetUser = connectedUsers.find(user => user.uniqId === chatTargetUser);
+
+        if (!targetUser || targetUser.status === 'disconnected') {
+            console.log(`[CHAT UI] Target user ${chatTargetUser} disconnected, closing chat panel`);
+            setChatPanelOpen(false);
+            setChatTargetUser(null);
+        }
+    }, [connectedUsers, chatPanelOpen, chatTargetUser]);
 
     // 检查是否有P2P连接的用户
     const hasP2PConnectedUsers = connectedUsers.some(user =>
@@ -285,6 +307,10 @@ const Share = observer(() => {
             updateConnectedUsers,
             setFileTransferProgress,
         )
+
+        // 初始化聊天集成
+        ChatIntegration.init();
+
         setTimeout(() => { setStartUpVisibility(false) }, 1000)
 
         return () => {
@@ -606,105 +632,125 @@ const Share = observer(() => {
                             }
                             return 0;
                         }).map((user) => (
-                            <ButtonBase
-                                key={user.uniqId}
-                                onClick={(e) => {
-                                    if (selectedButton === "video") {
-                                        // 如果尚未建立视频连接，则主动发起连接
-                                        if (!realTimeColab.isConnectedToUser(user.uniqId)) {
-                                            realTimeColab.connectToUser(user.uniqId);
+                            <Box>
+                                <ButtonBase
+                                    key={user.uniqId}
+                                    onClick={(e) => {
+                                        if (selectedButton === "video") {
+                                            // 如果尚未建立视频连接，则主动发起连接
+                                            if (!realTimeColab.isConnectedToUser(user.uniqId)) {
+                                                realTimeColab.connectToUser(user.uniqId);
+                                            }
+                                            // 设置目标用户并打开视频面板
+                                            // setVideoTargetUser(user.uniqId);
+                                            // setVideoPanelOpen(true);
+                                        } else {
+                                            // 原有逻辑（文件/文本等消息）
+                                            handleClickOtherClients(e, user.uniqId);
                                         }
-                                        // 设置目标用户并打开视频面板
-                                        // setVideoTargetUser(user.uniqId);
-                                        // setVideoPanelOpen(true);
-                                    } else {
-                                        // 原有逻辑（文件/文本等消息）
-                                        handleClickOtherClients(e, user.uniqId);
-                                    }
-                                }}
-                                sx={{
-                                    ...settingsBodyContentBoxStyle,
-                                    width: "96%",
-                                    textAlign: "inherit",
-                                    backgroundColor: user.status === 'connected'
-                                        ? 'rgba(76, 175, 80, 0.1)' // 淡绿色背景表示P2P连接成功
-                                        : user.status === 'connecting'
-                                            ? theme.palette.action.hover // 连接中保持灰色
-                                            : theme.palette.background.paper, // text-only和其他状态为白色
-                                    opacity: user.status === 'connecting' ? 0.7 : 1,
-                                    transition: 'all 0.3s ease-in-out',
-                                    '&:hover': {
-                                        boxShadow: user.status === 'connected' ? 2 : 1,
-                                        bgcolor: user.status === 'connected'
-                                            ? 'rgba(76, 175, 80, 0.15)'
+                                    }}
+                                    sx={{
+                                        ...settingsBodyContentBoxStyle,
+                                        width: "96%",
+                                        textAlign: "inherit",
+                                        backgroundColor: user.status === 'connected'
+                                            ? 'rgba(76, 175, 80, 0.1)' // 淡绿色背景表示P2P连接成功
                                             : user.status === 'connecting'
-                                                ? 'rgba(0, 0, 0, 0.12)'
-                                                : 'background.default',
-                                    },
-                                    padding: 1.5,
-                                    borderRadius: 2,
-                                    display: "block", // 👈 避免默认 inline-flex
-                                }}
-                            >
-                                <Box sx={{
-                                    display: "flex",
-                                    alignItems: "flex-start",
-                                    textAlign: "left",
-                                    gap: 1,
-                                    width: "100%",
-                                    transition: 'opacity 0.3s ease',
-                                    opacity: user.status === 'connecting' ? 0.8 : 1
-                                }}>
-                                    {getUserTypeIcon(user.userType)}
+                                                ? theme.palette.action.hover // 连接中保持灰色
+                                                : theme.palette.background.paper, // text-only和其他状态为白色
+                                        opacity: user.status === 'connecting' ? 0.7 : 1,
+                                        transition: 'all 0.3s ease-in-out',
+                                        '&:hover': {
+                                            boxShadow: user.status === 'connected' ? 2 : 1,
+                                            bgcolor: user.status === 'connected'
+                                                ? 'rgba(76, 175, 80, 0.15)'
+                                                : user.status === 'connecting'
+                                                    ? 'rgba(0, 0, 0, 0.12)'
+                                                    : 'background.default',
+                                        },
+                                        padding: 1.5,
+                                        borderRadius: 2,
+                                        display: "block", // 👈 避免默认 inline-flex
+                                    }}
+                                >
+                                    <Box sx={{
+                                        display: "flex",
+                                        alignItems: "flex-start",
+                                        textAlign: "left",
+                                        gap: 1,
+                                        width: "100%",
+                                        transition: 'opacity 0.3s ease',
+                                        opacity: user.status === 'connecting' ? 0.8 : 1
+                                    }}>
+                                        {getUserTypeIcon(user.userType)}
+
+                                        <Typography
+                                            variant="body1"
+                                            sx={{
+                                                width: "100%",
+                                                textAlign: "left",
+                                                color: user.status === 'connected'
+                                                    ? 'text.primary'
+                                                    : 'text.secondary',
+                                                transition: 'color 0.3s ease'
+                                            }}
+                                        >
+                                            {user.name}
+                                        </Typography>
 
 
 
-                                    <Typography
-                                        variant="body1"
-                                        sx={{
-                                            width: "100%",
-                                            textAlign: "left",
-                                            color: user.status === 'connected'
-                                                ? 'text.primary'
-                                                : 'text.secondary',
-                                            transition: 'color 0.3s ease'
-                                        }}
-                                    >
-                                        {user.name}
-                                    </Typography>
-                                    {/* 状态图标 */}
-                                    <Box sx={{ display: "flex", alignItems: "center", mr: "5px" }}>
-                                        {user.status === 'connected' && (
-                                            <LinkIcon sx={{ color: 'success.main', fontSize: 27 }} />
-                                        )}
-                                        {user.status === 'connecting' && (
-                                            <SyncIcon sx={{ color: 'text.secondary', fontSize: 27 }} />
-                                        )}
-                                        {(user.status === 'text-only' || user.status === 'waiting') && (
-                                            <Box sx={{ display: 'flex', flexDirection: "row", alignItems: "center" }}>
-                                                <Chip
-                                                    label={t('status.textOnly')}
-                                                    size="small"
-                                                    sx={{
-                                                        backgroundColor: 'text.secondary',
-                                                        color: 'background.paper',
-                                                        fontSize: '0.75rem',
-                                                        fontWeight: 'bold',
-                                                        borderRadius: '4px',
-                                                        px: 0.5,
-                                                        mr: "10px",
-                                                        py: 0.25,
-                                                        '& .MuiChip-label': {
-                                                            padding: 0,
-                                                        },
-                                                    }}
-                                                />
-                                                <PortableWifiOffIcon sx={{ color: 'text.secondary', fontSize: 27, mr: "5px" }} />
-                                            </Box>
-                                        )}
+                                        {/* 状态图标 */}
+                                        <Box sx={{ display: "flex", alignItems: "center", mr: "5px" }}>
+                                            {user.status === 'connected' && (
+                                                <LinkIcon sx={{ color: 'success.main', fontSize: 27 }} />
+                                            )}
+                                            {user.status === 'connecting' && (
+                                                <SyncIcon sx={{ color: 'text.secondary', fontSize: 27 }} />
+                                            )}
+                                            {(user.status === 'text-only' || user.status === 'waiting') && (
+                                                <Box sx={{ display: 'flex', flexDirection: "row", alignItems: "center" }}>
+                                                    <Chip
+                                                        label={t('status.textOnly')}
+                                                        size="small"
+                                                        sx={{
+                                                            backgroundColor: 'text.secondary',
+                                                            color: 'background.paper',
+                                                            fontSize: '0.75rem',
+                                                            fontWeight: 'bold',
+                                                            borderRadius: '4px',
+                                                            px: 0.5,
+                                                            mr: "10px",
+                                                            py: 0.25,
+                                                            '& .MuiChip-label': {
+                                                                padding: 0,
+                                                            },
+                                                        }}
+                                                    />
+                                                    <PortableWifiOffIcon sx={{ color: 'text.secondary', fontSize: 27, mr: "5px" }} />
+                                                </Box>
+                                            )}
+                                        </Box>
+                                        {/* 聊天按钮 */}
+                                        <Box onClick={(e) => {
+                                            e.stopPropagation();
+                                            setChatTargetUser(user.uniqId);
+                                            setChatPanelOpen(true);
+                                        }} sx={{
+                                            mr: 1,
+                                            opacity: 0.7,
+                                            '&:hover': { opacity: 1 }
+                                        }}>
+                                            <IconButton
+                                                size="small"
+                                            >
+                                                <ChatIcon sx={{ fontSize: 20 }} />
+                                            </IconButton>
+                                        </Box>
                                     </Box>
-                                </Box>
-                            </ButtonBase>
+                                </ButtonBase>
+
+                            </Box>
                         ))}
                     </Box>
 
@@ -847,6 +893,16 @@ const Share = observer(() => {
             </Backdrop>
             <StartupPage open={startUpVisibility} />
             <AlertPortal />
+
+            {/* 聊天面板 */}
+            {chatTargetUser && (
+                <ChatPanel
+                    open={chatPanelOpen}
+                    onClose={() => setChatPanelOpen(false)}
+                    targetUserId={chatTargetUser}
+                    targetUserName={chatTargetUser.split(':')[0] || 'Unknown User'}
+                />
+            )}
         </>
     );
 });
