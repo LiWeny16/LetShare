@@ -59,9 +59,49 @@ export default defineConfig({
     react(),
     VitePWA({
       // devOptions: {
-      //   enabled: false, // 在开发模式 (`npm run dev`) 中也启用 Service Worker，方便调试。
+      //   enabled: false, // 在开发模式 (`npm run dev`) 中也启用 Service Worker,方便调试。
       // },
       registerType: 'autoUpdate',
+      injectRegister: 'auto',
+      // 每60秒检查一次更新
+      workbox: {
+        // 立即激活新的 Service Worker
+        clientsClaim: true,
+        skipWaiting: true,
+        // 设置检查更新的间隔(毫秒)
+        cleanupOutdatedCaches: true,
+        // 设置运行时缓存策略
+        runtimeCaching: [
+          {
+            // 缓存外部资源,使用 StaleWhileRevalidate 策略
+            urlPattern: /^https:\/\/.*/i,
+            handler: 'StaleWhileRevalidate',
+            options: {
+              cacheName: 'external-cache',
+              expiration: {
+                maxEntries: 200,
+                maxAgeSeconds: 60 * 60 * 24 * 30 // 30天长期缓存
+              },
+              cacheableResponse: {
+                statuses: [0, 200]
+              }
+            }
+          },
+          {
+            // 应用资源使用 NetworkFirst,每次都检查更新
+            urlPattern: /^\/.*\.(js|css|html)$/,
+            handler: 'NetworkFirst',
+            options: {
+              cacheName: 'app-cache',
+              networkTimeoutSeconds: 3,
+              expiration: {
+                maxEntries: 100,
+                maxAgeSeconds: 60 * 60 * 24 * 30 // 30天
+              }
+            }
+          }
+        ]
+      },
       // includeAssets: ['favicon.svg', 'robots.txt', 'apple-touch-icon.png'],
       manifest: {
         name: 'LetShare',
