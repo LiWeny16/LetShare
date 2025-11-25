@@ -77,6 +77,38 @@ export class ConnectionManager implements IConnectionProvider {
         return this.currentProvider?.getConnectionType() ?? "none";
     }
 
+    send(message: any): void {
+        if (this.currentProvider?.send) {
+            this.currentProvider.send(message);
+        } else {
+            console.error("❌ 当前连接提供者不支持send方法");
+        }
+    }
+
+    sendBinary(data: ArrayBuffer): void {
+        if (this.currentProvider?.sendBinary) {
+            this.currentProvider.sendBinary(data);
+        } else {
+            console.error("❌ 当前连接提供者不支持sendBinary方法");
+        }
+    }
+
+    onMessageReceived(callback: (message: any) => void): void {
+        if (this.currentProvider?.onMessageReceived) {
+            this.currentProvider.onMessageReceived(callback);
+        }
+    }
+
+    onBinaryReceived(callback: (data: ArrayBuffer) => void): void {
+        if (this.currentProvider?.onBinaryReceived) {
+            this.currentProvider.onBinaryReceived(callback);
+        }
+    }
+
+    getUniqId(): string {
+        return this.currentProvider?.getUniqId?.() ?? this.config.uniqId;
+    }
+
     private async connectAuto(roomId: string): Promise<boolean> {
         const ipResult = await testIp();
         const isOverseas = this.isOverseasRegion(ipResult);

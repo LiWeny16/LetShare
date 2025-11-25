@@ -7,6 +7,8 @@ export class CustomConnectionProvider implements IConnectionProvider {
     private currentRoomId: string | null = null;
     private config: ConnectionConfig;
     private signalCallback: ((data: any) => void) | null = null;
+    private messageCallback: ((message: any) => void) | null = null;
+    private binaryCallback: ((data: ArrayBuffer) => void) | null = null;
     private isSubscribed: boolean = false;
 
     constructor(config: ConnectionConfig) {
@@ -49,7 +51,19 @@ export class CustomConnectionProvider implements IConnectionProvider {
                     resolve(true);
                 };
 
-                this.ws.onmessage = (event) => this.handleMessage(event);
+                this.ws.onmessage = (event) => {
+                    // 支持二进制消息
+                    if (event.data instanceof ArrayBuffer) {
+                        this.handleBinaryMessage(event.data);
+                    } else if (event.data instanceof Blob) {
+                        // 将Blob转换为ArrayBuffer
+                        event.data.arrayBuffer().then(buffer => {
+                            this.handleBinaryMessage(buffer);
+                        });
+                    } else {
+                        this.handleMessage(event);
+                    }
+                };
 
                 this.ws.onclose = () => {
                     clearTimeout(timeout);
@@ -127,6 +141,34 @@ export class CustomConnectionProvider implements IConnectionProvider {
 
     getConnectionType(): string {
         return "custom";
+    }
+
+    send(message: any): void {
+        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            this.ws.send(JSON.stringify(message));
+        } else {
+            console.error("❌ WebSocket未连接，无法发送消息");
+        }
+    }
+
+    sendBinary(data: ArrayBuffer): void {
+        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            this.ws.send(data);
+        } else {
+            console.error("❌ WebSocket未连接，无法发送二进制数据");
+        }
+    }
+
+    onMessageReceived(callback: (message: any) => void): void {
+        this.messageCallback = callback;
+    }
+
+    onBinaryReceived(callback: (data: ArrayBuffer) => void): void {
+        this.binaryCallback = callback;
+    }
+
+    getUniqId(): string {
+        return this.config.uniqId;
     }
 
     private async subscribeToRoom(roomId: string): Promise<void> {
@@ -217,7 +259,7 @@ export class CustomConnectionProvider implements IConnectionProvider {
         try {
             const message = JSON.parse(event.data);
             
-            // 过滤掉非信号消息
+            // 处理信令消息
             if (message.type === "message" && 
                 message.channel && 
                 (message.event === "signal:all" || message.event === `signal:${this.config.uniqId}`)) {
@@ -231,8 +273,25 @@ export class CustomConnectionProvider implements IConnectionProvider {
                     this.signalCallback(signalEvent);
                 }
             }
+            // 处理文件传输相关消息
+            else if (message.type && message.type.startsWith("file:transfer:")) {
+                if (this.messageCallback) {
+                    this.messageCallback(message);
+                }
+            }
+            // 其他类型的消息也通过messageCallback处理
+            else if (this.messageCallback) {
+                this.messageCallback(message);
+            }
         } catch (e) {
             console.error("❌ 处理服务器消息失败:", e);
+        }
+    }
+
+    private handleBinaryMessage(data: ArrayBuffer): void {
+        console.log(`[CustomConnectionProvider] Received binary message: ${data.byteLength} bytes`);
+        if (this.binaryCallback) {
+            this.binaryCallback(data);
         }
     }
 } 

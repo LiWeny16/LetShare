@@ -40,6 +40,35 @@ export interface IConnectionProvider {
      * 获取连接类型标识
      */
     getConnectionType(): string;
+    
+    /**
+     * 发送自定义消息（JSON格式）
+     * @param message 消息对象
+     */
+    send?(message: any): void;
+    
+    /**
+     * 发送二进制数据
+     * @param data 二进制数据
+     */
+    sendBinary?(data: ArrayBuffer): void;
+    
+    /**
+     * 设置消息接收回调(用于文件传输等非信令消息)
+     * @param callback 接收到消息时的回调函数
+     */
+    onMessageReceived?(callback: (message: any) => void): void;
+    
+    /**
+     * 设置二进制数据接收回调
+     * @param callback 接收到二进制数据时的回调函数
+     */
+    onBinaryReceived?(callback: (data: ArrayBuffer) => void): void;
+    
+    /**
+     * 获取唯一ID
+     */
+    getUniqId?(): string;
 }
 
 export interface ConnectionConfig {

@@ -133,9 +133,10 @@ const Share = observer(() => {
         }
     }, [connectedUsers, chatPanelOpen, chatTargetUser]);
 
-    // 检查是否有P2P连接的用户
-    const hasP2PConnectedUsers = connectedUsers.some(user =>
-        realTimeColab.canSendFileToUser(user.uniqId)
+    // 检查是否有连接的用户(P2P或服务器都可以)
+    // 现在即使没有P2P连接,也可以通过服务器转发文件
+    const hasConnectedUsers = connectedUsers.some(user =>
+        user.status !== 'disconnected'
     );
 
 
@@ -243,17 +244,6 @@ const Share = observer(() => {
             const canSendFile = realTimeColab.canSendFileToUser(targetUserId);
             const canSendMessage = realTimeColab.canSendMessageToUser(targetUserId);
 
-            // 如果是文件操作但没有P2P连接
-            if ((selectedButton === "file" || selectedButton === "image") && !canSendFile) {
-                if (realTimeColab.isTextOnlyUser(targetUserId)) {
-                    alertUseMUI(t('alert.fileSendP2PRequired'), 2000, { kind: "warning" });
-                } else {
-                    alertUseMUI(t('toast.connectingUser'), 2000, { kind: "warning" });
-                    realTimeColab.connectToUser(targetUserId);
-                }
-                return;
-            }
-
             // 如果是文本操作但无法发送消息
             if ((selectedButton === "text" || selectedButton === "clip") && !canSendMessage) {
                 alertUseMUI(t('toast.connectingUser'), 2000, { kind: "warning" });
@@ -269,10 +259,16 @@ const Share = observer(() => {
                 }
 
                 setDwnloadPageState(true);
-                await realTimeColab.sendFileToUser(
-                    targetUserId,
-                    selectedFile,
-                );
+
+                // 智能选择传输方式：优先P2P，不可用时自动使用服务器转发
+                if (canSendFile) {
+                    console.log("📡 使用P2P方式发送文件");
+                    await realTimeColab.sendFileToUser(targetUserId, selectedFile);
+                } else {
+                    console.log("🌐 P2P不可用，使用服务器转发文件");
+                    alertUseMUI(t('toast.serverTransferMode'), 2000, { kind: "info" });
+                    await realTimeColab.sendFileViaServer(targetUserId, selectedFile);
+                }
             } else if (selectedButton === "text" && selectedText) {
                 await realTimeColab.sendMessageToUser(targetUserId, selectedText);
             } else if (selectedButton === "clip") {
@@ -284,7 +280,6 @@ const Share = observer(() => {
                 }
             } else {
                 alertUseMUI(t('toast.noContentSelected'), 2000, { kind: "info" });
-                // await realTimeColab.sendMessageToUser(targetUserId, "配对成功!");
             }
         } catch (error) {
             console.error("发送失败：", error);
@@ -483,7 +478,7 @@ const Share = observer(() => {
                                 variant="outlined"
                                 sx={buttonStyleNormal}
                                 startIcon={<FileIcon />}
-                                disabled={!hasP2PConnectedUsers}
+                                disabled={!hasConnectedUsers}
                                 onClick={() => {
                                     const input = document.getElementById("multi-file-input") as HTMLInputElement;
                                     if (input) {
@@ -514,7 +509,7 @@ const Share = observer(() => {
                                 variant="outlined"
                                 sx={buttonStyleNormal}
                                 startIcon={<ImageIcon />}
-                                disabled={!hasP2PConnectedUsers}
+                                disabled={!hasConnectedUsers}
                                 onClick={() => {
                                     const input = document.getElementById("image-input") as HTMLInputElement;
                                     if (input) {

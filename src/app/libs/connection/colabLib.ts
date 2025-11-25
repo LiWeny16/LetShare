@@ -15,6 +15,7 @@ import { ConnectionManager } from "./providers/ConnectionManager";
 import { SecureMessageWrapper } from "../security/SecureMessageWrapper";
 import { UserKeyInfo } from "../security/SimpleE2EEncryption";
 import mitt from 'mitt';
+import { ServerFileTransfer } from "./ServerFileTransfer";
 // import { VideoManager } from "../video/video";
 
 // 常量配置
@@ -95,9 +96,15 @@ export class RealTimeColab {
 
     // 🔐 初始化加密功能
     this.secureWrapper = new SecureMessageWrapper();
+    
+    // 🚀 初始化服务器文件传输
+    this.serverFileTransfer = new ServerFileTransfer(this.connectionManager);
   }
   // In RealTimeColab
   private connectionManager: ConnectionManager;
+  
+  // 🚀 服务器文件传输
+  private serverFileTransfer: ServerFileTransfer | null = null;
 
   // 🔐 加密相关属性
   private secureWrapper: SecureMessageWrapper;
@@ -207,6 +214,19 @@ export class RealTimeColab {
     this.setFileTransferProgress = setFileTransferProgress;
     this.initTransferConfig();
     this.setupVisibilityWatcher();
+
+    // 🚀 设置服务器文件传输回调
+    if (this.serverFileTransfer) {
+      this.serverFileTransfer.setProgressCallback((progress) => {
+        this.setFileTransferProgress(progress);
+      });
+      
+      this.serverFileTransfer.setFileReceivedCallback((file, fromUserId) => {
+        console.log(`[ColabLib] File received from ${fromUserId}:`, file.name);
+        this.receivedFiles.set(fromUserId, file);
+        this.handleReceivedFile(file, fromUserId);
+      });
+    }
     this.setupPageUnloadHandler();
 
     // 🔐 初始化加密功能
@@ -280,6 +300,20 @@ export class RealTimeColab {
 
     // 设置信号处理器
     this.connectionManager.onSignalReceived(this.handleSignal.bind(this));
+    
+    // 设置文件传输消息处理器
+    this.connectionManager.onMessageReceived?.((message) => {
+      if (message.type && message.type.startsWith("file:transfer:")) {
+        console.log(`[ColabLib] Received file transfer message:`, message.type);
+        this.serverFileTransfer?.handleFileTransferMessage(message.type, message.data || message);
+      }
+    });
+    
+    // 设置二进制数据处理器
+    this.connectionManager.onBinaryReceived?.((data) => {
+      console.log(`[ColabLib] Received binary data: ${data.byteLength} bytes`);
+      this.serverFileTransfer?.handleBinaryData(data);
+    });
 
     const success = await this.connectionManager.connect(roomId!);
     if (success) {
@@ -1509,6 +1543,42 @@ export class RealTimeColab {
       }
       this.timeoutHandles.clear();
     }
+    
+    // 同时取消服务器传输
+    this.serverFileTransfer?.cancelCurrentTransfer();
+  }
+
+  /**
+   * 处理接收到的文件（支持ZIP解压）
+   */
+  private async handleReceivedFile(file: File, id: string): Promise<void> {
+    const fullKey = `${id}::${file.name}`;
+    this.receivedFiles.set(fullKey, file);
+
+    // 如果是ZIP文件，尝试解压
+    if (file.name.startsWith("LetShare_") && file.name.endsWith(".zip")) {
+      try {
+        alertUseMUI(t("alert.unzipping"), 2000, { kind: "info" });
+        const zip = await JSZip.loadAsync(file);
+
+        for (const [fileName, zipEntry] of Object.entries(zip.files)) {
+          if (!zipEntry.dir) {
+            const blob = await zipEntry.async("blob");
+            const extractedFile = new File([blob], fileName);
+            const newKey = `${id}::${fileName}`;
+            this.receivedFiles.set(newKey, extractedFile);
+          }
+        }
+        // 删除ZIP文件本身
+        this.receivedFiles.delete(fullKey);
+      } catch (err) {
+        console.error("Unzipping failed:", err);
+      }
+    }
+
+    alertUseMUI(t("alert.fileReceived", { name: id.split(":")[0] }), 2000, { kind: "success" });
+    this.setFileTransferProgress(null);
+    this.setDownloadPageState(false);
   }
   public isConnectedToUser(id: string): boolean {
     const channel = this.dataChannels.get(id);
@@ -1546,6 +1616,44 @@ export class RealTimeColab {
     return canSendText;
   }
 
+  /**
+   * 通过服务器转发文件给用户（适用于P2P不可用的情况）
+   */
+  public async sendFileViaServer(
+    id: string,
+    file: File
+  ): Promise<void> {
+    if (!this.serverFileTransfer) {
+      console.error("❌ 服务器文件传输未初始化");
+      alertUseMUI(t('toast.serverTransferNotAvailable'), 2000, { kind: "error" });
+      return;
+    }
+
+    const roomId = settingsStore.get("roomId");
+    if (!roomId) {
+      console.error("❌ 未加入房间");
+      alertUseMUI(t('toast.notInRoom'), 2000, { kind: "error" });
+      return;
+    }
+
+    this.setFileSendingTargetUser(id);
+    this.isSendingFile = true;
+    this.setDownloadPageState(true);
+
+    try {
+      await this.serverFileTransfer.sendFileViaServer(id, file, roomId);
+      console.log(`✅ 文件通过服务器发送完成`);
+    } catch (error) {
+      console.error("❌ 服务器文件传输失败:", error);
+      alertUseMUI(t('toast.fileTransferFailed'), 3000, { kind: "error" });
+    } finally {
+      this.isSendingFile = false;
+    }
+  }
+
+  /**
+   * 发送文件给用户（P2P方式）
+   */
   public async sendFileToUser(
     id: string,
     file: File
@@ -1555,6 +1663,9 @@ export class RealTimeColab {
     this.setFileSendingTargetUser(id);
     if (!channel || channel.readyState !== "open") {
       console.error(`Data channel with user ${id} is not available.`);
+      // 如果P2P不可用,尝试通过服务器转发
+      console.log("🔄 P2P不可用，尝试通过服务器转发文件");
+      await this.sendFileViaServer(id, file);
       return;
     }
 
