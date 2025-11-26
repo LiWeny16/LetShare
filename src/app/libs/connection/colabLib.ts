@@ -316,10 +316,12 @@ export class RealTimeColab {
     // 设置文件传输消息处理器
     if (this.connectionManager.onMessageReceived) {
       this.connectionManager.onMessageReceived((message) => {
-        console.log(`[ColabLib] 收到消息:`, message.type || message);
+        console.log(`[ColabLib] 收到消息:`, message.type || message, message);
         if (message.type && message.type.startsWith("file:transfer:")) {
-          console.log(`[ColabLib] 处理文件传输消息:`, message.type);
-          this.serverFileTransfer?.handleFileTransferMessage(message.type, message.data || message);
+          console.log(`[ColabLib] 处理文件传输消息:`, message.type, '数据:', message.data);
+          // 如果 data 是嵌套的，需要提取实际数据
+          const actualData = message.data?.transfer_id ? message.data : message;
+          this.serverFileTransfer?.handleFileTransferMessage(message.type, actualData);
         }
       });
       console.log(`[ColabLib] ✓ 文件传输消息回调已设置`);

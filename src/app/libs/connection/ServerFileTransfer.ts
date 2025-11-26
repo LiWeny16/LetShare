@@ -221,32 +221,25 @@ export class ServerFileTransfer {
     this.sendingSessions.set(transferId, session);
     this.currentSendingTransferId = transferId;
 
-    // 发送传输请求
-    const request: FileTransferRequest = {
-      transfer_id: transferId,
-      file_name: file.name,
-      file_size: file.size,
-      file_type: file.type || "application/octet-stream",
-      chunk_size: chunkSize,
-      total_chunks: totalChunks,
-      from_user_id: this.connectionManager.getUniqId(),
-      to_user_id: toUserId,
-      room_name: roomName,
-    };
-
-    // 🔧 使用正确的消息格式发送给特定用户
-    const requestData = {
+    // 🔧 按照服务器期望的 WebSocketMessage 格式发送
+    const requestMessage = {
       type: FILE_TRANSFER_MESSAGE_TYPES.REQUEST,
-      data: request,
+      channel: roomName,
+      data: {
+        transfer_id: transferId,
+        file_name: file.name,
+        file_size: file.size,
+        file_type: file.type || "application/octet-stream",
+        chunk_size: chunkSize,
+        total_chunks: totalChunks,
+        from_user_id: this.connectionManager.getUniqId(),
+        to_user_id: toUserId,
+        room_name: roomName,
+      },
     };
 
-    this.connectionManager.send({
-      type: "publish",
-      channel: roomName,
-      event: `signal:${toUserId}`, // 🔧 发送给特定用户
-      data: requestData,
-    });
-
+    console.log(`[ServerFileTransfer] 发送 REQUEST 消息:`, requestMessage);
+    this.connectionManager.send(requestMessage);
     console.log(`[ServerFileTransfer] ✅ REQUEST 消息已发送给 ${toUserId}`);
     alertUseMUI(t('toast.waitingForAccept'), 2000, { kind: "info" });
   }
@@ -338,24 +331,20 @@ export class ServerFileTransfer {
     });
 
     try {
-      // 🔧 使用正确的消息格式发送给特定用户
-      const acceptData = {
+      // 🔧 按照服务器期望的 WebSocketMessage 格式发送
+      const acceptMessage = {
         type: FILE_TRANSFER_MESSAGE_TYPES.ACCEPT,
-        data: { 
+        channel: session.roomName,
+        data: {
           transfer_id: transferId,
-          from_user_id: this.connectionManager.getUniqId(),
-          to_user_id: toUserId,
         },
       };
       
-      this.connectionManager.send({
-        type: "publish",
-        channel: session.roomName,
-        event: `signal:${toUserId}`, // 🔧 发送给特定用户
-        data: acceptData,
-      });
+      console.log(`[ServerFileTransfer] 发送 ACCEPT 消息:`, acceptMessage);
       
-      console.log(`[ServerFileTransfer] ✅ ACCEPT 消息已发送给 ${toUserId}: ${transferId}`);
+      this.connectionManager.send(acceptMessage);
+      
+      console.log(`[ServerFileTransfer] ✅ ACCEPT 消息已发送: ${transferId}`);
     } catch (error) {
       console.error(`[ServerFileTransfer] ❌ 发送 ACCEPT 消息失败:`, error);
     }
@@ -367,28 +356,21 @@ export class ServerFileTransfer {
   /**
    * 拒绝文件传输
    */
-  private rejectTransfer(transferId: string, toUserId: string, reason: string) {
+  private rejectTransfer(transferId: string, _toUserId: string, reason: string) {
     const session = this.receivingSessions.get(transferId);
     this.receivingSessions.delete(transferId);
 
     if (session) {
-      // 🔧 使用正确的消息格式发送给特定用户
-      const rejectData = {
+      const rejectMessage = {
         type: FILE_TRANSFER_MESSAGE_TYPES.REJECT,
-        data: { 
+        channel: session.roomName,
+        data: {
           transfer_id: transferId, 
           reason,
-          from_user_id: this.connectionManager.getUniqId(),
-          to_user_id: toUserId,
         },
       };
       
-      this.connectionManager.send({
-        type: "publish",
-        channel: session.roomName,
-        event: `signal:${toUserId}`, // 🔧 发送给特定用户
-        data: rejectData,
-      });
+      this.connectionManager.send(rejectMessage);
     }
 
     console.log(`[ServerFileTransfer] Rejected transfer: ${transferId}`);
@@ -451,8 +433,6 @@ export class ServerFileTransfer {
     // 通知服务器开始传输
     this.connectionManager.send({
       type: FILE_TRANSFER_MESSAGE_TYPES.START,
-      channel: "", // 服务器会自动路由
-      event: "",
       data: { transfer_id: session.transferId },
     });
 
@@ -503,8 +483,6 @@ export class ServerFileTransfer {
     // 发送完成消息
     this.connectionManager.send({
       type: FILE_TRANSFER_MESSAGE_TYPES.END,
-      channel: "",
-      event: "",
       data: { transfer_id: session.transferId },
     });
 
@@ -648,8 +626,6 @@ export class ServerFileTransfer {
       if (session) {
         this.connectionManager.send({
           type: FILE_TRANSFER_MESSAGE_TYPES.CANCEL,
-          channel: "",
-          event: "",
           data: { 
             transfer_id: this.currentSendingTransferId,
             reason: "用户取消"
