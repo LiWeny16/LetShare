@@ -23,6 +23,8 @@ export class ConnectionManager implements IConnectionProvider {
     private failureCount: Map<string, number> = new Map();
     private maxFailures = 1;
     private signalCallback: ((data: any) => void) | null = null;
+    private messageCallback: ((message: any) => void) | null = null;
+    private binaryCallback: ((data: ArrayBuffer) => void) | null = null;
 
     constructor(config: ConnectionConfig) {
         this.config = config;
@@ -94,12 +96,14 @@ export class ConnectionManager implements IConnectionProvider {
     }
 
     onMessageReceived(callback: (message: any) => void): void {
+        this.messageCallback = callback;
         if (this.currentProvider?.onMessageReceived) {
             this.currentProvider.onMessageReceived(callback);
         }
     }
 
     onBinaryReceived(callback: (data: ArrayBuffer) => void): void {
+        this.binaryCallback = callback;
         if (this.currentProvider?.onBinaryReceived) {
             this.currentProvider.onBinaryReceived(callback);
         }
@@ -158,9 +162,15 @@ export class ConnectionManager implements IConnectionProvider {
                 provider = new CustomConnectionProvider(this.config);
             }
 
-            // 在连接前设置信号回调
+            // 在连接前设置所有回调
             if (this.signalCallback) {
                 provider.onSignalReceived(this.signalCallback);
+            }
+            if (this.messageCallback && provider.onMessageReceived) {
+                provider.onMessageReceived(this.messageCallback);
+            }
+            if (this.binaryCallback && provider.onBinaryReceived) {
+                provider.onBinaryReceived(this.binaryCallback);
             }
 
             // 尝试连接
@@ -169,9 +179,15 @@ export class ConnectionManager implements IConnectionProvider {
             if (success) {
                 this.currentProvider = provider;
                 
-                // 连接成功后再次确保信号回调已设置
+                // 连接成功后再次确保所有回调已设置
                 if (this.signalCallback) {
                     this.currentProvider.onSignalReceived(this.signalCallback);
+                }
+                if (this.messageCallback && this.currentProvider.onMessageReceived) {
+                    this.currentProvider.onMessageReceived(this.messageCallback);
+                }
+                if (this.binaryCallback && this.currentProvider.onBinaryReceived) {
+                    this.currentProvider.onBinaryReceived(this.binaryCallback);
                 }
                 
                 this.failureCount.set(providerType, 0); // 重置失败计数

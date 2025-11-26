@@ -226,6 +226,16 @@ export class RealTimeColab {
         this.receivedFiles.set(fromUserId, file);
         this.handleReceivedFile(file, fromUserId);
       });
+
+      // 🎨 设置下载页面状态回调
+      this.serverFileTransfer.setDownloadPageStateCallback((show) => {
+        this.setDownloadPageState(show);
+      });
+
+      // 🎨 设置文件元信息回调
+      this.serverFileTransfer.setFileMetaInfoCallback((fileName) => {
+        this.fileMetaInfo.name = fileName;
+      });
     }
     this.setupPageUnloadHandler();
 
@@ -298,6 +308,8 @@ export class RealTimeColab {
       return false;
     }
 
+    // ⚠️ 重要：必须在连接之前设置所有回调！
+    
     // 设置信号处理器
     this.connectionManager.onSignalReceived(this.handleSignal.bind(this));
     
@@ -310,6 +322,7 @@ export class RealTimeColab {
           this.serverFileTransfer?.handleFileTransferMessage(message.type, message.data || message);
         }
       });
+      console.log(`[ColabLib] ✓ 文件传输消息回调已设置`);
     } else {
       console.warn(`[ColabLib] ⚠️ ConnectionManager 不支持 onMessageReceived 回调`);
     }
@@ -320,10 +333,12 @@ export class RealTimeColab {
         console.log(`[ColabLib] 收到二进制数据: ${data.byteLength} 字节`);
         this.serverFileTransfer?.handleBinaryData(data);
       });
+      console.log(`[ColabLib] ✓ 二进制数据回调已设置`);
     } else {
       console.warn(`[ColabLib] ⚠️ ConnectionManager 不支持 onBinaryReceived 回调`);
     }
 
+    // 现在连接到服务器
     const success = await this.connectionManager.connect(roomId!);
     if (success) {
       settingsStore.updateUnrmb("isConnectedToServer", true);
@@ -379,8 +394,25 @@ export class RealTimeColab {
         // 没有活跃连接，建立新连接
         console.log(`🔄 没有活跃连接，建立新连接到房间: ${newRoomId}`);
 
-        // 重新设置信号处理器，确保新连接能接收到信号
+        // 重新设置所有回调，确保新连接能接收到信号和文件传输消息
         this.connectionManager.onSignalReceived(this.handleSignal.bind(this));
+        
+        if (this.connectionManager.onMessageReceived) {
+          this.connectionManager.onMessageReceived((message) => {
+            console.log(`[ColabLib] 收到消息:`, message.type || message);
+            if (message.type && message.type.startsWith("file:transfer:")) {
+              console.log(`[ColabLib] 处理文件传输消息:`, message.type);
+              this.serverFileTransfer?.handleFileTransferMessage(message.type, message.data || message);
+            }
+          });
+        }
+        
+        if (this.connectionManager.onBinaryReceived) {
+          this.connectionManager.onBinaryReceived((data) => {
+            console.log(`[ColabLib] 收到二进制数据: ${data.byteLength} 字节`);
+            this.serverFileTransfer?.handleBinaryData(data);
+          });
+        }
 
         const success = await this.connectionManager.connect(newRoomId!);
         if (!success) {

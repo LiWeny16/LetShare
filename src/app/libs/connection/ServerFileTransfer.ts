@@ -69,6 +69,7 @@ interface ReceiveSession {
   chunkSize: number;
   receivedChunks: Map<number, ArrayBuffer>;
   fromUserId: string;
+  roomName: string; // 🔧 添加房间名，用于发送响应消息
   status: "pending" | "receiving" | "completed" | "cancelled" | "error";
 }
 
@@ -80,6 +81,8 @@ export class ServerFileTransfer {
   private onProgressCallback: ((progress: number | null) => void) | null = null;
   private onFileReceivedCallback: ((file: File, fromUserId: string) => void) | null = null;
   private currentSendingTransferId: string | null = null;
+  private onDownloadPageStateChange: ((show: boolean) => void) | null = null;
+  private onFileMetaInfoChange: ((name: string) => void) | null = null;
 
   constructor(connectionManager: ConnectionManager) {
     this.connectionManager = connectionManager;
@@ -98,6 +101,20 @@ export class ServerFileTransfer {
    */
   public setFileReceivedCallback(callback: (file: File, fromUserId: string) => void) {
     this.onFileReceivedCallback = callback;
+  }
+
+  /**
+   * 设置下载页面状态回调
+   */
+  public setDownloadPageStateCallback(callback: (show: boolean) => void) {
+    this.onDownloadPageStateChange = callback;
+  }
+
+  /**
+   * 设置文件元信息回调
+   */
+  public setFileMetaInfoCallback(callback: (name: string) => void) {
+    this.onFileMetaInfoChange = callback;
   }
 
   /**
@@ -160,7 +177,11 @@ export class ServerFileTransfer {
         const expectedChunkIndex = session.receivedChunks.size;
         session.receivedChunks.set(expectedChunkIndex, data);
         
-        console.log(`[ServerFileTransfer] Chunk ${expectedChunkIndex}/${session.totalChunks} received`);
+        // 🎨 更新进度条
+        const progress = (session.receivedChunks.size / session.totalChunks) * 100;
+        this.onProgressCallback?.(progress);
+        
+        console.log(`[ServerFileTransfer] Chunk ${expectedChunkIndex + 1}/${session.totalChunks} received (${progress.toFixed(1)}%)`);
         
         // 检查是否接收完成
         if (session.receivedChunks.size === session.totalChunks) {
@@ -213,13 +234,20 @@ export class ServerFileTransfer {
       room_name: roomName,
     };
 
-    this.connectionManager.send({
+    // 🔧 使用正确的消息格式发送给特定用户
+    const requestData = {
       type: FILE_TRANSFER_MESSAGE_TYPES.REQUEST,
-      channel: roomName,
-      event: "",
       data: request,
+    };
+
+    this.connectionManager.send({
+      type: "publish",
+      channel: roomName,
+      event: `signal:${toUserId}`, // 🔧 发送给特定用户
+      data: requestData,
     });
 
+    console.log(`[ServerFileTransfer] ✅ REQUEST 消息已发送给 ${toUserId}`);
     alertUseMUI(t('toast.waitingForAccept'), 2000, { kind: "info" });
   }
 
@@ -239,6 +267,7 @@ export class ServerFileTransfer {
       chunkSize: request.chunk_size,
       receivedChunks: new Map(),
       fromUserId: request.from_user_id,
+      roomName: request.room_name, // 🔧 保存房间名
       status: "pending",
     };
     this.receivingSessions.set(request.transfer_id, session);
@@ -247,9 +276,9 @@ export class ServerFileTransfer {
     const userAccepts = await this.showAcceptDialog(request);
 
     if (userAccepts) {
-      this.acceptTransfer(request.transfer_id, request.room_name);
+      this.acceptTransfer(request.transfer_id, request.from_user_id);
     } else {
-      this.rejectTransfer(request.transfer_id, request.room_name, "用户拒绝");
+      this.rejectTransfer(request.transfer_id, request.from_user_id, "用户拒绝");
     }
   }
 
@@ -257,33 +286,79 @@ export class ServerFileTransfer {
    * 显示接受对话框
    */
   private async showAcceptDialog(request: FileTransferRequest): Promise<boolean> {
-    return new Promise((resolve) => {
-      const sizeInMB = (request.file_size / (1024 * 1024)).toFixed(2);
-      const message = `${request.from_user_id.split(':')[0]} 想要发送文件:\n${request.file_name} (${sizeInMB} MB)`;
-      
-      if (confirm(message)) {
-        resolve(true);
-      } else {
-        resolve(false);
-      }
-    });
+    // ⚠️ 暂时自动接受所有文件传输请求（避免 confirm() 阻塞）
+    // TODO: 替换为非阻塞的 React/MUI Dialog 组件
+    const sizeInMB = (request.file_size / (1024 * 1024)).toFixed(2);
+    const fromUser = request.from_user_id.split(':')[0];
+    
+    console.log(`[ServerFileTransfer] 收到文件传输请求:`);
+    console.log(`  - 来自: ${fromUser}`);
+    console.log(`  - 文件名: ${request.file_name}`);
+    console.log(`  - 大小: ${sizeInMB} MB`);
+    console.log(`[ServerFileTransfer] 自动接受文件传输`);
+    
+    alertUseMUI(`${fromUser} 正在发送文件: ${request.file_name} (${sizeInMB} MB)`, 3000, { kind: "info" });
+    
+    // 自动接受
+    return Promise.resolve(true);
+    
+    // 原来的阻塞式代码：
+    // return new Promise((resolve) => {
+    //   const message = `${fromUser} 想要发送文件:\n${request.file_name} (${sizeInMB} MB)`;
+    //   if (confirm(message)) {
+    //     resolve(true);
+    //   } else {
+    //     resolve(false);
+    //   }
+    // });
   }
 
   /**
    * 接受文件传输
    */
-  private acceptTransfer(transferId: string, roomName: string) {
+  private acceptTransfer(transferId: string, toUserId: string) {
     const session = this.receivingSessions.get(transferId);
-    if (!session) return;
+    if (!session) {
+      console.error(`[ServerFileTransfer] ❌ Session not found: ${transferId}`);
+      return;
+    }
 
     session.status = "receiving";
 
-    this.connectionManager.send({
-      type: FILE_TRANSFER_MESSAGE_TYPES.ACCEPT,
-      channel: roomName,
-      event: "",
-      data: { transfer_id: transferId },
+    // 🎨 显示下载界面
+    this.onFileMetaInfoChange?.(session.fileName);
+    this.onDownloadPageStateChange?.(true);
+    this.onProgressCallback?.(0); // 初始化进度条为 0%
+
+    console.log(`[ServerFileTransfer] 准备发送 ACCEPT 消息:`, {
+      transferId,
+      toUserId,
+      roomName: session.roomName,
+      isConnected: this.connectionManager.isConnected(),
     });
+
+    try {
+      // 🔧 使用正确的消息格式发送给特定用户
+      const acceptData = {
+        type: FILE_TRANSFER_MESSAGE_TYPES.ACCEPT,
+        data: { 
+          transfer_id: transferId,
+          from_user_id: this.connectionManager.getUniqId(),
+          to_user_id: toUserId,
+        },
+      };
+      
+      this.connectionManager.send({
+        type: "publish",
+        channel: session.roomName,
+        event: `signal:${toUserId}`, // 🔧 发送给特定用户
+        data: acceptData,
+      });
+      
+      console.log(`[ServerFileTransfer] ✅ ACCEPT 消息已发送给 ${toUserId}: ${transferId}`);
+    } catch (error) {
+      console.error(`[ServerFileTransfer] ❌ 发送 ACCEPT 消息失败:`, error);
+    }
 
     console.log(`[ServerFileTransfer] Accepted transfer: ${transferId}`);
     alertUseMUI(t('toast.receivingFile'), 2000, { kind: "info" });
@@ -292,31 +367,57 @@ export class ServerFileTransfer {
   /**
    * 拒绝文件传输
    */
-  private rejectTransfer(transferId: string, roomName: string, reason: string) {
+  private rejectTransfer(transferId: string, toUserId: string, reason: string) {
+    const session = this.receivingSessions.get(transferId);
     this.receivingSessions.delete(transferId);
 
-    this.connectionManager.send({
-      type: FILE_TRANSFER_MESSAGE_TYPES.REJECT,
-      channel: roomName,
-      event: "",
-      data: { transfer_id: transferId, reason },
-    });
+    if (session) {
+      // 🔧 使用正确的消息格式发送给特定用户
+      const rejectData = {
+        type: FILE_TRANSFER_MESSAGE_TYPES.REJECT,
+        data: { 
+          transfer_id: transferId, 
+          reason,
+          from_user_id: this.connectionManager.getUniqId(),
+          to_user_id: toUserId,
+        },
+      };
+      
+      this.connectionManager.send({
+        type: "publish",
+        channel: session.roomName,
+        event: `signal:${toUserId}`, // 🔧 发送给特定用户
+        data: rejectData,
+      });
+    }
 
     console.log(`[ServerFileTransfer] Rejected transfer: ${transferId}`);
+    alertUseMUI(t('toast.transferRejected'), 2000, { kind: "info" });
   }
 
   /**
    * 处理传输接受
    */
   private async handleTransferAccept(data: { transfer_id: string }) {
+    console.log(`[ServerFileTransfer] 收到 ACCEPT 消息:`, data);
+    
     const session = this.sendingSessions.get(data.transfer_id);
-    if (!session) return;
+    if (!session) {
+      console.error(`[ServerFileTransfer] ❌ Sending session not found: ${data.transfer_id}`);
+      console.log(`[ServerFileTransfer] 当前发送会话:`, Array.from(this.sendingSessions.keys()));
+      return;
+    }
 
     session.status = "accepted";
-    console.log(`[ServerFileTransfer] Transfer accepted: ${data.transfer_id}`);
+    console.log(`[ServerFileTransfer] ✅ Transfer accepted: ${data.transfer_id}`);
     
     // 开始发送文件
-    await this.startSending(session);
+    try {
+      await this.startSending(session);
+    } catch (error) {
+      console.error(`[ServerFileTransfer] ❌ 开始发送文件失败:`, error);
+      alertUseMUI(t('toast.fileTransferFailed'), 3000, { kind: "error" });
+    }
   }
 
   /**
@@ -329,6 +430,8 @@ export class ServerFileTransfer {
     const transferId = data.transfer_id;
     this.sendingSessions.delete(transferId);
     this.onProgressCallback?.(null);
+    // 🎨 关闭下载页面
+    this.onDownloadPageStateChange?.(false);
 
     alertUseMUI(`${t('toast.transferRejected')}: ${data.reason || '未知原因'}`, 3000, { kind: "warning" });
     console.log(`[ServerFileTransfer] Transfer rejected: ${transferId}`);
@@ -339,6 +442,11 @@ export class ServerFileTransfer {
    */
   private async startSending(session: TransferSession) {
     session.status = "transferring";
+    
+    // 🎨 显示上传进度界面
+    this.onFileMetaInfoChange?.(session.file.name);
+    this.onDownloadPageStateChange?.(true);
+    this.onProgressCallback?.(0);
     
     // 通知服务器开始传输
     this.connectionManager.send({
@@ -401,6 +509,12 @@ export class ServerFileTransfer {
     });
 
     console.log(`[ServerFileTransfer] File sending completed: ${session.transferId}`);
+    
+    // 🎨 延迟关闭下载页面，让用户看到100%完成
+    setTimeout(() => {
+      this.onProgressCallback?.(null);
+      this.onDownloadPageStateChange?.(false);
+    }, 1500);
   }
 
   /**
@@ -430,15 +544,16 @@ export class ServerFileTransfer {
     if (sendSession) {
       sendSession.status = "completed";
       this.sendingSessions.delete(data.transfer_id);
-      this.onProgressCallback?.(null);
       alertUseMUI(t('toast.fileSent'), 2000, { kind: "success" });
       console.log(`[ServerFileTransfer] Send completed: ${data.transfer_id}`);
+      // 注意：关闭界面的逻辑在 startSending 的 setTimeout 中处理
     }
 
     const receiveSession = this.receivingSessions.get(data.transfer_id);
     if (receiveSession) {
       receiveSession.status = "completed";
       console.log(`[ServerFileTransfer] Receive completed: ${data.transfer_id}`);
+      // 注意：接收方的关闭界面逻辑在 assembleAndSaveFile 中处理
     }
   }
 
@@ -449,6 +564,8 @@ export class ServerFileTransfer {
     this.sendingSessions.delete(data.transfer_id);
     this.receivingSessions.delete(data.transfer_id);
     this.onProgressCallback?.(null);
+    // 🎨 关闭下载页面
+    this.onDownloadPageStateChange?.(false);
 
     alertUseMUI(`${t('toast.transferCancelled')}: ${data.reason || ''}`, 2000, { kind: "warning" });
     console.log(`[ServerFileTransfer] Transfer cancelled: ${data.transfer_id}`);
@@ -461,6 +578,8 @@ export class ServerFileTransfer {
     this.sendingSessions.delete(data.transfer_id);
     this.receivingSessions.delete(data.transfer_id);
     this.onProgressCallback?.(null);
+    // 🎨 关闭下载页面
+    this.onDownloadPageStateChange?.(false);
 
     alertUseMUI(`${t('toast.transferError')}: ${data.error || ''}`, 3000, { kind: "error" });
     console.error(`[ServerFileTransfer] Transfer error: ${data.transfer_id}`, data.error);
@@ -487,6 +606,9 @@ export class ServerFileTransfer {
       if (!chunk) {
         console.error(`[ServerFileTransfer] Missing chunk ${i}`);
         alertUseMUI(t('toast.fileAssemblyError'), 3000, { kind: "error" });
+        // 🎨 关闭下载页面
+        this.onProgressCallback?.(null);
+        this.onDownloadPageStateChange?.(false);
         return;
       }
       chunks.push(chunk);
@@ -507,7 +629,12 @@ export class ServerFileTransfer {
 
     // 清理会话
     this.receivingSessions.delete(session.transferId);
-    this.onProgressCallback?.(null);
+    
+    // 🎨 延迟关闭下载页面，让用户看到100%完成
+    setTimeout(() => {
+      this.onProgressCallback?.(null);
+      this.onDownloadPageStateChange?.(false);
+    }, 1500);
 
     alertUseMUI(t('toast.fileReceived'), 2000, { kind: "success" });
   }
