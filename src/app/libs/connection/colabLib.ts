@@ -302,18 +302,27 @@ export class RealTimeColab {
     this.connectionManager.onSignalReceived(this.handleSignal.bind(this));
     
     // 设置文件传输消息处理器
-    this.connectionManager.onMessageReceived?.((message) => {
-      if (message.type && message.type.startsWith("file:transfer:")) {
-        console.log(`[ColabLib] Received file transfer message:`, message.type);
-        this.serverFileTransfer?.handleFileTransferMessage(message.type, message.data || message);
-      }
-    });
+    if (this.connectionManager.onMessageReceived) {
+      this.connectionManager.onMessageReceived((message) => {
+        console.log(`[ColabLib] 收到消息:`, message.type || message);
+        if (message.type && message.type.startsWith("file:transfer:")) {
+          console.log(`[ColabLib] 处理文件传输消息:`, message.type);
+          this.serverFileTransfer?.handleFileTransferMessage(message.type, message.data || message);
+        }
+      });
+    } else {
+      console.warn(`[ColabLib] ⚠️ ConnectionManager 不支持 onMessageReceived 回调`);
+    }
     
     // 设置二进制数据处理器
-    this.connectionManager.onBinaryReceived?.((data) => {
-      console.log(`[ColabLib] Received binary data: ${data.byteLength} bytes`);
-      this.serverFileTransfer?.handleBinaryData(data);
-    });
+    if (this.connectionManager.onBinaryReceived) {
+      this.connectionManager.onBinaryReceived((data) => {
+        console.log(`[ColabLib] 收到二进制数据: ${data.byteLength} 字节`);
+        this.serverFileTransfer?.handleBinaryData(data);
+      });
+    } else {
+      console.warn(`[ColabLib] ⚠️ ConnectionManager 不支持 onBinaryReceived 回调`);
+    }
 
     const success = await this.connectionManager.connect(roomId!);
     if (success) {

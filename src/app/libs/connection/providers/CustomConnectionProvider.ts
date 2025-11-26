@@ -259,6 +259,29 @@ export class CustomConnectionProvider implements IConnectionProvider {
         try {
             const message = JSON.parse(event.data);
             
+            // 首先检查 data 字段中是否有文件传输消息
+            let innerData: any = null;
+            if (message.data) {
+                try {
+                    // data 可能是字符串或对象
+                    innerData = typeof message.data === 'string' 
+                        ? JSON.parse(message.data) 
+                        : message.data;
+                } catch {
+                    innerData = message.data;
+                }
+            }
+            
+            // 处理文件传输相关消息（检查内层 data.type）
+            if (innerData && innerData.type && innerData.type.startsWith("file:transfer:")) {
+                console.log(`[CustomConnectionProvider] 收到文件传输消息: ${innerData.type}`);
+                if (this.messageCallback) {
+                    // 传递内层数据给回调
+                    this.messageCallback(innerData);
+                }
+                return;
+            }
+            
             // 处理信令消息
             if (message.type === "message" && 
                 message.channel && 
@@ -272,15 +295,20 @@ export class CustomConnectionProvider implements IConnectionProvider {
                 if (this.signalCallback) {
                     this.signalCallback(signalEvent);
                 }
+                return;
             }
-            // 处理文件传输相关消息
-            else if (message.type && message.type.startsWith("file:transfer:")) {
+            
+            // 处理顶层的文件传输消息（兼容性）
+            if (message.type && message.type.startsWith("file:transfer:")) {
+                console.log(`[CustomConnectionProvider] 收到顶层文件传输消息: ${message.type}`);
                 if (this.messageCallback) {
                     this.messageCallback(message);
                 }
+                return;
             }
+            
             // 其他类型的消息也通过messageCallback处理
-            else if (this.messageCallback) {
+            if (this.messageCallback) {
                 this.messageCallback(message);
             }
         } catch (e) {
@@ -289,9 +317,21 @@ export class CustomConnectionProvider implements IConnectionProvider {
     }
 
     private handleBinaryMessage(data: ArrayBuffer): void {
-        console.log(`[CustomConnectionProvider] Received binary message: ${data.byteLength} bytes`);
+        const byteLength = data.byteLength;
+        console.log(`[CustomConnectionProvider] 收到二进制消息: ${byteLength} 字节`);
+        
+        // 打印前32字节用于调试（如果数据足够长）
+        if (byteLength > 0) {
+            const view = new Uint8Array(data);
+            const preview = view.slice(0, Math.min(32, byteLength));
+            console.log(`[CustomConnectionProvider] 前${preview.length}字节:`, 
+                Array.from(preview).map(b => b.toString(16).padStart(2, '0')).join(' '));
+        }
+        
         if (this.binaryCallback) {
             this.binaryCallback(data);
+        } else {
+            console.warn(`[CustomConnectionProvider] ⚠️ 没有设置二进制回调函数，数据被忽略`);
         }
     }
 } 
