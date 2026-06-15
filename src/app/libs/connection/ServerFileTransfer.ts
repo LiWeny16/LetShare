@@ -78,11 +78,13 @@ export class ServerFileTransfer {
   private sendingSessions: Map<string, TransferSession> = new Map();
   private receivingSessions: Map<string, ReceiveSession> = new Map();
   private readonly DEFAULT_CHUNK_SIZE = 64 * 1024; // 64KB
+  private readonly BASIC_SIZE_LIMIT = 50 * 1024 * 1024; // 50MB
   private onProgressCallback: ((progress: number | null) => void) | null = null;
   private onFileReceivedCallback: ((file: File, fromUserId: string) => void) | null = null;
   private currentSendingTransferId: string | null = null;
   private onDownloadPageStateChange: ((show: boolean) => void) | null = null;
   private onFileMetaInfoChange: ((name: string) => void) | null = null;
+  private onAdminPasswordRequestCallback: ((fileSize: number) => Promise<string | null>) | null = null;
 
   constructor(connectionManager: ConnectionManager) {
     this.connectionManager = connectionManager;
@@ -115,6 +117,13 @@ export class ServerFileTransfer {
    */
   public setFileMetaInfoCallback(callback: (name: string) => void) {
     this.onFileMetaInfoChange = callback;
+  }
+
+  /**
+   * 设置管理员密码请求回调(超过50MB时请求密码)
+   */
+  public setAdminPasswordRequestCallback(callback: (fileSize: number) => Promise<string | null>) {
+    this.onAdminPasswordRequestCallback = callback;
   }
 
   /**
@@ -166,30 +175,31 @@ export class ServerFileTransfer {
    * 处理二进制文件块数据
    */
   public handleBinaryData(data: ArrayBuffer) {
-    // 二进制消息应该紧跟在CHUNK消息之后
-    // 我们需要找到对应的接收会话
+    // 二进制消息可能来自P2P转发或服务端下载
     console.log(`[ServerFileTransfer] Received binary data: ${data.byteLength} bytes`);
-    
-    // 查找正在接收的会话
+
+    // 先检查P2P接收会话
     for (const [_transferId, session] of this.receivingSessions) {
       if (session.status === "receiving") {
         // 获取最新的块索引(应该在之前的CHUNK消息中设置)
         const expectedChunkIndex = session.receivedChunks.size;
         session.receivedChunks.set(expectedChunkIndex, data);
-        
+
         // 🎨 更新进度条
         const progress = (session.receivedChunks.size / session.totalChunks) * 100;
         this.onProgressCallback?.(progress);
-        
-        console.log(`[ServerFileTransfer] Chunk ${expectedChunkIndex + 1}/${session.totalChunks} received (${progress.toFixed(1)}%)`);
-        
+
+        console.log(`[ServerFileTransfer] P2P Chunk ${expectedChunkIndex + 1}/${session.totalChunks} received (${progress.toFixed(1)}%)`);
+
         // 检查是否接收完成
         if (session.receivedChunks.size === session.totalChunks) {
           this.assembleAndSaveFile(session);
         }
-        break;
+        return;
       }
     }
+
+    console.warn(`[ServerFileTransfer] ⚠️ 收到未知二进制数据 (${data.byteLength} bytes), 没有匹配的接收会话`);
   }
 
   /**
@@ -207,6 +217,30 @@ export class ServerFileTransfer {
       totalChunks,
       toUserId,
     });
+
+    // 🔑 检查是否需要管理员密码(文件超过50MB)
+    let adminPass = "";
+    if (file.size > this.BASIC_SIZE_LIMIT) {
+      const sizeMB = (file.size / (1024 * 1024)).toFixed(2);
+      console.log(`[ServerFileTransfer] 文件大小 ${sizeMB} MB 超过 50MB 限制,需要管理员密码`);
+
+      if (this.onAdminPasswordRequestCallback) {
+        const password = await this.onAdminPasswordRequestCallback(file.size);
+        if (!password) {
+          console.log("[ServerFileTransfer] 用户取消了大文件传输");
+          alertUseMUI("需要管理员密码才能传输超过50MB的文件", 3000, { kind: "warning" });
+          return;
+        }
+        adminPass = password;
+      } else {
+        const password = prompt(`文件大小 ${sizeMB} MB 超过50MB限制\n请输入管理员密码:`);
+        if (!password) {
+          alertUseMUI("需要管理员密码才能传输超过50MB的文件", 3000, { kind: "warning" });
+          return;
+        }
+        adminPass = password;
+      }
+    }
 
     // 创建发送会话
     const session: TransferSession = {
@@ -235,6 +269,7 @@ export class ServerFileTransfer {
         from_user_id: this.connectionManager.getUniqId(),
         to_user_id: toUserId,
         room_name: roomName,
+        admin_pass: adminPass,
       },
     };
 

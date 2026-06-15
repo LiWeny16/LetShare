@@ -6,7 +6,6 @@ import WifiOffIcon from '@mui/icons-material/WifiOff';
 import DownloadIcon from "@mui/icons-material/Download";
 import { createTheme, ThemeProvider, useTheme } from '@mui/material/styles';
 import { ButtonBase, CssBaseline, GlobalStyles } from '@mui/material';
-import PortableWifiOffIcon from '@mui/icons-material/PortableWifiOff';
 import {
     Box,
     Button,
@@ -46,6 +45,7 @@ import PhonelinkIcon from "@mui/icons-material/Phonelink";
 import LinkIcon from "@mui/icons-material/Link";
 import SyncIcon from "@mui/icons-material/Sync";
 import ChatIcon from "@mui/icons-material/Chat";
+import HubIcon from "@mui/icons-material/Hub";
 import { compareUniqIdPriority, getDeviceType } from "@App/libs/tools/tools";
 import { observer } from "mobx-react-lite";
 import settingsStore from "@App/libs/mobx/mobx";
@@ -111,6 +111,13 @@ const Share = observer(() => {
     const [isDraggingOver, setIsDraggingOver] = React.useState(false);
     const [fileSendingTargetUser, setFileSendingTargetUser] = React.useState("");
 
+    // 🔑 管理员密码对话框状态
+    const [adminPasswordDialogOpen, setAdminPasswordDialogOpen] = useState(false);
+    const [adminPasswordInput, setAdminPasswordInput] = useState("");
+    const [adminPasswordResolver, setAdminPasswordResolver] = useState<((pass: string | null) => void) | null>(null);
+    const [pendingLargeFileSize, setPendingLargeFileSize] = useState(0);
+
+
     // 聊天相关状态
     const [chatPanelOpen, setChatPanelOpen] = useState<boolean>(false);
     const [chatTargetUser, setChatTargetUser] = useState<string | null>(null);
@@ -134,10 +141,15 @@ const Share = observer(() => {
     }, [connectedUsers, chatPanelOpen, chatTargetUser]);
 
     // 检查是否有连接的用户(P2P或服务器都可以)
-    // 现在即使没有P2P连接,也可以通过服务器转发文件
     const hasConnectedUsers = connectedUsers.some(user =>
         user.status !== 'disconnected'
     );
+
+    // 是否连接到服务器
+    const isConnectedToServer = settingsStore.getUnrmb("isConnectedToServer") === true;
+
+    // 文件/图片按钮可用条件: 有已连接用户, 或已连上服务器 (有用户即可通过P2P/中继发送)
+    const canSendFile = hasConnectedUsers || isConnectedToServer;
 
 
     const getUserTypeIcon = (userType: string) => {
@@ -305,6 +317,20 @@ const Share = observer(() => {
 
         // 初始化聊天集成
         ChatIntegration.init();
+
+        // 🔑 设置管理员密码请求回调(使用MUI对话框)
+        const sft = realTimeColab.getServerFileTransfer();
+        if (sft) {
+            sft.setAdminPasswordRequestCallback(async (fileSize: number) => {
+                setPendingLargeFileSize(fileSize);
+                setAdminPasswordInput("");
+                return new Promise((resolve) => {
+                    setAdminPasswordResolver(() => resolve);
+                    setAdminPasswordDialogOpen(true);
+                });
+            });
+
+        }
 
         setTimeout(() => { setStartUpVisibility(false) }, 1000)
 
@@ -478,7 +504,7 @@ const Share = observer(() => {
                                 variant="outlined"
                                 sx={buttonStyleNormal}
                                 startIcon={<FileIcon />}
-                                disabled={!hasConnectedUsers}
+                                disabled={!canSendFile}
                                 onClick={() => {
                                     const input = document.getElementById("multi-file-input") as HTMLInputElement;
                                     if (input) {
@@ -509,7 +535,7 @@ const Share = observer(() => {
                                 variant="outlined"
                                 sx={buttonStyleNormal}
                                 startIcon={<ImageIcon />}
-                                disabled={!hasConnectedUsers}
+                                disabled={!canSendFile}
                                 onClick={() => {
                                     const input = document.getElementById("image-input") as HTMLInputElement;
                                     if (input) {
@@ -582,7 +608,7 @@ const Share = observer(() => {
                         </Badge>
                     </Box>
 
-                    <Box sx={{ display: "flex", justifyContent: "space-between", mt: 2 }}>
+                    <Box sx={{ display: "flex", justifyContent: "space-between", mt: 2, gap: 1, flexWrap: "wrap" }}>
                         <Button
                             ref={searchButtonRef}
                             onClick={handleClickSearch}
@@ -596,6 +622,7 @@ const Share = observer(() => {
                         >
                             {t('button.searchUsers')}
                         </Button>
+
                     </Box>
 
                     <Divider sx={{ mb: 0.5, mt: 2 }} />
@@ -649,19 +676,23 @@ const Share = observer(() => {
                                         width: "96%",
                                         textAlign: "inherit",
                                         backgroundColor: user.status === 'connected'
-                                            ? 'rgba(76, 175, 80, 0.1)' // 淡绿色背景表示P2P连接成功
-                                            : user.status === 'connecting'
-                                                ? theme.palette.action.hover // 连接中保持灰色
-                                                : theme.palette.background.paper, // text-only和其他状态为白色
+                                            ? 'rgba(76, 175, 80, 0.1)' // 🟢 P2P直连 — 淡绿色
+                                            : (user.status === 'text-only' || user.status === 'waiting')
+                                                ? 'rgba(33, 150, 243, 0.08)' // 🔵 公网中继 — 淡蓝色
+                                                : user.status === 'connecting'
+                                                    ? theme.palette.action.hover
+                                                    : theme.palette.background.paper,
                                         opacity: user.status === 'connecting' ? 0.7 : 1,
                                         transition: 'all 0.3s ease-in-out',
                                         '&:hover': {
                                             boxShadow: user.status === 'connected' ? 2 : 1,
                                             bgcolor: user.status === 'connected'
                                                 ? 'rgba(76, 175, 80, 0.15)'
-                                                : user.status === 'connecting'
-                                                    ? 'rgba(0, 0, 0, 0.12)'
-                                                    : 'background.default',
+                                                : (user.status === 'text-only' || user.status === 'waiting')
+                                                    ? 'rgba(33, 150, 243, 0.15)' // 🔵 hover 深蓝
+                                                    : user.status === 'connecting'
+                                                        ? 'rgba(0, 0, 0, 0.12)'
+                                                        : 'background.default',
                                         },
                                         padding: 1.5,
                                         borderRadius: 2,
@@ -686,7 +717,9 @@ const Share = observer(() => {
                                                 textAlign: "left",
                                                 color: user.status === 'connected'
                                                     ? 'text.primary'
-                                                    : 'text.secondary',
+                                                    : (user.status === 'text-only' || user.status === 'waiting')
+                                                        ? 'text.primary'
+                                                        : 'text.secondary',
                                                 transition: 'color 0.3s ease'
                                             }}
                                         >
@@ -709,8 +742,8 @@ const Share = observer(() => {
                                                         label={t('status.textOnly')}
                                                         size="small"
                                                         sx={{
-                                                            backgroundColor: 'text.secondary',
-                                                            color: 'background.paper',
+                                                            backgroundColor: 'info.main',
+                                                            color: 'white',
                                                             fontSize: '0.75rem',
                                                             fontWeight: 'bold',
                                                             borderRadius: '4px',
@@ -722,7 +755,7 @@ const Share = observer(() => {
                                                             },
                                                         }}
                                                     />
-                                                    <PortableWifiOffIcon sx={{ color: 'text.secondary', fontSize: 27, mr: "5px" }} />
+                                                    <HubIcon sx={{ color: 'info.main', fontSize: 27, mr: "5px" }} />
                                                 </Box>
                                             )}
                                         </Box>
@@ -880,6 +913,54 @@ const Share = observer(() => {
                 onClose={() => { setDwnloadPageState(false) }}
                 open={downloadPageState} progress={fileTransferProgress}
                 setProgress={setFileTransferProgress} />
+
+            {/* 🔑 管理员密码对话框 */}
+            <Dialog
+                open={adminPasswordDialogOpen}
+                onClose={() => {
+                    setAdminPasswordDialogOpen(false);
+                    adminPasswordResolver?.(null);
+                }}
+                maxWidth="xs"
+                fullWidth
+            >
+                <DialogTitle>需要管理员密码</DialogTitle>
+                <DialogContent>
+                    <DialogContentText sx={{ mb: 2 }}>
+                        文件大小 {(pendingLargeFileSize / (1024 * 1024)).toFixed(2)} MB 超过 50MB 限制，
+                        请输入管理员密码以继续上传。
+                    </DialogContentText>
+                    <TextField
+                        autoFocus
+                        label="管理员密码"
+                        type="password"
+                        fullWidth
+                        value={adminPasswordInput}
+                        onChange={(e) => setAdminPasswordInput(e.target.value)}
+                        onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                                setAdminPasswordDialogOpen(false);
+                                adminPasswordResolver?.(adminPasswordInput || null);
+                            }
+                        }}
+                    />
+                </DialogContent>
+                <DialogActions>
+                    <Button onClick={() => {
+                        setAdminPasswordDialogOpen(false);
+                        adminPasswordResolver?.(null);
+                    }} color="secondary">
+                        取消
+                    </Button>
+                    <Button onClick={() => {
+                        setAdminPasswordDialogOpen(false);
+                        adminPasswordResolver?.(adminPasswordInput || null);
+                    }} color="primary" variant="contained">
+                        确认
+                    </Button>
+                </DialogActions>
+            </Dialog>
+
             <Backdrop
                 sx={{ color: '#fff', zIndex: (theme) => theme.zIndex.drawer + 9999 }}
                 open={loadingPage}

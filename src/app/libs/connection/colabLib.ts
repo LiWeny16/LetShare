@@ -236,6 +236,19 @@ export class RealTimeColab {
       this.serverFileTransfer.setFileMetaInfoCallback((fileName) => {
         this.fileMetaInfo.name = fileName;
       });
+
+      // 🔑 设置管理员密码请求回调(超过50MB时触发)
+      this.serverFileTransfer.setAdminPasswordRequestCallback(async (fileSize) => {
+        // 使用 prompt 作为默认实现，UI层可以覆盖
+        const sizeMB = (fileSize / (1024 * 1024)).toFixed(2);
+        return new Promise((resolve) => {
+          const password = prompt(
+            `文件大小 ${sizeMB} MB 超过50MB限制\n请输入管理员密码:`
+          );
+          resolve(password);
+        });
+      });
+
     }
     this.setupPageUnloadHandler();
 
@@ -1692,6 +1705,13 @@ export class RealTimeColab {
     } finally {
       this.isSendingFile = false;
     }
+  }
+
+  /**
+   * 获取 ServerFileTransfer 实例(供UI层设置回调)
+   */
+  public getServerFileTransfer(): ServerFileTransfer | null {
+    return this.serverFileTransfer;
   }
 
   /**
