@@ -709,6 +709,10 @@ export class RealTimeColab {
           currentUser.status = "text-only";
           console.log(`[DISCOVER] 📱 User ${fromId} P2P failed too many times, staying in text-only mode`);
           alertUseMUI(t("alert.p2pFailed", { name: fromId.split(":")[0] }), 2000, { kind: "warning" });
+          // 🌍 海外后端额外提示：P2P 直连要求双方网络可穿透
+          if (this.connectionManager.getConnectionType() === "ably") {
+            alertUseMUI(t("alert.p2pOnlyOverseas"), 4000, { kind: "warning" });
+          }
         } else {
           // 回退到text-only，等待下次discover重试
           currentUser.status = "text-only";
@@ -1492,6 +1496,10 @@ export class RealTimeColab {
             this.userList.set(id, user);
             console.log(`📱 User ${id} switched to text-only due to timeout`);
             alertUseMUI(t("alert.p2pTimeout", { name: id.split(":")[0] }), 2000, { kind: "warning" });
+            // 🌍 海外后端额外提示：Ably 不支持服务器中转大文件，需 P2P 直连
+            if (this.connectionManager.getConnectionType() === "ably") {
+              alertUseMUI(t("alert.p2pOnlyOverseas"), 4000, { kind: "warning" });
+            }
           }
 
           this.updateUI();

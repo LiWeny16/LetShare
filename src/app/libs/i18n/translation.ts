@@ -117,7 +117,8 @@ const sharedMalayTranslation = {
             p2pFailed: "Sambungan P2P dengan {{name}} gagal, beralih ke mod teks",
             serverConnectionFailed: "Semua pelayan isyarat gagal disambungkan!",
             roomSwitchFailed: "Gagal menukar bilik: {{error}}",
-            fileSendP2PRequired: "Penghantaran fail memerlukan sambungan P2P, pengguna semasa hanya menyokong mod teks"
+            fileSendP2PRequired: "Penghantaran fail memerlukan sambungan P2P, pengguna semasa hanya menyokong mod teks",
+            p2pOnlyOverseas: "Pemindahan fail memerlukan sambungan rakan-ke-rakan terus. Kedua-dua pengguna mesti dalam talian."
         },
         status: {
             textOnly: "Teks Sahaja",
@@ -257,7 +258,8 @@ export const resources = {
                 p2pFailed: "P2P connection with {{name}} failed, switched to text mode",
                 serverConnectionFailed: "All signaling servers failed to connect!",
                 roomSwitchFailed: "Failed to switch room: {{error}}",
-                fileSendP2PRequired: "File sending requires P2P connection, current user only supports text mode"
+                fileSendP2PRequired: "File sending requires P2P connection, current user only supports text mode",
+                p2pOnlyOverseas: "File transfer requires direct peer-to-peer connection on this network. Both users must be online."
             },
             status: {
                 textOnly: "Text Only",
@@ -396,7 +398,8 @@ export const resources = {
                 p2pFailed: "与 {{name}} 的P2P连接失败，已切换到文本模式", 
                 serverConnectionFailed: "所有信令服务器连接失败！",
                 roomSwitchFailed: "切换房间失败: {{error}}",
-                fileSendP2PRequired: "文件发送需要P2P连接，当前用户仅支持文本模式"
+                fileSendP2PRequired: "文件发送需要P2P连接，当前用户仅支持文本模式",
+                p2pOnlyOverseas: "当前网络为海外线路，大文件仅支持点对点直连，需双方同时在线"
             },
             status: {
                 textOnly: "仅文本",
@@ -411,5 +414,14 @@ export const resources = {
         }
     },
     ms: sharedMalayTranslation,
-    id: sharedMalayTranslation
+    id: {
+        ...sharedMalayTranslation,
+        translation: {
+            ...sharedMalayTranslation.translation,
+            alert: {
+                ...sharedMalayTranslation.translation.alert,
+                p2pOnlyOverseas: "Transfer file memerlukan koneksi peer-to-peer langsung. Kedua pengguna harus online."
+            }
+        }
+    }
 };

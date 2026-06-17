@@ -111,6 +111,9 @@ const Share = observer(() => {
     const [isDraggingOver, setIsDraggingOver] = React.useState(false);
     const [fileSendingTargetUser, setFileSendingTargetUser] = React.useState("");
 
+    // 🖼️ 发送侧图片预览：懒加载 object URL，选择变化或卸载时 revoke
+    const [senderPreviewUrl, setSenderPreviewUrl] = React.useState<string | null>(null);
+
     // 🔑 管理员密码对话框状态
     const [adminPasswordDialogOpen, setAdminPasswordDialogOpen] = useState(false);
     const [adminPasswordInput, setAdminPasswordInput] = useState("");
@@ -375,6 +378,21 @@ const Share = observer(() => {
         };
 
     }, [textInputDialogOpen, openDialog]);
+    // 🖼️ 发送侧图片预览：当 selectedFile 是图片时生成预览 URL，否则清理
+    useEffect(() => {
+        const isImg = selectedFile && /\.(png|jpe?g|gif|bmp|webp|svg)$/i.test(selectedFile.name);
+        if (selectedButton === "image" && isImg && selectedFile) {
+            const url = URL.createObjectURL(selectedFile);
+            setSenderPreviewUrl(url);
+            return () => {
+                URL.revokeObjectURL(url);
+                setSenderPreviewUrl(null);
+            };
+        } else {
+            setSenderPreviewUrl(null);
+        }
+    }, [selectedFile, selectedButton]);
+
     const handleAcceptMessage = () => {
         try {
             if (msgFromSharing) {
@@ -607,6 +625,45 @@ const Share = observer(() => {
                             </Button>
                         </Badge>
                     </Box>
+
+                    {/* 🖼️ 发送侧图片预览缩略图（仅当选择了图片时显示） */}
+                    {senderPreviewUrl && selectedButton === "image" && (
+                        <Box
+                            sx={{
+                                mt: 1.5,
+                                display: "flex",
+                                alignItems: "center",
+                                gap: 1.5,
+                                px: 1,
+                                py: 0.5,
+                                borderRadius: 2,
+                                border: `1px solid ${theme.palette.divider}`,
+                                backgroundColor: theme.palette.action.hover,
+                                overflow: "hidden",
+                            }}
+                        >
+                            <Box
+                                component="img"
+                                src={senderPreviewUrl}
+                                alt={selectedFile?.name ?? "preview"}
+                                sx={{
+                                    width: 48,
+                                    height: 48,
+                                    objectFit: "cover",
+                                    borderRadius: 1,
+                                    flexShrink: 0,
+                                }}
+                            />
+                            <Typography
+                                variant="body2"
+                                noWrap
+                                color="text.secondary"
+                                sx={{ flex: 1, minWidth: 0 }}
+                            >
+                                {selectedFile?.name}
+                            </Typography>
+                        </Box>
+                    )}
 
                     <Box sx={{ display: "flex", justifyContent: "space-between", mt: 2, gap: 1, flexWrap: "wrap" }}>
                         <Button

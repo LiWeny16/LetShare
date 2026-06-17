@@ -67,9 +67,16 @@ interface ReceiveSession {
   fileType: string;
   totalChunks: number;
   chunkSize: number;
-  receivedChunks: Map<number, ArrayBuffer>;
+  /** 🔥 预分配缓冲区 — 直接写入对应位置, 避免 Map 碎片和多次拷贝。接受前为 null, 避免 OOM */
+  buffer: Uint8Array | null;
+  receivedCount: number;
+  /**
+   * 下一个待写入块的真实索引 (来自 file:transfer:chunk 元数据)。
+   * 初始 -1 表示尚未收到元数据帧; 二进制帧写入后重置回 -1。
+   */
+  pendingChunkIndex: number;
   fromUserId: string;
-  roomName: string; // 🔧 添加房间名，用于发送响应消息
+  roomName: string;
   status: "pending" | "receiving" | "completed" | "cancelled" | "error";
 }
 
@@ -79,6 +86,8 @@ export class ServerFileTransfer {
   private receivingSessions: Map<string, ReceiveSession> = new Map();
   private readonly DEFAULT_CHUNK_SIZE = 64 * 1024; // 64KB
   private readonly BASIC_SIZE_LIMIT = 50 * 1024 * 1024; // 50MB
+  /** 🛡️ 对齐服务端 500MB 上限, 防止恶意/超大 file_size 撑爆标签页 */
+  private readonly MAX_FILE_SIZE = 500 * 1024 * 1024; // 500MB
   private onProgressCallback: ((progress: number | null) => void) | null = null;
   private onFileReceivedCallback: ((file: File, fromUserId: string) => void) | null = null;
   private currentSendingTransferId: string | null = null;
@@ -172,34 +181,57 @@ export class ServerFileTransfer {
   }
 
   /**
-   * 处理二进制文件块数据
+   * 处理二进制文件块数据 — 🔥 直接写入预分配缓冲区, O(1) 无额外拷贝
    */
   public handleBinaryData(data: ArrayBuffer) {
-    // 二进制消息可能来自P2P转发或服务端下载
     console.log(`[ServerFileTransfer] Received binary data: ${data.byteLength} bytes`);
 
-    // 先检查P2P接收会话
-    for (const [_transferId, session] of this.receivingSessions) {
+    // 查找活跃的接收会话
+    for (const [transferId, session] of this.receivingSessions) {
       if (session.status === "receiving") {
-        // 获取最新的块索引(应该在之前的CHUNK消息中设置)
-        const expectedChunkIndex = session.receivedChunks.size;
-        session.receivedChunks.set(expectedChunkIndex, data);
+        // 🛡️ Bug1 修复: 必须先收到元数据帧才能知道真实 chunk_index
+        if (session.pendingChunkIndex === -1) {
+          console.warn(`[ServerFileTransfer] ⚠️ 收到二进制帧但尚无元数据 (transfer=${transferId}), 跳过`);
+          return;
+        }
 
-        // 🎨 更新进度条
-        const progress = (session.receivedChunks.size / session.totalChunks) * 100;
-        this.onProgressCallback?.(progress);
+        // 🛡️ Bug1 修复: 用真实 chunk_index 计算 offset, 不再用盲计数器
+        const chunkIndex = session.pendingChunkIndex;
+        const offset = chunkIndex * session.chunkSize;
 
-        console.log(`[ServerFileTransfer] P2P Chunk ${expectedChunkIndex + 1}/${session.totalChunks} received (${progress.toFixed(1)}%)`);
+        // 🛡️ Bug2 修复: buffer 为 null 说明 acceptTransfer 尚未分配成功, 跳过
+        if (!session.buffer) {
+          console.warn(`[ServerFileTransfer] ⚠️ buffer 为 null, 跳过写入 (transfer=${transferId})`);
+          return;
+        }
 
-        // 检查是否接收完成
-        if (session.receivedChunks.size === session.totalChunks) {
-          this.assembleAndSaveFile(session);
+        // 🔥 直接写入预分配缓冲区 — 无额外拷贝
+        if (offset + data.byteLength <= session.buffer.byteLength) {
+          session.buffer.set(new Uint8Array(data), offset);
+          session.receivedCount++;
+          // 写入完成, 重置等待索引
+          session.pendingChunkIndex = -1;
+
+          const progress = (session.receivedCount / session.totalChunks) * 100;
+          this.onProgressCallback?.(progress);
+
+          // 每隔 50 块才打一次日志, 减少输出
+          if (session.receivedCount % 50 === 0 || session.receivedCount === session.totalChunks) {
+            console.log(`[ServerFileTransfer] Chunk ${session.receivedCount}/${session.totalChunks} (${progress.toFixed(1)}%)`);
+          }
+
+          // 检查是否接收完成
+          if (session.receivedCount === session.totalChunks) {
+            this.finalizeReceivedFile(session);
+          }
+        } else {
+          console.error(`[ServerFileTransfer] ❌ Buffer overflow! chunk ${chunkIndex} offset=${offset} size=${data.byteLength} buffer=${session.buffer.byteLength}`);
         }
         return;
       }
     }
 
-    console.warn(`[ServerFileTransfer] ⚠️ 收到未知二进制数据 (${data.byteLength} bytes), 没有匹配的接收会话`);
+    console.warn(`[ServerFileTransfer] ⚠️ 未知二进制数据 (${data.byteLength} bytes), 无匹配会话`);
   }
 
   /**
@@ -280,12 +312,19 @@ export class ServerFileTransfer {
   }
 
   /**
-   * 处理传输请求
+   * 处理传输请求 — 🛡️ 先校验大小再创建会话, buffer 延迟到 acceptTransfer 分配
    */
   private async handleTransferRequest(request: FileTransferRequest) {
     console.log(`[ServerFileTransfer] Received transfer request:`, request);
 
-    // 创建接收会话
+    // 🛡️ Bug2 修复: 接受前先校验文件大小, 防止 OOM
+    if (request.file_size > this.MAX_FILE_SIZE) {
+      console.warn(`[ServerFileTransfer] ❌ 文件过大 (${(request.file_size / 1024 / 1024).toFixed(1)} MB), 超过 500MB 上限, 自动拒绝`);
+      this.rejectTransfer(request.transfer_id, request.from_user_id, "文件超过500MB上限");
+      return;
+    }
+
+    // 🛡️ Bug2 修复: 不在此处预分配缓冲区, 延迟到用户真正接受后再分配
     const session: ReceiveSession = {
       transferId: request.transfer_id,
       fileName: request.file_name,
@@ -293,14 +332,15 @@ export class ServerFileTransfer {
       fileType: request.file_type,
       totalChunks: request.total_chunks,
       chunkSize: request.chunk_size,
-      receivedChunks: new Map(),
+      buffer: null,
+      receivedCount: 0,
+      pendingChunkIndex: -1,
       fromUserId: request.from_user_id,
-      roomName: request.room_name, // 🔧 保存房间名
+      roomName: request.room_name,
       status: "pending",
     };
     this.receivingSessions.set(request.transfer_id, session);
 
-    // 弹窗询问用户是否接受
     const userAccepts = await this.showAcceptDialog(request);
 
     if (userAccepts) {
@@ -342,13 +382,27 @@ export class ServerFileTransfer {
   }
 
   /**
-   * 接受文件传输
+   * 接受文件传输 — 🔥 在此处分配缓冲区, 确保用户确认后才占用内存
    */
   private acceptTransfer(transferId: string, toUserId: string) {
     const session = this.receivingSessions.get(transferId);
     if (!session) {
       console.error(`[ServerFileTransfer] ❌ Session not found: ${transferId}`);
       return;
+    }
+
+    // 🛡️ Bug2 修复: 在用户接受后才分配缓冲区, 用 try/catch 捕获 RangeError
+    try {
+      session.buffer = new Uint8Array(session.fileSize);
+    } catch (e) {
+      if (e instanceof RangeError) {
+        console.error(`[ServerFileTransfer] ❌ 缓冲区分配失败 (${(session.fileSize / 1024 / 1024).toFixed(1)} MB):`, e);
+        alertUseMUI("内存不足, 无法接收该文件", 3000, { kind: "error" });
+        // 清理会话, 不让异常冒泡
+        this.receivingSessions.delete(transferId);
+        return;
+      }
+      throw e; // 非 RangeError 的异常继续抛出
     }
 
     session.status = "receiving";
@@ -374,11 +428,11 @@ export class ServerFileTransfer {
           transfer_id: transferId,
         },
       };
-      
+
       console.log(`[ServerFileTransfer] 发送 ACCEPT 消息:`, acceptMessage);
-      
+
       this.connectionManager.send(acceptMessage);
-      
+
       console.log(`[ServerFileTransfer] ✅ ACCEPT 消息已发送: ${transferId}`);
     } catch (error) {
       console.error(`[ServerFileTransfer] ❌ 发送 ACCEPT 消息失败:`, error);
@@ -542,11 +596,17 @@ export class ServerFileTransfer {
   }
 
   /**
-   * 处理传输块
+   * 处理传输块元数据 — 🛡️ Bug1 修复: 将真实 chunk_index 存入 session, 供下一个二进制帧使用
    */
   private handleTransferChunk(chunkMeta: FileTransferChunk) {
-    // 块元数据已收到,实际数据会在下一个二进制消息中到达
-    console.log(`[ServerFileTransfer] Chunk metadata received:`, chunkMeta);
+    const session = this.receivingSessions.get(chunkMeta.transfer_id);
+    if (!session) {
+      console.warn(`[ServerFileTransfer] ⚠️ handleTransferChunk: 未找到会话 ${chunkMeta.transfer_id}`);
+      return;
+    }
+    // 将元数据里的真实索引暂存, handleBinaryData 会在下一帧读取它
+    session.pendingChunkIndex = chunkMeta.chunk_index;
+    console.log(`[ServerFileTransfer] Chunk metadata received: index=${chunkMeta.chunk_index}/${chunkMeta.total_chunks - 1} transfer=${chunkMeta.transfer_id}`);
   }
 
   /**
@@ -566,7 +626,7 @@ export class ServerFileTransfer {
     if (receiveSession) {
       receiveSession.status = "completed";
       console.log(`[ServerFileTransfer] Receive completed: ${data.transfer_id}`);
-      // 注意：接收方的关闭界面逻辑在 assembleAndSaveFile 中处理
+      // 接收方的关闭界面逻辑在 finalizeReceivedFile 中处理
     }
   }
 
@@ -607,43 +667,33 @@ export class ServerFileTransfer {
   }
 
   /**
-   * 组装并保存文件
+   * 🔥 直接基于预分配缓冲区创建文件 — 单次拷贝, 无额外内存
    */
-  private async assembleAndSaveFile(session: ReceiveSession) {
-    console.log(`[ServerFileTransfer] Assembling file: ${session.fileName}`);
+  private finalizeReceivedFile(session: ReceiveSession) {
+    const startTime = performance.now();
+    console.log(`[ServerFileTransfer] Finalizing: ${session.fileName} (${(session.fileSize / 1024 / 1024).toFixed(1)}MB)`);
 
-    // 按顺序组装所有块
-    const chunks: ArrayBuffer[] = [];
-    for (let i = 0; i < session.totalChunks; i++) {
-      const chunk = session.receivedChunks.get(i);
-      if (!chunk) {
-        console.error(`[ServerFileTransfer] Missing chunk ${i}`);
-        alertUseMUI(t('toast.fileAssemblyError'), 3000, { kind: "error" });
-        // 🎨 关闭下载页面
-        this.onProgressCallback?.(null);
-        this.onDownloadPageStateChange?.(false);
-        return;
+    try {
+      if (!session.buffer) {
+        throw new Error("buffer 为 null, 无法组装文件");
       }
-      chunks.push(chunk);
+      // 🔥 直接创建 Blob — 浏览器可能零拷贝 (shared memory)
+      const blob = new Blob([session.buffer], { type: session.fileType });
+      const file = new File([blob], session.fileName, { type: session.fileType });
+
+      const elapsed = (performance.now() - startTime).toFixed(0);
+      console.log(`[ServerFileTransfer] ✅ File ready in ${elapsed}ms: ${file.name} (${file.size} bytes)`);
+
+      this.onFileReceivedCallback?.(file, session.fromUserId);
+    } catch (err) {
+      console.error(`[ServerFileTransfer] ❌ Finalize failed:`, err);
+      alertUseMUI(t('toast.fileAssemblyError'), 3000, { kind: "error" });
     }
 
-    // 创建Blob
-    const blob = new Blob(chunks, { type: session.fileType });
-    const file = new File([blob], session.fileName, { type: session.fileType });
-
-    console.log(`[ServerFileTransfer] File assembled successfully:`, {
-      name: file.name,
-      size: file.size,
-      type: file.type,
-    });
-
-    // 触发回调
-    this.onFileReceivedCallback?.(file, session.fromUserId);
-
-    // 清理会话
+    // 清理
+    session.buffer = null; // 帮助 GC
     this.receivingSessions.delete(session.transferId);
-    
-    // 🎨 延迟关闭下载页面，让用户看到100%完成
+
     setTimeout(() => {
       this.onProgressCallback?.(null);
       this.onDownloadPageStateChange?.(false);

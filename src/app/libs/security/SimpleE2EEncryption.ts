@@ -434,7 +434,9 @@ export class SimpleE2EEncryption {
    */
   private async importPublicKey(publicKeyBase64: string, algorithm: "ECDH" | "ECDSA"): Promise<CryptoKey> {
     const keyData = Uint8Array.from(atob(publicKeyBase64), c => c.charCodeAt(0));
-    const keyUsage: KeyUsage[] = algorithm === "ECDH" ? ["deriveKey"] : ["verify"];
+    // 🔧 ECDH public keys (SPKI format) must have empty usages array.
+    // "deriveKey" is only valid for private keys per WebCrypto spec.
+    const keyUsage: KeyUsage[] = algorithm === "ECDH" ? [] : ["verify"];
     
     return await crypto.subtle.importKey(
       "spki",

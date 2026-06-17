@@ -6,6 +6,9 @@ import {
     useTheme,
     Backdrop,
     Button,
+    Dialog,
+    DialogContent,
+    IconButton,
 } from "@mui/material";
 import {
     InsertDriveFile,
@@ -18,6 +21,7 @@ import {
     TableChart,      // Excel
     Slideshow,       // PPT
     Subject,         // Word
+    Close as CloseIcon,
 } from "@mui/icons-material";
 import DownloadIcon from "@mui/icons-material/Download"; // 确保导入这个
 import { buttonStyleNormal } from "../pages/share";
@@ -28,6 +32,42 @@ import JSZip from "jszip";
 import { isApp } from "@App/libs/capacitor/user";
 import { saveBinaryToApp } from "@App/libs/capacitor/file";
 import { Trans, useTranslation } from "react-i18next";
+
+// 图片扩展名列表（小写）
+const IMAGE_EXTS = ["png", "jpg", "jpeg", "gif", "bmp", "webp", "svg"];
+
+/** 判断文件名是否是图片 */
+function isImageFile(filename: string): boolean {
+    const ext = filename.split(".").pop()?.toLowerCase() ?? "";
+    return IMAGE_EXTS.includes(ext);
+}
+
+/**
+ * 用 canvas 把图片降采样到最大边 ~200px，导出 JPEG dataURL(q=0.6)。
+ * 返回 null 表示生成失败（SVG 或浏览器不支持时的降级）。
+ */
+async function generateThumbnail(file: File): Promise<string | null> {
+    try {
+        const bitmap = await createImageBitmap(file);
+        const MAX = 200;
+        const scale = Math.min(MAX / bitmap.width, MAX / bitmap.height, 1);
+        const w = Math.round(bitmap.width * scale);
+        const h = Math.round(bitmap.height * scale);
+        const canvas = document.createElement("canvas");
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) {
+            bitmap.close();
+            return null;
+        }
+        ctx.drawImage(bitmap, 0, 0, w, h);
+        bitmap.close();
+        return canvas.toDataURL("image/jpeg", 0.6);
+    } catch {
+        return null;
+    }
+}
 
 
 export default function DownloadDrawerSlide({
@@ -48,6 +88,25 @@ export default function DownloadDrawerSlide({
     const [visible, setVisible] = React.useState(open);
     const [_, forceUpdate] = React.useReducer((x) => x + 1, 0);
 
+    // 🖼️ 缩略图缓存：key(receivedFiles key) → dataURL
+    const [thumbnails, setThumbnails] = React.useState<Map<string, string>>(new Map());
+
+    // 🖼️ 全屏预览状态：存储懒加载的 object URL 和对应的 File
+    const [previewUrl, setPreviewUrl] = React.useState<string | null>(null);
+    const [previewFile, setPreviewFile] = React.useState<File | null>(null);
+
+    // 🔗 Refs 用于组件卸载清理时获取最新值，避免闭包过期
+    const previewUrlRef = React.useRef(previewUrl);
+    previewUrlRef.current = previewUrl;
+    const thumbnailsRef = React.useRef(thumbnails);
+    thumbnailsRef.current = thumbnails;
+
+    // 🗂️ 提前声明（effect 依赖需要用到）
+    const receivingMap = realTimeColab.receivingFiles as Map<string, any>;
+    const receivedMap = realTimeColab.receivedFiles as Map<string, File>;
+    const receivingList = Array.from(receivingMap.entries());
+    const receivedList = Array.from(receivedMap.entries());
+
     React.useEffect(() => {
         if (open) setVisible(true);
     }, [open]);
@@ -57,14 +116,45 @@ export default function DownloadDrawerSlide({
         }, 350);
         return () => clearInterval(interval);
     }, []);
+
+    // 🖼️ 对 receivedList 里的图片异步生成缩略图，避免阻塞渲染
+    React.useEffect(() => {
+        const receivedMap = realTimeColab.receivedFiles as Map<string, File>;
+        const entries = Array.from(receivedMap.entries());
+
+        entries.forEach(([key, file]) => {
+            if (!isImageFile(file.name) || thumbnails.has(key)) return;
+            // 异步生成，不阻塞
+            generateThumbnail(file).then((dataUrl) => {
+                if (dataUrl) {
+                    setThumbnails((prev) => {
+                        const next = new Map(prev);
+                        next.set(key, dataUrl);
+                        return next;
+                    });
+                }
+            });
+        });
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [receivedList.length]); // receivedList 长度变化时重新扫描
+
+    // 🧹 组件卸载时清理所有预览 URL 和缩略图 dataURL
+    React.useEffect(() => {
+        return () => {
+            // 清理全屏预览的 object URL（懒加载，必须释放）
+            if (previewUrlRef.current) {
+                URL.revokeObjectURL(previewUrlRef.current);
+            }
+            // 遍历清理所有缩略图 dataURL（显式释放，安全操作）
+            thumbnailsRef.current.forEach((dataUrl) => {
+                URL.revokeObjectURL(dataUrl);
+            });
+        };
+    }, []);
     const handleSlideExited = () => {
         setVisible(false);
         onClose();
     };
-    const receivingMap = realTimeColab.receivingFiles as Map<string, any>;
-    const receivedMap = realTimeColab.receivedFiles as Map<string, File>;
-    const receivingList = Array.from(receivingMap.entries());
-    const receivedList = Array.from(receivedMap.entries());
     const downloadAllAsZip = async () => {
         if (receivedList.length === 0) return;
 
@@ -212,6 +302,25 @@ export default function DownloadDrawerSlide({
     };
 
 
+
+    /**
+     * 🖼️ 点击图片缩略图 → 打开全屏预览
+     * 懒加载：点击时才创建 object URL，关闭时立即 revoke
+     */
+    const openPreview = (file: File) => {
+        const url = URL.createObjectURL(file);
+        setPreviewFile(file);
+        setPreviewUrl(url);
+    };
+
+    /** 关闭全屏预览并释放 object URL */
+    const closePreview = () => {
+        if (previewUrl) {
+            URL.revokeObjectURL(previewUrl);
+        }
+        setPreviewUrl(null);
+        setPreviewFile(null);
+    };
 
     const hasContent =
         progress !== null || receivingList.length > 0 || receivedList.length > 0;
@@ -412,32 +521,63 @@ export default function DownloadDrawerSlide({
                                         </Box>
 
                                         <Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
-                                            {receivedList.map(([key, file]) => (
-                                                <Box
-                                                    key={key}
-                                                    onClick={() => downloadFile(file)}
-                                                    sx={{
-                                                        display: "flex",
-                                                        alignItems: "center",
-                                                        gap: 1.5,
-                                                        px: 2,
-                                                        py: 1.5,
-                                                        borderRadius: 2,
-                                                        boxShadow: 1,
-                                                        cursor: "pointer",
-                                                        transition: "0.2s",
-                                                        "&:hover": {
-                                                            boxShadow: 3,
-                                                            backgroundColor: theme.palette.action.hover,
-                                                        },
-                                                    }}
-                                                >
-                                                    {getFileIcon(file.name)}
-                                                    <Typography variant="body2" noWrap>
-                                                        {file.name}
-                                                    </Typography>
-                                                </Box>
-                                            ))}
+                                            {receivedList.map(([key, file]) => {
+                                                const isImg = isImageFile(file.name);
+                                                const thumbUrl = thumbnails.get(key);
+                                                return (
+                                                    <Box
+                                                        key={key}
+                                                        onClick={() => {
+                                                            // 🖼️ 图片：点击打开全屏预览；其他文件：直接下载
+                                                            if (isImg) {
+                                                                openPreview(file);
+                                                            } else {
+                                                                downloadFile(file);
+                                                            }
+                                                        }}
+                                                        sx={{
+                                                            display: "flex",
+                                                            alignItems: "center",
+                                                            gap: 1.5,
+                                                            px: 2,
+                                                            py: 1.5,
+                                                            borderRadius: 2,
+                                                            boxShadow: 1,
+                                                            cursor: "pointer",
+                                                            transition: "0.2s",
+                                                            "&:hover": {
+                                                                boxShadow: 3,
+                                                                backgroundColor: theme.palette.action.hover,
+                                                            },
+                                                        }}
+                                                    >
+                                                        {/* 🖼️ 图片：显示缩略图（已生成）或通用图标（生成中） */}
+                                                        {isImg && thumbUrl ? (
+                                                            <Box
+                                                                component="img"
+                                                                src={thumbUrl}
+                                                                alt={file.name}
+                                                                sx={{
+                                                                    width: 40,
+                                                                    height: 40,
+                                                                    objectFit: "cover",
+                                                                    borderRadius: 1,
+                                                                    flexShrink: 0,
+                                                                }}
+                                                            />
+                                                        ) : (
+                                                            getFileIcon(file.name)
+                                                        )}
+                                                        <Typography variant="body2" noWrap sx={{ flex: 1 }}>
+                                                            {file.name}
+                                                        </Typography>
+                                                        {/* 非图片文件显示下载提示图标 */}
+                                                        {!isImg && (
+                                                            <DownloadIcon fontSize="small" sx={{ color: "text.secondary", flexShrink: 0 }} />
+                                                        )}
+                                                    </Box>
+                                                );
+                                            })}
                                         </Box>
                                     </Box>
                                 )}
@@ -458,6 +598,82 @@ export default function DownloadDrawerSlide({
                     </Box>
                 </Box>
             </Slide>
+
+            {/* 🖼️ 全屏图片预览 Dialog（懒加载 object URL，关闭时立即 revoke） */}
+            <Dialog
+                open={!!previewUrl}
+                onClose={closePreview}
+                maxWidth={false}
+                PaperProps={{
+                    sx: {
+                        backgroundColor: "rgba(0,0,0,0.85)",
+                        boxShadow: "none",
+                        borderRadius: 2,
+                        overflow: "hidden",
+                        m: 1,
+                    },
+                }}
+            >
+                <DialogContent
+                    sx={{
+                        p: 0,
+                        position: "relative",
+                        display: "flex",
+                        flexDirection: "column",
+                        alignItems: "center",
+                    }}
+                >
+                    {/* 关闭按钮 */}
+                    <IconButton
+                        onClick={closePreview}
+                        size="small"
+                        sx={{
+                            position: "absolute",
+                            top: 8,
+                            right: 8,
+                            zIndex: 1,
+                            color: "white",
+                            backgroundColor: "rgba(0,0,0,0.4)",
+                            "&:hover": { backgroundColor: "rgba(0,0,0,0.6)" },
+                        }}
+                    >
+                        <CloseIcon fontSize="small" />
+                    </IconButton>
+
+                    {/* 大图 */}
+                    {previewUrl && (
+                        <Box
+                            component="img"
+                            src={previewUrl}
+                            alt={previewFile?.name ?? "preview"}
+                            sx={{
+                                maxWidth: "90vw",
+                                maxHeight: "80vh",
+                                objectFit: "contain",
+                                display: "block",
+                            }}
+                        />
+                    )}
+
+                    {/* 下载按钮 */}
+                    {previewFile && (
+                        <Button
+                            variant="contained"
+                            startIcon={<DownloadIcon />}
+                            onClick={() => {
+                                downloadFile(previewFile);
+                            }}
+                            sx={{
+                                mt: 1,
+                                mb: 1,
+                                ...buttonStyleNormal,
+                            }}
+                        >
+                            {previewFile.name}
+                        </Button>
+                    )}
+                </DialogContent>
+            </Dialog>
         </>
     );
 }
