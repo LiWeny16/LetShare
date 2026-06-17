@@ -26,11 +26,11 @@ export default defineConfig({
               .split("/")[0]
               .toString()
             // 小体积包合并到 common-vendor，减少 modulepreload 请求数
+            // ⚠️ scheduler/use-sync-external-store 是 React 内部依赖，不能合并
             const smallLibs = [
               "clsx", "mitt", "uuid", "hoist-non-react-statics",
               "prop-types", "dom-helpers", "void-elements",
-              "html-parse-stringify", "use-sync-external-store",
-              "@floating-ui", "scheduler", "@babel",
+              "html-parse-stringify", "@floating-ui",
             ]
             if (smallLibs.includes(pkgName)) {
               return "common-vendor"
