@@ -9,14 +9,16 @@ import settingsStore from '@App/libs/mobx/mobx';
 import { useTranslation } from 'react-i18next';
 import QRCodeSignalChannel from '@App/libs/connection/qrlib';
 import realTimeColab from '@App/libs/connection/colabLib';
+import { observer } from 'mobx-react-lite';
 
-const Footer = () => {
+const Footer = observer(() => {
     const { t } = useTranslation();
     const [open, setOpen] = useState(false);
     const handleOpen = () => setOpen(true);
     const handleClose = () => setOpen(false);
     const theme = useTheme();
-    const shareUrl = 'https://bigonion.cn/shortlink';
+    const roomId = settingsStore.get("roomId") || "default-room";
+    const shareUrl = `https://letshare.fun/?room=${encodeURIComponent(roomId)}`;
     const githubUrl = 'https://github.com/LiWeny16/LetShare';
     const [qrMode, _setQrMode] = useState<"share" | "connect">("share");
     const [qrSignal] = useState(() => new QRCodeSignalChannel(realTimeColab));
@@ -115,9 +117,9 @@ const Footer = () => {
                                     href={shareUrl}
                                     target="_blank"
                                     rel="noopener noreferrer"
-                                    sx={{ mt: 1, wordBreak: 'break-word', textDecoration: "none" }}
+                                    sx={{ mt: 1, wordBreak: 'break-word', textDecoration: "none", fontSize: '0.8rem' }}
                                 >
-                                    https://letshare.fun
+                                    letshare.fun/?room={roomId}
                                 </Typography>
                             </Box>
                         ) : (
@@ -186,6 +188,6 @@ const Footer = () => {
             <SettingsPage />
         </>
     );
-};
+});
 
 export { Footer };
