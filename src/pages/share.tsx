@@ -303,9 +303,19 @@ const Share = observer(() => {
 
     useEffect(() => {
 
-        // 📱 扫码入房: 解析 URL 参数 ?room=xxx 自动填入房间号
+        // 📱 扫码入房: 解析 URL 参数 ?room=xxx&region=china|global
         const urlParams = new URLSearchParams(window.location.search);
         const roomFromUrl = urlParams.get('room');
+        const regionFromUrl = urlParams.get('region');
+
+        if (regionFromUrl === 'china') {
+            settingsStore.update("serverMode", "custom");
+            console.log(`[INIT] 📱 扫码指定区域: china → custom server`);
+        } else if (regionFromUrl === 'global') {
+            settingsStore.update("serverMode", "ably");
+            console.log(`[INIT] 📱 扫码指定区域: global → ably server`);
+        }
+
         if (roomFromUrl && roomFromUrl.trim()) {
             const currentRoom = settingsStore.get("roomId");
             if (currentRoom !== roomFromUrl) {

@@ -18,7 +18,19 @@ const Footer = observer(() => {
     const handleClose = () => setOpen(false);
     const theme = useTheme();
     const roomId = settingsStore.get("roomId") || "default-room";
-    const shareUrl = `https://letshare.fun/?room=${encodeURIComponent(roomId)}`;
+    // 获取当前实际连接的服务器区域，让扫码者使用同一服务器
+    const getRegionParam = (): string => {
+        const resolved = realTimeColab.getResolvedServerType();
+        if (resolved === 'china') return 'china';
+        if (resolved === 'global') return 'global';
+        // 未连接时回退到用户设置
+        const mode = settingsStore.get('serverMode');
+        if (mode === 'custom') return 'china';
+        if (mode === 'ably') return 'global';
+        return ''; // auto 模式且未连接，无法确定
+    };
+    const region = getRegionParam();
+    const shareUrl = `https://letshare.fun/?room=${encodeURIComponent(roomId)}${region ? `&region=${region}` : ''}`;
     const githubUrl = 'https://github.com/LiWeny16/LetShare';
     const [qrMode, _setQrMode] = useState<"share" | "connect">("share");
     const [qrSignal] = useState(() => new QRCodeSignalChannel(realTimeColab));

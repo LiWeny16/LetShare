@@ -1874,6 +1874,14 @@ export class RealTimeColab {
     return this.connectionManager.isConnected(); // 新的实现
   }
 
+  /** 获取当前实际连接的服务器类型（china=自定义服务器, global=Ably, none=未连接） */
+  public getResolvedServerType(): 'china' | 'global' | 'none' {
+    const connType = this.connectionManager.getConnectionType();
+    if (connType === 'custom') return 'china';
+    if (connType === 'ably') return 'global';
+    return 'none';
+  }
+
   public getConnectedUserIds(): string[] {
     return Array.from(this.userList.entries())
       .filter(([_, info]) => info.status === "connected") // 加上 return 判断条件
