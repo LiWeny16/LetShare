@@ -42,6 +42,7 @@ import JSZip from "jszip";
 import AppleIcon from "@mui/icons-material/Apple";
 import PhonelinkRingIcon from "@mui/icons-material/PhonelinkRing";
 import PhonelinkIcon from "@mui/icons-material/Phonelink";
+import LinkIcon from "@mui/icons-material/Link";
 import SyncIcon from "@mui/icons-material/Sync";
 import ChatIcon from "@mui/icons-material/Chat";
 import HubIcon from "@mui/icons-material/Hub";
@@ -56,6 +57,18 @@ import { Trans, useTranslation } from "react-i18next";
 // 确保状态类型正确
 
 
+const settingsBodyContentBoxStyle = {
+    position: "relative",
+    padding: "10px",
+    borderRadius: "8px",
+    display: "flex",
+    flexDirection: "column",
+    mt: "10px",
+    mb: "5px",
+    boxShadow: "0 2px 8px rgba(0, 0, 0, 0.1)",
+    overflow: "hidden",
+    cursor: "pointer",
+};
 const badgeStyle = {
     "& .MuiBadge-badge": {
         top: 4,
@@ -290,18 +303,18 @@ const Share = observer(() => {
 
     useEffect(() => {
 
-		// 📱 扫码入房: 解析 URL 参数 ?room=xxx 自动填入房间号
-		const urlParams = new URLSearchParams(window.location.search);
-		const roomFromUrl = urlParams.get('room');
-		if (roomFromUrl && roomFromUrl.trim()) {
-			const currentRoom = settingsStore.get("roomId");
-			if (currentRoom !== roomFromUrl) {
-				settingsStore.update("roomId", roomFromUrl.trim());
-				console.log(`[INIT] 📱 扫码入房: room=${roomFromUrl}`);
-			}
-			const newUrl = window.location.origin + window.location.pathname;
-			window.history.replaceState({}, '', newUrl);
-		}
+        // 📱 扫码入房: 解析 URL 参数 ?room=xxx 自动填入房间号
+        const urlParams = new URLSearchParams(window.location.search);
+        const roomFromUrl = urlParams.get('room');
+        if (roomFromUrl && roomFromUrl.trim()) {
+            const currentRoom = settingsStore.get("roomId");
+            if (currentRoom !== roomFromUrl) {
+                settingsStore.update("roomId", roomFromUrl.trim());
+                console.log(`[INIT] 📱 扫码入房: room=${roomFromUrl}`);
+            }
+            const newUrl = window.location.origin + window.location.pathname;
+            window.history.replaceState({}, '', newUrl);
+        }
         realTimeColab.connectToServer().then((e) => {
             if (e) {
                 realTimeColab.broadcastSignal({ type: "discover", userType: getDeviceType() });
@@ -716,118 +729,122 @@ const Share = observer(() => {
                                     key={user.uniqId}
                                     onClick={(e) => {
                                         if (selectedButton === "video") {
+                                            // 如果尚未建立视频连接，则主动发起连接
                                             if (!realTimeColab.isConnectedToUser(user.uniqId)) {
                                                 realTimeColab.connectToUser(user.uniqId);
                                             }
+                                            // 设置目标用户并打开视频面板
+                                            // setVideoTargetUser(user.uniqId);
+                                            // setVideoPanelOpen(true);
                                         } else {
+                                            // 原有逻辑（文件/文本等消息）
                                             handleClickOtherClients(e, user.uniqId);
                                         }
                                     }}
                                     sx={{
-                                        width: "100%",
+                                        ...settingsBodyContentBoxStyle,
+                                        width: "96%",
                                         textAlign: "inherit",
-                                        borderRadius: 3,
-                                        overflow: 'hidden',
-                                        transition: 'all 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
-                                        opacity: user.status === 'connecting' ? 0.75 : 1,
-                                        // 左侧 4px 状态色条
-                                        position: 'relative',
-                                        '&::before': {
-                                            content: '""',
-                                            position: 'absolute',
-                                            left: 0,
-                                            top: 0,
-                                            bottom: 0,
-                                            width: 4,
-                                            borderTopLeftRadius: 12,
-                                            borderBottomLeftRadius: 12,
-                                            backgroundColor:
-                                                user.status === 'connected' ? 'success.main'
-                                                : (user.status === 'text-only' || user.status === 'waiting') ? 'info.main'
-                                                : user.status === 'connecting' ? 'warning.main'
-                                                : 'grey.400',
-                                            transition: 'background-color 0.3s ease',
-                                        },
-                                        backgroundColor:
-                                            user.status === 'connected' ? 'rgba(76, 175, 80, 0.08)'
-                                            : (user.status === 'text-only' || user.status === 'waiting') ? 'rgba(33, 150, 243, 0.06)'
-                                            : user.status === 'connecting' ? 'action.hover'
-                                            : 'background.paper',
-                                        boxShadow: '0 1px 4px rgba(0,0,0,0.06)',
+                                        backgroundColor: user.status === 'connected'
+                                            ? 'rgba(76, 175, 80, 0.1)' // 🟢 P2P直连 — 淡绿色
+                                            : (user.status === 'text-only' || user.status === 'waiting')
+                                                ? 'rgba(33, 150, 243, 0.08)' // 🔵 公网中继 — 淡蓝色
+                                                : user.status === 'connecting'
+                                                    ? theme.palette.action.hover
+                                                    : theme.palette.background.paper,
+                                        opacity: user.status === 'connecting' ? 0.7 : 1,
+                                        transition: 'all 0.3s ease-in-out',
                                         '&:hover': {
-                                            boxShadow: '0 4px 16px rgba(0,0,0,0.10)',
-                                            transform: 'translateY(-2px)',
-                                            backgroundColor:
-                                                user.status === 'connected' ? 'rgba(76, 175, 80, 0.14)'
-                                                : (user.status === 'text-only' || user.status === 'waiting') ? 'rgba(33, 150, 243, 0.12)'
-                                                : user.status === 'connecting' ? 'rgba(0,0,0,0.08)'
-                                                : 'action.hover',
+                                            boxShadow: user.status === 'connected' ? 2 : 1,
+                                            bgcolor: user.status === 'connected'
+                                                ? 'rgba(76, 175, 80, 0.15)'
+                                                : (user.status === 'text-only' || user.status === 'waiting')
+                                                    ? 'rgba(33, 150, 243, 0.15)' // 🔵 hover 深蓝
+                                                    : user.status === 'connecting'
+                                                        ? 'rgba(0, 0, 0, 0.12)'
+                                                        : 'background.default',
                                         },
-                                        display: 'block',
-                                        px: 2,
-                                        py: 1.75,
-                                        mb: 1,
+                                        padding: 1.5,
+                                        borderRadius: 2,
+                                        display: "block", // 👈 避免默认 inline-flex
                                     }}
                                 >
-                                    {/* --- 顶行: 图标 + 名称 + 状态 --- */}
-                                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 0.75 }}>
-                                        <Box sx={{
-                                            width: 40, height: 40, borderRadius: '50%',
-                                            display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                            backgroundColor:
-                                                user.status === 'connected' ? 'rgba(76,175,80,0.15)'
-                                                : (user.status === 'text-only' || user.status === 'waiting') ? 'rgba(33,150,243,0.12)'
-                                                : 'action.hover',
-                                            flexShrink: 0,
-                                        }}>
-                                            {getUserTypeIcon(user.userType)}
-                                        </Box>
+                                    <Box sx={{
+                                        display: "flex",
+                                        alignItems: "flex-start",
+                                        textAlign: "left",
+                                        gap: 1,
+                                        width: "100%",
+                                        transition: 'opacity 0.3s ease',
+                                        opacity: user.status === 'connecting' ? 0.8 : 1
+                                    }}>
+                                        {getUserTypeIcon(user.userType)}
 
                                         <Typography
-                                            variant="subtitle1"
-                                            fontWeight={600}
-                                            noWrap
-                                            sx={{ flex: 1, minWidth: 0, color: 'text.primary' }}
+                                            variant="body1"
+                                            sx={{
+                                                width: "100%",
+                                                textAlign: "left",
+                                                color: user.status === 'connected'
+                                                    ? 'text.primary'
+                                                    : (user.status === 'text-only' || user.status === 'waiting')
+                                                        ? 'text.primary'
+                                                        : 'text.secondary',
+                                                transition: 'color 0.3s ease'
+                                            }}
                                         >
                                             {user.name}
                                         </Typography>
 
-                                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flexShrink: 0 }}>
+
+
+                                        {/* 状态图标 */}
+                                        <Box sx={{ display: "flex", alignItems: "center", mr: "5px" }}>
                                             {user.status === 'connected' && (
-                                                <Chip label={t('status.connected') ?? 'P2P'} size="small"
-                                                    sx={{ bgcolor: 'success.main', color: 'white', fontWeight: 700, fontSize: '0.7rem', height: 22 }} />
+                                                <LinkIcon sx={{ color: 'success.main', fontSize: 27 }} />
                                             )}
                                             {user.status === 'connecting' && (
-                                                <Chip label={t('status.connecting') ?? '连接中'} size="small"
-                                                    icon={<SyncIcon sx={{ fontSize: 14, color: 'white !important' }} />}
-                                                    sx={{ bgcolor: 'warning.main', color: 'white', fontWeight: 700, fontSize: '0.7rem', height: 22 }} />
+                                                <SyncIcon sx={{ color: 'text.secondary', fontSize: 27 }} />
                                             )}
                                             {(user.status === 'text-only' || user.status === 'waiting') && (
-                                                <Chip label={t('status.textOnly')} size="small"
-                                                    icon={<HubIcon sx={{ fontSize: 14, color: 'white !important' }} />}
-                                                    sx={{ bgcolor: 'info.main', color: 'white', fontWeight: 700, fontSize: '0.7rem', height: 22 }} />
+                                                <Box sx={{ display: 'flex', flexDirection: "row", alignItems: "center" }}>
+                                                    <Chip
+                                                        label={t('status.textOnly')}
+                                                        size="small"
+                                                        sx={{
+                                                            backgroundColor: 'info.main',
+                                                            color: 'white',
+                                                            fontSize: '0.75rem',
+                                                            fontWeight: 'bold',
+                                                            borderRadius: '4px',
+                                                            px: 0.5,
+                                                            mr: "10px",
+                                                            py: 0.25,
+                                                            '& .MuiChip-label': {
+                                                                padding: 0,
+                                                            },
+                                                        }}
+                                                    />
+                                                    <HubIcon sx={{ color: 'info.main', fontSize: 27, mr: "5px" }} />
+                                                </Box>
                                             )}
                                         </Box>
-                                    </Box>
-
-                                    {/* --- 底行: 操作按钮 ---  */}
-                                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, justifyContent: 'flex-end' }}>
-                                        <IconButton
-                                            size="small"
-                                            onClick={(e) => {
-                                                e.stopPropagation();
-                                                setChatTargetUser(user.uniqId);
-                                                setChatPanelOpen(true);
-                                            }}
-                                            sx={{
-                                                opacity: 0.65,
-                                                color: 'text.secondary',
-                                                '&:hover': { opacity: 1, color: 'primary.main' },
-                                                transition: 'all 0.2s',
-                                            }}
-                                        >
-                                            <ChatIcon sx={{ fontSize: 20 }} />
-                                        </IconButton>
+                                        {/* 聊天按钮 */}
+                                        <Box onClick={(e) => {
+                                            e.stopPropagation();
+                                            setChatTargetUser(user.uniqId);
+                                            setChatPanelOpen(true);
+                                        }} sx={{
+                                            mr: 1,
+                                            opacity: 0.7,
+                                            '&:hover': { opacity: 1 }
+                                        }}>
+                                            <IconButton
+                                                size="small"
+                                            >
+                                                <ChatIcon sx={{ fontSize: 20 }} />
+                                            </IconButton>
+                                        </Box>
                                     </Box>
                                 </ButtonBase>
 
