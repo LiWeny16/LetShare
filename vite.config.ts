@@ -77,7 +77,7 @@ export default defineConfig({
             urlPattern: /^https:\/\/.*/i,
             handler: 'StaleWhileRevalidate',
             options: {
-              cacheName: 'external-cache-v2',
+              cacheName: 'external-cache-v3',
               expiration: {
                 maxEntries: 200,
                 maxAgeSeconds: 60 * 60 * 24 * 7 // 7天
@@ -92,7 +92,7 @@ export default defineConfig({
             urlPattern: /^\/.*\.(js|css|html)$/,
             handler: 'NetworkFirst',
             options: {
-              cacheName: 'app-cache-v2',
+              cacheName: 'app-cache-v3',
               networkTimeoutSeconds: 2,
               expiration: {
                 maxEntries: 100,
