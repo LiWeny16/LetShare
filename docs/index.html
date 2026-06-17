@@ -16,48 +16,157 @@
   <link rel="icon" type="image/svg+xml" href="./icons/favicon_io/favicon-32x32.png" />
   <meta name="theme-color" content="#ffffff" />
 
+  <!-- 加载骨架屏（内联 CSS, 零额外请求） -->
+  <style>
+    #app-loading {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100dvh;
+      font-family: system-ui, -apple-system, sans-serif;
+      background: #f5f5f5;
+      position: fixed;
+      inset: 0;
+      z-index: 9999;
+      transition: opacity 0.3s ease;
+    }
+    #app-loading.hide {
+      opacity: 0;
+      pointer-events: none;
+    }
+    #app-loading .spinner {
+      width: 40px;
+      height: 40px;
+      border: 3px solid #e0e0e0;
+      border-top-color: #1976d2;
+      border-radius: 50%;
+      animation: lds-spin 0.8s linear infinite;
+      margin-bottom: 16px;
+    }
+    @keyframes lds-spin {
+      to { transform: rotate(360deg); }
+    }
+    #app-loading .text {
+      color: #999;
+      font-size: 14px;
+    }
 
-  <link rel="manifest" href="./static-4dhVlCNC.manifest.json">
-  <script type="module" crossorigin src="./static/index-Cz3nycjK.js"></script>
-  <link rel="modulepreload" crossorigin href="./static/@babel-vendor-CvQiZcsS.js">
-  <link rel="modulepreload" crossorigin href="./static/react-vendor-DUMAdzxi.js">
-  <link rel="modulepreload" crossorigin href="./static/scheduler-vendor-DYLXRpC5.js">
-  <link rel="modulepreload" crossorigin href="./static/react-dom-vendor-BQyVO993.js">
-  <link rel="modulepreload" crossorigin href="./static/@capacitor-vendor-BO59Eym-.js">
-  <link rel="modulepreload" crossorigin href="./static/@hugotomazi-vendor-BCKjIbph.js">
-  <link rel="modulepreload" crossorigin href="./static/clsx-vendor-B-dksMZM.js">
-  <link rel="modulepreload" crossorigin href="./static/hoist-non-react-statics-vendor-DQogQWOa.js">
+    /* 加载失败后的重试界面 */
+    #app-error {
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100dvh;
+      font-family: system-ui, -apple-system, sans-serif;
+      background: #f5f5f5;
+      position: fixed;
+      inset: 0;
+      z-index: 10000;
+    }
+    #app-error.show {
+      display: flex;
+    }
+    #app-error .icon {
+      font-size: 48px;
+      margin-bottom: 16px;
+    }
+    #app-error .msg {
+      color: #666;
+      font-size: 14px;
+      margin-bottom: 20px;
+      text-align: center;
+      padding: 0 24px;
+      line-height: 1.6;
+    }
+    #app-error button {
+      padding: 10px 24px;
+      background: #1976d2;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      font-size: 14px;
+      cursor: pointer;
+      touch-action: manipulation;
+      -webkit-tap-highlight-color: transparent;
+    }
+    #app-error button:active {
+      background: #1565c0;
+    }
+  </style>
+  <script type="module" crossorigin src="./static/index-CsGmXgEk.js"></script>
+  <link rel="modulepreload" crossorigin href="./static/react-dom-vendor-DXMIsF3Y.js">
+  <link rel="modulepreload" crossorigin href="./static/common-vendor-DkJnK3HZ.js">
   <link rel="modulepreload" crossorigin href="./static/stylis-vendor-DDa9OTMq.js">
-  <link rel="modulepreload" crossorigin href="./static/@emotion-vendor-BjJ2an68.js">
-  <link rel="modulepreload" crossorigin href="./static/react-transition-group-vendor-B4pUypdV.js">
+  <link rel="modulepreload" crossorigin href="./static/@emotion-vendor-P2OUjrub.js">
+  <link rel="modulepreload" crossorigin href="./static/react-transition-group-vendor-CrvETBN2.js">
   <link rel="modulepreload" crossorigin href="./static/react-is-vendor-DSf3zZfm.js">
   <link rel="modulepreload" crossorigin href="./static/@popperjs-vendor-DC5wud4b.js">
-  <link rel="modulepreload" crossorigin href="./static/@mui-vendor-BXGc2jtH.js">
-  <link rel="modulepreload" crossorigin href="./static/mitt-vendor-DJ65BbbF.js">
-  <link rel="modulepreload" crossorigin href="./static/uuid-vendor-BKrj-4V8.js">
+  <link rel="modulepreload" crossorigin href="./static/@mui-vendor-C6GmmHfe.js">
+  <link rel="modulepreload" crossorigin href="./static/react-vendor-Dp4FpQuc.js">
+  <link rel="modulepreload" crossorigin href="./static/@capacitor-vendor-BO59Eym-.js">
+  <link rel="modulepreload" crossorigin href="./static/@hugotomazi-vendor-BCKjIbph.js">
   <link rel="modulepreload" crossorigin href="./static/i18next-vendor-CMUxQoQY.js">
   <link rel="modulepreload" crossorigin href="./static/mobx-vendor-BBz5gzLy.js">
-  <link rel="modulepreload" crossorigin href="./static/ua-parser-js-vendor-C8z0plQm.js">
-  <link rel="modulepreload" crossorigin href="./static/react-device-detect-vendor-CEfIdEC1.js">
-  <link rel="modulepreload" crossorigin href="./static/jszip-vendor-z9MW0yWn.js">
+  <link rel="modulepreload" crossorigin href="./static/ua-parser-js-vendor-HPLLGugr.js">
+  <link rel="modulepreload" crossorigin href="./static/react-device-detect-vendor-DUnNfvOA.js">
   <link rel="modulepreload" crossorigin href="./static/i18next-browser-languagedetector-vendor-OJKzRF51.js">
-  <link rel="modulepreload" crossorigin href="./static/void-elements-vendor-CDiu0thy.js">
-  <link rel="modulepreload" crossorigin href="./static/html-parse-stringify-vendor-zLifhomV.js">
-  <link rel="modulepreload" crossorigin href="./static/react-i18next-vendor-XEHgpih7.js">
-  <link rel="modulepreload" crossorigin href="./static/ably-vendor-DXKSc1eN.js">
-  <link rel="modulepreload" crossorigin href="./static/lodash.isequal-vendor-CoVwtXDn.js">
+  <link rel="modulepreload" crossorigin href="./static/react-i18next-vendor-CBKwZwZx.js">
+  <link rel="modulepreload" crossorigin href="./static/lodash.isequal-vendor-BgQmrSgU.js">
   <link rel="modulepreload" crossorigin href="./static/qrcode-generator-vendor-B7rwAJ2l.js">
-  <link rel="modulepreload" crossorigin href="./static/react-qrcode-logo-vendor-CUO0FCxv.js">
-  <link rel="modulepreload" crossorigin href="./static/use-sync-external-store-vendor-DyPNEIg6.js">
-  <link rel="modulepreload" crossorigin href="./static/mobx-react-lite-vendor-B6TFuRC2.js">
+  <link rel="modulepreload" crossorigin href="./static/react-qrcode-logo-vendor-BDuQwFWd.js">
+  <link rel="modulepreload" crossorigin href="./static/mobx-react-lite-vendor-Cn5sdqkz.js">
   <link rel="modulepreload" crossorigin href="./static/@remix-run-vendor-DdLerVrA.js">
-  <link rel="modulepreload" crossorigin href="./static/react-router-vendor-DWz9kk0e.js">
-  <link rel="modulepreload" crossorigin href="./static/react-router-dom-vendor-BuVDghpy.js">
+  <link rel="modulepreload" crossorigin href="./static/react-router-vendor-DkcbIk_P.js">
+  <link rel="modulepreload" crossorigin href="./static/react-router-dom-vendor-D2k-bNsS.js">
   <link rel="stylesheet" crossorigin href="./static-g6cDhx4N.index.css">
 <link rel="manifest" href="./manifest.webmanifest"><script id="vite-plugin-pwa:register-sw" src="./registerSW.js"></script></head>
 
 <body>
   <div id="root"></div>
+
+  <!-- 加载骨架屏 -->
+  <div id="app-loading">
+    <div class="spinner"></div>
+    <div class="text">正在加载…</div>
+  </div>
+
+  <!-- 加载失败兜底 -->
+  <div id="app-error">
+    <div class="icon">😵</div>
+    <div class="msg">加载失败，请检查网络连接后重试</div>
+    <button onclick="location.reload()">重新加载</button>
+  </div>
+
+
+  <!-- 兜底机制：监听 React 挂载 / 超时降级 -->
+  <script>
+    (function() {
+      var LOADING = document.getElementById('app-loading');
+      var ERROR = document.getElementById('app-error');
+      var ROOT = document.getElementById('root');
+
+      // 超时检测：8 秒后仍未挂载 → 显示错误
+      var timeout = setTimeout(function() {
+        if (ROOT && ROOT.children.length === 0) {
+          LOADING.classList.add('hide');
+          ERROR.classList.add('show');
+        }
+      }, 8000);
+
+      // 监听 React 挂载成功 → 隐藏骨架屏
+      var observer = new MutationObserver(function() {
+        if (ROOT.children.length > 0) {
+          clearTimeout(timeout);
+          LOADING.classList.add('hide');
+          ERROR.classList.remove('show');
+          observer.disconnect();
+        }
+      });
+      observer.observe(ROOT, { childList: true });
+    })();
+  </script>
 </body>
 
 </html>

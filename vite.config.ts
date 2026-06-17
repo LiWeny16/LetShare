@@ -18,13 +18,24 @@ export default defineConfig({
             // 需要单独分割那些资源 就写判断逻辑就行
             return "src/style.css"
           }
-          // // 最小化拆分包
+          // 最小化拆分包 — 但把很小的包合并，避免请求数爆炸
           if (id.includes("node_modules")) {
-            return id
+            const pkgName = id
               .toString()
               .split("node_modules/")[1]
               .split("/")[0]
-              .toString() + "-vendor"
+              .toString()
+            // 小体积包合并到 common-vendor，减少 modulepreload 请求数
+            const smallLibs = [
+              "clsx", "mitt", "uuid", "hoist-non-react-statics",
+              "prop-types", "dom-helpers", "void-elements",
+              "html-parse-stringify", "use-sync-external-store",
+              "@floating-ui", "scheduler", "@babel",
+            ]
+            if (smallLibs.includes(pkgName)) {
+              return "common-vendor"
+            }
+            return pkgName + "-vendor"
           }
         },
       },
@@ -88,15 +99,14 @@ export default defineConfig({
             }
           },
           {
-            // 应用资源使用 NetworkFirst,每次都检查更新
+            // 应用资源使用 StaleWhileRevalidate 策略 — 缓存优先，避免冷加载超时白屏
             urlPattern: /^\/.*\.(js|css|html)$/,
-            handler: 'NetworkFirst',
+            handler: 'StaleWhileRevalidate',
             options: {
-              cacheName: 'app-cache-v3',
-              networkTimeoutSeconds: 2,
+              cacheName: 'app-cache-v4',
               expiration: {
                 maxEntries: 100,
-                maxAgeSeconds: 60 * 60 * 1 // 1小时, 更快过期
+                maxAgeSeconds: 60 * 60 * 24 // 24小时
               }
             }
           }
@@ -112,12 +122,12 @@ export default defineConfig({
         theme_color: '#ffffff',
         icons: [
           {
-            src: 'public/icons/192x192.png',
+            src: '/icons/192x192.png',
             sizes: '192x192',
             type: 'image/png'
           },
           {
-            src: 'public/icons/512x512.png',
+            src: '/icons/512x512.png',
             sizes: '512x512',
             type: 'image/png'
           }

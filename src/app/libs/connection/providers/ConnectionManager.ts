@@ -1,5 +1,4 @@
 import { IConnectionProvider, ConnectionConfig } from "./IConnectionProvider";
-import { AblyConnectionProvider } from "./AblyConnectionProvider";
 import { CustomConnectionProvider } from "./CustomConnectionProvider";
 import settingsStore from "../../mobx/mobx";
 import { testIp } from "../../tools/tools";
@@ -157,6 +156,7 @@ export class ConnectionManager implements IConnectionProvider {
             // 创建新提供者
             let provider: IConnectionProvider;
             if (providerType === 'ably') {
+                const { AblyConnectionProvider } = await import("./AblyConnectionProvider");
                 provider = new AblyConnectionProvider(this.config);
             } else {
                 provider = new CustomConnectionProvider(this.config);

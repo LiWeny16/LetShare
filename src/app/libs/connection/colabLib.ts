@@ -7,9 +7,7 @@ import {
 } from "../tools/tools";
 // import Ably from "ably";
 import settingsStore from "../mobx/mobx";
-import JSZip from "jszip";
 import i18n from "../i18n/i18n";
-import VConsole from "vconsole";
 import { ConnectionConfig } from "./providers/IConnectionProvider";
 import { ConnectionManager } from "./providers/ConnectionManager";
 import { SecureMessageWrapper } from "../security/SecureMessageWrapper";
@@ -202,8 +200,10 @@ export class RealTimeColab {
     setFileTransferProgress: React.Dispatch<React.SetStateAction<number | null>>
   ) {
     if (import.meta.env.MODE !== "production") {
-      new VConsole();
-      console.log("🔧 vConsole loaded for development");
+      import("vconsole").then(({ default: VConsole }) => {
+        new VConsole();
+        console.log("🔧 vConsole loaded for development");
+      });
     }
 
     // console.log("sss",this.staticIp);
@@ -1310,30 +1310,32 @@ export class RealTimeColab {
             ([_, file]) =>
               file.name.startsWith("LetShare_") && file.name.endsWith(".zip")
           );
-          if (zipEntries) {
+          if (zipEntries.length > 0) {
             alertUseMUI(t("alert.unzipping"), 2000, { kind: "info" });
-          }
+            // 仅在需要时才 import，且移出循环只调一次
+            const { default: JSZip } = await import("jszip");
 
-          for (const [fullKey, zipFile] of zipEntries) {
-            try {
-              const zip = await JSZip.loadAsync(zipFile);
+            for (const [fullKey, zipFile] of zipEntries) {
+              try {
+                const zip = await JSZip.loadAsync(zipFile);
 
-              // 提取 ID，例如从 key = "user123::LetShare_12345.zip"
-              const [id] = fullKey.split("::");
+                // 提取 ID，例如从 key = "user123::LetShare_12345.zip"
+                const [innerId] = fullKey.split("::");
 
-              for (const [fileName, zipEntry] of Object.entries(zip.files)) {
-                if (!zipEntry.dir) {
-                  const blob = await zipEntry.async("blob");
-                  const extractedFile = new File([blob], fileName);
+                for (const [fileName, zipEntry] of Object.entries(zip.files)) {
+                  if (!zipEntry.dir) {
+                    const blob = await zipEntry.async("blob");
+                    const extractedFile = new File([blob], fileName);
 
-                  // 生成新 key，例如 "user123::innerFile.txt"
-                  const newKey = `${id}::${fileName}`;
-                  this.receivedFiles.set(newKey, extractedFile);
+                    // 生成新 key，例如 "user123::innerFile.txt"
+                    const newKey = `${innerId}::${fileName}`;
+                    this.receivedFiles.set(newKey, extractedFile);
+                  }
                 }
+                this.receivedFiles.delete(fullKey);
+              } catch (err) {
+                console.error("Unzipping failed:", err);
               }
-              this.receivedFiles.delete(fullKey);
-            } catch (err) {
-              console.error("Unzipping failed:", err);
             }
           }
           alertUseMUI(t("alert.fileReceived", { name: id.split(":")[0] }));
@@ -1623,6 +1625,7 @@ export class RealTimeColab {
     if (file.name.startsWith("LetShare_") && file.name.endsWith(".zip")) {
       try {
         alertUseMUI(t("alert.unzipping"), 2000, { kind: "info" });
+        const { default: JSZip } = await import("jszip");
         const zip = await JSZip.loadAsync(file);
 
         for (const [fileName, zipEntry] of Object.entries(zip.files)) {

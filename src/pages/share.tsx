@@ -38,7 +38,6 @@ import StartupPage from "../components/StartupPage";
 import DownloadDrawer from "../components/Download";
 import ChatPanel from "../components/Chat/ChatPanel";
 import ChatIntegration from "@App/libs/chat/ChatIntegration";
-import JSZip from "jszip";
 import AppleIcon from "@mui/icons-material/Apple";
 import PhonelinkRingIcon from "@mui/icons-material/PhonelinkRing";
 import PhonelinkIcon from "@mui/icons-material/Phonelink";
@@ -238,6 +237,7 @@ const Share = observer(() => {
             return
         }
         try {
+            const { default: JSZip } = await import("jszip");
             const zip = new JSZip();
             // 添加所有文件到ZIP
             Array.from(files).forEach(file => {

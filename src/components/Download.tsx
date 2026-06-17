@@ -28,7 +28,6 @@ import { buttonStyleNormal } from "../pages/share";
 import React from "react";
 import alertUseMUI from "@App/libs/tools/alert";
 import realTimeColab from "@App/libs/connection/colabLib";
-import JSZip from "jszip";
 import { isApp } from "@App/libs/capacitor/user";
 import { saveBinaryToApp } from "@App/libs/capacitor/file";
 import { Trans, useTranslation } from "react-i18next";
@@ -155,15 +154,20 @@ export default function DownloadDrawerSlide({
         setVisible(false);
         onClose();
     };
+    const isDownloadingRef = React.useRef(false);
+
     const downloadAllAsZip = async () => {
         if (receivedList.length === 0) return;
-
-        const zip = new JSZip();
-        receivedList.forEach(([_key, file]) => {
-            zip.file(file.name, file);
-        });
+        // 防止重复点击导致双重 ZIP 生成
+        if (isDownloadingRef.current) return;
+        isDownloadingRef.current = true;
 
         try {
+            const { default: JSZip } = await import("jszip");
+            const zip = new JSZip();
+            receivedList.forEach(([_key, file]) => {
+                zip.file(file.name, file);
+            });
             const content = await zip.generateAsync({ type: "blob" });
             const zipFileName = `Received_${Date.now()}.zip`;
 
@@ -190,6 +194,8 @@ export default function DownloadDrawerSlide({
         } catch (err) {
             console.error("打包下载失败:", err);
             alertUseMUI("打包下载失败，请重试！", 2000, { kind: "error" });
+        } finally {
+            isDownloadingRef.current = false;
         }
     };
 
