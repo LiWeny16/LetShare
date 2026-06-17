@@ -88,7 +88,7 @@ export default defineConfig({
             urlPattern: /^https:\/\/.*/i,
             handler: 'StaleWhileRevalidate',
             options: {
-              cacheName: 'external-cache-v3',
+              cacheName: 'external-cache-v4',
               expiration: {
                 maxEntries: 200,
                 maxAgeSeconds: 60 * 60 * 24 * 7 // 7天
@@ -103,7 +103,7 @@ export default defineConfig({
             urlPattern: /^\/.*\.(js|css|html)$/,
             handler: 'StaleWhileRevalidate',
             options: {
-              cacheName: 'app-cache-v4',
+              cacheName: 'app-cache-v5',
               expiration: {
                 maxEntries: 100,
                 maxAgeSeconds: 60 * 60 * 24 // 24小时
