@@ -92,7 +92,7 @@ export class PeerManager {
         // 如果用户曾经成功建立过P2P连接，断开时很可能是真的离线了
         if (user?.hadP2PConnection && peer.connectionState === "disconnected") {
           console.log(`[CONNECT] 🚪 ${id} had P2P connection before, likely offline, removing user`);
-          this.rtc.clearCache(id);
+          this.rtc.clearCache(id, { clearEncryption: true });
           this.rtc.userList.delete(id);
         } else {
           // 如果从未建立过P2P连接，可能只是连接失败，降级到text-only
@@ -118,13 +118,7 @@ export class PeerManager {
   }
 
   public removePeer(id: string): void {
-    const peer = RealTimeColab.peers.get(id);
-    if (peer) {
-      peer.close();
-      RealTimeColab.peers.delete(id);
-    }
-
-    this.rtc.dataChannels.delete(id);
+    this.rtc.clearCache(id, { clearEncryption: true });
     this.rtc.negotiationMap.delete(id);
     this.rtc.lastConnectAttempt.delete(id);
     this.rtc.userList.delete(id);

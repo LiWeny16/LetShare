@@ -764,11 +764,19 @@ export class RealTimeColab {
    */
   private async handleTextMessage(data: any): Promise<void> {
     const fromId = data.from;
-    const message = data.message;
+    const message =
+      typeof data.message === "string"
+        ? data.message
+        : typeof data.msg === "string"
+          ? data.msg
+          : undefined;
+    const isEncryptedTextMessage = data.type === "encrypted_text" && !!data.encryptedMessage;
 
-    console.log(`[RECV MSG] Received signal text message from ${fromId}: ${message}`);
+    console.log(
+      `[RECV MSG] Received signal text message from ${fromId}: ${message ?? (isEncryptedTextMessage ? "[encrypted payload]" : "undefined")}`
+    );
 
-    if (!fromId || fromId === this.getUniqId() || !message) {
+    if (!fromId || fromId === this.getUniqId() || (message === undefined && !isEncryptedTextMessage)) {
       console.warn(`[RECV MSG] ❌ Invalid message, skipping processing`);
       return;
     }
@@ -795,19 +803,31 @@ export class RealTimeColab {
     }
 
     // 🔐 解密消息（如果是加密消息）
-    let finalMessage = message;
+    let finalMessage: string | undefined = message;
     try {
       const unwrappedData = await this.secureWrapper.unwrapIncomingMessage(fromId, data);
-      if (unwrappedData.message) {
-        finalMessage = unwrappedData.message;
+      const unwrappedMessage =
+        typeof unwrappedData.message === "string"
+          ? unwrappedData.message
+          : typeof unwrappedData.msg === "string"
+            ? unwrappedData.msg
+            : undefined;
+
+      if (unwrappedMessage !== undefined) {
+        finalMessage = unwrappedMessage;
         if (unwrappedData.error) {
           console.error(`[RECV MSG] 🔒 加密消息解密失败`);
-        } else {
+        } else if (isEncryptedTextMessage) {
           console.log(`[RECV MSG] 🔓 成功解密加密消息`);
         }
       }
     } catch (error) {
       console.warn(`[RECV MSG] ⚠️ 消息解密处理失败，使用原始消息:`, error);
+    }
+
+    if (finalMessage === undefined) {
+      console.warn(`[RECV MSG] ❌ No displayable message after processing, skipping`);
+      return;
     }
 
     // 显示收到的消息 - 但避免对当前活跃聊天用户重复提示
@@ -833,7 +853,7 @@ export class RealTimeColab {
       return;
     }
 
-    this.clearCache(fromId);
+    this.clearCache(fromId, { clearEncryption: true });
     this.userList.delete(fromId);
     this.updateUI();
     console.log(`[LEAVE] ✅ All data for user ${fromId} has been cleaned up`);
@@ -844,7 +864,7 @@ export class RealTimeColab {
    * @description Clean The Cache Of User Id
    * @param id
    */
-  public clearCache(id: string): void {
+  public clearCache(id: string, options: { clearEncryption?: boolean } = {}): void {
     console.warn(`🧹 Cleaning up connection-related state for ${id}`);
 
     // 关闭并移除 PeerConnection
@@ -885,9 +905,12 @@ export class RealTimeColab {
     this.pongFailures.delete(id);
     this.recentlyResetPeers.delete(id);
 
-    // 🔐 清理加密数据
-    this.secureWrapper.clearUserData(id);
-    this.userPublicKeys.delete(id);
+    if (options.clearEncryption) {
+      // 🔐 只有用户真正离开/被删除时才清理加密数据。
+      // P2P 失败后仍会降级到 text-only，服务器转发文本还需要这些密钥。
+      this.secureWrapper.clearUserData(id);
+      this.userPublicKeys.delete(id);
+    }
   }
 
   // public broadcastSignal(signal: any): void {

@@ -53,21 +53,29 @@ export class SecureMessageWrapper {
    * 发送前包装消息（自动加密文本消息）
    */
   async wrapOutgoingMessage(targetUniqId: string, message: any): Promise<any> {
+    const plaintext =
+      typeof message.message === "string"
+        ? message.message
+        : typeof message.msg === "string"
+          ? message.msg
+          : undefined;
+
     // 只对text类型的消息进行加密
-    if (message.type === "text" && message.message && this.canEncryptForUser(targetUniqId)) {
+    if (message.type === "text" && plaintext !== undefined && this.canEncryptForUser(targetUniqId)) {
       try {
         const encryptedMsg = await this.encryption.encryptTextMessage(
           this.currentUniqId,  // 🔧 显式传递当前用户ID
-          targetUniqId, 
-          message.message
+          targetUniqId,
+          plaintext
         );
-        
+
         // 返回包装后的消息
         return {
           ...message,
           type: "encrypted_text",
           encryptedMessage: encryptedMsg,
-          message: undefined // 移除明文消息
+          message: undefined, // 移除明文消息
+          msg: undefined
         };
       } catch (error) {
         console.warn(`⚠️ 消息加密失败，使用明文发送:`, error);
@@ -187,4 +195,4 @@ export class SecureMessageWrapper {
   getCurrentUniqId(): string {
     return this.currentUniqId;
   }
-} 
+}
