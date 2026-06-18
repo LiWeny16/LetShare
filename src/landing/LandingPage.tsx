@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import gsap from "gsap";
+import { ScrollTrigger } from "gsap/ScrollTrigger";
 import { useGSAP } from "@gsap/react";
 
-gsap.registerPlugin(useGSAP);
+gsap.registerPlugin(useGSAP, ScrollTrigger);
 
 type ThemeKey = "light" | "dark" | "blue" | "green" | "sunset" | "coolGray";
 
@@ -124,9 +125,17 @@ export default function LandingPage() {
     document.querySelector('meta[name="theme-color"]')?.setAttribute("content", theme === "dark" || theme === "coolGray" ? "#101715" : "#f7fbf8");
   }, [theme]);
 
+  useEffect(() => {
+    ScrollTrigger.refresh();
+  }, [openFaq]);
+
   useGSAP(() => {
+    const root = rootRef.current;
     const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    if (reduceMotion) return;
+    if (reduceMotion || !root) {
+      gsap.set(".landing-reveal", { autoAlpha: 1, y: 0 });
+      return;
+    }
 
     const timeline = gsap.timeline({ defaults: { ease: "power3.out" } });
     timeline
@@ -149,13 +158,51 @@ export default function LandingPage() {
         opacity: 0,
         duration: 0.75,
         stagger: 0.08,
-      }, "-=0.6")
-      .from(".landing-reveal", {
-        y: 24,
-        opacity: 0,
-        duration: 0.72,
-        stagger: 0.06,
-      }, "-=0.2");
+      }, "-=0.6");
+
+    gsap.to(".scroll-progress-bar", {
+      scaleX: 1,
+      ease: "none",
+      scrollTrigger: {
+        trigger: root,
+        start: "top top",
+        end: "bottom bottom",
+        scrub: 0.2,
+      },
+    });
+
+    root.querySelectorAll<HTMLElement>(".landing-reveal").forEach((element) => {
+      gsap.fromTo(element,
+        { autoAlpha: 0, y: 36 },
+        {
+          autoAlpha: 1,
+          y: 0,
+          ease: "power2.out",
+          scrollTrigger: {
+            trigger: element,
+            start: "top 88%",
+            end: "top 68%",
+            scrub: 0.45,
+          },
+        },
+      );
+    });
+
+    const showcaseSection = root.querySelector<HTMLElement>(".showcase-section");
+    const showcaseImage = root.querySelector<HTMLElement>(".showcase-media img");
+    if (showcaseSection && showcaseImage) {
+      gsap.to(showcaseImage, {
+        yPercent: -5,
+        scale: 1.015,
+        ease: "none",
+        scrollTrigger: {
+          trigger: showcaseSection,
+          start: "top bottom",
+          end: "bottom top",
+          scrub: true,
+        },
+      });
+    }
 
     gsap.to(".signal-dot", {
       x: 18,
@@ -222,6 +269,9 @@ export default function LandingPage() {
           </div>
           <a className="button button-primary" href="./">Open App</a>
         </div>
+        <span className="scroll-progress" aria-hidden="true">
+          <span className="scroll-progress-bar" />
+        </span>
       </header>
 
       <section className="hero-section" aria-labelledby="hero-title">

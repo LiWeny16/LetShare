@@ -96,6 +96,14 @@ class SettingsStore {
         const raw = localStorage.getItem(STORAGE_KEY);
 
         try {
+            if (!raw) {
+                runInAction(() => {
+                    this.settings = { ...DEFAULT_SETTINGS };
+                });
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(this.settings));
+                return;
+            }
+
             const parsed = raw ? JSON.parse(raw) : null;
 
             const isValid =

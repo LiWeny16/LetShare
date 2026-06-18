@@ -1,4 +1,4 @@
-import{r as o}from"./react-vendor-BHB2V11F.js";import{g as x}from"./gsap-vendor-SFc2wnMY.js";/*!
+import{r as o}from"./react-vendor-BHB2V11F.js";import{g as x}from"./gsap-vendor-CiEuWA-R.js";/*!
  * @gsap/react 2.1.2
  * https://gsap.com
  *
