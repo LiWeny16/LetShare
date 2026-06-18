@@ -83,6 +83,7 @@ export default defineConfig({
         skipWaiting: true,
         // 设置检查更新的间隔(毫秒)
         cleanupOutdatedCaches: true,
+        navigateFallbackDenylist: [/^\/landing\.html(?:\?.*)?$/],
         // Landing page has its own entry and animation bundle. Keep it out of
         // app precache so the root sharing tool does not fetch GSAP in the
         // background during first use.

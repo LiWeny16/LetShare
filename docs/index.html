@@ -293,6 +293,43 @@
     </div>
   </div>
 
+  <script>
+    (function() {
+      if (location.pathname !== "/landing.html") return;
+
+      var reloadLanding = function() {
+        location.replace(location.href);
+      };
+
+      if (!("serviceWorker" in navigator)) {
+        reloadLanding();
+        return;
+      }
+
+      navigator.serviceWorker.getRegistrations()
+        .then(function(registrations) {
+          return Promise.all(registrations.map(function(registration) {
+            return registration.unregister();
+          }));
+        })
+        .then(function() {
+          if (!("caches" in window)) return;
+          return caches.keys().then(function(keys) {
+            return Promise.all(keys
+              .filter(function(key) {
+                return key.indexOf("workbox") !== -1 ||
+                  key.indexOf("precache") !== -1 ||
+                  key.indexOf("app-cache") !== -1;
+              })
+              .map(function(key) {
+                return caches.delete(key);
+              }));
+          });
+        })
+        .finally(reloadLanding);
+    })();
+  </script>
+
 
   <script>
     if ("serviceWorker" in navigator && location.protocol === "https:") {
