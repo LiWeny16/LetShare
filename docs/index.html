@@ -223,7 +223,8 @@
       background: #1565c0;
     }
   </style>
-  <script type="module" crossorigin src="./static/index-Bi4ZCGfW.js"></script>
+  <script type="module" crossorigin src="./static/index-BRsDePFu.js"></script>
+  <link rel="modulepreload" crossorigin href="./static/modulepreload-polyfill-B5Qt9EMX.js">
   <link rel="modulepreload" crossorigin href="./static/@babel-vendor-K6QP4FNl.js">
   <link rel="modulepreload" crossorigin href="./static/react-vendor-BHB2V11F.js">
   <link rel="modulepreload" crossorigin href="./static/scheduler-vendor-DYLXRpC5.js">
@@ -252,7 +253,7 @@
   <link rel="modulepreload" crossorigin href="./static/react-router-vendor-PBO5KUeP.js">
   <link rel="modulepreload" crossorigin href="./static/react-router-dom-vendor-BmX3mq2S.js">
   <link rel="stylesheet" crossorigin href="./static-g6cDhx4N.index.css">
-<link rel="manifest" href="./manifest.webmanifest"><script id="vite-plugin-pwa:register-sw" src="./registerSW.js"></script></head>
+<link rel="manifest" href="./manifest.webmanifest"></head>
 
 <body>
   <div id="root"></div>
@@ -292,6 +293,14 @@
     </div>
   </div>
 
+
+  <script>
+    if ("serviceWorker" in navigator && location.protocol === "https:") {
+      window.addEventListener("load", function() {
+        navigator.serviceWorker.register("./sw.js").catch(function() {});
+      });
+    }
+  </script>
 
   <!-- 兜底机制：监听 React 挂载 / 超时降级 -->
   <script>

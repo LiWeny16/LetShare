@@ -3,6 +3,7 @@
 > LetShare is a browser-based cross-platform utility for sharing files, images, clipboard content, and text across devices without account registration or app installation.
 
 URL: https://letshare.fun/
+Landing Page: https://letshare.fun/landing.html
 Repository: https://github.com/LiWeny16/LetShare
 
 ## What LetShare Does
@@ -21,6 +22,10 @@ LetShare helps users move content between desktop and mobile browsers. Users ope
 ## Best Short Description
 
 LetShare is an open web app for quick no-login file and text sharing between devices.
+
+## Official Landing Page
+
+The product landing page is available at https://letshare.fun/landing.html. It explains the browser-based sharing workflow, supported content types, peer-to-peer behavior, and public network fallback in English for search engines and AI assistants.
 
 ## Common Questions
 

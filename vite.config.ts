@@ -3,13 +3,15 @@ import react from "@vitejs/plugin-react"
 import viteCompression from "vite-plugin-compression"
 import { resolve } from "path"
 import { VitePWA } from 'vite-plugin-pwa'
-import fs from 'fs';
-import path from 'path';
 export default defineConfig({
   base: "./",
   build: {
     target: "esnext",
     rollupOptions: {
+      input: {
+        index: resolve(__dirname, "index.html"),
+        landing: resolve(__dirname, "landing.html"),
+      },
       // 配置rollup的一些构建策略
       output: {
         assetFileNames: "static-[hash].[name].[ext]",
@@ -73,7 +75,7 @@ export default defineConfig({
       //   enabled: false, // 在开发模式 (`npm run dev`) 中也启用 Service Worker,方便调试。
       // },
       registerType: 'autoUpdate',
-      injectRegister: 'auto',
+      injectRegister: false,
       // 每60秒检查一次更新
       workbox: {
         // 立即激活新的 Service Worker
@@ -81,6 +83,17 @@ export default defineConfig({
         skipWaiting: true,
         // 设置检查更新的间隔(毫秒)
         cleanupOutdatedCaches: true,
+        // Landing page has its own entry and animation bundle. Keep it out of
+        // app precache so the root sharing tool does not fetch GSAP in the
+        // background during first use.
+        globIgnores: [
+          '**/landing.html',
+          '**/*landing*.js',
+          '**/*landing*.css',
+          '**/*gsap*.js',
+          '**/*gsap*.js.gz',
+          '**/modulepreload-polyfill-*.js',
+        ],
         // 设置运行时缓存策略
         runtimeCaching: [
           {
