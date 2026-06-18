@@ -12,12 +12,10 @@ import {
     Popover,
     Grid,
 } from '@mui/material';
-import {
-    Send as SendIcon,
-    Delete as DeleteIcon,
-    AttachFile as AttachFileIcon,
-    EmojiEmotions as EmojiIcon,
-} from '@mui/icons-material';
+import SendIcon from '@mui/icons-material/Send';
+import DeleteIcon from '@mui/icons-material/Delete';
+import AttachFileIcon from '@mui/icons-material/AttachFile';
+import EmojiIcon from '@mui/icons-material/EmojiEmotions';
 import { useTranslation } from 'react-i18next';
 import ChatHistoryManager, { ChatMessage, ChatHistory } from '@App/libs/chat/ChatHistoryManager';
 import ChatIntegration from '@App/libs/chat/ChatIntegration';
@@ -541,4 +539,4 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ open, onClose, targetUserId, targ
     );
 };
 
-export default ChatPanel; 
+export default ChatPanel;

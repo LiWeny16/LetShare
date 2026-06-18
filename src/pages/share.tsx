@@ -23,6 +23,7 @@ import {
     Fade,
     Chip,
     IconButton,
+    Tooltip,
 } from "@mui/material";
 import realTimeColab, { UserInfo, UserStatus } from "@App/libs/connection/colabLib";
 import FileIcon from "@mui/icons-material/Description";
@@ -44,7 +45,7 @@ import PhonelinkIcon from "@mui/icons-material/Phonelink";
 import LinkIcon from "@mui/icons-material/Link";
 import SyncIcon from "@mui/icons-material/Sync";
 import ChatIcon from "@mui/icons-material/Chat";
-import HubIcon from "@mui/icons-material/Hub";
+import WifiTetheringIcon from "@mui/icons-material/WifiTethering";
 import { compareUniqIdPriority, getDeviceType } from "@App/libs/tools/tools";
 import { observer } from "mobx-react-lite";
 import settingsStore from "@App/libs/mobx/mobx";
@@ -118,6 +119,17 @@ const Share = observer(() => {
     const [adminPasswordInput, setAdminPasswordInput] = useState("");
     const [adminPasswordResolver, setAdminPasswordResolver] = useState<((pass: string | null) => void) | null>(null);
     const [pendingLargeFileSize, setPendingLargeFileSize] = useState(0);
+
+    const isPublicNetworkStatus = (status: UserStatus) => (
+        status === 'text-only' || status === 'waiting'
+    );
+
+    const getConnectionStatusTooltip = (status: UserStatus) => {
+        if (status === 'connected') return t('status.p2pTooltip');
+        if (status === 'connecting') return t('status.connectingTooltip');
+        if (isPublicNetworkStatus(status)) return t('status.publicNetworkTooltip');
+        return t('status.disconnected');
+    };
 
 
     // 聊天相关状态
@@ -757,8 +769,8 @@ const Share = observer(() => {
                                         textAlign: "inherit",
                                         backgroundColor: user.status === 'connected'
                                             ? 'rgba(76, 175, 80, 0.1)' // 🟢 P2P直连 — 淡绿色
-                                            : (user.status === 'text-only' || user.status === 'waiting')
-                                                ? 'rgba(33, 150, 243, 0.08)' // 🔵 公网中继 — 淡蓝色
+                                            : isPublicNetworkStatus(user.status)
+                                                ? 'rgba(33, 150, 243, 0.08)' // 🔵 公网通道 — 淡蓝色
                                                 : user.status === 'connecting'
                                                     ? theme.palette.action.hover
                                                     : theme.palette.background.paper,
@@ -768,7 +780,7 @@ const Share = observer(() => {
                                             boxShadow: user.status === 'connected' ? 2 : 1,
                                             bgcolor: user.status === 'connected'
                                                 ? 'rgba(76, 175, 80, 0.15)'
-                                                : (user.status === 'text-only' || user.status === 'waiting')
+                                                : isPublicNetworkStatus(user.status)
                                                     ? 'rgba(33, 150, 243, 0.15)' // 🔵 hover 深蓝
                                                     : user.status === 'connecting'
                                                         ? 'rgba(0, 0, 0, 0.12)'
@@ -797,7 +809,7 @@ const Share = observer(() => {
                                                 textAlign: "left",
                                                 color: user.status === 'connected'
                                                     ? 'text.primary'
-                                                    : (user.status === 'text-only' || user.status === 'waiting')
+                                                    : isPublicNetworkStatus(user.status)
                                                         ? 'text.primary'
                                                         : 'text.secondary',
                                                 transition: 'color 0.3s ease'
@@ -809,36 +821,38 @@ const Share = observer(() => {
 
 
                                         {/* 状态图标 */}
-                                        <Box sx={{ display: "flex", alignItems: "center", mr: "5px" }}>
-                                            {user.status === 'connected' && (
-                                                <LinkIcon sx={{ color: 'success.main', fontSize: 27 }} />
-                                            )}
-                                            {user.status === 'connecting' && (
-                                                <SyncIcon sx={{ color: 'text.secondary', fontSize: 27 }} />
-                                            )}
-                                            {(user.status === 'text-only' || user.status === 'waiting') && (
-                                                <Box sx={{ display: 'flex', flexDirection: "row", alignItems: "center" }}>
-                                                    <Chip
-                                                        label={t('status.textOnly')}
-                                                        size="small"
-                                                        sx={{
-                                                            backgroundColor: 'info.main',
-                                                            color: 'white',
-                                                            fontSize: '0.75rem',
-                                                            fontWeight: 'bold',
-                                                            borderRadius: '4px',
-                                                            px: 0.5,
-                                                            mr: "10px",
-                                                            py: 0.25,
-                                                            '& .MuiChip-label': {
-                                                                padding: 0,
-                                                            },
-                                                        }}
-                                                    />
-                                                    <HubIcon sx={{ color: 'info.main', fontSize: 27, mr: "5px" }} />
-                                                </Box>
-                                            )}
-                                        </Box>
+                                        <Tooltip title={getConnectionStatusTooltip(user.status)} arrow enterDelay={250}>
+                                            <Box sx={{ display: "flex", alignItems: "center", mr: "5px" }}>
+                                                {user.status === 'connected' && (
+                                                    <LinkIcon sx={{ color: 'success.main', fontSize: 27 }} />
+                                                )}
+                                                {user.status === 'connecting' && (
+                                                    <SyncIcon sx={{ color: 'text.secondary', fontSize: 27 }} />
+                                                )}
+                                                {isPublicNetworkStatus(user.status) && (
+                                                    <Box sx={{ display: 'flex', flexDirection: "row", alignItems: "center" }}>
+                                                        <Chip
+                                                            label={t('status.publicNetwork')}
+                                                            size="small"
+                                                            sx={{
+                                                                backgroundColor: 'info.main',
+                                                                color: 'white',
+                                                                fontSize: '0.75rem',
+                                                                fontWeight: 'bold',
+                                                                borderRadius: '4px',
+                                                                px: 0.5,
+                                                                mr: "10px",
+                                                                py: 0.25,
+                                                                '& .MuiChip-label': {
+                                                                    padding: 0,
+                                                                },
+                                                            }}
+                                                        />
+                                                        <WifiTetheringIcon sx={{ color: 'info.main', fontSize: 27, mr: "5px" }} />
+                                                    </Box>
+                                                )}
+                                            </Box>
+                                        </Tooltip>
                                         {/* 聊天按钮 */}
                                         <Box onClick={(e) => {
                                             e.stopPropagation();

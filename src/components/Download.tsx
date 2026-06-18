@@ -10,19 +10,17 @@ import {
     DialogContent,
     IconButton,
 } from "@mui/material";
-import {
-    InsertDriveFile,
-    PictureAsPdf,
-    Image as ImageIcon,
-    Movie,
-    FolderZip as FolderZipIcon,
-    Code,            // 代码文件
-    TextSnippet,     // .txt .md
-    TableChart,      // Excel
-    Slideshow,       // PPT
-    Subject,         // Word
-    Close as CloseIcon,
-} from "@mui/icons-material";
+import InsertDriveFile from "@mui/icons-material/InsertDriveFile";
+import PictureAsPdf from "@mui/icons-material/PictureAsPdf";
+import ImageIcon from "@mui/icons-material/Image";
+import Movie from "@mui/icons-material/Movie";
+import FolderZipIcon from "@mui/icons-material/FolderZip";
+import Code from "@mui/icons-material/Code";
+import TextSnippet from "@mui/icons-material/TextSnippet";
+import TableChart from "@mui/icons-material/TableChart";
+import Slideshow from "@mui/icons-material/Slideshow";
+import Subject from "@mui/icons-material/Subject";
+import CloseIcon from "@mui/icons-material/Close";
 import DownloadIcon from "@mui/icons-material/Download"; // 确保导入这个
 import { buttonStyleNormal } from "../pages/share";
 import React from "react";
