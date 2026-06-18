@@ -122,12 +122,17 @@
       position: fixed;
       inset: 0;
       z-index: 9999;
-      transition: opacity 0.3s ease;
+      opacity: 1;
+      visibility: visible;
+      transition:
+        opacity 520ms ease,
+        visibility 0s linear 520ms;
       padding: 24px;
       box-sizing: border-box;
     }
     #app-loading.hide {
-      display: none;
+      opacity: 0;
+      visibility: hidden;
       pointer-events: none;
     }
     .loading-card {
@@ -345,25 +350,46 @@
       var LOADING = document.getElementById('app-loading');
       var ERROR = document.getElementById('app-error');
       var ROOT = document.getElementById('root');
+      var loadingStartedAt = performance.now();
+      var minLoadingMs = 900;
+      var hidden = false;
+
+      function hideLoading() {
+        if (hidden || !LOADING) return;
+
+        hidden = true;
+        clearTimeout(timeout);
+
+        var elapsed = performance.now() - loadingStartedAt;
+        var delay = Math.max(0, minLoadingMs - elapsed);
+
+        setTimeout(function() {
+          LOADING.classList.add('hide');
+          if (ERROR) ERROR.classList.remove('show');
+        }, delay);
+      }
 
       // 超时检测：8 秒后仍未挂载 → 显示错误
       var timeout = setTimeout(function() {
         if (ROOT && ROOT.children.length === 0) {
-          LOADING.classList.add('hide');
-          ERROR.classList.add('show');
+          if (LOADING) LOADING.classList.add('hide');
+          if (ERROR) ERROR.classList.add('show');
         }
       }, 8000);
 
       // 监听 React 挂载成功 → 隐藏骨架屏
       var observer = new MutationObserver(function() {
         if (ROOT.children.length > 0) {
-          clearTimeout(timeout);
-          LOADING.classList.add('hide');
-          ERROR.classList.remove('show');
+          hideLoading();
           observer.disconnect();
         }
       });
       observer.observe(ROOT, { childList: true });
+
+      if (ROOT && ROOT.children.length > 0) {
+        hideLoading();
+        observer.disconnect();
+      }
     })();
   </script>
 </body>
