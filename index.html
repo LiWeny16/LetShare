@@ -5,16 +5,109 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
 
-  <title>LetShare | Cross-platform File & Text Sharing</title>
+  <title>LetShare - Fast File & Text Sharing Without Login</title>
 
 
   <meta name="msvalidate.01" content="411D1135BD0F14F46E1AE89FE6D56B0B" />
-  <meta name="description" content="Share files, clipboard content, and text across devices quickly without registration.">
-  <meta name="keywords" content="file sharing, clipboard sharing, text sharing, cross-platform transfer, instant sharing, no registration">
+  <meta name="description" content="LetShare is a browser-based file, text, clipboard, and image sharing tool for nearby devices. No account, no install, fast cross-platform transfer.">
+  <meta name="keywords" content="file sharing, text sharing, clipboard sharing, image transfer, cross-platform file transfer, browser file sharing, no login file sharing, AirDrop alternative">
   <meta name="author" content="Let's Share Now Team">
   <meta name="robots" content="index, follow">
+  <meta name="application-name" content="LetShare">
+  <meta name="apple-mobile-web-app-title" content="LetShare">
+  <link rel="canonical" href="https://letshare.fun/">
+  <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" type="image/svg+xml" href="/icons/favicon_io/favicon-32x32.png" />
+  <link rel="apple-touch-icon" href="/icons/favicon_io/apple-touch-icon.png">
   <meta name="theme-color" content="#ffffff" />
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="LetShare">
+  <meta property="og:title" content="LetShare - Fast File & Text Sharing Without Login">
+  <meta property="og:description" content="Share files, text, clipboard content, and images across devices from the browser. No account, no install, quick cross-platform transfer.">
+  <meta property="og:url" content="https://letshare.fun/">
+  <meta property="og:image" content="https://letshare.fun/screenshots/desktop.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="746">
+  <meta property="og:image:alt" content="LetShare file and text sharing interface">
+  <meta property="og:locale" content="en_US">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="LetShare - Fast File & Text Sharing Without Login">
+  <meta name="twitter:description" content="Browser-based file, text, clipboard, and image sharing across devices. No account or install required.">
+  <meta name="twitter:image" content="https://letshare.fun/screenshots/desktop.png">
+
+  <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@graph": [
+        {
+          "@type": "WebSite",
+          "@id": "https://letshare.fun/#website",
+          "url": "https://letshare.fun/",
+          "name": "LetShare",
+          "description": "Browser-based cross-platform file, text, clipboard, and image sharing.",
+          "inLanguage": "en"
+        },
+        {
+          "@type": "WebApplication",
+          "@id": "https://letshare.fun/#app",
+          "name": "LetShare",
+          "url": "https://letshare.fun/",
+          "applicationCategory": "UtilitiesApplication",
+          "operatingSystem": "Any modern browser",
+          "browserRequirements": "Requires a modern browser with WebRTC and WebSocket support.",
+          "description": "LetShare lets nearby users share files, images, clipboard content, and text across desktop and mobile browsers without creating an account or installing an app.",
+          "image": "https://letshare.fun/icons/512x512.png",
+          "screenshot": "https://letshare.fun/screenshots/desktop.png",
+          "offers": {
+            "@type": "Offer",
+            "price": "0",
+            "priceCurrency": "USD"
+          },
+          "featureList": [
+            "Cross-platform file sharing",
+            "Text and clipboard sharing",
+            "Image transfer",
+            "No account required",
+            "Browser-based transfer",
+            "Peer-to-peer transfer when available"
+          ],
+          "sameAs": [
+            "https://github.com/LiWeny16/LetShare"
+          ]
+        },
+        {
+          "@type": "FAQPage",
+          "@id": "https://letshare.fun/#faq",
+          "mainEntity": [
+            {
+              "@type": "Question",
+              "name": "What is LetShare?",
+              "acceptedAnswer": {
+                "@type": "Answer",
+                "text": "LetShare is a browser-based utility for sharing files, images, clipboard content, and text across devices without requiring an account or app installation."
+              }
+            },
+            {
+              "@type": "Question",
+              "name": "Do I need to install LetShare?",
+              "acceptedAnswer": {
+                "@type": "Answer",
+                "text": "No. LetShare runs in a modern web browser, so users can open the same room link or scan a QR code to start sharing."
+              }
+            },
+            {
+              "@type": "Question",
+              "name": "Does LetShare support peer-to-peer transfer?",
+              "acceptedAnswer": {
+                "@type": "Answer",
+                "text": "Yes. LetShare attempts a direct peer-to-peer connection for fast file transfer when the network allows it, and falls back to the public network channel for supported text communication."
+              }
+            }
+          ]
+        }
+      ]
+    }
+  </script>
 
   <!-- 加载骨架屏（内联 CSS, 零额外请求） -->
   <style>
@@ -134,6 +227,21 @@
 
 <body>
   <div id="root"></div>
+
+  <noscript>
+    <style>
+      #app-loading {
+        display: none !important;
+      }
+    </style>
+    <main class="loading-card">
+      <h1>LetShare file and text sharing</h1>
+      <p>LetShare is a browser-based utility for sharing files, images, clipboard content, and text across devices without creating an account or installing an app.</p>
+      <p>Open LetShare on two devices, use the same room ID, and start sharing from your browser.</p>
+      <p>JavaScript is required to use the interactive transfer app.</p>
+      <p><a href="https://github.com/LiWeny16/LetShare" rel="noopener noreferrer">View LetShare on GitHub</a></p>
+    </main>
+  </noscript>
 
   <!-- 加载骨架屏 -->
   <div id="app-loading">

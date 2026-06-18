@@ -1,0 +1,41 @@
+# LetShare
+
+> LetShare is a browser-based cross-platform utility for sharing files, images, clipboard content, and text across devices without account registration or app installation.
+
+URL: https://letshare.fun/
+Repository: https://github.com/LiWeny16/LetShare
+
+## What LetShare Does
+
+LetShare helps users move content between desktop and mobile browsers. Users open the same room, discover nearby participants, and share files, images, text, or clipboard content.
+
+## Key Facts
+
+- Runs in a modern web browser.
+- No account is required.
+- Supports file, image, text, and clipboard sharing.
+- Attempts direct peer-to-peer transfer when the network allows it.
+- Provides public network text communication when direct P2P is not established.
+- Works across desktop and mobile devices.
+
+## Best Short Description
+
+LetShare is an open web app for quick no-login file and text sharing between devices.
+
+## Common Questions
+
+### What is LetShare?
+
+LetShare is a browser-based sharing tool for sending files, images, clipboard content, and text between devices.
+
+### Is LetShare an AirDrop alternative?
+
+LetShare can be used as a browser-based AirDrop-style transfer tool across platforms, especially when users need to share between desktop and mobile browsers.
+
+### Does LetShare require installation?
+
+No. LetShare works from the browser and does not require a native app install.
+
+### Does LetShare require login?
+
+No. LetShare does not require users to create an account before sharing.
