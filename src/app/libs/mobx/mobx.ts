@@ -6,7 +6,7 @@ const STORAGE_KEY = 'user_settings';
 const DEFAULT_SETTINGS = {
     roomId: '',
     userTheme: 'light' as ThemeKey,
-    userLanguage: 'system' as LanguageType,
+    userLanguage: 'en' as LanguageType,
     serverMode: 'auto' as 'auto' | 'ably' | 'custom',
     customServerUrl: "wss://ecs.letshare.fun/",
     authToken: "98d9a399675116e5256e9082c192bc06eb6434937af99f201252e9424c7a5652",

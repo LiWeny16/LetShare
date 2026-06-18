@@ -1,16 +1,16 @@
 <!DOCTYPE html>
-<html lang="zh">
+<html lang="en">
 
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
 
-  <title>乐享Share | 文件 & 文本跨平台共享</title>
+  <title>LetShare | Cross-platform File & Text Sharing</title>
 
 
   <meta name="msvalidate.01" content="411D1135BD0F14F46E1AE89FE6D56B0B" />
-  <meta name="description" content="在同一局域网内轻松共享文件、剪贴板内容和文本，无需注册，快速便捷。">
-  <meta name="keywords" content="局域网, 文件共享, 剪贴板共享, 传输, 共享文本, 无需注册, 即时共享">
+  <meta name="description" content="Share files, clipboard content, and text across devices quickly without registration.">
+  <meta name="keywords" content="file sharing, clipboard sharing, text sharing, cross-platform transfer, instant sharing, no registration">
   <meta name="author" content="Let's Share Now Team">
   <meta name="robots" content="index, follow">
   <link rel="icon" type="image/svg+xml" href="./icons/favicon_io/favicon-32x32.png" />
@@ -25,15 +25,51 @@
       justify-content: center;
       min-height: 100dvh;
       font-family: system-ui, -apple-system, sans-serif;
-      background: #f5f5f5;
+      background: #f7f8fa;
       position: fixed;
       inset: 0;
       z-index: 9999;
       transition: opacity 0.3s ease;
+      padding: 24px;
+      box-sizing: border-box;
     }
     #app-loading.hide {
-      opacity: 0;
+      display: none;
       pointer-events: none;
+    }
+    .loading-card {
+      width: min(320px, 100%);
+      min-height: 292px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 32px 28px;
+      border-radius: 16px;
+      background: #ffffff;
+      box-shadow: 0 8px 28px rgba(15, 23, 42, 0.10);
+      box-sizing: border-box;
+      text-align: center;
+    }
+    .loading-card img {
+      width: 96px;
+      height: 96px;
+      display: block;
+      object-fit: contain;
+      margin-bottom: 18px;
+    }
+    .loading-card .brand {
+      color: #1f2937;
+      font-size: 24px;
+      font-weight: 500;
+      line-height: 1.25;
+      margin-bottom: 8px;
+    }
+    .loading-card .text {
+      color: #6b7280;
+      font-size: 14px;
+      line-height: 1.5;
+      min-height: 21px;
     }
     #app-loading .spinner {
       width: 40px;
@@ -42,14 +78,10 @@
       border-top-color: #1976d2;
       border-radius: 50%;
       animation: lds-spin 0.8s linear infinite;
-      margin-bottom: 16px;
+      margin-top: 22px;
     }
     @keyframes lds-spin {
       to { transform: rotate(360deg); }
-    }
-    #app-loading .text {
-      color: #999;
-      font-size: 14px;
     }
 
     /* 加载失败后的重试界面 */
@@ -60,10 +92,12 @@
       justify-content: center;
       min-height: 100dvh;
       font-family: system-ui, -apple-system, sans-serif;
-      background: #f5f5f5;
+      background: #f7f8fa;
       position: fixed;
       inset: 0;
       z-index: 10000;
+      padding: 24px;
+      box-sizing: border-box;
     }
     #app-error.show {
       display: flex;
@@ -90,12 +124,13 @@
       cursor: pointer;
       touch-action: manipulation;
       -webkit-tap-highlight-color: transparent;
+      box-shadow: 0 2px 8px rgba(25, 118, 210, 0.28);
     }
     #app-error button:active {
       background: #1565c0;
     }
   </style>
-  <script type="module" crossorigin src="./static/index-C5g7lI8-.js"></script>
+  <script type="module" crossorigin src="./static/index-Bi4ZCGfW.js"></script>
   <link rel="modulepreload" crossorigin href="./static/@babel-vendor-K6QP4FNl.js">
   <link rel="modulepreload" crossorigin href="./static/react-vendor-BHB2V11F.js">
   <link rel="modulepreload" crossorigin href="./static/scheduler-vendor-DYLXRpC5.js">
@@ -108,7 +143,7 @@
   <link rel="modulepreload" crossorigin href="./static/react-transition-group-vendor-Dv-5bzlK.js">
   <link rel="modulepreload" crossorigin href="./static/react-is-vendor-DSf3zZfm.js">
   <link rel="modulepreload" crossorigin href="./static/@popperjs-vendor-DC5wud4b.js">
-  <link rel="modulepreload" crossorigin href="./static/@mui-vendor-DAaWQpN1.js">
+  <link rel="modulepreload" crossorigin href="./static/@mui-vendor-DIjEad59.js">
   <link rel="modulepreload" crossorigin href="./static/i18next-vendor-CMUxQoQY.js">
   <link rel="modulepreload" crossorigin href="./static/mobx-vendor-BBz5gzLy.js">
   <link rel="modulepreload" crossorigin href="./static/ua-parser-js-vendor-DUoPVsbw.js">
@@ -131,15 +166,22 @@
 
   <!-- 加载骨架屏 -->
   <div id="app-loading">
-    <div class="spinner"></div>
-    <div class="text">正在加载…</div>
+    <div class="loading-card">
+      <img src="./icons/startup-logo-192.png" alt="LetShare" width="96" height="96" decoding="async">
+      <div class="brand">LetShare</div>
+      <div class="text">Preparing your sharing room</div>
+      <div class="spinner" aria-hidden="true"></div>
+    </div>
   </div>
 
   <!-- 加载失败兜底 -->
   <div id="app-error">
-    <div class="icon">😵</div>
-    <div class="msg">加载失败，请检查网络连接后重试</div>
-    <button onclick="location.reload()">重新加载</button>
+    <div class="loading-card">
+      <div class="icon">!</div>
+      <div class="brand">LetShare</div>
+      <div class="msg">Loading failed. Check your network connection and try again.</div>
+      <button onclick="location.reload()">Reload</button>
+    </div>
   </div>
 
 

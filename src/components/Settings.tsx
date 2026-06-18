@@ -39,6 +39,7 @@ const SettingsPage = () => {
     const settings = settingsStore.getAllSettings();
     const settingsRef = React.useRef<HTMLDivElement>(null);
     const [advancedOpen, setAdvancedOpen] = React.useState(false);
+    const languageLabel = t('settings.languageLabel');
     // ✅ 初始值只记录一次（建议放在 useEffect 或 useRef）
     const originalRoomIdRef = React.useRef(settingsStore.get("roomId"));
 
@@ -224,11 +225,11 @@ const SettingsPage = () => {
                     <ThemeSelector />
 
                     <FormControl fullWidth>
-                        <InputLabel>语言/Language</InputLabel>
+                        <InputLabel>{languageLabel}</InputLabel>
                         <Select
                             value={(settingsStore.get('userLanguage') as LanguageType)}
                             onChange={handleChangeLanguage}
-                            label={"语言/Language"}
+                            label={languageLabel}
                             sx={{ minWidth: 140, mt: 0 }}
                         >
                             <MenuItem value="system">System</MenuItem>

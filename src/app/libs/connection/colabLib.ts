@@ -199,13 +199,6 @@ export class RealTimeColab {
     updateConnectedUsers: (userList: Map<string, UserInfo>) => void = () => { },
     setFileTransferProgress: React.Dispatch<React.SetStateAction<number | null>>
   ) {
-    if (import.meta.env.MODE !== "production") {
-      import("vconsole").then(({ default: VConsole }) => {
-        new VConsole();
-        console.log("🔧 vConsole loaded for development");
-      });
-    }
-
     // console.log("sss",this.staticIp);
     this.setFileSendingTargetUser = setFileSendingTargetUser;
     this.setMsgFromSharing = setMsgFromSharing;

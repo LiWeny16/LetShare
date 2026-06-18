@@ -9,8 +9,8 @@ import { resources } from './translation';
 // 从 MobX store 获取语言设置
 const storedLang = settingsStore.get('userLanguage') as LanguageType | null;
 
-// 如果为空，默认设为 'en'
-const userLang: LanguageType = storedLang ?? 'system';
+// Default new users to English; users can still switch to system language in settings.
+const userLang: LanguageType = storedLang ?? 'en';
 
 // 解析最终用于 i18n 的语言
 const getEffectiveLang = (): string => {

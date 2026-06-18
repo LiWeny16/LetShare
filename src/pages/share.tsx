@@ -18,7 +18,6 @@ import {
     Badge,
     CircularProgress,
     TextField,
-    Backdrop,
     Fab,
     Fade,
     Chip,
@@ -35,7 +34,6 @@ import alertUseMUI from "@App/libs/tools/alert";
 import AlertPortal from "../components/Alert";
 import { Footer } from "../components/Footer";
 import EditableUserId from "../components/UserId";
-import StartupPage from "../components/StartupPage";
 import DownloadDrawer from "../components/Download";
 import ChatPanel from "../components/Chat/ChatPanel";
 import ChatIntegration from "@App/libs/chat/ChatIntegration";
@@ -105,8 +103,6 @@ const Share = observer(() => {
     const [textInputDialogOpen, setTextInputDialogOpen] = useState(false);
     const [textInput, setTextInput] = useState("");
     const [fileTransferProgress, setFileTransferProgress] = useState<number | null>(null);
-    const [loadingPage, setLoadingPage] = useState(true);
-    const [startUpVisibility, setStartUpVisibility] = useState(true);
     const [downloadPageState, setDwnloadPageState] = useState(false);
     const [isDraggingOver, setIsDraggingOver] = React.useState(false);
     const [fileSendingTargetUser, setFileSendingTargetUser] = React.useState("");
@@ -370,8 +366,6 @@ const Share = observer(() => {
 
         }
 
-        setTimeout(() => { setStartUpVisibility(false) }, 1000)
-
         return () => {
             realTimeColab.disconnect();
         };
@@ -407,7 +401,6 @@ const Share = observer(() => {
         };
 
         window.addEventListener("paste", handlePaste);
-        setLoadingPage(false)
         return () => {
             window.removeEventListener("paste", handlePaste);
         };
@@ -492,32 +485,31 @@ const Share = observer(() => {
 
     return (
         <>
-            {!startUpVisibility && (
-                <Box
-                    ref={mainDialogRef}
-                    onDragEnter={handleDragEnter}
-                    onDragLeave={handleDragLeave}
-                    onDragOver={handleDragOver}
-                    onDrop={handleDrop}
-                    sx={{
-                        position: "fixed",
-                        top: "50%",
-                        left: "50%",
-                        transform: "translate(-50%, -50%)",
-                        width: { xs: "89%", sm: "80%", md: "60%" },
-                        // maxWidth: "9000px",
-                        height: isApp ? "85svh" : "75vh",
-                        p: 3,
-                        m: "auto",
-                        boxShadow: isApp ? 8 : 8,
-                        borderRadius: 2,
-                        backgroundColor: "background.paper",
-                        zIndex: (theme) => theme.zIndex.modal,
-                        display: "flex",
-                        flexDirection: "column",
-                        justifyContent: "space-between",
-                    }}
-                >
+            <Box
+                ref={mainDialogRef}
+                onDragEnter={handleDragEnter}
+                onDragLeave={handleDragLeave}
+                onDragOver={handleDragOver}
+                onDrop={handleDrop}
+                sx={{
+                    position: "fixed",
+                    top: "50%",
+                    left: "50%",
+                    transform: "translate(-50%, -50%)",
+                    width: { xs: "89%", sm: "80%", md: "60%" },
+                    // maxWidth: "9000px",
+                    height: isApp ? "85svh" : "75vh",
+                    p: 3,
+                    m: "auto",
+                    boxShadow: isApp ? 8 : 8,
+                    borderRadius: 2,
+                    backgroundColor: "background.paper",
+                    zIndex: (theme) => theme.zIndex.modal,
+                    display: "flex",
+                    flexDirection: "column",
+                    justifyContent: "space-between",
+                }}
+            >
                     {isDraggingOver && (
                         <Fade in={isDraggingOver} timeout={400} unmountOnExit>
                             <Box
@@ -891,8 +883,7 @@ const Share = observer(() => {
                     </Fab>
 
                     <EditableUserId />
-                </Box>
-            )}
+            </Box>
 
 
             <Dialog
@@ -1055,13 +1046,6 @@ const Share = observer(() => {
                 </DialogActions>
             </Dialog>
 
-            <Backdrop
-                sx={{ color: '#fff', zIndex: (theme) => theme.zIndex.drawer + 9999 }}
-                open={loadingPage}
-            >
-                <CircularProgress color="inherit" />
-            </Backdrop>
-            <StartupPage open={startUpVisibility} />
             <AlertPortal />
 
             {/* 聊天面板 */}
