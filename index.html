@@ -310,7 +310,29 @@
   <script>
     if ("serviceWorker" in navigator && location.protocol === "https:") {
       window.addEventListener("load", function() {
-        navigator.serviceWorker.register("./sw.js").catch(function() {});
+        var hadController = Boolean(navigator.serviceWorker.controller);
+        var refreshing = false;
+
+        navigator.serviceWorker.addEventListener("controllerchange", function() {
+          if (!hadController) {
+            hadController = true;
+            return;
+          }
+          if (refreshing) return;
+          refreshing = true;
+          location.reload();
+        });
+
+        navigator.serviceWorker.register("./sw.js", { updateViaCache: "none" })
+          .then(function(registration) {
+            var checkForUpdate = function() {
+              registration.update().catch(function() {});
+            };
+
+            checkForUpdate();
+            setInterval(checkForUpdate, 60 * 1000);
+          })
+          .catch(function() {});
       });
     }
   </script>

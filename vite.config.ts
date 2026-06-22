@@ -111,18 +111,6 @@ export default defineConfig({
                 statuses: [0, 200]
               }
             }
-          },
-          {
-            // 应用资源使用 StaleWhileRevalidate 策略 — 缓存优先，避免冷加载超时白屏
-            urlPattern: /^\/.*\.(js|css|html)$/,
-            handler: 'StaleWhileRevalidate',
-            options: {
-              cacheName: 'app-cache-v5',
-              expiration: {
-                maxEntries: 100,
-                maxAgeSeconds: 60 * 60 * 24 // 24小时
-              }
-            }
           }
         ]
       },
