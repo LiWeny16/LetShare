@@ -7,6 +7,14 @@
 
   <title>LetShare - Fast File & Text Sharing Without Login</title>
 
+  <script>
+    (function() {
+      var isProductionHost = location.hostname === "letshare.fun";
+      if (isProductionHost && location.protocol === "http:") {
+        location.replace("https://letshare.fun" + location.pathname + location.search + location.hash);
+      }
+    })();
+  </script>
 
   <meta name="msvalidate.01" content="411D1135BD0F14F46E1AE89FE6D56B0B" />
   <meta name="description" content="LetShare is a browser-based file, text, clipboard, and image sharing tool for nearby devices. No account, no install, fast cross-platform transfer.">
