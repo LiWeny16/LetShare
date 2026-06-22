@@ -26,6 +26,14 @@ test("production http traffic is upgraded before the app boots", () => {
   );
 });
 
+test("initial loading shell uses stable dimensions before React boots", () => {
+  assert.match(indexHtml, /#app-loading\s*\{[\s\S]*height:\s*100vh/);
+  assert.match(indexHtml, /@supports \(height:\s*100svh\)/);
+  assert.match(indexHtml, /#app-loading,\s*#app-error\s*\{[\s\S]*height:\s*100svh/);
+  assert.match(indexHtml, /\.loading-card\s*\{[\s\S]*min-height:\s*320px/);
+  assert.match(indexHtml, /#app-loading \.loading-card\s*\{[\s\S]*height:\s*320px/);
+});
+
 test("local app shell is not served stale-first by a runtime cache", () => {
   assert.doesNotMatch(viteConfig, /cacheName:\s*['"]app-cache-v\d+['"]/);
   assert.doesNotMatch(viteConfig, /urlPattern:\s*\/\^\\\/\.\*\\\.\(js\|css\|html\)\$\/,/);
