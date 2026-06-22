@@ -23,6 +23,12 @@ export interface IConnectionProvider {
      * @param callback 接收到信令时的回调函数
      */
     onSignalReceived(callback: (data: any) => void): void;
+
+    /**
+     * 设置连接断开回调
+     * @param callback 底层连接断开或异常时的回调函数
+     */
+    onDisconnected?(callback: (reason?: string) => void): void;
     
     /**
      * 检查连接状态
@@ -52,6 +58,11 @@ export interface IConnectionProvider {
      * @param data 二进制数据
      */
     sendBinary?(data: ArrayBuffer): void;
+
+    /**
+     * 获取当前底层发送缓冲区大小，用于文件传输背压控制
+     */
+    getBufferedAmount?(): number;
     
     /**
      * 设置消息接收回调(用于文件传输等非信令消息)
@@ -74,4 +85,4 @@ export interface IConnectionProvider {
 export interface ConnectionConfig {
     roomId: string;
     uniqId: string;
-} 
+}

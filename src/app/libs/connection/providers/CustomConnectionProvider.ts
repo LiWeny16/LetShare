@@ -9,6 +9,7 @@ export class CustomConnectionProvider implements IConnectionProvider {
     private signalCallback: ((data: any) => void) | null = null;
     private messageCallback: ((message: any) => void) | null = null;
     private binaryCallback: ((data: ArrayBuffer) => void) | null = null;
+    private disconnectedCallback: ((reason?: string) => void) | null = null;
     private isSubscribed: boolean = false;
 
     constructor(config: ConnectionConfig) {
@@ -59,6 +60,9 @@ export class CustomConnectionProvider implements IConnectionProvider {
                         // 将Blob转换为ArrayBuffer
                         event.data.arrayBuffer().then(buffer => {
                             this.handleBinaryMessage(buffer);
+                        }).catch(error => {
+                            console.error("❌ WebSocket Blob二进制数据读取失败:", error);
+                            this.disconnectedCallback?.("WebSocket 二进制数据读取失败");
                         });
                     } else {
                         this.handleMessage(event);
@@ -68,11 +72,14 @@ export class CustomConnectionProvider implements IConnectionProvider {
                 this.ws.onclose = () => {
                     clearTimeout(timeout);
                     console.warn("🔌 WebSocket连接关闭");
+                    this.isSubscribed = false;
+                    this.disconnectedCallback?.("WebSocket 连接已关闭");
                 };
 
                 this.ws.onerror = (error: Event) => {
                     clearTimeout(timeout);
                     console.error("❌ WebSocket连接错误:", error);
+                    this.disconnectedCallback?.("WebSocket 连接异常");
                     reject(error);
                 };
             });
@@ -83,7 +90,7 @@ export class CustomConnectionProvider implements IConnectionProvider {
         }
     }
 
-    async disconnect(_soft?: boolean): Promise<void> {
+    async disconnect(): Promise<void> {
         if (this.ws) {
             // 先取消订阅
             if (this.isSubscribed && this.currentRoomId) {
@@ -121,6 +128,10 @@ export class CustomConnectionProvider implements IConnectionProvider {
         this.signalCallback = callback;
     }
 
+    onDisconnected(callback: (reason?: string) => void): void {
+        this.disconnectedCallback = callback;
+    }
+
     isConnected(): boolean {
         return this.ws !== null && this.ws.readyState === WebSocket.OPEN && this.isSubscribed;
     }
@@ -147,7 +158,7 @@ export class CustomConnectionProvider implements IConnectionProvider {
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
             this.ws.send(JSON.stringify(message));
         } else {
-            console.error("❌ WebSocket未连接，无法发送消息");
+            throw new Error("WebSocket未连接，无法发送消息");
         }
     }
 
@@ -155,8 +166,12 @@ export class CustomConnectionProvider implements IConnectionProvider {
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
             this.ws.send(data);
         } else {
-            console.error("❌ WebSocket未连接，无法发送二进制数据");
+            throw new Error("WebSocket未连接，无法发送二进制数据");
         }
+    }
+
+    getBufferedAmount(): number {
+        return this.ws?.bufferedAmount ?? Number.POSITIVE_INFINITY;
     }
 
     onMessageReceived(callback: (message: any) => void): void {
@@ -181,25 +196,25 @@ export class CustomConnectionProvider implements IConnectionProvider {
                 reject(new Error("WebSocket未连接"));
                 return;
             }
+            const ws = this.ws;
 
             const timeout = setTimeout(() => {
                 reject(new Error("订阅超时"));
             }, 5000);
 
             // 监听订阅确认
-            const originalOnMessage = this.ws.onmessage;
-            const self = this;
-            this.ws.onmessage = function(event) {
+            const originalOnMessage = ws.onmessage;
+            ws.onmessage = (event) => {
                 try {
                     const message = JSON.parse(event.data);
                     if (message.type === "subscribed" && message.channel === roomId) {
                         clearTimeout(timeout);
-                        self.currentRoomId = roomId;
-                        self.isSubscribed = true;
+                        this.currentRoomId = roomId;
+                        this.isSubscribed = true;
                         
                         // 恢复原始消息处理器
-                        if (self.ws) {
-                            self.ws.onmessage = originalOnMessage;
+                        if (this.ws === ws) {
+                            ws.onmessage = originalOnMessage;
                         }
                         resolve();
                         return;
@@ -210,7 +225,7 @@ export class CustomConnectionProvider implements IConnectionProvider {
                 
                 // 处理其他消息
                 if (originalOnMessage) {
-                    originalOnMessage.call(this, event);
+                    originalOnMessage.call(ws, event);
                 }
             };
 
@@ -334,4 +349,4 @@ export class CustomConnectionProvider implements IConnectionProvider {
             console.warn(`[CustomConnectionProvider] ⚠️ 没有设置二进制回调函数，数据被忽略`);
         }
     }
-} 
+}

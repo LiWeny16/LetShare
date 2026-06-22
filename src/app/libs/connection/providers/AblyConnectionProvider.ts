@@ -10,6 +10,7 @@ export class AblyConnectionProvider implements IConnectionProvider {
     private currentRoomId: string | null = null;
     private config: ConnectionConfig;
     private signalCallback: ((data: any) => void) | null = null;
+    private disconnectedCallback: ((reason?: string) => void) | null = null;
 
     constructor(config: ConnectionConfig) {
         this.config = config;
@@ -50,6 +51,12 @@ export class AblyConnectionProvider implements IConnectionProvider {
                 }
 
                 this.ably = new Ably.Realtime({ key: settingsStore.get("ablyKey") });
+                this.ably.connection.on((stateChange: any) => {
+                    const state = stateChange?.current ?? stateChange;
+                    if (["closed", "disconnected", "suspended", "failed"].includes(state)) {
+                        this.disconnectedCallback?.(`Ably 连接状态变为 ${state}`);
+                    }
+                });
 
                 await new Promise((resolve, reject) => {
                     this.ably!.connection.once("connected", resolve);
@@ -111,6 +118,10 @@ export class AblyConnectionProvider implements IConnectionProvider {
 
     onSignalReceived(callback: (data: any) => void): void {
         this.signalCallback = callback;
+    }
+
+    onDisconnected(callback: (reason?: string) => void): void {
+        this.disconnectedCallback = callback;
     }
 
     isConnected(): boolean {

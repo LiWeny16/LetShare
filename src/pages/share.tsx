@@ -295,7 +295,7 @@ const Share = observer(() => {
             } else if (selectedButton === "text" && selectedText) {
                 await realTimeColab.sendMessageToUser(targetUserId, selectedText);
             } else if (selectedButton === "clip") {
-                let clipText = await readClipboard();
+                const clipText = await readClipboard();
                 if (clipText != "") {
                     await realTimeColab.sendMessageToUser(targetUserId, clipText ?? "读取剪切板失败");
                 } else {
@@ -738,9 +738,9 @@ const Share = observer(() => {
                             }
                             return 0;
                         }).map((user) => (
-                            <Box>
+                            <Box key={user.uniqId}>
                                 <ButtonBase
-                                    key={user.uniqId}
+                                    component="div"
                                     onClick={(e) => {
                                         if (selectedButton === "video") {
                                             // 如果尚未建立视频连接，则主动发起连接

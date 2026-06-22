@@ -24,6 +24,7 @@ export class ConnectionManager implements IConnectionProvider {
     private signalCallback: ((data: any) => void) | null = null;
     private messageCallback: ((message: any) => void) | null = null;
     private binaryCallback: ((data: ArrayBuffer) => void) | null = null;
+    private disconnectedCallback: ((reason?: string) => void) | null = null;
 
     constructor(config: ConnectionConfig) {
         this.config = config;
@@ -62,6 +63,13 @@ export class ConnectionManager implements IConnectionProvider {
         }
     }
 
+    onDisconnected(callback: (reason?: string) => void): void {
+        this.disconnectedCallback = callback;
+        if (this.currentProvider?.onDisconnected) {
+            this.currentProvider.onDisconnected(callback);
+        }
+    }
+
     isConnected(): boolean {
         return this.currentProvider?.isConnected() ?? false;
     }
@@ -82,7 +90,7 @@ export class ConnectionManager implements IConnectionProvider {
         if (this.currentProvider?.send) {
             this.currentProvider.send(message);
         } else {
-            console.error("❌ 当前连接提供者不支持send方法");
+            throw new Error("当前连接提供者不支持send方法");
         }
     }
 
@@ -90,8 +98,16 @@ export class ConnectionManager implements IConnectionProvider {
         if (this.currentProvider?.sendBinary) {
             this.currentProvider.sendBinary(data);
         } else {
-            console.error("❌ 当前连接提供者不支持sendBinary方法");
+            throw new Error("当前连接提供者不支持sendBinary方法");
         }
+    }
+
+    canSendBinary(): boolean {
+        return !!this.currentProvider?.sendBinary;
+    }
+
+    getBufferedAmount(): number {
+        return this.currentProvider?.getBufferedAmount?.() ?? 0;
     }
 
     onMessageReceived(callback: (message: any) => void): void {
@@ -172,6 +188,9 @@ export class ConnectionManager implements IConnectionProvider {
             if (this.binaryCallback && provider.onBinaryReceived) {
                 provider.onBinaryReceived(this.binaryCallback);
             }
+            if (this.disconnectedCallback && provider.onDisconnected) {
+                provider.onDisconnected(this.disconnectedCallback);
+            }
 
             // 尝试连接
             const success = await provider.connect(roomId);
@@ -188,6 +207,9 @@ export class ConnectionManager implements IConnectionProvider {
                 }
                 if (this.binaryCallback && this.currentProvider.onBinaryReceived) {
                     this.currentProvider.onBinaryReceived(this.binaryCallback);
+                }
+                if (this.disconnectedCallback && this.currentProvider.onDisconnected) {
+                    this.currentProvider.onDisconnected(this.disconnectedCallback);
                 }
                 
                 this.failureCount.set(providerType, 0); // 重置失败计数
@@ -249,4 +271,4 @@ export class ConnectionManager implements IConnectionProvider {
     public getFailureCount(providerType: 'ably' | 'custom'): number {
         return this.failureCount.get(providerType) || 0;
     }
-} 
+}

@@ -14,6 +14,35 @@ import { SecureMessageWrapper } from "../security/SecureMessageWrapper";
 import { UserKeyInfo } from "../security/SimpleE2EEncryption";
 import mitt from 'mitt';
 import { ServerFileTransfer } from "./ServerFileTransfer";
+import {
+  type ReceiveBufferWriteResult,
+  TransferAckTracker,
+  TransferReceiveBuffer,
+  TransferTimeoutError,
+  canRecoverMissingChunksWithResend,
+  canContinueReceivedFilePostProcessing,
+  canRetainReceivedFiles,
+  createCompletedTransferFile,
+  createTransferResendRequestMessage,
+  confirmCompletionBeforePostProcessing,
+  encodeTransferFrame,
+  extractTransferIdFromFrameSafely,
+  getP2PChannelFailureImpact,
+  getResendRecoveryFailureMessage,
+  getSafeReceiveSizeLimit,
+  getSafeTransferConfig,
+  getTransferCompletionAckTimeoutMs,
+  isP2PSendTransferCurrent,
+  normalizeTransferMetadata,
+  normalizeTransferResendRequest,
+  parseDataChannelControlMessage,
+  runTransferHandlerSafely,
+  shouldStopTransfersForPageLifecycle,
+  shouldReportTransferIssueOnce,
+  waitForBufferedAmountBelow,
+  withTransferTimeout,
+  writeTransferFrameToReceiveBuffer,
+} from "./transferReliability";
 // import { VideoManager } from "../video/video";
 
 // 常量配置
@@ -54,6 +83,32 @@ export interface UserInfo {
   lastSeen: number;
   userType: UserType;
   hadP2PConnection?: boolean; // 标记该用户是否曾经成功建立过P2P连接
+}
+
+interface P2PReceivingFile {
+  name: string;
+  size: number;
+  totalChunks: number;
+  receivedSize: number;
+  receivedChunkCount: number;
+  chunkSize: number;
+  transferId?: string;
+  receiveBuffer: TransferReceiveBuffer;
+  resendAttempts: number;
+}
+
+interface P2PSendContext {
+  transferId: string;
+  totalChunks: number;
+  resendChunks: (chunkIndexes: number[]) => Promise<void>;
+}
+
+type TransferStatusKind = "info" | "warning" | "error" | "success";
+
+interface TransferStatusState {
+  message: string | null;
+  kind: TransferStatusKind;
+  updatedAt: number;
 }
 
 export class RealTimeColab {
@@ -114,18 +169,7 @@ export class RealTimeColab {
 
   public userList: Map<string, UserInfo> = new Map();
   public dataChannels: Map<string, RTCDataChannel> = new Map();
-  public receivingFiles: Map<
-    string,
-    {
-      name: string;
-      size: number;
-      totalChunks: number;
-      receivedSize: number;
-      receivedChunkCount: number;
-      chunkSize: number;
-      chunks: ArrayBuffer[];
-    }
-  > = new Map();
+  public receivingFiles: Map<string, P2PReceivingFile> = new Map();
   public receivedFiles: Map<string, File> = new Map();
 
   private lastPingTimes: Map<string, number> = new Map();
@@ -134,6 +178,11 @@ export class RealTimeColab {
     string,
     ReturnType<typeof setInterval>
   >();
+  private p2pReceiveTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
+  private p2pSendingTransferIds = new Map<string, string>();
+  private p2pSendContexts = new Map<string, P2PSendContext>();
+  private p2pUnknownTransferIssueKeys = new Set<string>();
+  private p2pAckTracker = new TransferAckTracker();
   private timeoutHandles = new Set();
   private connectionQueue = new Map<string, boolean>();
   private pendingOffers = new Set<string>();
@@ -147,8 +196,20 @@ export class RealTimeColab {
 
   public isSendingFile = false;
   public fileMetaInfo = { name: "default_received_file" };
+  public fileTransferStatus: TransferStatusState = {
+    message: null,
+    kind: "info",
+    updatedAt: 0,
+  };
   public coolingTime = 2000;
   public cleaningLock: boolean = false;
+  private readonly AUTO_UNZIP_SIZE_LIMIT = 20 * 1024 * 1024;
+  private readonly AUTO_UNZIP_FILE_LIMIT = 40;
+  private readonly P2P_RESEND_CHUNK_LIMIT = 256;
+  private readonly P2P_MAX_RESEND_ATTEMPTS = 3;
+  private readonly P2P_RECEIVE_TIMEOUT_MS = 30_000;
+  private receivedFilesVersion = 0;
+  private transferStatusClearTimeout: ReturnType<typeof setTimeout> | null = null;
 
   public setFileTransferProgress: React.Dispatch<
     React.SetStateAction<number | null>
@@ -174,21 +235,47 @@ export class RealTimeColab {
   private aborted = false;
 
   public initTransferConfig() {
-    const deviceType = getDeviceType();
-    if (deviceType === "apple" || deviceType === "android") {
-      this.transferConfig = {
-        chunkSize: 4 * 32 * 1024,
-        maxConcurrentReads: 8,
-        bufferThreshold: 128 * 1024,
-      };
-    } else {
-      this.transferConfig = {
-        chunkSize: 32 * 1024,
-        maxConcurrentReads: 8,
-        bufferThreshold: 256 * 1024,
-      };
+    this.transferConfig = getSafeTransferConfig(getDeviceType());
+  }
+
+  private setFileTransferStatus(
+    message: string | null,
+    kind: TransferStatusKind = "info",
+    options: { autoClearMs?: number; showPanel?: boolean } = {}
+  ): void {
+    if (this.transferStatusClearTimeout) {
+      clearTimeout(this.transferStatusClearTimeout);
+      this.transferStatusClearTimeout = null;
+    }
+
+    this.fileTransferStatus = {
+      message,
+      kind,
+      updatedAt: Date.now(),
+    };
+
+    if (message && options.showPanel !== false) {
+      this.setDownloadPageState(true);
+    }
+
+    if (message && options.autoClearMs) {
+      this.transferStatusClearTimeout = setTimeout(() => {
+        this.fileTransferStatus = {
+          message: null,
+          kind: "info",
+          updatedAt: Date.now(),
+        };
+        this.transferStatusClearTimeout = null;
+        if (
+          this.getActiveFileTransferCount() === 0 &&
+          this.receivedFiles.size === 0
+        ) {
+          this.setDownloadPageState(false);
+        }
+      }, options.autoClearMs);
     }
   }
+
   /**
    * @description Init @jInit
    */
@@ -216,7 +303,6 @@ export class RealTimeColab {
       
       this.serverFileTransfer.setFileReceivedCallback((file, fromUserId) => {
         console.log(`[ColabLib] File received from ${fromUserId}:`, file.name);
-        this.receivedFiles.set(fromUserId, file);
         this.handleReceivedFile(file, fromUserId);
       });
 
@@ -230,6 +316,12 @@ export class RealTimeColab {
         this.fileMetaInfo.name = fileName;
       });
 
+      this.serverFileTransfer.setTransferStatusCallback((message, kind) => {
+        this.setFileTransferStatus(message, kind, {
+          autoClearMs: kind === "success" || kind === "error" ? 10_000 : undefined,
+        });
+      });
+
       // 🔑 设置管理员密码请求回调(超过50MB时触发)
       this.serverFileTransfer.setAdminPasswordRequestCallback(async (fileSize) => {
         // 使用 prompt 作为默认实现，UI层可以覆盖
@@ -241,6 +333,10 @@ export class RealTimeColab {
           resolve(password);
         });
       });
+
+      this.serverFileTransfer.setReceivedFileCacheCandidatesCallback(() =>
+        this.getReceivedFileCacheCandidates()
+      );
 
     }
     this.setupPageUnloadHandler();
@@ -880,6 +976,8 @@ export class RealTimeColab {
     this.connectionQueue.delete(id);
 
     // 心跳/超时
+    this.clearP2PReceiveTimeout(id);
+
     const interval = this.heartbeatIntervals.get(id);
     if (interval) {
       clearInterval(interval);
@@ -1171,34 +1269,192 @@ export class RealTimeColab {
       this.receivingFiles = new Map();
     }
 
-    channel.onmessage = async (event) => {
+    channel.onmessage = (event) => {
+      void runTransferHandlerSafely(async () => {
       if (typeof event.data === "string") {
-        const message = JSON.parse(event.data);
+        const parsedMessage = parseDataChannelControlMessage(event.data);
+        if (!parsedMessage.valid) {
+          console.warn(`[P2P] Ignoring malformed control message from ${id}: ${parsedMessage.reason}`);
+          this.stopActiveP2PTransferAfterMalformedControlMessage(
+            id,
+            channel,
+            parsedMessage.reason
+          );
+          return;
+        }
+
+        const message = parsedMessage.message as Record<string, any> & { type: string };
 
         switch (message.type) {
-          case "file-meta":
-            // 初始化新的接收状态
-            this.receivingFiles.set(id, {
-              name: message.name,
-              size: message.size,
-              totalChunks: Math.ceil(message.size / message.chunkSize),
-              chunks: new Array(Math.ceil(message.size / message.chunkSize)),
+          case "file-meta": {
+            const normalizedMeta = normalizeTransferMetadata({
+              fileName: message.name,
+              fileSize: message.size,
               chunkSize: message.chunkSize,
+              totalChunks: message.totalChunks,
+              transferId: message.transferId,
+            });
+            if (!normalizedMeta.valid) {
+              const reason = `文件传输元数据无效，请重试：${normalizedMeta.reason}`;
+              console.warn(`[P2P FILE] ${reason}`, message);
+              if (channel.readyState === "open") {
+                channel.send(JSON.stringify({
+                  type: "abort",
+                  transferId: typeof message.transferId === "string" ? message.transferId : undefined,
+                  reason,
+                }));
+              }
+              alertUseMUI(reason, 4000, { kind: "error" });
+              this.setFileTransferProgress(null);
+              this.setDownloadPageState(false);
+              this.setFileTransferStatus(reason, "error", {
+                autoClearMs: 10_000,
+              });
+              break;
+            }
+
+            if (this.receivingFiles.has(id)) {
+              const reason = "已有文件正在接收，请等待完成后重试";
+              console.warn(`[P2P FILE] ${reason}`);
+              if (channel.readyState === "open") {
+                channel.send(JSON.stringify({
+                  type: "abort",
+                  transferId: message.transferId,
+                  reason,
+                }));
+              }
+              alertUseMUI(reason, 3000, { kind: "warning" });
+              this.setFileTransferStatus(reason, "warning", {
+                autoClearMs: 10_000,
+              });
+              break;
+            }
+
+            const receiveLimit = getSafeReceiveSizeLimit(getDeviceType());
+            if (normalizedMeta.fileSize > receiveLimit) {
+              const limitMB = (receiveLimit / 1024 / 1024).toFixed(0);
+              const reason = `当前设备为避免内存崩溃，单文件接收上限为 ${limitMB}MB`;
+              console.warn(`[P2P FILE] ${reason}`);
+              if (channel.readyState === "open") {
+                channel.send(JSON.stringify({
+                  type: "abort",
+                  transferId: message.transferId,
+                  reason,
+                }));
+              }
+              alertUseMUI(reason, 4000, { kind: "warning" });
+              this.setFileTransferProgress(null);
+              this.setDownloadPageState(false);
+              this.setFileTransferStatus(reason, "warning", {
+                autoClearMs: 10_000,
+              });
+              break;
+            }
+            const cacheGuard = canRetainReceivedFiles(
+              this.getReceivedFileCacheCandidates(normalizedMeta.fileSize),
+              getDeviceType()
+            );
+            if (!cacheGuard.allowed) {
+              const reason = this.getReceivedCacheLimitMessage(cacheGuard);
+              console.warn(`[P2P FILE] ${reason}`);
+              if (channel.readyState === "open") {
+                channel.send(JSON.stringify({
+                  type: "abort",
+                  transferId: message.transferId,
+                  reason,
+                }));
+              }
+              alertUseMUI(reason, 6000, { kind: "warning" });
+              this.setFileTransferProgress(null);
+              this.setDownloadPageState(false);
+              this.setFileTransferStatus(reason, "warning", {
+                autoClearMs: 10_000,
+              });
+              break;
+            }
+            // 初始化新的接收状态
+            const totalChunks = normalizedMeta.totalChunks;
+            let receiveBuffer: TransferReceiveBuffer;
+            try {
+              receiveBuffer = new TransferReceiveBuffer({
+                fileSize: normalizedMeta.fileSize,
+                totalChunks,
+                chunkSize: normalizedMeta.chunkSize,
+              });
+            } catch (err) {
+              const reason = "当前设备内存不足，无法接收该文件，请换小文件或重试";
+              console.error(`[P2P FILE] ${reason}:`, err);
+              if (channel.readyState === "open") {
+                channel.send(JSON.stringify({
+                  type: "abort",
+                  transferId: message.transferId,
+                  reason,
+                }));
+              }
+              alertUseMUI(reason, 4000, { kind: "error" });
+              this.setFileTransferProgress(null);
+              this.setDownloadPageState(false);
+              this.setFileTransferStatus(reason, "error", {
+                autoClearMs: 10_000,
+              });
+              break;
+            }
+            this.receivingFiles.set(id, {
+              name: normalizedMeta.fileName,
+              size: normalizedMeta.fileSize,
+              totalChunks,
+              chunkSize: normalizedMeta.chunkSize,
+              transferId: normalizedMeta.transferId,
+              receiveBuffer,
               receivedSize: 0,
               receivedChunkCount: 0,
+              resendAttempts: 0,
             });
+            if (normalizedMeta.transferId) {
+              this.p2pUnknownTransferIssueKeys.delete(normalizedMeta.transferId);
+            }
+            this.setFileTransferStatus("正在接收文件", "info", { showPanel: false });
+            this.refreshP2PReceiveTimeout(id);
 
-            realTimeColab.fileMetaInfo.name = message.name;
+            realTimeColab.fileMetaInfo.name = normalizedMeta.fileName;
             this.setDownloadPageState(true);
             // alertUseMUI(`开始接受来自 ${id} 的文件: ${message.name}`, 5000, { kind: "success" });
             break;
+          }
 
           case "abort":
-            realTimeColab.abortFileTransferToUser?.();
+            if (message.transferId) {
+              this.p2pUnknownTransferIssueKeys.delete(message.transferId);
+              this.p2pAckTracker.reject(
+                message.transferId,
+                new Error(message.reason || t("alert.transferCancelled"))
+              );
+            }
+            if (!message.transferId || this.p2pSendingTransferIds.get(id) === message.transferId) {
+              this.aborted = true;
+              this.isSendingFile = false;
+              this.p2pSendingTransferIds.delete(id);
+              this.p2pSendContexts.delete(id);
+            }
+            this.receivingFiles.delete(id);
+            this.clearP2PReceiveTimeout(id);
             this.setFileTransferProgress(null);
             this.setDownloadPageState(false);
-            alertUseMUI(t("alert.transferCancelled"), 2000, { kind: "error" });
+            this.setFileTransferStatus(
+              message.reason || t("alert.transferCancelled"),
+              "error",
+              { autoClearMs: 10_000 }
+            );
+            alertUseMUI(message.reason || t("alert.transferCancelled"), 3000, { kind: "error" });
 
+            break;
+          case "file-complete":
+            if (message.transferId) {
+              this.p2pAckTracker.acknowledge(message.transferId);
+            }
+            break;
+          case "resend-chunks":
+            await this.handleP2PResendChunksRequest(id, channel, message);
             break;
           case "ping":
             this.lastPingTimes.set(id, Date.now());
@@ -1208,7 +1464,7 @@ export class RealTimeColab {
             }
             break;
 
-          case "pong":
+          case "pong": {
             this.lastPongTimes.set(id, Date.now());
 
             const user = this.userList.get(id);
@@ -1219,6 +1475,7 @@ export class RealTimeColab {
             this.pingFailures.set(id, 0);
             this.updateUI();
             break;
+          }
 
           case "text":
           default:
@@ -1271,99 +1528,157 @@ export class RealTimeColab {
       } else {
         // 非文本消息：二进制数据
         const buffer = event.data as ArrayBuffer;
-        const headerSize = 8; // 4字节索引 + 4字节长度
-        if (buffer.byteLength < headerSize) {
-          console.error("Received binary data is too small");
-          return;
-        }
-
-        const view = new DataView(buffer);
-        const index = view.getUint32(0);
-        const chunkLength = view.getUint32(4);
-        const chunkData = buffer.slice(headerSize);
-
-        if (chunkData.byteLength !== chunkLength) {
-          console.error(
-            `Chunk ${index} length mismatch: should be ${chunkLength}, actual is ${chunkData.byteLength}`
-          );
-          return;
-        }
-
         const fileInfo = this.receivingFiles.get(id);
         if (!fileInfo) {
-          console.error("File metadata not received, cannot process chunk");
+          const transferId = extractTransferIdFromFrameSafely(buffer);
+          const issueKey = transferId ?? `${id}:unknown-binary-frame`;
+          if (shouldReportTransferIssueOnce(this.p2pUnknownTransferIssueKeys, issueKey)) {
+            const reason = transferId
+              ? "收到文件分片但缺少文件元数据，当前传输已停止，请重试"
+              : "收到无法识别的文件分片，当前传输已停止，请重试";
+            console.warn(`[P2P FILE] ${reason}`, { peerId: id, transferId });
+            if (transferId && channel.readyState === "open") {
+              channel.send(JSON.stringify({
+                type: "abort",
+                transferId,
+                reason,
+              }));
+            }
+            this.setFileTransferProgress(null);
+            this.setDownloadPageState(false);
+            this.setFileTransferStatus(reason, "error", {
+              autoClearMs: 10_000,
+            });
+            alertUseMUI(reason, 4000, { kind: "error" });
+          }
           return;
         }
 
-        if (!fileInfo.chunks[index]) {
-          fileInfo.chunks[index] = chunkData;
-          fileInfo.receivedSize += chunkData.byteLength;
-          fileInfo.receivedChunkCount++;
-        }
+        let writeResult;
+        try {
+          if (fileInfo.transferId) {
+            writeResult = writeTransferFrameToReceiveBuffer(
+              fileInfo.receiveBuffer,
+              fileInfo.transferId,
+              buffer
+            ).result;
+          } else {
+            throw new Error("legacy transfer has no transferId");
+          }
+        } catch (err) {
+          const canTryLegacyFrame =
+            !(err instanceof Error) ||
+            !/transfer id mismatch|transfer total_chunks mismatch|chunk size mismatch|chunk index out of range|chunk exceeds receive buffer/.test(err.message);
 
-        if (fileInfo.receivedChunkCount === fileInfo.totalChunks) {
-          const sortedChunks: ArrayBuffer[] = [];
-          for (let i = 0; i < fileInfo.totalChunks; i++) {
-            if (!fileInfo.chunks[i]) {
-              alertUseMUI(t("alert.chunkMissing", { index: i }), 1000, {
-                kind: "error",
-              });
-              console.error(`Missing chunk ${i}`);
-              this.receivingFiles.delete(id);
+          if (canTryLegacyFrame) {
+            try {
+              writeResult = this.writeLegacyP2PChunk(fileInfo, buffer);
+            } catch (legacyErr) {
+              this.abortP2PReceive(id, channel, fileInfo.transferId, "收到损坏的文件分片，已停止当前任务，请重试", legacyErr);
               return;
             }
-            sortedChunks.push(fileInfo.chunks[i]);
+          } else {
+            this.abortP2PReceive(id, channel, fileInfo.transferId, "收到不属于当前任务的文件分片，已停止当前任务，请重试", err);
+            return;
           }
+        }
 
-          const fileBlob = new Blob(sortedChunks);
-          const file = new File([fileBlob], fileInfo.name, {
-            type: "application/octet-stream",
+        if (!writeResult.accepted) {
+          return;
+        }
+
+        fileInfo.receivedSize = writeResult.receivedSize;
+        fileInfo.receivedChunkCount = writeResult.receivedCount;
+        fileInfo.resendAttempts = 0;
+        this.setFileTransferProgress(Math.min((fileInfo.receivedChunkCount / fileInfo.totalChunks) * 100, 100));
+        this.refreshP2PReceiveTimeout(id);
+
+        if (writeResult.completed) {
+          this.clearP2PReceiveTimeout(id);
+          const completedTransferId = fileInfo.transferId;
+          const file = createCompletedTransferFile({
+            bytes: fileInfo.receiveBuffer.bytes(),
+            fileName: fileInfo.name,
+            fileType: "application/octet-stream",
+            createFile: (parts, fileName, options) => new File(parts, fileName, options),
           });
-          this.receivedFiles.set(id + "::" + file.name, file);
-
-          // 复制一份当前的 Map（避免边改边遍历）
-          const zipEntries = Array.from(this.receivedFiles.entries()).filter(
-            ([_, file]) =>
-              file.name.startsWith("LetShare_") && file.name.endsWith(".zip")
-          );
-          if (zipEntries.length > 0) {
-            alertUseMUI(t("alert.unzipping"), 2000, { kind: "info" });
-            // 仅在需要时才 import，且移出循环只调一次
-            const { default: JSZip } = await import("jszip");
-
-            for (const [fullKey, zipFile] of zipEntries) {
-              try {
-                const zip = await JSZip.loadAsync(zipFile);
-
-                // 提取 ID，例如从 key = "user123::LetShare_12345.zip"
-                const [innerId] = fullKey.split("::");
-
-                for (const [fileName, zipEntry] of Object.entries(zip.files)) {
-                  if (!zipEntry.dir) {
-                    const blob = await zipEntry.async("blob");
-                    const extractedFile = new File([blob], fileName);
-
-                    // 生成新 key，例如 "user123::innerFile.txt"
-                    const newKey = `${innerId}::${fileName}`;
-                    this.receivedFiles.set(newKey, extractedFile);
-                  }
-                }
-                this.receivedFiles.delete(fullKey);
-              } catch (err) {
-                console.error("Unzipping failed:", err);
-              }
-            }
-          }
-          alertUseMUI(t("alert.fileReceived", { name: id.split(":")[0] }));
-
+          const fullKey = `${id}::${file.name}`;
+          this.receivedFiles.set(fullKey, file);
+          const postProcessVersion = this.receivedFilesVersion;
           this.receivingFiles.delete(id);
+          this.setFileTransferProgress(null);
+          this.setFileTransferStatus("文件接收完成", "success", {
+            autoClearMs: CONFIG.TRANSFER_COMPLETE_DELAY,
+            showPanel: false,
+          });
+          void confirmCompletionBeforePostProcessing({
+            confirmCompletion: () => {
+              if (completedTransferId && channel.readyState === "open") {
+                try {
+                  channel.send(JSON.stringify({
+                    type: "file-complete",
+                    transferId: completedTransferId,
+                  }));
+                } catch (error) {
+                  console.warn("P2P completion confirmation could not be sent:", error);
+                }
+              }
+            },
+            postProcess: async () => {
+              await this.maybeAutoUnzipReceivedFile(
+                file,
+                id,
+                fullKey,
+                postProcessVersion
+              );
+            },
+            onPostProcessError: (error) => {
+              console.warn("P2P received file post-processing failed:", error);
+            },
+          });
+          alertUseMUI(t("alert.fileReceived", { name: id.split(":")[0] }));
         }
       }
+      }, (error) => {
+        this.handleUnhandledP2PMessageError(id, channel, error);
+      });
     };
 
   
     channel.onclose = () => {
       console.warn(`🧹 DataChannel closed for ${id}, setting user to text-only status`);
+      const transferId = this.p2pSendingTransferIds.get(id);
+      const failureImpact = getP2PChannelFailureImpact({
+        sendingTransferId: transferId,
+        receivingFileActive: this.receivingFiles.has(id),
+      });
+      if (transferId) {
+        this.p2pAckTracker.reject(
+          transferId,
+          new TransferTimeoutError("P2P data channel closed before receiver confirmation")
+        );
+        this.p2pSendingTransferIds.delete(id);
+        this.p2pSendContexts.delete(id);
+        this.p2pUnknownTransferIssueKeys.delete(transferId);
+      }
+      this.p2pSendContexts.delete(id);
+      this.p2pUnknownTransferIssueKeys.delete(`${id}:unknown-binary-frame`);
+      if (failureImpact.hasSendingTransfer) {
+        this.aborted = true;
+        this.isSendingFile = false;
+      }
+      if (failureImpact.hasActiveTransfer) {
+        this.setFileTransferProgress(null);
+        this.setDownloadPageState(false);
+        this.setFileTransferStatus(
+          "P2P 连接已断开，当前文件传输已停止，请重试",
+          "error",
+          { autoClearMs: 10_000 }
+        );
+        alertUseMUI("P2P 连接已断开，当前文件传输已停止，请重试", 4000, { kind: "error" });
+      }
+      this.receivingFiles.delete(id);
+      this.clearP2PReceiveTimeout(id);
       this.clearCache(id);
 
       // 不删除用户，而是设置为text-only状态
@@ -1390,6 +1705,38 @@ export class RealTimeColab {
   private cleanupDataChannel(id: string): void {
     const channel = this.dataChannels.get(id);
     if (channel) {
+      const transferId = this.p2pSendingTransferIds.get(id);
+      const failureImpact = getP2PChannelFailureImpact({
+        sendingTransferId: transferId,
+        receivingFileActive: this.receivingFiles.has(id),
+      });
+      if (transferId) {
+        this.p2pAckTracker.reject(
+          transferId,
+          new TransferTimeoutError("P2P data channel error before receiver confirmation")
+        );
+        this.p2pSendingTransferIds.delete(id);
+        this.p2pSendContexts.delete(id);
+        this.p2pUnknownTransferIssueKeys.delete(transferId);
+      }
+      this.p2pSendContexts.delete(id);
+      this.p2pUnknownTransferIssueKeys.delete(`${id}:unknown-binary-frame`);
+      if (failureImpact.hasSendingTransfer) {
+        this.aborted = true;
+        this.isSendingFile = false;
+      }
+      if (failureImpact.hasActiveTransfer) {
+        this.setFileTransferProgress(null);
+        this.setDownloadPageState(false);
+        this.setFileTransferStatus(
+          "P2P 连接异常，当前文件传输已停止，请重试",
+          "error",
+          { autoClearMs: 10_000 }
+        );
+        alertUseMUI("P2P 连接异常，当前文件传输已停止，请重试", 4000, { kind: "error" });
+      }
+      this.receivingFiles.delete(id);
+      this.clearP2PReceiveTimeout(id);
       // 强制关闭通道（触发 onclose）
       channel.close();
       // 清理心跳定时器
@@ -1412,6 +1759,337 @@ export class RealTimeColab {
       this.updateUI();
     }
   }
+
+  private async handleP2PResendChunksRequest(
+    id: string,
+    channel: RTCDataChannel,
+    message: Record<string, any>
+  ): Promise<void> {
+    const context = this.p2pSendContexts.get(id);
+    const payload = typeof message.data === "object" && message.data !== null
+      ? message.data
+      : message;
+    const normalized = normalizeTransferResendRequest(payload, {
+      expectedTransferId: context?.transferId ?? this.p2pSendingTransferIds.get(id),
+      totalChunks: context?.totalChunks,
+      maxChunkIndexes: this.P2P_RESEND_CHUNK_LIMIT,
+    });
+
+    if (!normalized.valid) {
+      console.warn(`[P2P FILE] Ignoring invalid resend request from ${id}: ${normalized.reason}`, message);
+      return;
+    }
+
+    if (!context || this.p2pSendingTransferIds.get(id) !== normalized.request.transferId) {
+      const reason = "发送端已无法重传缺失分片，请重新发起传输";
+      console.warn(`[P2P FILE] ${reason}`, normalized.request);
+      if (channel.readyState === "open") {
+        try {
+          channel.send(JSON.stringify({
+            type: "abort",
+            transferId: normalized.request.transferId,
+            reason,
+          }));
+        } catch (sendError) {
+          console.warn("P2P missing-context abort message could not be sent:", sendError);
+        }
+      }
+      alertUseMUI(reason, 4000, { kind: "error" });
+      return;
+    }
+
+    try {
+      alertUseMUI(
+        `接收方请求重传 ${normalized.request.chunkIndexes.length}/${normalized.request.missingCount} 个分片，正在恢复`,
+        2500,
+        { kind: "info" }
+      );
+      this.setFileTransferStatus(
+        `接收方请求重传 ${normalized.request.chunkIndexes.length}/${normalized.request.missingCount} 个分片，正在恢复`,
+        "warning",
+        { showPanel: false }
+      );
+      await context.resendChunks(normalized.request.chunkIndexes);
+    } catch (error) {
+      const reason = "重传缺失分片失败，请重新发起传输";
+      console.warn(`[P2P FILE] ${reason}:`, error);
+      this.p2pAckTracker.reject(context.transferId, new Error(reason));
+      this.p2pSendContexts.delete(id);
+      this.p2pSendingTransferIds.delete(id);
+      this.isSendingFile = false;
+      this.setFileTransferProgress(null);
+      this.setDownloadPageState(false);
+      this.setFileTransferStatus(reason, "error", { autoClearMs: 10_000 });
+      if (channel.readyState === "open") {
+        try {
+          channel.send(JSON.stringify({
+            type: "abort",
+            transferId: context.transferId,
+            reason,
+          }));
+        } catch (sendError) {
+          console.warn("P2P resend abort message could not be sent:", sendError);
+        }
+      }
+      alertUseMUI(reason, 4000, { kind: "error" });
+    }
+  }
+
+  private refreshP2PReceiveTimeout(id: string): void {
+    this.clearP2PReceiveTimeout(id);
+    const timeoutId = setTimeout(() => {
+      const fileInfo = this.receivingFiles.get(id);
+      if (!fileInfo) {
+        return;
+      }
+
+      const channel = this.dataChannels.get(id);
+      const missingChunks = fileInfo.receiveBuffer.getMissingChunkIndexes(this.P2P_RESEND_CHUNK_LIMIT);
+      const missingCount = fileInfo.receiveBuffer.missingCount;
+      const recoveryGuard = canRecoverMissingChunksWithResend({
+        missingCount,
+        maxChunkIndexesPerRequest: this.P2P_RESEND_CHUNK_LIMIT,
+        maxResendAttempts: this.P2P_MAX_RESEND_ATTEMPTS,
+        resendAttemptsUsed: fileInfo.resendAttempts,
+      });
+      if (
+        fileInfo.transferId &&
+        missingChunks.length > 0 &&
+        recoveryGuard.allowed &&
+        channel?.readyState === "open"
+      ) {
+        fileInfo.resendAttempts++;
+        try {
+          channel.send(JSON.stringify(createTransferResendRequestMessage({
+            type: "resend-chunks",
+            transferId: fileInfo.transferId,
+            chunkIndexes: missingChunks,
+            missingCount,
+            totalChunks: fileInfo.totalChunks,
+            reason: "接收长时间无进度，请重传缺失分片",
+          })));
+          alertUseMUI(
+            `接收长时间无进度，正在请求重传缺失分片（${fileInfo.resendAttempts}/${this.P2P_MAX_RESEND_ATTEMPTS}）`,
+            4000,
+            { kind: "warning" }
+          );
+          this.setFileTransferStatus(
+            `接收长时间无进度，正在请求重传缺失分片（${fileInfo.resendAttempts}/${this.P2P_MAX_RESEND_ATTEMPTS}）`,
+            "warning",
+            { showPanel: false }
+          );
+          this.refreshP2PReceiveTimeout(id);
+          return;
+        } catch (error) {
+          console.warn("[P2P FILE] Failed to request missing chunks:", error);
+        }
+      }
+
+      this.receivingFiles.delete(id);
+      this.setFileTransferProgress(null);
+      this.setDownloadPageState(false);
+      const failureReason = recoveryGuard.allowed
+        ? "缺失分片重传失败，已停止当前任务，请重试"
+        : getResendRecoveryFailureMessage({
+            missingCount,
+            maxChunkIndexesPerRequest: this.P2P_RESEND_CHUNK_LIMIT,
+            maxResendAttempts: this.P2P_MAX_RESEND_ATTEMPTS,
+            resendAttemptsUsed: fileInfo.resendAttempts,
+          }) ?? "缺失分片自动重传无法恢复，请重新发送";
+      this.setFileTransferStatus(failureReason, "error", {
+        autoClearMs: 10_000,
+      });
+
+      if (channel?.readyState === "open") {
+        try {
+          channel.send(JSON.stringify({
+            type: "abort",
+            transferId: fileInfo.transferId,
+            reason: failureReason,
+          }));
+        } catch (error) {
+          console.warn("P2P receive timeout abort message could not be sent:", error);
+        }
+      }
+
+      alertUseMUI(failureReason, 4000, { kind: "error" });
+    }, this.P2P_RECEIVE_TIMEOUT_MS);
+    this.p2pReceiveTimeouts.set(id, timeoutId);
+  }
+
+  private clearP2PReceiveTimeout(id: string): void {
+    const timeoutId = this.p2pReceiveTimeouts.get(id);
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+      this.p2pReceiveTimeouts.delete(id);
+    }
+  }
+
+  private writeLegacyP2PChunk(
+    fileInfo: P2PReceivingFile,
+    buffer: ArrayBuffer
+  ): ReceiveBufferWriteResult {
+    const headerSize = 8; // 4字节索引 + 4字节长度
+    if (buffer.byteLength < headerSize) {
+      throw new Error("legacy chunk is smaller than header");
+    }
+
+    const view = new DataView(buffer);
+    const index = view.getUint32(0);
+    const chunkLength = view.getUint32(4);
+
+    if (buffer.byteLength !== headerSize + chunkLength) {
+      throw new Error(
+        `legacy chunk length mismatch: expected ${chunkLength}, got ${buffer.byteLength - headerSize}`
+      );
+    }
+
+    return fileInfo.receiveBuffer.writeChunk(
+      index,
+      new Uint8Array(buffer, headerSize, chunkLength)
+    );
+  }
+
+  private stopActiveP2PTransferAfterMalformedControlMessage(
+    id: string,
+    channel: RTCDataChannel,
+    parseFailureReason: string
+  ): void {
+    const receivingFile = this.receivingFiles.get(id);
+    const sendingTransferId = this.p2pSendingTransferIds.get(id);
+
+    if (!receivingFile && !sendingTransferId) {
+      return;
+    }
+
+    const reason = `收到无法识别的 P2P 控制消息，当前文件传输已停止，请重试：${parseFailureReason}`;
+
+    if (receivingFile) {
+      this.abortP2PReceive(
+        id,
+        channel,
+        receivingFile.transferId,
+        reason,
+        new Error(parseFailureReason)
+      );
+    }
+
+    if (!sendingTransferId) {
+      return;
+    }
+
+    this.p2pAckTracker.reject(sendingTransferId, new Error(reason));
+    this.p2pSendingTransferIds.delete(id);
+    this.p2pSendContexts.delete(id);
+    this.aborted = true;
+    this.isSendingFile = false;
+    this.setFileTransferProgress(null);
+    if (this.receivingFiles.size === 0) {
+      this.setDownloadPageState(false);
+    }
+
+    if (channel.readyState === "open") {
+      try {
+        channel.send(JSON.stringify({
+          type: "abort",
+          transferId: sendingTransferId,
+          reason,
+        }));
+      } catch (sendError) {
+        console.warn("P2P malformed-control abort message could not be sent:", sendError);
+      }
+    }
+
+    if (!receivingFile) {
+      alertUseMUI(reason, 4000, { kind: "error" });
+    }
+  }
+
+  private handleUnhandledP2PMessageError(
+    id: string,
+    channel: RTCDataChannel,
+    error: unknown
+  ): void {
+    const errorDetail = error instanceof Error ? error.message : String(error);
+    const receivingFile = this.receivingFiles.get(id);
+    const sendingTransferId = this.p2pSendingTransferIds.get(id);
+
+    console.error(`[P2P] Message handler failed for ${id}:`, error);
+
+    if (!receivingFile && !sendingTransferId) {
+      return;
+    }
+
+    const reason = `P2P 消息处理异常，当前文件传输已停止，请重试：${errorDetail}`;
+
+    if (receivingFile) {
+      this.abortP2PReceive(id, channel, receivingFile.transferId, reason, error);
+    }
+
+    if (!sendingTransferId) {
+      return;
+    }
+
+    this.p2pAckTracker.reject(sendingTransferId, new Error(reason));
+    this.p2pSendingTransferIds.delete(id);
+    this.p2pSendContexts.delete(id);
+    this.aborted = true;
+    this.isSendingFile = false;
+    this.setFileTransferProgress(null);
+    if (this.receivingFiles.size === 0) {
+      this.setDownloadPageState(false);
+    }
+
+    if (channel.readyState === "open") {
+      try {
+        channel.send(JSON.stringify({
+          type: "abort",
+          transferId: sendingTransferId,
+          reason,
+        }));
+      } catch (sendError) {
+        console.warn("P2P unhandled-error abort message could not be sent:", sendError);
+      }
+    }
+
+    if (!receivingFile) {
+      alertUseMUI(reason, 4000, { kind: "error" });
+    }
+  }
+
+  private abortP2PReceive(
+    id: string,
+    channel: RTCDataChannel,
+    transferId: string | undefined,
+    reason: string,
+    error?: unknown
+  ): void {
+    console.error(`[P2P FILE] ${reason}:`, error);
+    this.clearP2PReceiveTimeout(id);
+    this.receivingFiles.delete(id);
+    this.setFileTransferProgress(null);
+    if (this.receivingFiles.size === 0 && !this.isSendingFile) {
+      this.setDownloadPageState(false);
+    }
+    this.setFileTransferStatus(reason, "error", {
+      autoClearMs: 10_000,
+    });
+
+    if (channel.readyState === "open") {
+      try {
+        channel.send(JSON.stringify({
+          type: "abort",
+          transferId,
+          reason,
+        }));
+      } catch (sendError) {
+        console.warn("P2P receive abort message could not be sent:", sendError);
+      }
+    }
+
+    alertUseMUI(reason, 4000, { kind: "error" });
+  }
+
   /**
    * @description Connect To User @jUser
    */
@@ -1545,7 +2223,7 @@ export class RealTimeColab {
     const user = this.userList.get(id);
 
     // 🔐 准备要发送的消息对象
-    let messageObj = { msg: message, type: "text" };
+    const messageObj = { msg: message, type: "text" };
 
     // 发送消息的历史记录保存由事件系统处理
 
@@ -1616,8 +2294,27 @@ export class RealTimeColab {
     );
   }
   public abortFileTransferToUser() {
+    const reason = "发送方取消了传输";
     this.aborted = true;
     this.isSendingFile = false;
+
+    for (const [id, transferId] of this.p2pSendingTransferIds.entries()) {
+      const channel = this.dataChannels.get(id);
+      if (channel?.readyState === "open") {
+        try {
+          channel.send(JSON.stringify({
+            type: "abort",
+            transferId,
+            reason,
+          }));
+        } catch (error) {
+          console.warn("P2P cancel message could not be sent:", error);
+        }
+      }
+      this.p2pAckTracker.reject(transferId, new Error(reason));
+    }
+    this.p2pSendingTransferIds.clear();
+    this.p2pSendContexts.clear();
 
     if (this.timeoutHandles) {
       for (const id of this.timeoutHandles) {
@@ -1630,34 +2327,206 @@ export class RealTimeColab {
     this.serverFileTransfer?.cancelCurrentTransfer();
   }
 
+  public cancelReceivingFileFromUser(id: string, reason = "用户取消接收") {
+    const fileInfo = this.receivingFiles.get(id);
+    const channel = this.dataChannels.get(id);
+
+    if (channel?.readyState === "open") {
+      try {
+        channel.send(JSON.stringify({
+          type: "abort",
+          transferId: fileInfo?.transferId,
+          reason,
+        }));
+      } catch (error) {
+        console.warn("P2P receive cancel message could not be sent:", error);
+      }
+    }
+
+    this.clearP2PReceiveTimeout(id);
+    this.receivingFiles.delete(id);
+    this.setFileTransferProgress(null);
+    if (this.receivingFiles.size === 0 && !this.isSendingFile) {
+      this.setDownloadPageState(false);
+    }
+  }
+
+  private getReceivedFileCacheCandidates(incomingSize?: number): Array<{ size: number }> {
+    const candidates = [
+      ...Array.from(this.receivedFiles.values()).map((file) => ({ size: file.size })),
+      ...Array.from(this.receivingFiles.values()).map((file) => ({ size: file.size })),
+    ];
+
+    if (typeof incomingSize === "number") {
+      candidates.push({ size: incomingSize });
+    }
+
+    return candidates;
+  }
+
+  private getReceivedCacheLimitMessage(guard: {
+    totalBytes: number;
+    totalFiles: number;
+    maxBytes: number;
+    maxFiles: number;
+  }): string {
+    const totalMB = (guard.totalBytes / 1024 / 1024).toFixed(1);
+    const maxMB = (guard.maxBytes / 1024 / 1024).toFixed(0);
+    return `当前浏览器已缓存 ${guard.totalFiles} 个文件 / ${totalMB}MB。为避免内存崩溃，当前设备安全缓存上限为 ${guard.maxFiles} 个 / ${maxMB}MB，请先下载并清空已接收文件后重试。`;
+  }
+
+  public clearReceivedFiles(): void {
+    this.receivedFilesVersion += 1;
+    this.receivedFiles.clear();
+  }
+
+  private getActiveFileTransferCount(): number {
+    return (
+      this.p2pSendingTransferIds.size +
+      this.receivingFiles.size +
+      (this.serverFileTransfer?.getActiveTransferCount() ?? 0)
+    );
+  }
+
+  private stopActiveFileTransfersForLifecycle(reason: string): boolean {
+    const p2pActiveCount = this.p2pSendingTransferIds.size + this.receivingFiles.size;
+    const serverActiveCount = this.serverFileTransfer?.getActiveTransferCount() ?? 0;
+
+    if (p2pActiveCount === 0 && serverActiveCount === 0) {
+      return false;
+    }
+
+    this.aborted = true;
+    this.isSendingFile = false;
+
+    for (const [id, transferId] of this.p2pSendingTransferIds.entries()) {
+      const channel = this.dataChannels.get(id);
+      if (channel?.readyState === "open") {
+        try {
+          channel.send(JSON.stringify({
+            type: "abort",
+            transferId,
+            reason,
+          }));
+        } catch (error) {
+          console.warn("P2P lifecycle abort message could not be sent:", error);
+        }
+      }
+      this.p2pAckTracker.reject(transferId, new TransferTimeoutError(reason));
+    }
+    this.p2pSendingTransferIds.clear();
+    this.p2pSendContexts.clear();
+
+    for (const [id, fileInfo] of this.receivingFiles.entries()) {
+      const channel = this.dataChannels.get(id);
+      if (channel?.readyState === "open") {
+        try {
+          channel.send(JSON.stringify({
+            type: "abort",
+            transferId: fileInfo.transferId,
+            reason,
+          }));
+        } catch (error) {
+          console.warn("P2P lifecycle receive abort message could not be sent:", error);
+        }
+      }
+      this.clearP2PReceiveTimeout(id);
+    }
+    this.receivingFiles.clear();
+
+    this.setFileTransferProgress(null);
+    this.setDownloadPageState(false);
+    this.setFileTransferStatus(reason, "warning", {
+      autoClearMs: 10_000,
+    });
+    this.serverFileTransfer?.handleConnectionLost(reason);
+
+    if (p2pActiveCount > 0 && serverActiveCount === 0) {
+      alertUseMUI(reason, 5000, { kind: "warning" });
+    }
+
+    return true;
+  }
+
+  private isLetShareZip(file: File): boolean {
+    return file.name.startsWith("LetShare_") && file.name.endsWith(".zip");
+  }
+
+  private canContinueReceivedFilePostProcessing(
+    expectedVersion: number,
+    fullKey: string
+  ): boolean {
+    return canContinueReceivedFilePostProcessing({
+      expectedVersion,
+      currentVersion: this.receivedFilesVersion,
+      fileStillRetained: this.receivedFiles.has(fullKey),
+    });
+  }
+
+  private async maybeAutoUnzipReceivedFile(
+    file: File,
+    id: string,
+    fullKey: string,
+    expectedVersion = this.receivedFilesVersion
+  ): Promise<boolean> {
+    if (!this.isLetShareZip(file)) {
+      return false;
+    }
+
+    if (!this.canContinueReceivedFilePostProcessing(expectedVersion, fullKey)) {
+      return false;
+    }
+
+    if (file.size > this.AUTO_UNZIP_SIZE_LIMIT) {
+      alertUseMUI("压缩包较大，已保留为 ZIP 以降低内存占用", 3000, { kind: "info" });
+      return false;
+    }
+
+    try {
+      alertUseMUI(t("alert.unzipping"), 2000, { kind: "info" });
+      const { default: JSZip } = await import("jszip");
+      const zip = await JSZip.loadAsync(file);
+
+      if (!this.canContinueReceivedFilePostProcessing(expectedVersion, fullKey)) {
+        return false;
+      }
+
+      const files = Object.entries(zip.files).filter(([, zipEntry]) => !zipEntry.dir);
+
+      if (files.length > this.AUTO_UNZIP_FILE_LIMIT) {
+        alertUseMUI("文件数量较多，已保留为 ZIP 以降低内存占用", 3000, { kind: "info" });
+        return false;
+      }
+
+      for (const [fileName, zipEntry] of files) {
+        const blob = await zipEntry.async("blob");
+        if (!this.canContinueReceivedFilePostProcessing(expectedVersion, fullKey)) {
+          return false;
+        }
+        const extractedFile = new File([blob], fileName);
+        const newKey = `${id}::${fileName}`;
+        this.receivedFiles.set(newKey, extractedFile);
+      }
+
+      if (this.canContinueReceivedFilePostProcessing(expectedVersion, fullKey)) {
+        this.receivedFiles.delete(fullKey);
+      }
+      return true;
+    } catch (err) {
+      console.error("Unzipping failed:", err);
+      return false;
+    }
+  }
+
   /**
    * 处理接收到的文件（支持ZIP解压）
    */
   private async handleReceivedFile(file: File, id: string): Promise<void> {
     const fullKey = `${id}::${file.name}`;
     this.receivedFiles.set(fullKey, file);
+    const postProcessVersion = this.receivedFilesVersion;
 
-    // 如果是ZIP文件，尝试解压
-    if (file.name.startsWith("LetShare_") && file.name.endsWith(".zip")) {
-      try {
-        alertUseMUI(t("alert.unzipping"), 2000, { kind: "info" });
-        const { default: JSZip } = await import("jszip");
-        const zip = await JSZip.loadAsync(file);
-
-        for (const [fileName, zipEntry] of Object.entries(zip.files)) {
-          if (!zipEntry.dir) {
-            const blob = await zipEntry.async("blob");
-            const extractedFile = new File([blob], fileName);
-            const newKey = `${id}::${fileName}`;
-            this.receivedFiles.set(newKey, extractedFile);
-          }
-        }
-        // 删除ZIP文件本身
-        this.receivedFiles.delete(fullKey);
-      } catch (err) {
-        console.error("Unzipping failed:", err);
-      }
-    }
+    await this.maybeAutoUnzipReceivedFile(file, id, fullKey, postProcessVersion);
 
     alertUseMUI(t("alert.fileReceived", { name: id.split(":")[0] }), 2000, { kind: "success" });
     this.setFileTransferProgress(null);
@@ -1673,6 +2542,14 @@ export class RealTimeColab {
    */
   public canSendFileToUser(id: string): boolean {
     return this.isConnectedToUser(id);
+  }
+
+  public hasActiveOutgoingFileTransfer(): boolean {
+    return (
+      this.isSendingFile ||
+      this.p2pSendingTransferIds.size > 0 ||
+      this.serverFileTransfer?.isSending() === true
+    );
   }
 
   /**
@@ -1729,6 +2606,8 @@ export class RealTimeColab {
     } catch (error) {
       console.error("❌ 服务器文件传输失败:", error);
       alertUseMUI(t('toast.fileTransferFailed'), 3000, { kind: "error" });
+      this.setFileTransferProgress(null);
+      this.setDownloadPageState(false);
     } finally {
       this.isSendingFile = false;
     }
@@ -1759,34 +2638,40 @@ export class RealTimeColab {
       return;
     }
 
-    const totalChunks = Math.ceil(file.size / this.transferConfig.chunkSize);
-    let maxConcurrentReads = this.transferConfig.maxConcurrentReads;
+    const totalChunks = Math.max(1, Math.ceil(file.size / this.transferConfig.chunkSize));
+    const maxConcurrentReads = this.transferConfig.maxConcurrentReads;
+    const transferId = `p2p_${Date.now()}_${this.generateUUID()}`;
     let chunksSent = 0;
     let currentIndex = 0;
     // 解锁
     this.aborted = false;
+    this.isSendingFile = true;
+    this.p2pSendingTransferIds.set(id, transferId);
+    this.setDownloadPageState(true);
+    this.setFileTransferProgress(0);
+    this.setFileTransferStatus("正在通过 P2P 发送文件", "info", { showPanel: false });
 
-    const activeTasks: Promise<void>[] = [];
+    const stillOwnsTransfer = () => this.p2pSendingTransferIds.get(id) === transferId;
+    const isCurrentTransfer = () =>
+      isP2PSendTransferCurrent({
+        expectedTransferId: transferId,
+        currentTransferId: this.p2pSendingTransferIds.get(id),
+        globallyAborted: this.aborted,
+      });
 
     // 元信息
     const metaMessage = {
       type: "file-meta",
+      transferId,
       name: file.name,
       size: file.size,
       totalChunks,
       chunkSize: this.transferConfig.chunkSize,
     };
-    try {
-      channel.send(JSON.stringify(metaMessage));
-      console.log("📦 File metadata sent:", metaMessage);
-    } catch (err) {
-      console.error("❌ Failed to send file metadata:", err);
-      return;
-    }
 
     const readChunk = (index: number): Promise<ArrayBuffer> => {
-      return new Promise((resolve, reject) => {
-        if (this.aborted) return reject(new Error("Reading aborted"));
+      const readOperation = new Promise<ArrayBuffer>((resolve, reject) => {
+        if (!isCurrentTransfer()) return reject(new Error("Reading aborted"));
 
         const offset = index * this.transferConfig.chunkSize;
         const slice = file.slice(
@@ -1795,7 +2680,7 @@ export class RealTimeColab {
         );
         const reader = new FileReader();
         reader.onload = () => {
-          if (this.aborted) return reject(new Error("Reading aborted"));
+          if (!isCurrentTransfer()) return reject(new Error("Reading aborted"));
           if (reader.result instanceof ArrayBuffer) {
             resolve(reader.result);
           } else {
@@ -1805,77 +2690,136 @@ export class RealTimeColab {
         reader.onerror = (err) => reject(err);
         reader.readAsArrayBuffer(slice);
       });
+
+      return withTransferTimeout(readOperation, {
+        timeoutMs: 15_000,
+        timeoutMessage: "读取文件分片超时，请重试",
+      });
     };
 
-    const sendChunk = async (index: number) => {
-      if (this.aborted) return;
+    const sendChunk = async (
+      index: number,
+      options: { countProgress?: boolean } = {}
+    ) => {
+      const countProgress = options.countProgress ?? true;
+      if (!isCurrentTransfer()) return;
 
-      try {
-        const chunkBuffer = await readChunk(index);
-        if (this.aborted) return;
+      const chunkBuffer = await readChunk(index);
+      if (!isCurrentTransfer()) return;
 
-        const headerSize = 8;
-        const bufferWithHeader = new ArrayBuffer(
-          headerSize + chunkBuffer.byteLength
-        );
-        const view = new DataView(bufferWithHeader);
-        view.setUint32(0, index);
-        view.setUint32(4, chunkBuffer.byteLength);
-        new Uint8Array(bufferWithHeader, headerSize).set(
-          new Uint8Array(chunkBuffer)
-        );
+      const bufferWithHeader = encodeTransferFrame(
+        {
+          transfer_id: transferId,
+          chunk_index: index,
+          chunk_size: chunkBuffer.byteLength,
+          total_chunks: totalChunks,
+        },
+        chunkBuffer
+      );
 
-        const send = () => {
-          if (this.aborted) return;
-          if (channel.bufferedAmount < this.transferConfig.bufferThreshold) {
-            channel.send(bufferWithHeader);
-            chunksSent++;
-            const progress = Math.min((chunksSent / totalChunks) * 100, 100);
-            this.setFileTransferProgress(progress);
-            // 发送完成
-            if (progress >= 100) {
-              setTimeout(() => this.setFileTransferProgress(null), CONFIG.TRANSFER_COMPLETE_DELAY);
-              this.setDownloadPageState(false);
-            }
-            this.isSendingFile = progress < 100 && progress > 0;
-          } else {
-            const timeoutId = setTimeout(send, CONFIG.RETRY_SEND_DELAY);
-            this.timeoutHandles.add(timeoutId);
-          }
-        };
+      await waitForBufferedAmountBelow({
+        getBufferedAmount: () => channel.bufferedAmount,
+        isOpen: () => channel.readyState === "open",
+        threshold: this.transferConfig.bufferThreshold,
+        intervalMs: CONFIG.RETRY_SEND_DELAY,
+        timeoutMs: 15_000,
+      });
 
-        send();
-      } catch (err) {
-        if (!this.aborted) {
-          console.error(`Chunk ${index} sending failed:`, err);
-        }
+      if (!isCurrentTransfer()) return;
+      if (channel.readyState !== "open") {
+        throw new TransferTimeoutError("P2P data channel closed during transfer");
+      }
+
+      channel.send(bufferWithHeader);
+      if (countProgress) {
+        chunksSent++;
+        const progress = Math.min((chunksSent / totalChunks) * 100, 99);
+        this.setFileTransferProgress(progress);
       }
     };
 
-    const enqueue = async () => {
-      while (currentIndex < totalChunks && !this.aborted) {
-        if (activeTasks.length >= maxConcurrentReads) {
-          await Promise.race(activeTasks);
+    this.p2pSendContexts.set(id, {
+      transferId,
+      totalChunks,
+      resendChunks: async (chunkIndexes: number[]) => {
+        for (const chunkIndex of chunkIndexes) {
+          await sendChunk(chunkIndex, { countProgress: false });
         }
+      },
+    });
+
+    const worker = async () => {
+      while (currentIndex < totalChunks && isCurrentTransfer()) {
         const indexToSend = currentIndex++;
-        const task = sendChunk(indexToSend);
-        activeTasks.push(task);
-        task.finally(() => {
-          const idx = activeTasks.indexOf(task);
-          if (idx > -1) {
-            activeTasks.splice(idx, 1);
-          }
-        });
+        await sendChunk(indexToSend);
       }
     };
 
-    await enqueue();
-    await Promise.allSettled(activeTasks);
+    try {
+      channel.send(JSON.stringify(metaMessage));
+      console.log("📦 File metadata sent:", metaMessage);
 
-    if (!this.aborted) {
-      console.log("✅ File sending complete");
-    } else {
-      console.warn("🚫 File sending aborted");
+      await Promise.all(Array.from({ length: maxConcurrentReads }, () => worker()));
+      if (!isCurrentTransfer()) {
+        console.warn("🚫 File sending aborted");
+        return;
+      }
+      this.setFileTransferProgress(99);
+      await this.p2pAckTracker.waitForAck(
+        transferId,
+        getTransferCompletionAckTimeoutMs({
+          receiveTimeoutMs: this.P2P_RECEIVE_TIMEOUT_MS,
+          maxResendAttempts: this.P2P_MAX_RESEND_ATTEMPTS,
+        })
+      );
+      console.log("✅ File sending complete and receiver confirmed");
+      this.setFileTransferProgress(100);
+      setTimeout(() => this.setFileTransferProgress(null), CONFIG.TRANSFER_COMPLETE_DELAY);
+      this.setDownloadPageState(false);
+      this.setFileTransferStatus("P2P 传输完成", "success", {
+        autoClearMs: CONFIG.TRANSFER_COMPLETE_DELAY,
+        showPanel: false,
+      });
+    } catch (err) {
+      if (!stillOwnsTransfer()) {
+        console.warn("Ignoring stale P2P transfer worker failure:", err);
+        return;
+      }
+      let message = "P2P 传输中断，已停止当前任务，请点击用户重试";
+      if (!this.aborted) {
+        console.error("P2P file transfer stalled:", err);
+        if (channel.readyState === "open") {
+          try {
+            channel.send(JSON.stringify({
+              type: "abort",
+              transferId,
+              reason: "发送端检测到传输中断，请重试",
+            }));
+          } catch (sendError) {
+            console.warn("P2P abort message could not be sent:", sendError);
+          }
+        }
+        message = err instanceof TransferTimeoutError && err.message.includes("receiver")
+          ? "接收方未确认完成，已停止当前任务，请重试"
+          : "P2P 传输中断，已停止当前任务，请点击用户重试";
+        alertUseMUI(message, 4000, { kind: "error" });
+      }
+      this.aborted = true;
+      this.setFileTransferProgress(null);
+      this.setDownloadPageState(false);
+      this.setFileTransferStatus(message, "error", {
+        autoClearMs: 10_000,
+      });
+      throw err;
+    } finally {
+      if (this.p2pSendContexts.get(id)?.transferId === transferId) {
+        this.p2pSendContexts.delete(id);
+      }
+      if (stillOwnsTransfer()) {
+        this.p2pAckTracker.cancel(transferId);
+        this.p2pSendingTransferIds.delete(id);
+        this.isSendingFile = false;
+      }
     }
 
     // this.abortedMap.delete(id); // 清理状态
@@ -1900,7 +2844,7 @@ export class RealTimeColab {
 
   public getConnectedUserIds(): string[] {
     return Array.from(this.userList.entries())
-      .filter(([_, info]) => info.status === "connected") // 加上 return 判断条件
+      .filter(([, info]) => info.status === "connected") // 加上 return 判断条件
       .map(([id]) => id);
   }
 
@@ -1935,12 +2879,29 @@ export class RealTimeColab {
         backgroundStartTime = Date.now();
         ablyTimeoutHandle = setTimeout(() => {
           const now = Date.now();
-          if (backgroundStartTime && now - backgroundStartTime >= overtime) {
+          const backgroundDurationMs = backgroundStartTime ? now - backgroundStartTime : 0;
+          const activeTransferCount = this.getActiveFileTransferCount();
+          if (shouldStopTransfersForPageLifecycle({
+            backgroundDurationMs,
+            timeoutMs: overtime,
+            activeTransferCount,
+          })) {
+            this.stopActiveFileTransfersForLifecycle(
+              "页面在后台停留较久，当前文件传输已停止，请回到前台后重试"
+            );
+            void runTransferHandlerSafely(
+              () => this.disconnect(),
+              (error) => console.warn("Background disconnect failed:", error)
+            );
+          } else if (backgroundStartTime && backgroundDurationMs >= overtime) {
             alertUseMUI(
               t("background.timeout", { seconds: overtime / 1000 }),
               3000
             );
-            this.disconnect(); // 你已有的断开方法
+            void runTransferHandlerSafely(
+              () => this.disconnect(),
+              (error) => console.warn("Background disconnect failed:", error)
+            );
           }
         }, overtime);
       } else if (document.visibilityState === "visible") {

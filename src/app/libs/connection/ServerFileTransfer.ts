@@ -6,6 +6,30 @@
 import { ConnectionManager } from "./providers/ConnectionManager";
 import alertUseMUI from "../tools/alert";
 import i18n from "../i18n/i18n";
+import {
+  TransferAckTracker,
+  TransferTimeoutError,
+  canRecoverMissingChunksWithResend,
+  canRetainReceivedFiles,
+  createCompletedTransferFile,
+  createTransferCompleteMessage,
+  createTransferControlMessage,
+  createTransferResendRequestMessage,
+  decodeTransferFrame,
+  encodeTransferFrame,
+  getResendRecoveryFailureMessage,
+  getSafeReceiveSizeLimit,
+  getServerTransferCapability,
+  getTransferCompletionAckTimeoutMs,
+  normalizeTransferControlPayload,
+  normalizeTransferMetadata,
+  normalizeTransferResendRequest,
+  runTransferHandlerSafely,
+  shouldReportTransferIssueOnce,
+  waitForBufferedAmountBelow,
+  withTransferTimeout,
+} from "./transferReliability";
+import { getDeviceType } from "../tools/tools";
 
 const t = i18n.t;
 
@@ -17,6 +41,8 @@ export const FILE_TRANSFER_MESSAGE_TYPES = {
   START: "file:transfer:start",
   CHUNK: "file:transfer:chunk",
   END: "file:transfer:end",
+  COMPLETE: "file:transfer:complete",
+  RESEND: "file:transfer:resend",
   CANCEL: "file:transfer:cancel",
   ERROR: "file:transfer:error",
   PROGRESS: "file:transfer:progress",
@@ -54,6 +80,7 @@ interface TransferSession {
   transferId: string;
   file: File;
   toUserId: string;
+  roomName: string;
   totalChunks: number;
   chunkSize: number;
   sentChunks: number;
@@ -70,6 +97,8 @@ interface ReceiveSession {
   /** 🔥 预分配缓冲区 — 直接写入对应位置, 避免 Map 碎片和多次拷贝。接受前为 null, 避免 OOM */
   buffer: Uint8Array | null;
   receivedCount: number;
+  receivedChunkIndexes: Set<number>;
+  resendAttempts: number;
   /**
    * 下一个待写入块的真实索引 (来自 file:transfer:chunk 元数据)。
    * 初始 -1 表示尚未收到元数据帧; 二进制帧写入后重置回 -1。
@@ -80,24 +109,38 @@ interface ReceiveSession {
   status: "pending" | "receiving" | "completed" | "cancelled" | "error";
 }
 
+type TransferStatusKind = "info" | "warning" | "error" | "success";
+
 export class ServerFileTransfer {
   private connectionManager: ConnectionManager;
   private sendingSessions: Map<string, TransferSession> = new Map();
   private receivingSessions: Map<string, ReceiveSession> = new Map();
+  private transferTimeouts: Map<string, ReturnType<typeof setTimeout>> = new Map();
+  private receiveTimeouts: Map<string, ReturnType<typeof setTimeout>> = new Map();
+  private completionAcks = new TransferAckTracker();
+  private unknownBinaryTransferIssueKeys = new Set<string>();
   private readonly DEFAULT_CHUNK_SIZE = 64 * 1024; // 64KB
   private readonly BASIC_SIZE_LIMIT = 50 * 1024 * 1024; // 50MB
   /** 🛡️ 对齐服务端 500MB 上限, 防止恶意/超大 file_size 撑爆标签页 */
   private readonly MAX_FILE_SIZE = 500 * 1024 * 1024; // 500MB
+  private readonly RESEND_CHUNK_LIMIT = 256;
+  private readonly MAX_RESEND_ATTEMPTS = 3;
+  private readonly RECEIVE_TIMEOUT_MS = 30_000;
   private onProgressCallback: ((progress: number | null) => void) | null = null;
   private onFileReceivedCallback: ((file: File, fromUserId: string) => void) | null = null;
   private currentSendingTransferId: string | null = null;
   private onDownloadPageStateChange: ((show: boolean) => void) | null = null;
   private onFileMetaInfoChange: ((name: string) => void) | null = null;
+  private onTransferStatusChange: ((message: string | null, kind: TransferStatusKind) => void) | null = null;
   private onAdminPasswordRequestCallback: ((fileSize: number) => Promise<string | null>) | null = null;
+  private receivedFileCacheCandidatesCallback: (() => Array<{ size: number }>) | null = null;
 
   constructor(connectionManager: ConnectionManager) {
     this.connectionManager = connectionManager;
     this.setupMessageHandlers();
+    this.connectionManager.onDisconnected?.((reason) => {
+      this.handleConnectionLost(reason || "服务器连接已断开");
+    });
   }
 
   /**
@@ -128,11 +171,23 @@ export class ServerFileTransfer {
     this.onFileMetaInfoChange = callback;
   }
 
+  public setTransferStatusCallback(callback: (message: string | null, kind: TransferStatusKind) => void) {
+    this.onTransferStatusChange = callback;
+  }
+
   /**
    * 设置管理员密码请求回调(超过50MB时请求密码)
    */
   public setAdminPasswordRequestCallback(callback: (fileSize: number) => Promise<string | null>) {
     this.onAdminPasswordRequestCallback = callback;
+  }
+
+  public setReceivedFileCacheCandidatesCallback(callback: () => Array<{ size: number }>) {
+    this.receivedFileCacheCandidatesCallback = callback;
+  }
+
+  private setTransferStatus(message: string | null, kind: TransferStatusKind = "info") {
+    this.onTransferStatusChange?.(message, kind);
   }
 
   /**
@@ -149,35 +204,53 @@ export class ServerFileTransfer {
   public handleFileTransferMessage(type: string, data: any) {
     console.log(`[ServerFileTransfer] Received message type: ${type}`, data);
 
-    switch (type) {
-      case FILE_TRANSFER_MESSAGE_TYPES.REQUEST:
-        this.handleTransferRequest(data);
-        break;
-      case FILE_TRANSFER_MESSAGE_TYPES.ACCEPT:
-        this.handleTransferAccept(data);
-        break;
-      case FILE_TRANSFER_MESSAGE_TYPES.REJECT:
-        this.handleTransferReject(data);
-        break;
-      case FILE_TRANSFER_MESSAGE_TYPES.START:
-        this.handleTransferStart(data);
-        break;
-      case FILE_TRANSFER_MESSAGE_TYPES.CHUNK:
-        this.handleTransferChunk(data);
-        break;
-      case FILE_TRANSFER_MESSAGE_TYPES.END:
-        this.handleTransferEnd(data);
-        break;
-      case FILE_TRANSFER_MESSAGE_TYPES.CANCEL:
-        this.handleTransferCancel(data);
-        break;
-      case FILE_TRANSFER_MESSAGE_TYPES.ERROR:
-        this.handleTransferError(data);
-        break;
-      case FILE_TRANSFER_MESSAGE_TYPES.PROGRESS:
-        this.handleTransferProgress(data);
-        break;
+    const normalizedPayload = normalizeTransferControlPayload(data);
+    if (!normalizedPayload.valid) {
+      this.handleMalformedTransferMessage(type, data, normalizedPayload.reason);
+      return;
     }
+
+    const payload = normalizedPayload.payload as any;
+
+    void runTransferHandlerSafely(async () => {
+      switch (type) {
+        case FILE_TRANSFER_MESSAGE_TYPES.REQUEST:
+          await this.handleTransferRequest(payload);
+          break;
+        case FILE_TRANSFER_MESSAGE_TYPES.ACCEPT:
+          await this.handleTransferAccept(payload);
+          break;
+        case FILE_TRANSFER_MESSAGE_TYPES.REJECT:
+          this.handleTransferReject(payload);
+          break;
+        case FILE_TRANSFER_MESSAGE_TYPES.START:
+          this.handleTransferStart(payload);
+          break;
+        case FILE_TRANSFER_MESSAGE_TYPES.CHUNK:
+          this.handleTransferChunk(payload);
+          break;
+        case FILE_TRANSFER_MESSAGE_TYPES.END:
+          this.handleTransferEnd(payload);
+          break;
+        case FILE_TRANSFER_MESSAGE_TYPES.COMPLETE:
+          this.handleTransferComplete(payload);
+          break;
+        case FILE_TRANSFER_MESSAGE_TYPES.RESEND:
+          await this.handleTransferResend(payload);
+          break;
+        case FILE_TRANSFER_MESSAGE_TYPES.CANCEL:
+          this.handleTransferCancel(payload);
+          break;
+        case FILE_TRANSFER_MESSAGE_TYPES.ERROR:
+          this.handleTransferError(payload);
+          break;
+        case FILE_TRANSFER_MESSAGE_TYPES.PROGRESS:
+          this.handleTransferProgress(payload);
+          break;
+      }
+    }, (error) => {
+      this.handleMalformedTransferMessage(type, payload, error);
+    });
   }
 
   /**
@@ -186,47 +259,44 @@ export class ServerFileTransfer {
   public handleBinaryData(data: ArrayBuffer) {
     console.log(`[ServerFileTransfer] Received binary data: ${data.byteLength} bytes`);
 
+    try {
+      const { meta, payload } = decodeTransferFrame(data);
+      const session = this.receivingSessions.get(meta.transfer_id);
+      if (!session || session.status !== "receiving") {
+        const reason = "收到文件分片但接收会话不存在，当前传输已停止，请重试";
+        console.warn(`[ServerFileTransfer] ⚠️ ${reason} transfer=${meta.transfer_id}`);
+        if (shouldReportTransferIssueOnce(this.unknownBinaryTransferIssueKeys, meta.transfer_id)) {
+          this.sendTransferControlMessage(
+            FILE_TRANSFER_MESSAGE_TYPES.CANCEL,
+            meta.transfer_id,
+            reason
+          );
+          this.onProgressCallback?.(null);
+          this.onDownloadPageStateChange?.(false);
+          this.setTransferStatus(reason, "error");
+          alertUseMUI(reason, 4000, { kind: "error" });
+        }
+        return;
+      }
+      this.unknownBinaryTransferIssueKeys.delete(meta.transfer_id);
+      this.writeChunkToSession(session, meta.chunk_index, payload);
+      return;
+    } catch (err) {
+      console.debug(`[ServerFileTransfer] Binary frame fallback to legacy metadata pairing:`, err);
+    }
+
     // 查找活跃的接收会话
     for (const [transferId, session] of this.receivingSessions) {
       if (session.status === "receiving") {
         // 🛡️ Bug1 修复: 必须先收到元数据帧才能知道真实 chunk_index
         if (session.pendingChunkIndex === -1) {
-          console.warn(`[ServerFileTransfer] ⚠️ 收到二进制帧但尚无元数据 (transfer=${transferId}), 跳过`);
+          console.warn(`[ServerFileTransfer] ⚠️ 收到二进制帧但尚无元数据 (transfer=${transferId})`);
+          this.failReceiveSession(session, "收到缺少元数据的文件分片，请重试");
           return;
         }
 
-        // 🛡️ Bug1 修复: 用真实 chunk_index 计算 offset, 不再用盲计数器
-        const chunkIndex = session.pendingChunkIndex;
-        const offset = chunkIndex * session.chunkSize;
-
-        // 🛡️ Bug2 修复: buffer 为 null 说明 acceptTransfer 尚未分配成功, 跳过
-        if (!session.buffer) {
-          console.warn(`[ServerFileTransfer] ⚠️ buffer 为 null, 跳过写入 (transfer=${transferId})`);
-          return;
-        }
-
-        // 🔥 直接写入预分配缓冲区 — 无额外拷贝
-        if (offset + data.byteLength <= session.buffer.byteLength) {
-          session.buffer.set(new Uint8Array(data), offset);
-          session.receivedCount++;
-          // 写入完成, 重置等待索引
-          session.pendingChunkIndex = -1;
-
-          const progress = (session.receivedCount / session.totalChunks) * 100;
-          this.onProgressCallback?.(progress);
-
-          // 每隔 50 块才打一次日志, 减少输出
-          if (session.receivedCount % 50 === 0 || session.receivedCount === session.totalChunks) {
-            console.log(`[ServerFileTransfer] Chunk ${session.receivedCount}/${session.totalChunks} (${progress.toFixed(1)}%)`);
-          }
-
-          // 检查是否接收完成
-          if (session.receivedCount === session.totalChunks) {
-            this.finalizeReceivedFile(session);
-          }
-        } else {
-          console.error(`[ServerFileTransfer] ❌ Buffer overflow! chunk ${chunkIndex} offset=${offset} size=${data.byteLength} buffer=${session.buffer.byteLength}`);
-        }
+        this.writeChunkToSession(session, session.pendingChunkIndex, data);
+        session.pendingChunkIndex = -1;
         return;
       }
     }
@@ -234,13 +304,364 @@ export class ServerFileTransfer {
     console.warn(`[ServerFileTransfer] ⚠️ 未知二进制数据 (${data.byteLength} bytes), 无匹配会话`);
   }
 
+  private writeChunkToSession(
+    session: ReceiveSession,
+    chunkIndex: number,
+    data: ArrayBuffer | ArrayBufferView
+  ) {
+    if (chunkIndex < 0 || chunkIndex >= session.totalChunks) {
+      console.warn(`[ServerFileTransfer] ⚠️ chunk index 越界: ${chunkIndex}/${session.totalChunks}`);
+      this.failReceiveSession(session, "收到无效的文件分片，请重试");
+      return;
+    }
+
+    if (!session.buffer) {
+      console.warn(`[ServerFileTransfer] ⚠️ buffer 为 null, 跳过写入 (transfer=${session.transferId})`);
+      this.failReceiveSession(session, "接收缓冲区不可用，请重试");
+      return;
+    }
+
+    if (session.receivedChunkIndexes.has(chunkIndex)) {
+      console.warn(`[ServerFileTransfer] ⚠️ duplicate chunk ignored: ${chunkIndex} transfer=${session.transferId}`);
+      return;
+    }
+
+    const bytes = data instanceof ArrayBuffer
+      ? new Uint8Array(data)
+      : new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+    const offset = chunkIndex * session.chunkSize;
+    if (offset + bytes.byteLength > session.buffer.byteLength) {
+      console.error(`[ServerFileTransfer] ❌ Buffer overflow! chunk ${chunkIndex} offset=${offset} size=${bytes.byteLength} buffer=${session.buffer.byteLength}`);
+      this.failReceiveSession(session, "收到越界的文件分片，请重试");
+      return;
+    }
+    const expectedSize = chunkIndex === session.totalChunks - 1
+      ? session.fileSize - offset
+      : session.chunkSize;
+    if (bytes.byteLength !== expectedSize) {
+      console.error(`[ServerFileTransfer] ❌ Chunk size mismatch! chunk ${chunkIndex} expected=${expectedSize} actual=${bytes.byteLength}`);
+      this.failReceiveSession(session, "收到损坏的文件分片，请重试");
+      return;
+    }
+
+    session.buffer.set(bytes, offset);
+    session.receivedChunkIndexes.add(chunkIndex);
+    session.receivedCount++;
+    session.resendAttempts = 0;
+
+    const progress = (session.receivedCount / session.totalChunks) * 100;
+    this.onProgressCallback?.(progress);
+
+    if (session.receivedCount % 50 === 0 || session.receivedCount === session.totalChunks) {
+      console.log(`[ServerFileTransfer] Chunk ${session.receivedCount}/${session.totalChunks} (${progress.toFixed(1)}%)`);
+    }
+
+    if (session.receivedCount === session.totalChunks) {
+      this.finalizeReceivedFile(session);
+    } else {
+      this.refreshReceiveTimeout(session.transferId);
+    }
+  }
+
+  private refreshReceiveTimeout(transferId: string) {
+    this.clearReceiveTimeout(transferId);
+    const timeoutId = setTimeout(() => {
+      const session = this.receivingSessions.get(transferId);
+      if (!session || session.status !== "receiving") {
+        return;
+      }
+
+      if (this.requestMissingServerChunks(session, "接收长时间无进度，请重传缺失分片")) {
+        this.refreshReceiveTimeout(transferId);
+        return;
+      }
+
+      this.failReceiveSession(session, this.getResendRecoveryFailureMessage(session));
+    }, this.RECEIVE_TIMEOUT_MS);
+    this.receiveTimeouts.set(transferId, timeoutId);
+  }
+
+  private clearReceiveTimeout(transferId: string) {
+    const timeoutId = this.receiveTimeouts.get(transferId);
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+      this.receiveTimeouts.delete(transferId);
+    }
+  }
+
+  private getMissingChunkIndexes(
+    session: ReceiveSession,
+    limit = this.RESEND_CHUNK_LIMIT
+  ): number[] {
+    const missing: number[] = [];
+    const safeLimit = Math.max(0, Math.min(limit, session.totalChunks));
+
+    for (let index = 0; index < session.totalChunks; index++) {
+      if (!session.receivedChunkIndexes.has(index)) {
+        missing.push(index);
+        if (missing.length >= safeLimit) {
+          break;
+        }
+      }
+    }
+
+    return missing;
+  }
+
+  private getMissingChunkCount(session: ReceiveSession): number {
+    return session.totalChunks - session.receivedChunkIndexes.size;
+  }
+
+  private getResendRecoveryFailureMessage(session: ReceiveSession): string {
+    return getResendRecoveryFailureMessage({
+      missingCount: this.getMissingChunkCount(session),
+      maxChunkIndexesPerRequest: this.RESEND_CHUNK_LIMIT,
+      maxResendAttempts: this.MAX_RESEND_ATTEMPTS,
+      resendAttemptsUsed: session.resendAttempts,
+    }) ?? "缺失分片重传失败，已停止当前任务，请重试";
+  }
+
+  private requestMissingServerChunks(session: ReceiveSession, reason: string): boolean {
+    const missingChunks = this.getMissingChunkIndexes(session);
+    const missingCount = this.getMissingChunkCount(session);
+    const recoveryGuard = canRecoverMissingChunksWithResend({
+      missingCount,
+      maxChunkIndexesPerRequest: this.RESEND_CHUNK_LIMIT,
+      maxResendAttempts: this.MAX_RESEND_ATTEMPTS,
+      resendAttemptsUsed: session.resendAttempts,
+    });
+    if (
+      missingChunks.length === 0 ||
+      missingCount === 0 ||
+      !recoveryGuard.allowed
+    ) {
+      return false;
+    }
+
+    session.resendAttempts++;
+    try {
+      this.connectionManager.send(createTransferResendRequestMessage({
+        type: FILE_TRANSFER_MESSAGE_TYPES.RESEND,
+        transferId: session.transferId,
+        chunkIndexes: missingChunks,
+        missingCount,
+        totalChunks: session.totalChunks,
+        reason,
+        channel: session.roomName,
+      }));
+      alertUseMUI(
+        `公网接收长时间无进度，正在请求重传缺失分片（${session.resendAttempts}/${this.MAX_RESEND_ATTEMPTS}）`,
+        4000,
+        { kind: "warning" }
+      );
+      this.setTransferStatus(
+        `公网接收长时间无进度，正在请求重传缺失分片（${session.resendAttempts}/${this.MAX_RESEND_ATTEMPTS}）`,
+        "warning"
+      );
+      return true;
+    } catch (error) {
+      console.warn(`[ServerFileTransfer] 请求缺失分片重传失败:`, error);
+      return false;
+    }
+  }
+
+  private sendTransferControlMessage(
+    type: string,
+    transferId: string,
+    reason: string,
+    channel?: string
+  ): void {
+    try {
+      this.connectionManager.send(
+        createTransferControlMessage({
+          type,
+          transferId,
+          reason,
+          channel,
+        })
+      );
+    } catch (error) {
+      console.warn(`[ServerFileTransfer] 发送传输控制消息失败: ${transferId}`, error);
+    }
+  }
+
+  private sendTransferCompleteMessage(
+    transferId: string,
+    channel?: string
+  ): void {
+    try {
+      this.connectionManager.send(
+        createTransferCompleteMessage({
+          type: FILE_TRANSFER_MESSAGE_TYPES.COMPLETE,
+          transferId,
+          channel,
+        })
+      );
+    } catch (error) {
+      console.warn(`[ServerFileTransfer] 发送完成确认失败: ${transferId}`, error);
+    }
+  }
+
+  private failReceiveSession(
+    session: ReceiveSession,
+    reason: string,
+    messageType: string = FILE_TRANSFER_MESSAGE_TYPES.CANCEL
+  ): void {
+    session.status = "error";
+    session.buffer = null;
+    this.receivingSessions.delete(session.transferId);
+    this.clearReceiveTimeout(session.transferId);
+    this.onProgressCallback?.(null);
+    this.onDownloadPageStateChange?.(false);
+    this.setTransferStatus(reason, "error");
+    this.sendTransferControlMessage(
+      messageType,
+      session.transferId,
+      reason,
+      session.roomName
+    );
+    alertUseMUI(reason, 4000, { kind: "error" });
+  }
+
+  private getReceivedFileCacheCandidates(incomingSize: number): Array<{ size: number }> {
+    return [
+      ...(this.receivedFileCacheCandidatesCallback?.() ?? []),
+      ...Array.from(this.receivingSessions.values()).map((session) => ({
+        size: session.fileSize,
+      })),
+      { size: incomingSize },
+    ];
+  }
+
+  private getReceivedCacheLimitMessage(guard: {
+    totalBytes: number;
+    totalFiles: number;
+    maxBytes: number;
+    maxFiles: number;
+  }): string {
+    const totalMB = (guard.totalBytes / 1024 / 1024).toFixed(1);
+    const maxMB = (guard.maxBytes / 1024 / 1024).toFixed(0);
+    return `当前浏览器已缓存 ${guard.totalFiles} 个文件 / ${totalMB}MB。为避免内存崩溃，当前设备安全缓存上限为 ${guard.maxFiles} 个 / ${maxMB}MB，请先下载并清空已接收文件后重试。`;
+  }
+
+  private handleMalformedTransferMessage(
+    type: string,
+    data: unknown,
+    error: unknown
+  ): void {
+    const errorDetail = error instanceof Error ? error.message : String(error);
+    const transferId =
+      typeof data === "object" &&
+      data !== null &&
+      !Array.isArray(data) &&
+      typeof (data as Record<string, unknown>).transfer_id === "string"
+        ? (data as Record<string, string>).transfer_id
+        : undefined;
+    const reason = `收到异常公网传输消息，当前文件传输已停止，请重试：${errorDetail}`;
+
+    console.warn(`[ServerFileTransfer] Malformed transfer message ${type}`, data, error);
+
+    if (!transferId) {
+      if (this.sendingSessions.size > 0 || this.receivingSessions.size > 0) {
+        this.handleConnectionLost(reason);
+      } else {
+        alertUseMUI(`收到异常公网传输消息，已忽略：${errorDetail}`, 3000, { kind: "warning" });
+      }
+      return;
+    }
+
+    const receivingSession = this.receivingSessions.get(transferId);
+    const sendingSession = this.sendingSessions.get(transferId);
+
+    if (!receivingSession && !sendingSession) {
+      return;
+    }
+
+    if (receivingSession) {
+      this.failReceiveSession(receivingSession, reason);
+    }
+
+    if (!sendingSession) {
+      return;
+    }
+
+    if (sendingSession.status !== "pending") {
+      this.completionAcks.reject(transferId, new Error(reason));
+    } else {
+      this.completionAcks.cancel(transferId);
+    }
+    sendingSession.status = "error";
+    this.sendingSessions.delete(transferId);
+    this.clearTransferTimeout(transferId);
+    if (this.currentSendingTransferId === transferId) {
+      this.currentSendingTransferId = null;
+    }
+    this.onProgressCallback?.(null);
+    this.onDownloadPageStateChange?.(false);
+    this.setTransferStatus(reason, "error");
+    this.sendTransferControlMessage(
+      FILE_TRANSFER_MESSAGE_TYPES.CANCEL,
+      transferId,
+      reason,
+      sendingSession.roomName
+    );
+
+    if (!receivingSession) {
+      alertUseMUI(reason, 4000, { kind: "error" });
+    }
+  }
+
+  public handleConnectionLost(reason: string): void {
+    const activeTransferCount = this.sendingSessions.size + this.receivingSessions.size;
+    const pendingAckCount = this.completionAcks.rejectAll(
+      new TransferTimeoutError(reason)
+    );
+
+    if (activeTransferCount === 0 && pendingAckCount === 0) {
+      return;
+    }
+
+    for (const session of this.receivingSessions.values()) {
+      session.status = "error";
+      session.buffer = null;
+    }
+    for (const session of this.sendingSessions.values()) {
+      session.status = "error";
+    }
+
+    this.receivingSessions.clear();
+    this.sendingSessions.clear();
+    this.unknownBinaryTransferIssueKeys.clear();
+    this.clearAllTimeouts();
+    this.currentSendingTransferId = null;
+    this.onProgressCallback?.(null);
+    this.onDownloadPageStateChange?.(false);
+    this.setTransferStatus(reason, "error");
+    alertUseMUI(reason, 5000, { kind: "error" });
+  }
+
   /**
    * 发送文件给用户(通过服务器中转)
    */
   public async sendFileViaServer(toUserId: string, file: File, roomName: string): Promise<void> {
+    const capability = getServerTransferCapability({
+      isConnected: this.connectionManager.isConnected(),
+      canSendBinary: this.connectionManager.canSendBinary(),
+    });
+    if (!capability.allowed) {
+      const message = capability.reason === "server connection does not support binary transfer"
+        ? "当前公网连接不支持文件中转，请切换到自定义服务器或等待 P2P 重连后重试"
+        : "公网连接不可用，无法中转文件，请重连后重试";
+      this.onProgressCallback?.(null);
+      this.onDownloadPageStateChange?.(false);
+      this.setTransferStatus(message, "warning");
+      alertUseMUI(message, 5000, { kind: "warning" });
+      return;
+    }
+
     const transferId = this.generateTransferId();
     const chunkSize = this.DEFAULT_CHUNK_SIZE;
-    const totalChunks = Math.ceil(file.size / chunkSize);
+    const totalChunks = Math.max(1, Math.ceil(file.size / chunkSize));
 
     console.log(`[ServerFileTransfer] Sending file via server:`, {
       transferId,
@@ -249,6 +670,11 @@ export class ServerFileTransfer {
       totalChunks,
       toUserId,
     });
+
+    if (!this.connectionManager.canSendBinary()) {
+      alertUseMUI("当前线路不支持公网文件中转，请切换服务器或重试 P2P", 4000, { kind: "error" });
+      throw new Error("current connection provider does not support binary relay");
+    }
 
     // 🔑 检查是否需要管理员密码(文件超过50MB)
     let adminPass = "";
@@ -279,6 +705,7 @@ export class ServerFileTransfer {
       transferId,
       file,
       toUserId,
+      roomName,
       totalChunks,
       chunkSize,
       sentChunks: 0,
@@ -306,9 +733,62 @@ export class ServerFileTransfer {
     };
 
     console.log(`[ServerFileTransfer] 发送 REQUEST 消息:`, requestMessage);
-    this.connectionManager.send(requestMessage);
+    try {
+      this.connectionManager.send(requestMessage);
+    } catch (error) {
+      console.error(`[ServerFileTransfer] ❌ REQUEST 消息发送失败:`, error);
+      session.status = "error";
+      this.sendingSessions.delete(transferId);
+      if (this.currentSendingTransferId === transferId) {
+        this.currentSendingTransferId = null;
+      }
+      this.onProgressCallback?.(null);
+      this.onDownloadPageStateChange?.(false);
+      this.setTransferStatus("公网传输请求发送失败，请重连后重试", "error");
+      alertUseMUI("公网传输请求发送失败，请重连后重试", 4000, { kind: "error" });
+      return;
+    }
+    this.scheduleRequestTimeout(transferId);
     console.log(`[ServerFileTransfer] ✅ REQUEST 消息已发送给 ${toUserId}`);
     alertUseMUI(t('toast.waitingForAccept'), 2000, { kind: "info" });
+  }
+
+  private scheduleRequestTimeout(transferId: string) {
+    this.clearTransferTimeout(transferId);
+    const timeoutId = setTimeout(() => {
+      const session = this.sendingSessions.get(transferId);
+      if (!session || session.status !== "pending") {
+        return;
+      }
+
+      session.status = "error";
+      this.sendingSessions.delete(transferId);
+      if (this.currentSendingTransferId === transferId) {
+        this.currentSendingTransferId = null;
+      }
+      this.onProgressCallback?.(null);
+      this.onDownloadPageStateChange?.(false);
+      this.setTransferStatus("对方未响应文件传输请求，请重试", "warning");
+      alertUseMUI("对方未响应文件传输请求，请重试", 4000, { kind: "warning" });
+    }, 30_000);
+    this.transferTimeouts.set(transferId, timeoutId);
+  }
+
+  private clearTransferTimeout(transferId: string) {
+    const timeoutId = this.transferTimeouts.get(transferId);
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+      this.transferTimeouts.delete(transferId);
+    }
+  }
+
+  private clearAllTimeouts(): void {
+    for (const transferId of Array.from(this.transferTimeouts.keys())) {
+      this.clearTransferTimeout(transferId);
+    }
+    for (const transferId of Array.from(this.receiveTimeouts.keys())) {
+      this.clearReceiveTimeout(transferId);
+    }
   }
 
   /**
@@ -317,29 +797,65 @@ export class ServerFileTransfer {
   private async handleTransferRequest(request: FileTransferRequest) {
     console.log(`[ServerFileTransfer] Received transfer request:`, request);
 
-    // 🛡️ Bug2 修复: 接受前先校验文件大小, 防止 OOM
-    if (request.file_size > this.MAX_FILE_SIZE) {
-      console.warn(`[ServerFileTransfer] ❌ 文件过大 (${(request.file_size / 1024 / 1024).toFixed(1)} MB), 超过 500MB 上限, 自动拒绝`);
-      this.rejectTransfer(request.transfer_id, request.from_user_id, "文件超过500MB上限");
+    const normalizedMeta = normalizeTransferMetadata({
+      fileName: request.file_name,
+      fileSize: request.file_size,
+      chunkSize: request.chunk_size,
+      totalChunks: request.total_chunks,
+      transferId: request.transfer_id,
+    });
+    if (!normalizedMeta.valid) {
+      const reason = `文件传输元数据无效，请重试：${normalizedMeta.reason}`;
+      console.warn(`[ServerFileTransfer] ❌ ${reason}`, request);
+      this.setTransferStatus(reason, "error");
+      alertUseMUI(reason, 4000, { kind: "error" });
+      this.rejectIncomingRequest(request, reason);
+      return;
+    }
+
+    const deviceLimit = Math.min(this.MAX_FILE_SIZE, getSafeReceiveSizeLimit(getDeviceType()));
+    if (normalizedMeta.fileSize > deviceLimit) {
+      const limitMB = (deviceLimit / 1024 / 1024).toFixed(0);
+      const reason = `当前设备为避免内存崩溃，单文件接收上限为 ${limitMB}MB`;
+      console.warn(`[ServerFileTransfer] ❌ ${reason}`);
+      this.setTransferStatus(reason, "warning");
+      alertUseMUI(reason, 4000, { kind: "warning" });
+      this.rejectIncomingRequest(request, reason);
+      return;
+    }
+
+    const cacheGuard = canRetainReceivedFiles(
+      this.getReceivedFileCacheCandidates(normalizedMeta.fileSize),
+      getDeviceType()
+    );
+    if (!cacheGuard.allowed) {
+      const reason = this.getReceivedCacheLimitMessage(cacheGuard);
+      console.warn(`[ServerFileTransfer] ❌ ${reason}`);
+      this.setTransferStatus(reason, "warning");
+      alertUseMUI(reason, 6000, { kind: "warning" });
+      this.rejectIncomingRequest(request, reason);
       return;
     }
 
     // 🛡️ Bug2 修复: 不在此处预分配缓冲区, 延迟到用户真正接受后再分配
     const session: ReceiveSession = {
-      transferId: request.transfer_id,
-      fileName: request.file_name,
-      fileSize: request.file_size,
+      transferId: normalizedMeta.transferId ?? request.transfer_id,
+      fileName: normalizedMeta.fileName,
+      fileSize: normalizedMeta.fileSize,
       fileType: request.file_type,
-      totalChunks: request.total_chunks,
-      chunkSize: request.chunk_size,
+      totalChunks: normalizedMeta.totalChunks,
+      chunkSize: normalizedMeta.chunkSize,
       buffer: null,
       receivedCount: 0,
+      receivedChunkIndexes: new Set<number>(),
+      resendAttempts: 0,
       pendingChunkIndex: -1,
       fromUserId: request.from_user_id,
       roomName: request.room_name,
       status: "pending",
     };
     this.receivingSessions.set(request.transfer_id, session);
+    this.unknownBinaryTransferIssueKeys.delete(request.transfer_id);
 
     const userAccepts = await this.showAcceptDialog(request);
 
@@ -396,16 +912,16 @@ export class ServerFileTransfer {
       session.buffer = new Uint8Array(session.fileSize);
     } catch (e) {
       if (e instanceof RangeError) {
+        const reason = "内存不足，无法接收该文件，请换小文件或重试";
         console.error(`[ServerFileTransfer] ❌ 缓冲区分配失败 (${(session.fileSize / 1024 / 1024).toFixed(1)} MB):`, e);
-        alertUseMUI("内存不足, 无法接收该文件", 3000, { kind: "error" });
-        // 清理会话, 不让异常冒泡
-        this.receivingSessions.delete(transferId);
+        this.failReceiveSession(session, reason, FILE_TRANSFER_MESSAGE_TYPES.REJECT);
         return;
       }
       throw e; // 非 RangeError 的异常继续抛出
     }
 
     session.status = "receiving";
+    this.refreshReceiveTimeout(transferId);
 
     // 🎨 显示下载界面
     this.onFileMetaInfoChange?.(session.fileName);
@@ -436,6 +952,8 @@ export class ServerFileTransfer {
       console.log(`[ServerFileTransfer] ✅ ACCEPT 消息已发送: ${transferId}`);
     } catch (error) {
       console.error(`[ServerFileTransfer] ❌ 发送 ACCEPT 消息失败:`, error);
+      this.failReceiveSession(session, "公网传输确认发送失败，请重试", FILE_TRANSFER_MESSAGE_TYPES.REJECT);
+      return;
     }
 
     console.log(`[ServerFileTransfer] Accepted transfer: ${transferId}`);
@@ -450,20 +968,25 @@ export class ServerFileTransfer {
     this.receivingSessions.delete(transferId);
 
     if (session) {
-      const rejectMessage = {
-        type: FILE_TRANSFER_MESSAGE_TYPES.REJECT,
-        channel: session.roomName,
-        data: {
-          transfer_id: transferId, 
-          reason,
-        },
-      };
-      
-      this.connectionManager.send(rejectMessage);
+      this.sendTransferControlMessage(
+        FILE_TRANSFER_MESSAGE_TYPES.REJECT,
+        transferId,
+        reason,
+        session.roomName
+      );
     }
 
     console.log(`[ServerFileTransfer] Rejected transfer: ${transferId}`);
     alertUseMUI(t('toast.transferRejected'), 2000, { kind: "info" });
+  }
+
+  private rejectIncomingRequest(request: FileTransferRequest, reason: string) {
+    this.sendTransferControlMessage(
+      FILE_TRANSFER_MESSAGE_TYPES.REJECT,
+      request.transfer_id,
+      reason,
+      request.room_name
+    );
   }
 
   /**
@@ -479,6 +1002,7 @@ export class ServerFileTransfer {
       return;
     }
 
+    this.clearTransferTimeout(data.transfer_id);
     session.status = "accepted";
     console.log(`[ServerFileTransfer] ✅ Transfer accepted: ${data.transfer_id}`);
     
@@ -487,7 +1011,29 @@ export class ServerFileTransfer {
       await this.startSending(session);
     } catch (error) {
       console.error(`[ServerFileTransfer] ❌ 开始发送文件失败:`, error);
-      alertUseMUI(t('toast.fileTransferFailed'), 3000, { kind: "error" });
+      const wasCancelled = !this.sendingSessions.has(session.transferId);
+      this.onProgressCallback?.(null);
+      this.onDownloadPageStateChange?.(false);
+      if (!wasCancelled) {
+        session.status = "error";
+      }
+      this.sendingSessions.delete(session.transferId);
+      this.clearTransferTimeout(session.transferId);
+      if (this.currentSendingTransferId === session.transferId) {
+        this.currentSendingTransferId = null;
+      }
+      const message = error instanceof TransferTimeoutError
+        ? "公网传输中断，已停止当前任务，请重试"
+        : t('toast.fileTransferFailed');
+      if (!wasCancelled) {
+        this.sendTransferControlMessage(
+          FILE_TRANSFER_MESSAGE_TYPES.CANCEL,
+          session.transferId,
+          message,
+          session.roomName
+        );
+        alertUseMUI(message, 4000, { kind: "error" });
+      }
     }
   }
 
@@ -499,6 +1045,17 @@ export class ServerFileTransfer {
     if (!session) return;
 
     const transferId = data.transfer_id;
+    const wasPending = session.status === "pending";
+    session.status = "cancelled";
+    this.clearTransferTimeout(transferId);
+    if (wasPending) {
+      this.completionAcks.cancel(transferId);
+    } else {
+      this.completionAcks.reject(
+        transferId,
+        new Error(data.reason || t('toast.transferRejected'))
+      );
+    }
     this.sendingSessions.delete(transferId);
     this.onProgressCallback?.(null);
     // 🎨 关闭下载页面
@@ -511,6 +1068,59 @@ export class ServerFileTransfer {
   /**
    * 开始发送文件
    */
+  private ensureSendingSessionActive(session: TransferSession): void {
+    if (
+      session.status === "cancelled" ||
+      session.status === "error" ||
+      !this.sendingSessions.has(session.transferId)
+    ) {
+      throw new TransferTimeoutError("transfer was cancelled before completion");
+    }
+  }
+
+  private async sendServerChunk(
+    session: TransferSession,
+    chunkIndex: number,
+    options: { countProgress?: boolean } = {}
+  ): Promise<void> {
+    const countProgress = options.countProgress ?? true;
+    this.ensureSendingSessionActive(session);
+
+    const offset = chunkIndex * session.chunkSize;
+    const chunk = session.file.slice(offset, offset + session.chunkSize);
+    const arrayBuffer = await withTransferTimeout(chunk.arrayBuffer(), {
+      timeoutMs: 15_000,
+      timeoutMessage: "读取文件分片超时，请重试",
+    });
+
+    const metaData: FileTransferChunk = {
+      transfer_id: session.transferId,
+      chunk_index: chunkIndex,
+      chunk_size: arrayBuffer.byteLength,
+      total_chunks: session.totalChunks,
+    };
+    const binaryMessage = encodeTransferFrame(metaData, arrayBuffer);
+
+    await waitForBufferedAmountBelow({
+      getBufferedAmount: () => this.connectionManager.getBufferedAmount(),
+      isOpen: () => this.connectionManager.isConnected(),
+      threshold: session.chunkSize * 8,
+      intervalMs: 100,
+      timeoutMs: 15_000,
+    });
+    this.ensureSendingSessionActive(session);
+    this.connectionManager.sendBinary(binaryMessage);
+
+    if (countProgress) {
+      session.sentChunks++;
+      const progress = Math.min((session.sentChunks / session.totalChunks) * 100, 99);
+      this.onProgressCallback?.(progress);
+    }
+
+    console.log(`[ServerFileTransfer] Sent chunk ${chunkIndex + 1}/${session.totalChunks}`);
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+
   private async startSending(session: TransferSession) {
     session.status = "transferring";
     
@@ -518,6 +1128,7 @@ export class ServerFileTransfer {
     this.onFileMetaInfoChange?.(session.file.name);
     this.onDownloadPageStateChange?.(true);
     this.onProgressCallback?.(0);
+    this.setTransferStatus("正在通过公网发送文件", "info");
     
     // 通知服务器开始传输
     this.connectionManager.send({
@@ -527,55 +1138,36 @@ export class ServerFileTransfer {
 
     // 分块读取并发送文件
     for (let chunkIndex = 0; chunkIndex < session.totalChunks; chunkIndex++) {
-      const offset = chunkIndex * session.chunkSize;
-      const chunk = session.file.slice(offset, offset + session.chunkSize);
-      
-      // 读取块数据
-      const arrayBuffer = await chunk.arrayBuffer();
-      
-      // 创建块元数据(256字节固定头)
-      const metaData: FileTransferChunk = {
-        transfer_id: session.transferId,
-        chunk_index: chunkIndex,
-        chunk_size: arrayBuffer.byteLength,
-        total_chunks: session.totalChunks,
-      };
-      
-      const metaJSON = JSON.stringify(metaData);
-      const metaBytes = new TextEncoder().encode(metaJSON);
-      
-      // 填充到256字节
-      const headerSize = 256;
-      const header = new Uint8Array(headerSize);
-      header.set(metaBytes);
-      
-      // 合并头和数据
-      const binaryMessage = new Uint8Array(headerSize + arrayBuffer.byteLength);
-      binaryMessage.set(header, 0);
-      binaryMessage.set(new Uint8Array(arrayBuffer), headerSize);
-      
-      // 发送二进制数据
-      this.connectionManager.sendBinary(binaryMessage.buffer);
-      
-      session.sentChunks++;
-      
-      // 更新进度
-      const progress = (session.sentChunks / session.totalChunks) * 100;
-      this.onProgressCallback?.(progress);
-      
-      console.log(`[ServerFileTransfer] Sent chunk ${chunkIndex + 1}/${session.totalChunks}`);
-      
-      // 添加小延迟避免过载
-      await new Promise(resolve => setTimeout(resolve, 10));
+      await this.sendServerChunk(session, chunkIndex);
     }
 
+    this.ensureSendingSessionActive(session);
     // 发送完成消息
     this.connectionManager.send({
       type: FILE_TRANSFER_MESSAGE_TYPES.END,
       data: { transfer_id: session.transferId },
     });
 
-    console.log(`[ServerFileTransfer] File sending completed: ${session.transferId}`);
+    this.onProgressCallback?.(99);
+    this.ensureSendingSessionActive(session);
+    await this.completionAcks.waitForAck(
+      session.transferId,
+      getTransferCompletionAckTimeoutMs({
+        receiveTimeoutMs: this.RECEIVE_TIMEOUT_MS,
+        maxResendAttempts: this.MAX_RESEND_ATTEMPTS,
+      })
+    );
+
+    session.status = "completed";
+    this.sendingSessions.delete(session.transferId);
+    if (this.currentSendingTransferId === session.transferId) {
+      this.currentSendingTransferId = null;
+    }
+
+    console.log(`[ServerFileTransfer] File sending completed and receiver confirmed: ${session.transferId}`);
+    alertUseMUI(t('toast.fileSent'), 2000, { kind: "success" });
+    this.onProgressCallback?.(100);
+    this.setTransferStatus("公网传输完成", "success");
     
     // 🎨 延迟关闭下载页面，让用户看到100%完成
     setTimeout(() => {
@@ -613,20 +1205,101 @@ export class ServerFileTransfer {
    * 处理传输结束
    */
   private handleTransferEnd(data: { transfer_id: string }) {
-    const sendSession = this.sendingSessions.get(data.transfer_id);
-    if (sendSession) {
-      sendSession.status = "completed";
-      this.sendingSessions.delete(data.transfer_id);
-      alertUseMUI(t('toast.fileSent'), 2000, { kind: "success" });
-      console.log(`[ServerFileTransfer] Send completed: ${data.transfer_id}`);
-      // 注意：关闭界面的逻辑在 startSending 的 setTimeout 中处理
-    }
-
     const receiveSession = this.receivingSessions.get(data.transfer_id);
     if (receiveSession) {
-      receiveSession.status = "completed";
-      console.log(`[ServerFileTransfer] Receive completed: ${data.transfer_id}`);
-      // 接收方的关闭界面逻辑在 finalizeReceivedFile 中处理
+      if (receiveSession.receivedCount !== receiveSession.totalChunks) {
+        const missingCount = this.getMissingChunkCount(receiveSession);
+        if (this.requestMissingServerChunks(receiveSession, "发送端已结束但接收端仍缺少分片，请重传")) {
+          this.refreshReceiveTimeout(receiveSession.transferId);
+          console.warn(`[ServerFileTransfer] Receive ended with missing chunks, requested resend: missing=${missingCount} transfer=${receiveSession.transferId}`);
+          return;
+        }
+        this.failReceiveSession(receiveSession, this.getResendRecoveryFailureMessage(receiveSession));
+        console.warn(`[ServerFileTransfer] Receive ended with missing chunks: ${receiveSession.receivedCount}/${receiveSession.totalChunks}`);
+      } else {
+        this.finalizeReceivedFile(receiveSession);
+        console.log(`[ServerFileTransfer] Receive completed: ${data.transfer_id}`);
+      }
+    }
+  }
+
+  /**
+   * 处理接收方完成确认
+   */
+  private handleTransferComplete(data: { transfer_id: string }) {
+    if (this.completionAcks.acknowledge(data.transfer_id)) {
+      console.log(`[ServerFileTransfer] Receiver confirmed completion: ${data.transfer_id}`);
+    }
+  }
+
+  private async handleTransferResend(data: Record<string, unknown>) {
+    const transferId = typeof data.transfer_id === "string" ? data.transfer_id : "";
+    const session = transferId ? this.sendingSessions.get(transferId) : undefined;
+    const normalized = normalizeTransferResendRequest(data, {
+      expectedTransferId: session?.transferId,
+      totalChunks: session?.totalChunks,
+      maxChunkIndexes: this.RESEND_CHUNK_LIMIT,
+    });
+
+    if (!normalized.valid) {
+      console.warn(`[ServerFileTransfer] 忽略无效重传请求: ${normalized.reason}`, data);
+      return;
+    }
+
+    if (!session || session.status === "cancelled" || session.status === "error") {
+      const reason = "发送端已无法重传缺失分片，请重新发起传输";
+      console.warn(`[ServerFileTransfer] ${reason}`, normalized.request);
+      this.onProgressCallback?.(null);
+      this.onDownloadPageStateChange?.(false);
+      this.sendTransferControlMessage(
+        FILE_TRANSFER_MESSAGE_TYPES.CANCEL,
+        normalized.request.transferId,
+        reason,
+        typeof data.room_name === "string" ? data.room_name : undefined
+      );
+      this.setTransferStatus(reason, "error");
+      alertUseMUI(reason, 4000, { kind: "error" });
+      return;
+    }
+
+    try {
+      alertUseMUI(
+        `接收方请求重传 ${normalized.request.chunkIndexes.length}/${normalized.request.missingCount} 个公网分片，正在恢复`,
+        2500,
+        { kind: "info" }
+      );
+      this.setTransferStatus(
+        `接收方请求重传 ${normalized.request.chunkIndexes.length}/${normalized.request.missingCount} 个公网分片，正在恢复`,
+        "warning"
+      );
+      for (const chunkIndex of normalized.request.chunkIndexes) {
+        await this.sendServerChunk(session, chunkIndex, { countProgress: false });
+      }
+      this.ensureSendingSessionActive(session);
+      this.connectionManager.send({
+        type: FILE_TRANSFER_MESSAGE_TYPES.END,
+        data: { transfer_id: session.transferId },
+      });
+      this.onProgressCallback?.(99);
+    } catch (error) {
+      const reason = "公网缺失分片重传失败，请重试";
+      console.warn(`[ServerFileTransfer] ${reason}:`, error);
+      this.completionAcks.reject(session.transferId, new Error(reason));
+      session.status = "error";
+      this.sendingSessions.delete(session.transferId);
+      if (this.currentSendingTransferId === session.transferId) {
+        this.currentSendingTransferId = null;
+      }
+      this.sendTransferControlMessage(
+        FILE_TRANSFER_MESSAGE_TYPES.CANCEL,
+        session.transferId,
+        reason,
+        session.roomName
+      );
+      this.onProgressCallback?.(null);
+      this.onDownloadPageStateChange?.(false);
+      this.setTransferStatus(reason, "error");
+      alertUseMUI(reason, 4000, { kind: "error" });
     }
   }
 
@@ -634,8 +1307,28 @@ export class ServerFileTransfer {
    * 处理传输取消
    */
   private handleTransferCancel(data: { transfer_id: string; reason?: string }) {
+    const sendingSession = this.sendingSessions.get(data.transfer_id);
+    const shouldRejectAck = !!sendingSession && sendingSession.status !== "pending";
+    if (sendingSession) {
+      sendingSession.status = "cancelled";
+    }
+    const receivingSession = this.receivingSessions.get(data.transfer_id);
+    if (receivingSession) {
+      receivingSession.status = "cancelled";
+      receivingSession.buffer = null;
+    }
+    if (shouldRejectAck) {
+      this.completionAcks.reject(
+        data.transfer_id,
+        new Error(data.reason || t('toast.transferCancelled'))
+      );
+    } else {
+      this.completionAcks.cancel(data.transfer_id);
+    }
     this.sendingSessions.delete(data.transfer_id);
     this.receivingSessions.delete(data.transfer_id);
+    this.clearTransferTimeout(data.transfer_id);
+    this.clearReceiveTimeout(data.transfer_id);
     this.onProgressCallback?.(null);
     // 🎨 关闭下载页面
     this.onDownloadPageStateChange?.(false);
@@ -648,8 +1341,19 @@ export class ServerFileTransfer {
    * 处理传输错误
    */
   private handleTransferError(data: { transfer_id: string; error?: string }) {
+    const sendingSession = this.sendingSessions.get(data.transfer_id);
+    if (sendingSession && sendingSession.status !== "pending") {
+      this.completionAcks.reject(
+        data.transfer_id,
+        new Error(data.error || t('toast.transferError'))
+      );
+    } else {
+      this.completionAcks.cancel(data.transfer_id);
+    }
     this.sendingSessions.delete(data.transfer_id);
     this.receivingSessions.delete(data.transfer_id);
+    this.clearTransferTimeout(data.transfer_id);
+    this.clearReceiveTimeout(data.transfer_id);
     this.onProgressCallback?.(null);
     // 🎨 关闭下载页面
     this.onDownloadPageStateChange?.(false);
@@ -663,7 +1367,8 @@ export class ServerFileTransfer {
    */
   private handleTransferProgress(progress: FileTransferProgress) {
     console.log(`[ServerFileTransfer] Progress: ${progress.percentage.toFixed(2)}%`);
-    this.onProgressCallback?.(progress.percentage);
+    const sendingSession = this.sendingSessions.get(progress.transfer_id);
+    this.onProgressCallback?.(sendingSession ? Math.min(progress.percentage, 99) : progress.percentage);
   }
 
   /**
@@ -672,34 +1377,49 @@ export class ServerFileTransfer {
   private finalizeReceivedFile(session: ReceiveSession) {
     const startTime = performance.now();
     console.log(`[ServerFileTransfer] Finalizing: ${session.fileName} (${(session.fileSize / 1024 / 1024).toFixed(1)}MB)`);
+    let completed = false;
 
     try {
       if (!session.buffer) {
         throw new Error("buffer 为 null, 无法组装文件");
       }
-      // 🔥 直接创建 Blob — 浏览器可能零拷贝 (shared memory)
-      const blob = new Blob([session.buffer], { type: session.fileType });
-      const file = new File([blob], session.fileName, { type: session.fileType });
+      const file = createCompletedTransferFile({
+        bytes: session.buffer,
+        fileName: session.fileName,
+        fileType: session.fileType,
+        createFile: (parts, fileName, options) => new File(parts, fileName, options),
+      });
 
       const elapsed = (performance.now() - startTime).toFixed(0);
       console.log(`[ServerFileTransfer] ✅ File ready in ${elapsed}ms: ${file.name} (${file.size} bytes)`);
 
       this.onFileReceivedCallback?.(file, session.fromUserId);
+      this.sendTransferCompleteMessage(session.transferId, session.roomName);
+      completed = true;
     } catch (err) {
       console.error(`[ServerFileTransfer] ❌ Finalize failed:`, err);
+      this.sendTransferControlMessage(
+        FILE_TRANSFER_MESSAGE_TYPES.CANCEL,
+        session.transferId,
+        "文件组装失败，请重试",
+        session.roomName
+      );
       alertUseMUI(t('toast.fileAssemblyError'), 3000, { kind: "error" });
     }
 
     // 清理
     session.buffer = null; // 帮助 GC
     this.receivingSessions.delete(session.transferId);
+    this.clearReceiveTimeout(session.transferId);
 
     setTimeout(() => {
       this.onProgressCallback?.(null);
       this.onDownloadPageStateChange?.(false);
     }, 1500);
 
-    alertUseMUI(t('toast.fileReceived'), 2000, { kind: "success" });
+    if (completed) {
+      alertUseMUI(t('toast.fileReceived'), 2000, { kind: "success" });
+    }
   }
 
   /**
@@ -709,15 +1429,23 @@ export class ServerFileTransfer {
     if (this.currentSendingTransferId) {
       const session = this.sendingSessions.get(this.currentSendingTransferId);
       if (session) {
-        this.connectionManager.send({
-          type: FILE_TRANSFER_MESSAGE_TYPES.CANCEL,
-          data: { 
-            transfer_id: this.currentSendingTransferId,
-            reason: "用户取消"
-          },
-        });
+        this.sendTransferControlMessage(
+          FILE_TRANSFER_MESSAGE_TYPES.CANCEL,
+          this.currentSendingTransferId,
+          "用户取消",
+          session.roomName
+        );
         
+        if (session.status !== "pending") {
+          this.completionAcks.reject(
+            this.currentSendingTransferId,
+            new Error("用户取消")
+          );
+        } else {
+          this.completionAcks.cancel(this.currentSendingTransferId);
+        }
         this.sendingSessions.delete(this.currentSendingTransferId);
+        this.clearTransferTimeout(this.currentSendingTransferId);
         this.currentSendingTransferId = null;
         this.onProgressCallback?.(null);
       }
@@ -737,5 +1465,8 @@ export class ServerFileTransfer {
   public isSending(): boolean {
     return this.currentSendingTransferId !== null;
   }
-}
 
+  public getActiveTransferCount(): number {
+    return this.sendingSessions.size + this.receivingSessions.size;
+  }
+}

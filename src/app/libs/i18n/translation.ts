@@ -49,6 +49,7 @@ const sharedMalayTranslation = {
             receiving: "📥 Menerima fail dari <strong>{{name}}</strong>: {{filename}}",
             byte: "bait",
             receivedFiles: "📁 Fail yang diterima",
+            awaitingConfirmation: "Menunggu penerima mengesahkan selesai...",
             noTasks: "Tiada tugas aktif"
         },
         // settings
@@ -188,6 +189,7 @@ export const resources = {
                 receiving: "📥 Receiving file from <strong>{{name}}</strong>: {{filename}}",
                 byte: "byte",
                 receivedFiles: "📁 Received Files",
+                awaitingConfirmation: "Waiting for receiver confirmation...",
                 noTasks: "No active tasks"
             },
             // Settings
@@ -331,6 +333,7 @@ export const resources = {
                 receiving: "📥 正在接收来自 <strong>{{name}}</strong> 的文件：{{filename}}",
                 byte: "字节",
                 receivedFiles: "📁 已接收的文件",
+                awaitingConfirmation: "等待接收方确认完成...",
                 noTasks: "没有进行中的任务"
             },
             // Settings

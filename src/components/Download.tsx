@@ -9,6 +9,7 @@ import {
     Dialog,
     DialogContent,
     IconButton,
+    Tooltip,
 } from "@mui/material";
 import InsertDriveFile from "@mui/icons-material/InsertDriveFile";
 import PictureAsPdf from "@mui/icons-material/PictureAsPdf";
@@ -22,6 +23,8 @@ import Slideshow from "@mui/icons-material/Slideshow";
 import Subject from "@mui/icons-material/Subject";
 import CloseIcon from "@mui/icons-material/Close";
 import DownloadIcon from "@mui/icons-material/Download"; // 确保导入这个
+import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
+import KeyboardArrowUpIcon from "@mui/icons-material/KeyboardArrowUp";
 import { buttonStyleNormal } from "../pages/share";
 import React from "react";
 import alertUseMUI from "@App/libs/tools/alert";
@@ -29,6 +32,15 @@ import realTimeColab from "@App/libs/connection/colabLib";
 import { isApp } from "@App/libs/capacitor/user";
 import { saveBinaryToApp } from "@App/libs/capacitor/file";
 import { Trans, useTranslation } from "react-i18next";
+import {
+    canDownloadFileInBrowser,
+    canCreateSafeZipBundle,
+    canGenerateSafeImageThumbnail,
+    canPreviewImageSafely,
+    replaceObjectUrl,
+    scheduleObjectUrlRevoke,
+} from "@App/libs/connection/transferReliability";
+import { getDeviceType } from "@App/libs/tools/tools";
 
 // 图片扩展名列表（小写）
 const IMAGE_EXTS = ["png", "jpg", "jpeg", "gif", "bmp", "webp", "svg"];
@@ -66,6 +78,39 @@ async function generateThumbnail(file: File): Promise<string | null> {
     }
 }
 
+function downloadFileInBrowser(file: File, fileName: string) {
+    const url = URL.createObjectURL(file);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = fileName;
+    a.rel = "noopener";
+    a.style.display = "none";
+    document.body.appendChild(a);
+    a.click();
+    window.setTimeout(() => {
+        a.remove();
+    }, 0);
+    scheduleObjectUrlRevoke(url);
+}
+
+function formatSizeMB(bytes: number): string {
+    return (bytes / 1024 / 1024).toFixed(bytes >= 10 * 1024 * 1024 ? 0 : 1);
+}
+
+type PendingBrowserDownload = {
+    url: string;
+    fileName: string;
+    size: number;
+};
+
+function getBrowserDownloadNotice(fileName: string): string {
+    return `已交给浏览器下载：${fileName}。Safari/iPhone 可点地址栏旁的下载按钮，或到“文件 App > 下载”查找。网页无法指定保存路径，只能建议文件名。`;
+}
+
+function getPreparedDownloadNotice(fileName: string): string {
+    return `已准备好：${fileName}。点击“保存文件”完成下载；Safari/iPhone 下载后可在“文件 App > 下载”查找。网页无法指定保存路径，只能建议文件名。`;
+}
+
 
 export default function DownloadDrawerSlide({
     open,
@@ -83,7 +128,8 @@ export default function DownloadDrawerSlide({
     const { t } = useTranslation();
     const theme = useTheme();
     const [visible, setVisible] = React.useState(open);
-    const [_, forceUpdate] = React.useReducer((x) => x + 1, 0);
+    const [drawerExpanded, setDrawerExpanded] = React.useState(false);
+    const [, forceUpdate] = React.useReducer((x) => x + 1, 0);
 
     // 🖼️ 缩略图缓存：key(receivedFiles key) → dataURL
     const [thumbnails, setThumbnails] = React.useState<Map<string, string>>(new Map());
@@ -91,18 +137,44 @@ export default function DownloadDrawerSlide({
     // 🖼️ 全屏预览状态：存储懒加载的 object URL 和对应的 File
     const [previewUrl, setPreviewUrl] = React.useState<string | null>(null);
     const [previewFile, setPreviewFile] = React.useState<File | null>(null);
+    const [pendingBrowserDownload, setPendingBrowserDownload] = React.useState<PendingBrowserDownload | null>(null);
+    const [browserDownloadNotice, setBrowserDownloadNotice] = React.useState<string | null>(null);
 
     // 🔗 Refs 用于组件卸载清理时获取最新值，避免闭包过期
     const previewUrlRef = React.useRef(previewUrl);
     previewUrlRef.current = previewUrl;
+    const pendingBrowserDownloadRef = React.useRef(pendingBrowserDownload);
+    pendingBrowserDownloadRef.current = pendingBrowserDownload;
     const thumbnailsRef = React.useRef(thumbnails);
     thumbnailsRef.current = thumbnails;
+    const thumbnailKeysRef = React.useRef<Set<string>>(new Set());
 
     // 🗂️ 提前声明（effect 依赖需要用到）
     const receivingMap = realTimeColab.receivingFiles as Map<string, any>;
     const receivedMap = realTimeColab.receivedFiles as Map<string, File>;
     const receivingList = Array.from(receivingMap.entries());
     const receivedList = Array.from(receivedMap.entries());
+    const replacePendingBrowserDownload = React.useCallback((next: PendingBrowserDownload | null) => {
+        setPendingBrowserDownload((current) => {
+            if (current && current.url !== next?.url) {
+                URL.revokeObjectURL(current.url);
+            }
+            return next;
+        });
+    }, []);
+
+    const prepareBrowserDownload = React.useCallback((file: File, fileName: string) => {
+        const url = URL.createObjectURL(file);
+        const notice = getPreparedDownloadNotice(fileName);
+
+        replacePendingBrowserDownload({
+            url,
+            fileName,
+            size: file.size,
+        });
+        setBrowserDownloadNotice(notice);
+        alertUseMUI(`${fileName} 已打包完成，请点击“保存文件”。`, 5000, { kind: "info" });
+    }, [replacePendingBrowserDownload]);
 
     React.useEffect(() => {
         if (open) setVisible(true);
@@ -118,9 +190,21 @@ export default function DownloadDrawerSlide({
     React.useEffect(() => {
         const receivedMap = realTimeColab.receivedFiles as Map<string, File>;
         const entries = Array.from(receivedMap.entries());
+        const deviceType = getDeviceType();
+        let scheduledThumbnailCount = thumbnailKeysRef.current.size;
 
         entries.forEach(([key, file]) => {
-            if (!isImageFile(file.name) || thumbnails.has(key)) return;
+            if (!isImageFile(file.name) || thumbnailKeysRef.current.has(key)) return;
+
+            const thumbnailGuard = canGenerateSafeImageThumbnail(
+                { size: file.size },
+                deviceType,
+                scheduledThumbnailCount
+            );
+            if (!thumbnailGuard.allowed) return;
+
+            thumbnailKeysRef.current.add(key);
+            scheduledThumbnailCount += 1;
             // 异步生成，不阻塞
             generateThumbnail(file).then((dataUrl) => {
                 if (dataUrl) {
@@ -132,20 +216,24 @@ export default function DownloadDrawerSlide({
                 }
             });
         });
-        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [receivedList.length]); // receivedList 长度变化时重新扫描
 
     // 🧹 组件卸载时清理所有预览 URL 和缩略图 dataURL
     React.useEffect(() => {
+        const thumbnailKeys = thumbnailKeysRef.current;
         return () => {
             // 清理全屏预览的 object URL（懒加载，必须释放）
             if (previewUrlRef.current) {
                 URL.revokeObjectURL(previewUrlRef.current);
             }
+            if (pendingBrowserDownloadRef.current) {
+                URL.revokeObjectURL(pendingBrowserDownloadRef.current.url);
+            }
             // 遍历清理所有缩略图 dataURL（显式释放，安全操作）
             thumbnailsRef.current.forEach((dataUrl) => {
                 URL.revokeObjectURL(dataUrl);
             });
+            thumbnailKeys.clear();
         };
     }, []);
     const handleSlideExited = () => {
@@ -161,13 +249,28 @@ export default function DownloadDrawerSlide({
         isDownloadingRef.current = true;
 
         try {
+            const zipGuard = canCreateSafeZipBundle(
+                receivedList.map(([, file]) => ({ size: file.size })),
+                getDeviceType()
+            );
+            if (!zipGuard.allowed) {
+                const maxMB = (zipGuard.maxBytes / 1024 / 1024).toFixed(0);
+                const totalMB = (zipGuard.totalBytes / 1024 / 1024).toFixed(1);
+                alertUseMUI(
+                    `文件较多或较大（${zipGuard.totalFiles} 个，${totalMB}MB），为避免浏览器内存崩溃，请逐个下载。当前设备安全打包上限：${zipGuard.maxFiles} 个 / ${maxMB}MB。`,
+                    6000,
+                    { kind: "warning" }
+                );
+                return;
+            }
+
             const { default: JSZip } = await import("jszip");
             const zip = new JSZip();
-            receivedList.forEach(([_key, file]) => {
+            receivedList.forEach(([, file]) => {
                 zip.file(file.name, file);
             });
             const content = await zip.generateAsync({ type: "blob" });
-            const zipFileName = `Received_${Date.now()}.zip`;
+            const zipFileName = `letshare_${Date.now()}.zip`;
 
             const zipFile = new File([content], zipFileName, {
                 type: "application/zip",
@@ -180,14 +283,7 @@ export default function DownloadDrawerSlide({
                     kind: "success",
                 });
             } else {
-                const url = URL.createObjectURL(zipFile);
-                const a = document.createElement("a");
-                a.href = url;
-                a.download = zipFileName;
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-                URL.revokeObjectURL(url);
+                prepareBrowserDownload(zipFile, zipFileName);
             }
         } catch (err) {
             console.error("打包下载失败:", err);
@@ -199,13 +295,9 @@ export default function DownloadDrawerSlide({
 
 
     const handleCancelReceive = (userId: string) => {
-        const channel = realTimeColab.dataChannels.get(userId)
-        if (channel) {
-            channel.send(JSON.stringify({ type: "abort" }));
-        }
+        realTimeColab.cancelReceivingFileFromUser(userId);
         onClose()
         alertUseMUI(`终止来自 ${userId.split(":")[0]} 的接收`, 2000, { kind: "error" });
-        receivingMap.delete(userId);
         forceUpdate();
         if (receivingMap.size === 0 && progress === null) setVisible(false);
     };
@@ -294,14 +386,22 @@ export default function DownloadDrawerSlide({
                 kind: "success",
             });
         } else {
-            // 浏览器下载 fallback
-            const blob = new Blob([file]);
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement("a");
-            a.href = url;
-            a.download = file.name;
-            a.click();
-            URL.revokeObjectURL(url);
+            const downloadGuard = canDownloadFileInBrowser(
+                { size: file.size },
+                getDeviceType()
+            );
+            if (!downloadGuard.allowed) {
+                alertUseMUI(
+                    `${file.name} 较大（${formatSizeMB(file.size)}MB），为避免浏览器下载时内存崩溃，已阻止直接下载。当前设备安全下载上限：${formatSizeMB(downloadGuard.maxBytes)}MB。请使用桌面端/原生 App，或拆分后重新传输。`,
+                    7000,
+                    { kind: "warning" }
+                );
+                return;
+            }
+            downloadFileInBrowser(file, file.name);
+            const notice = getBrowserDownloadNotice(file.name);
+            setBrowserDownloadNotice(notice);
+            alertUseMUI(notice, 7000, { kind: "info" });
         }
     };
 
@@ -312,9 +412,26 @@ export default function DownloadDrawerSlide({
      * 懒加载：点击时才创建 object URL，关闭时立即 revoke
      */
     const openPreview = (file: File) => {
+        const previewGuard = canPreviewImageSafely(
+            { size: file.size },
+            getDeviceType()
+        );
+        if (!previewGuard.allowed) {
+            alertUseMUI(
+                `${file.name} 较大（${formatSizeMB(file.size)}MB），为避免浏览器解码原图时崩溃，已跳过预览。当前设备安全预览上限：${formatSizeMB(previewGuard.maxBytes)}MB，可点下载按钮保存原图。`,
+                6000,
+                { kind: "warning" }
+            );
+            return;
+        }
+
         const url = URL.createObjectURL(file);
         setPreviewFile(file);
-        setPreviewUrl(url);
+        setPreviewUrl((currentUrl) => {
+            const nextUrl = replaceObjectUrl(currentUrl, url);
+            previewUrlRef.current = nextUrl;
+            return nextUrl;
+        });
     };
 
     /** 关闭全屏预览并释放 object URL */
@@ -326,8 +443,46 @@ export default function DownloadDrawerSlide({
         setPreviewFile(null);
     };
 
+    const clearReceivedFiles = () => {
+        closePreview();
+        replacePendingBrowserDownload(null);
+        setBrowserDownloadNotice(null);
+        realTimeColab.clearReceivedFiles();
+        setThumbnails(new Map());
+        thumbnailKeysRef.current.clear();
+        forceUpdate();
+        alertUseMUI("已清空接收列表并释放浏览器缓存", 2000, { kind: "success" });
+    };
+
+    const transferStatus = realTimeColab.fileTransferStatus;
+    const statusMessage = transferStatus.message;
+    const statusTone = transferStatus.kind === "error"
+        ? {
+            color: theme.palette.error.main,
+            backgroundColor: theme.palette.error.light,
+        }
+        : transferStatus.kind === "warning"
+            ? {
+                color: theme.palette.warning.dark,
+                backgroundColor: theme.palette.warning.light,
+            }
+            : transferStatus.kind === "success"
+                ? {
+                    color: theme.palette.success.dark,
+                    backgroundColor: theme.palette.success.light,
+                }
+                : {
+                    color: theme.palette.info.dark,
+                    backgroundColor: theme.palette.info.light,
+                };
+    const showSendingProgress = progress !== null && realTimeColab.hasActiveOutgoingFileTransfer();
     const hasContent =
-        progress !== null || receivingList.length > 0 || receivedList.length > 0;
+        showSendingProgress ||
+        receivingList.length > 0 ||
+        receivedList.length > 0 ||
+        !!pendingBrowserDownload ||
+        !!browserDownloadNotice ||
+        !!statusMessage;
 
     if (!visible && !open) return null;
 
@@ -351,11 +506,6 @@ export default function DownloadDrawerSlide({
                 onExited={handleSlideExited}
             >
                 <Box
-                    onClick={(e) => {
-                        if (e.target === e.currentTarget) {
-                            setVisible(false); // 点击外围才关闭
-                        }
-                    }}
                     sx={{
                         position: "fixed",
                         top: 0,
@@ -363,35 +513,124 @@ export default function DownloadDrawerSlide({
                         width: "100%",
                         display: "flex",
                         justifyContent: "center",
+                        pointerEvents: "none",
                         zIndex: theme.zIndex.modal,
                     }}
                 >
                     <Box
-                        className="uniformed-scroller"
                         sx={{
+                            position: "relative",
+                            pointerEvents: "none",
                             width: {
                                 xs: "88%",
                                 sm: "80%",
                                 md: "60%",
                                 lg: "50%",
                             },
-                            maxHeight: 400,
-                            overflowY: "auto",
-                            backgroundColor: theme.palette.background.paper,
-                            boxShadow: 3,
-                            px: 2,
-                            py: 2,
-                            borderBottomLeftRadius: 19,
-                            borderBottomRightRadius: 19,
-                            display: "flex",
-                            flexDirection: "column",
-                            gap: 2,
+                            mb: 4,
                         }}
                     >
+                        <Box
+                            className="uniformed-scroller"
+                            sx={{
+                                width: "100%",
+                                minHeight: drawerExpanded ? "90vh" : 0,
+                                maxHeight: drawerExpanded ? "90vh" : 400,
+                                overflowY: "auto",
+                                pointerEvents: "auto",
+                                backgroundColor: theme.palette.background.paper,
+                                boxShadow: 3,
+                                boxSizing: "border-box",
+                                px: 2,
+                                pt: 2,
+                                pb: 5,
+                                borderBottomLeftRadius: 19,
+                                borderBottomRightRadius: 19,
+                                display: "flex",
+                                flexDirection: "column",
+                                gap: 2,
+                                transition: theme.transitions.create(["min-height", "max-height"], {
+                                    duration: 220,
+                                    easing: theme.transitions.easing.easeInOut,
+                                }),
+                            }}
+                        >
                         {hasContent && (
                             <>
+                                {statusMessage && (
+                                    <Box
+                                        sx={{
+                                            px: 1.25,
+                                            py: 0.75,
+                                            borderRadius: 1,
+                                            color: statusTone.color,
+                                            backgroundColor: statusTone.backgroundColor,
+                                        }}
+                                    >
+                                        <Typography variant="caption">
+                                            {statusMessage}
+                                        </Typography>
+                                    </Box>
+                                )}
+
+                                {(browserDownloadNotice || pendingBrowserDownload) && (
+                                    <Box
+                                        sx={{
+                                            display: "flex",
+                                            alignItems: { xs: "stretch", sm: "center" },
+                                            flexDirection: { xs: "column", sm: "row" },
+                                            gap: 1,
+                                            px: 1.25,
+                                            py: 1,
+                                            borderRadius: 1,
+                                            color: theme.palette.info.dark,
+                                            backgroundColor: theme.palette.info.light,
+                                        }}
+                                    >
+                                        <Box sx={{ flex: 1, minWidth: 0 }}>
+                                            <Typography variant="caption" sx={{ display: "block" }}>
+                                                {browserDownloadNotice ?? (
+                                                    pendingBrowserDownload
+                                                        ? getPreparedDownloadNotice(pendingBrowserDownload.fileName)
+                                                        : ""
+                                                )}
+                                            </Typography>
+                                            {pendingBrowserDownload && (
+                                                <Typography
+                                                    variant="caption"
+                                                    sx={{ display: "block", mt: 0.5 }}
+                                                >
+                                                    {pendingBrowserDownload.fileName} · {formatSizeMB(pendingBrowserDownload.size)}MB
+                                                </Typography>
+                                            )}
+                                        </Box>
+                                        {pendingBrowserDownload && (
+                                            <Button
+                                                component="a"
+                                                href={pendingBrowserDownload.url}
+                                                download={pendingBrowserDownload.fileName}
+                                                variant="contained"
+                                                size="small"
+                                                startIcon={<DownloadIcon />}
+                                                onClick={() => {
+                                                    const notice = getBrowserDownloadNotice(pendingBrowserDownload.fileName);
+                                                    setBrowserDownloadNotice(notice);
+                                                    alertUseMUI(notice, 7000, { kind: "info" });
+                                                }}
+                                                sx={{
+                                                    alignSelf: { xs: "flex-start", sm: "center" },
+                                                    whiteSpace: "nowrap",
+                                                    ...buttonStyleNormal,
+                                                }}
+                                            >
+                                                保存文件
+                                            </Button>
+                                        )}
+                                    </Box>
+                                )}
+
                                 {/* 🟢 正在发送的文件 */}
-                                {progress !== null && (
+                                {showSendingProgress && (
                                     <Box
                                         key="sending"
                                         sx={{
@@ -416,11 +655,13 @@ export default function DownloadDrawerSlide({
                                                     variant="caption"
                                                     color="text.secondary"
                                                 >
-                                                    {progress.toFixed(1)}%
+                                                    {(progress ?? 0) >= 99
+                                                        ? t("transfer.awaitingConfirmation")
+                                                        : `${(progress ?? 0).toFixed(1)}%`}
                                                 </Typography>
                                                 <LinearProgress
                                                     variant="determinate"
-                                                    value={progress}
+                                                    value={progress ?? 0}
                                                     sx={{
                                                         height: 8,
                                                         borderRadius: 5,
@@ -515,9 +756,14 @@ export default function DownloadDrawerSlide({
                                     <Box>
                                         <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", mt: 2, mb: 1 }}>
                                             <Typography variant="subtitle2">{t('transfer.receivedFiles')}</Typography>
-                                            <Button onClick={downloadAllAsZip} endIcon={<DownloadIcon/>}>
-                                                {t("button.downloadAll")}
-                                            </Button>
+                                            <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                                                <Button onClick={clearReceivedFiles} size="small">
+                                                    清空
+                                                </Button>
+                                                <Button onClick={downloadAllAsZip} endIcon={<DownloadIcon/>}>
+                                                    {t("button.downloadAll")}
+                                                </Button>
+                                            </Box>
                                             {/* <IconButton onClick={downloadAllAsZip} size="small" >
 
                                                 <DownloadIcon fontSize="small" />
@@ -575,10 +821,17 @@ export default function DownloadDrawerSlide({
                                                         <Typography variant="body2" noWrap sx={{ flex: 1 }}>
                                                             {file.name}
                                                         </Typography>
-                                                        {/* 非图片文件显示下载提示图标 */}
-                                                        {!isImg && (
-                                                            <DownloadIcon fontSize="small" sx={{ color: "text.secondary", flexShrink: 0 }} />
-                                                        )}
+                                                        <IconButton
+                                                            size="small"
+                                                            onClick={(event) => {
+                                                                event.stopPropagation();
+                                                                downloadFile(file);
+                                                            }}
+                                                            aria-label={`download ${file.name}`}
+                                                            sx={{ color: "text.secondary", flexShrink: 0 }}
+                                                        >
+                                                            <DownloadIcon fontSize="small" />
+                                                        </IconButton>
                                                     </Box>
                                                 );
                                             })}
@@ -599,6 +852,36 @@ export default function DownloadDrawerSlide({
                             </Box>
                         )}
 
+                        </Box>
+                        <Tooltip title={drawerExpanded ? "收起抽屉" : "展开抽屉"} arrow>
+                            <IconButton
+                                aria-label={drawerExpanded ? "收起下载抽屉" : "展开下载抽屉"}
+                                onClick={(event) => {
+                                    event.stopPropagation();
+                                    setDrawerExpanded((expanded) => !expanded);
+                                }}
+                                sx={{
+                                    position: "absolute",
+                                    left: "50%",
+                                    bottom: -22,
+                                    transform: "translateX(-50%)",
+                                    width: 44,
+                                    height: 44,
+                                    borderRadius: "50%",
+                                    pointerEvents: "auto",
+                                    color: "common.black",
+                                    backgroundColor: theme.palette.background.paper,
+                                    border: `1px solid ${theme.palette.divider}`,
+                                    boxShadow: 3,
+                                    zIndex: 1,
+                                    "&:hover": {
+                                        backgroundColor: theme.palette.background.default,
+                                    },
+                                }}
+                            >
+                                {drawerExpanded ? <KeyboardArrowUpIcon /> : <KeyboardArrowDownIcon />}
+                            </IconButton>
+                        </Tooltip>
                     </Box>
                 </Box>
             </Slide>
