@@ -1450,6 +1450,12 @@ export class TransferAckTracker {
     const pending = this.pending.get(transferId);
     if (!pending) {
       this.terminalErrors.set(transferId, error);
+      // Schedule cleanup of terminal errors to prevent memory leak
+      if (this.pending.size === 0) {
+        setTimeout(() => {
+          this.terminalErrors.delete(transferId);
+        }, 60_000);
+      }
       return false;
     }
 

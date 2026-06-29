@@ -7,9 +7,20 @@ const messageDebounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const DEBOUNCE_DELAY = 1000; // 1秒防抖延迟
 
 /**
+ * Toast categories for deduplication.
+ * Toasts in the same category replace each other instead of stacking.
+ * "transfer-status" covers all file transfer status messages (errors, warnings, info).
+ * "transfer-success" covers transfer completion confirmations.
+ */
+export type ToastCategory = "transfer-status" | "transfer-success";
+
+/**
  * @description 使用 MUI 弹出全局提示，并对同样的消息进行1秒防抖处理。
  * 如果同一个消息在1秒内被多次调用，只有最后一次调用会在1秒延迟后触发。
  * 不同消息之间的调用不受此防抖影响（它们会各自独立触发或被各自的防抖逻辑处理）。
+ *
+ * @param category - 可选的 toast 分类。同一分类的新 toast 会替换旧 toast，
+ *   而不是堆叠显示。主要用于文件传输状态消息的去重。
  */
 const alertUseMUI = (
   msg: string,
@@ -17,6 +28,7 @@ const alertUseMUI = (
   objConfig?: {
     kind?: AlertColor;
     zIndex?: number;
+    category?: ToastCategory;
   }
 ) => {
   // 如果该消息已经有一个正在等待的计时器，清除它
@@ -32,6 +44,7 @@ const alertUseMUI = (
       severity: objConfig?.kind ?? "success",
       duration: time ?? 2500,
       zIndex: objConfig?.zIndex ?? 9999,
+      category: objConfig?.category,
     });
     // 提示显示后，从Map中移除该消息的计时器记录，以便下次同样消息能重新开始防抖
     messageDebounceTimers.delete(msg);

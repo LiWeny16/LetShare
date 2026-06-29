@@ -74,7 +74,7 @@ test("unknown P2P binary chunks publish a persistent retry status", () => {
 
 test("server relay binary chunks without a receive session publish a persistent retry status", () => {
   const body = extractMethodBody(serverFileTransferSource, "public handleBinaryData");
-  const branchStart = body.indexOf("收到文件分片但接收会话不存在");
+  const branchStart = body.indexOf("alert.chunkWithoutTransfer");
   assert.notEqual(branchStart, -1, "server missing-session branch should exist");
 
   const branchEnd = body.indexOf("return;", branchStart);
@@ -167,7 +167,7 @@ test("server relay unavailable and request timeout states remain visible", () =>
   const timeoutBody = extractMethodBody(serverFileTransferSource, "private scheduleRequestTimeout");
 
   assert.match(sendBody, /this\.setTransferStatus\(\s*message,\s*"warning"/);
-  assert.match(timeoutBody, /this\.setTransferStatus\(\s*"对方未响应文件传输请求，请重试",\s*"warning"/);
+  assert.match(timeoutBody, /this\.setTransferStatus\(\s*t\('alert.serverRejectTimeout'\),\s*"warning"/);
 });
 
 test("P2P file metadata rejection reasons remain visible", () => {
@@ -179,7 +179,7 @@ test("P2P file metadata rejection reasons remain visible", () => {
   const branch = colabLibSource.slice(fileMetaStart, fileMetaEnd);
   const statusPattern = /this\.setFileTransferStatus\(\s*reason,\s*"(?:error|warning)"[\s\S]*autoClearMs:\s*10_000/;
 
-  assertBranchPublishesReasonStatus(branch, "文件传输元数据无效，请重试", statusPattern);
+  assertBranchPublishesReasonStatus(branch, "alert.metadataInvalid", statusPattern);
   assertBranchPublishesReasonStatus(branch, "已有文件正在接收，请等待完成后重试", statusPattern);
   assertBranchPublishesReasonStatus(branch, "当前设备为避免内存崩溃，单文件接收上限", statusPattern);
   assertBranchPublishesReasonStatus(branch, "this.getReceivedCacheLimitMessage", statusPattern);
@@ -190,7 +190,7 @@ test("server relay incoming request rejection reasons remain visible", () => {
   const body = extractMethodBody(serverFileTransferSource, "private async handleTransferRequest");
   const statusPattern = /this\.setTransferStatus\(\s*reason,\s*"(?:error|warning)"/;
 
-  assertBranchPublishesReasonStatus(body, "文件传输元数据无效，请重试", statusPattern, "return;");
-  assertBranchPublishesReasonStatus(body, "当前设备为避免内存崩溃，单文件接收上限", statusPattern, "return;");
+  assertBranchPublishesReasonStatus(body, "alert.metadataInvalid", statusPattern, "return;");
+  assertBranchPublishesReasonStatus(body, "alert.fileTooLarge", statusPattern, "return;");
   assertBranchPublishesReasonStatus(body, "this.getReceivedCacheLimitMessage", statusPattern, "return;");
 });

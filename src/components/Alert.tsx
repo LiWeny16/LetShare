@@ -10,6 +10,7 @@ export const alertEmitter = mitt<{
     severity?: AlertColor;
     duration?: number;
     zIndex?: number;
+    category?: "transfer-status" | "transfer-success";
   };
 }>();
 
@@ -19,6 +20,7 @@ interface Toast {
   duration: number;
   zIndex: number;
   isExiting?: boolean;
+  category?: "transfer-status" | "transfer-success";
 }
 
 const AlertPortal: React.FC = () => {
@@ -50,9 +52,17 @@ const AlertPortal: React.FC = () => {
         message: data.message,
         duration: data.duration || 2500,
         zIndex: data.zIndex || 9999,
+        category: data.category,
       };
 
-      setToasts((prev) => [...prev, toast]);
+      setToasts((prev) => {
+        // ✅ Category-based dedup: same category replaces old toast instead of stacking
+        if (data.category) {
+          const filtered = prev.filter((t) => t.category !== data.category);
+          return [...filtered, toast];
+        }
+        return [...prev, toast];
+      });
 
       // 设置退出
       setTimeout(() => {

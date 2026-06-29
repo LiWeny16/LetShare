@@ -139,7 +139,7 @@ export class ServerFileTransfer {
     this.connectionManager = connectionManager;
     this.setupMessageHandlers();
     this.connectionManager.onDisconnected?.((reason) => {
-      this.handleConnectionLost(reason || "服务器连接已断开");
+      this.handleConnectionLost(reason || t('alert.serverConnectionLost'));
     });
   }
 
@@ -263,7 +263,7 @@ export class ServerFileTransfer {
       const { meta, payload } = decodeTransferFrame(data);
       const session = this.receivingSessions.get(meta.transfer_id);
       if (!session || session.status !== "receiving") {
-        const reason = "收到文件分片但接收会话不存在，当前传输已停止，请重试";
+        const reason = t('alert.chunkWithoutTransfer');
         console.warn(`[ServerFileTransfer] ⚠️ ${reason} transfer=${meta.transfer_id}`);
         if (shouldReportTransferIssueOnce(this.unknownBinaryTransferIssueKeys, meta.transfer_id)) {
           this.sendTransferControlMessage(
@@ -291,7 +291,7 @@ export class ServerFileTransfer {
         // 🛡️ Bug1 修复: 必须先收到元数据帧才能知道真实 chunk_index
         if (session.pendingChunkIndex === -1) {
           console.warn(`[ServerFileTransfer] ⚠️ 收到二进制帧但尚无元数据 (transfer=${transferId})`);
-          this.failReceiveSession(session, "收到缺少元数据的文件分片，请重试");
+          this.failReceiveSession(session, t('alert.chunkMissingMetadata'));
           return;
         }
 
@@ -311,13 +311,13 @@ export class ServerFileTransfer {
   ) {
     if (chunkIndex < 0 || chunkIndex >= session.totalChunks) {
       console.warn(`[ServerFileTransfer] ⚠️ chunk index 越界: ${chunkIndex}/${session.totalChunks}`);
-      this.failReceiveSession(session, "收到无效的文件分片，请重试");
+      this.failReceiveSession(session, t('alert.chunkInvalid'));
       return;
     }
 
     if (!session.buffer) {
       console.warn(`[ServerFileTransfer] ⚠️ buffer 为 null, 跳过写入 (transfer=${session.transferId})`);
-      this.failReceiveSession(session, "接收缓冲区不可用，请重试");
+      this.failReceiveSession(session, t('alert.bufferNotAvailable'));
       return;
     }
 
@@ -332,7 +332,7 @@ export class ServerFileTransfer {
     const offset = chunkIndex * session.chunkSize;
     if (offset + bytes.byteLength > session.buffer.byteLength) {
       console.error(`[ServerFileTransfer] ❌ Buffer overflow! chunk ${chunkIndex} offset=${offset} size=${bytes.byteLength} buffer=${session.buffer.byteLength}`);
-      this.failReceiveSession(session, "收到越界的文件分片，请重试");
+      this.failReceiveSession(session, t('alert.chunkOutOfBounds'));
       return;
     }
     const expectedSize = chunkIndex === session.totalChunks - 1
@@ -340,7 +340,7 @@ export class ServerFileTransfer {
       : session.chunkSize;
     if (bytes.byteLength !== expectedSize) {
       console.error(`[ServerFileTransfer] ❌ Chunk size mismatch! chunk ${chunkIndex} expected=${expectedSize} actual=${bytes.byteLength}`);
-      this.failReceiveSession(session, "收到损坏的文件分片，请重试");
+      this.failReceiveSession(session, t('alert.chunkCorrupted'));
       return;
     }
 
@@ -520,7 +520,6 @@ export class ServerFileTransfer {
       reason,
       session.roomName
     );
-    alertUseMUI(reason, 4000, { kind: "error" });
   }
 
   private getReceivedFileCacheCandidates(incomingSize: number): Array<{ size: number }> {
@@ -541,7 +540,7 @@ export class ServerFileTransfer {
   }): string {
     const totalMB = (guard.totalBytes / 1024 / 1024).toFixed(1);
     const maxMB = (guard.maxBytes / 1024 / 1024).toFixed(0);
-    return `当前浏览器已缓存 ${guard.totalFiles} 个文件 / ${totalMB}MB。为避免内存崩溃，当前设备安全缓存上限为 ${guard.maxFiles} 个 / ${maxMB}MB，请先下载并清空已接收文件后重试。`;
+    return t('alert.cacheLimitExceeded', { totalFiles: guard.totalFiles, totalMB, maxFiles: guard.maxFiles, maxMB });
   }
 
   private handleMalformedTransferMessage(
@@ -557,7 +556,7 @@ export class ServerFileTransfer {
       typeof (data as Record<string, unknown>).transfer_id === "string"
         ? (data as Record<string, string>).transfer_id
         : undefined;
-    const reason = `收到异常公网传输消息，当前文件传输已停止，请重试：${errorDetail}`;
+    const reason = t('alert.malformedServerMessage', { detail: errorDetail });
 
     console.warn(`[ServerFileTransfer] Malformed transfer message ${type}`, data, error);
 
@@ -565,7 +564,7 @@ export class ServerFileTransfer {
       if (this.sendingSessions.size > 0 || this.receivingSessions.size > 0) {
         this.handleConnectionLost(reason);
       } else {
-        alertUseMUI(`收到异常公网传输消息，已忽略：${errorDetail}`, 3000, { kind: "warning" });
+        alertUseMUI(t('alert.malformedMessageIgnored', { detail: errorDetail }), 3000, { kind: "warning" });
       }
       return;
     }
@@ -606,9 +605,6 @@ export class ServerFileTransfer {
       sendingSession.roomName
     );
 
-    if (!receivingSession) {
-      alertUseMUI(reason, 4000, { kind: "error" });
-    }
   }
 
   public handleConnectionLost(reason: string): void {
@@ -637,7 +633,6 @@ export class ServerFileTransfer {
     this.onProgressCallback?.(null);
     this.onDownloadPageStateChange?.(false);
     this.setTransferStatus(reason, "error");
-    alertUseMUI(reason, 5000, { kind: "error" });
   }
 
   /**
@@ -650,12 +645,11 @@ export class ServerFileTransfer {
     });
     if (!capability.allowed) {
       const message = capability.reason === "server connection does not support binary transfer"
-        ? "当前公网连接不支持文件中转，请切换到自定义服务器或等待 P2P 重连后重试"
-        : "公网连接不可用，无法中转文件，请重连后重试";
+        ? t('alert.serverCapabilityNotSupported')
+        : t('alert.serverNotConnected');
       this.onProgressCallback?.(null);
       this.onDownloadPageStateChange?.(false);
       this.setTransferStatus(message, "warning");
-      alertUseMUI(message, 5000, { kind: "warning" });
       return;
     }
 
@@ -672,7 +666,7 @@ export class ServerFileTransfer {
     });
 
     if (!this.connectionManager.canSendBinary()) {
-      alertUseMUI("当前线路不支持公网文件中转，请切换服务器或重试 P2P", 4000, { kind: "error" });
+      alertUseMUI(t('alert.capabilityNotSupported'), 4000, { kind: "error" });
       throw new Error("current connection provider does not support binary relay");
     }
 
@@ -686,14 +680,14 @@ export class ServerFileTransfer {
         const password = await this.onAdminPasswordRequestCallback(file.size);
         if (!password) {
           console.log("[ServerFileTransfer] 用户取消了大文件传输");
-          alertUseMUI("需要管理员密码才能传输超过50MB的文件", 3000, { kind: "warning" });
+          alertUseMUI(t('alert.passwordRequired'), 3000, { kind: "warning" });
           return;
         }
         adminPass = password;
       } else {
         const password = prompt(`文件大小 ${sizeMB} MB 超过50MB限制\n请输入管理员密码:`);
         if (!password) {
-          alertUseMUI("需要管理员密码才能传输超过50MB的文件", 3000, { kind: "warning" });
+          alertUseMUI(t('alert.passwordRequired'), 3000, { kind: "warning" });
           return;
         }
         adminPass = password;
@@ -744,8 +738,7 @@ export class ServerFileTransfer {
       }
       this.onProgressCallback?.(null);
       this.onDownloadPageStateChange?.(false);
-      this.setTransferStatus("公网传输请求发送失败，请重连后重试", "error");
-      alertUseMUI("公网传输请求发送失败，请重连后重试", 4000, { kind: "error" });
+      this.setTransferStatus(t('alert.sendRequestFailed'), "error");
       return;
     }
     this.scheduleRequestTimeout(transferId);
@@ -768,8 +761,7 @@ export class ServerFileTransfer {
       }
       this.onProgressCallback?.(null);
       this.onDownloadPageStateChange?.(false);
-      this.setTransferStatus("对方未响应文件传输请求，请重试", "warning");
-      alertUseMUI("对方未响应文件传输请求，请重试", 4000, { kind: "warning" });
+      this.setTransferStatus(t('alert.serverRejectTimeout'), "warning");
     }, 30_000);
     this.transferTimeouts.set(transferId, timeoutId);
   }
@@ -805,10 +797,9 @@ export class ServerFileTransfer {
       transferId: request.transfer_id,
     });
     if (!normalizedMeta.valid) {
-      const reason = `文件传输元数据无效，请重试：${normalizedMeta.reason}`;
+      const reason = t('alert.metadataInvalid', { detail: normalizedMeta.reason });
       console.warn(`[ServerFileTransfer] ❌ ${reason}`, request);
       this.setTransferStatus(reason, "error");
-      alertUseMUI(reason, 4000, { kind: "error" });
       this.rejectIncomingRequest(request, reason);
       return;
     }
@@ -816,10 +807,9 @@ export class ServerFileTransfer {
     const deviceLimit = Math.min(this.MAX_FILE_SIZE, getSafeReceiveSizeLimit(getDeviceType()));
     if (normalizedMeta.fileSize > deviceLimit) {
       const limitMB = (deviceLimit / 1024 / 1024).toFixed(0);
-      const reason = `当前设备为避免内存崩溃，单文件接收上限为 ${limitMB}MB`;
+      const reason = t('alert.fileTooLarge', { limit: limitMB });
       console.warn(`[ServerFileTransfer] ❌ ${reason}`);
       this.setTransferStatus(reason, "warning");
-      alertUseMUI(reason, 4000, { kind: "warning" });
       this.rejectIncomingRequest(request, reason);
       return;
     }
@@ -832,7 +822,6 @@ export class ServerFileTransfer {
       const reason = this.getReceivedCacheLimitMessage(cacheGuard);
       console.warn(`[ServerFileTransfer] ❌ ${reason}`);
       this.setTransferStatus(reason, "warning");
-      alertUseMUI(reason, 6000, { kind: "warning" });
       this.rejectIncomingRequest(request, reason);
       return;
     }
@@ -880,8 +869,7 @@ export class ServerFileTransfer {
     console.log(`  - 文件名: ${request.file_name}`);
     console.log(`  - 大小: ${sizeInMB} MB`);
     console.log(`[ServerFileTransfer] 自动接受文件传输`);
-    
-    alertUseMUI(`${fromUser} 正在发送文件: ${request.file_name} (${sizeInMB} MB)`, 3000, { kind: "info" });
+    console.debug(`[ServerFileTransfer] ${t('alert.autoAcceptFile', { user: fromUser, filename: request.file_name, size: sizeInMB })}`);
     
     // 自动接受
     return Promise.resolve(true);
@@ -912,7 +900,7 @@ export class ServerFileTransfer {
       session.buffer = new Uint8Array(session.fileSize);
     } catch (e) {
       if (e instanceof RangeError) {
-        const reason = "内存不足，无法接收该文件，请换小文件或重试";
+        const reason = t('alert.insufficientMemory');
         console.error(`[ServerFileTransfer] ❌ 缓冲区分配失败 (${(session.fileSize / 1024 / 1024).toFixed(1)} MB):`, e);
         this.failReceiveSession(session, reason, FILE_TRANSFER_MESSAGE_TYPES.REJECT);
         return;
@@ -952,7 +940,7 @@ export class ServerFileTransfer {
       console.log(`[ServerFileTransfer] ✅ ACCEPT 消息已发送: ${transferId}`);
     } catch (error) {
       console.error(`[ServerFileTransfer] ❌ 发送 ACCEPT 消息失败:`, error);
-      this.failReceiveSession(session, "公网传输确认发送失败，请重试", FILE_TRANSFER_MESSAGE_TYPES.REJECT);
+      this.failReceiveSession(session, t('alert.acceptSendFailed'), FILE_TRANSFER_MESSAGE_TYPES.REJECT);
       return;
     }
 
@@ -977,7 +965,7 @@ export class ServerFileTransfer {
     }
 
     console.log(`[ServerFileTransfer] Rejected transfer: ${transferId}`);
-    alertUseMUI(t('toast.transferRejected'), 2000, { kind: "info" });
+    alertUseMUI(t('toast.transferRejected'), 2000, { kind: "warning" });
   }
 
   private rejectIncomingRequest(request: FileTransferRequest, reason: string) {
@@ -1023,7 +1011,7 @@ export class ServerFileTransfer {
         this.currentSendingTransferId = null;
       }
       const message = error instanceof TransferTimeoutError
-        ? "公网传输中断，已停止当前任务，请重试"
+        ? t('alert.transferInterrupted')
         : t('toast.fileTransferFailed');
       if (!wasCancelled) {
         this.sendTransferControlMessage(
@@ -1032,7 +1020,7 @@ export class ServerFileTransfer {
           message,
           session.roomName
         );
-        alertUseMUI(message, 4000, { kind: "error" });
+        this.setTransferStatus(message, "error");
       }
     }
   }
@@ -1061,7 +1049,7 @@ export class ServerFileTransfer {
     // 🎨 关闭下载页面
     this.onDownloadPageStateChange?.(false);
 
-    alertUseMUI(`${t('toast.transferRejected')}: ${data.reason || '未知原因'}`, 3000, { kind: "warning" });
+    alertUseMUI(`${t('toast.transferRejected')}: ${data.reason || t('alert.unknownReason')}`, 3000, { kind: "warning" });
     console.log(`[ServerFileTransfer] Transfer rejected: ${transferId}`);
   }
 
@@ -1069,6 +1057,9 @@ export class ServerFileTransfer {
    * 开始发送文件
    */
   private ensureSendingSessionActive(session: TransferSession): void {
+    if (session.status === "completed") {
+      return; // Already completed — not an error
+    }
     if (
       session.status === "cancelled" ||
       session.status === "error" ||
@@ -1090,7 +1081,7 @@ export class ServerFileTransfer {
     const chunk = session.file.slice(offset, offset + session.chunkSize);
     const arrayBuffer = await withTransferTimeout(chunk.arrayBuffer(), {
       timeoutMs: 15_000,
-      timeoutMessage: "读取文件分片超时，请重试",
+      timeoutMessage: t('alert.readTimeout'),
     });
 
     const metaData: FileTransferChunk = {
@@ -1128,7 +1119,7 @@ export class ServerFileTransfer {
     this.onFileMetaInfoChange?.(session.file.name);
     this.onDownloadPageStateChange?.(true);
     this.onProgressCallback?.(0);
-    this.setTransferStatus("正在通过公网发送文件", "info");
+    this.setTransferStatus(t('alert.serverSendingFile'), "info");
     
     // 通知服务器开始传输
     this.connectionManager.send({
@@ -1167,7 +1158,7 @@ export class ServerFileTransfer {
     console.log(`[ServerFileTransfer] File sending completed and receiver confirmed: ${session.transferId}`);
     alertUseMUI(t('toast.fileSent'), 2000, { kind: "success" });
     this.onProgressCallback?.(100);
-    this.setTransferStatus("公网传输完成", "success");
+    this.setTransferStatus(t('alert.serverTransferComplete'), "success");
     
     // 🎨 延迟关闭下载页面，让用户看到100%完成
     setTimeout(() => {
@@ -1246,34 +1237,37 @@ export class ServerFileTransfer {
       return;
     }
 
-    if (!session || session.status === "cancelled" || session.status === "error") {
-      const reason = "发送端已无法重传缺失分片，请重新发起传输";
-      console.warn(`[ServerFileTransfer] ${reason}`, normalized.request);
-      this.onProgressCallback?.(null);
-      this.onDownloadPageStateChange?.(false);
-      this.sendTransferControlMessage(
-        FILE_TRANSFER_MESSAGE_TYPES.CANCEL,
-        normalized.request.transferId,
-        reason,
-        typeof data.room_name === "string" ? data.room_name : undefined
-      );
-      this.setTransferStatus(reason, "error");
-      alertUseMUI(reason, 4000, { kind: "error" });
+    if (!session || session.status === "cancelled" || session.status === "error" || session.status === "completed") {
+      // Session already resolved — don't send cancel, just return
+      if (!session || session.status !== "completed") {
+        const reason = t('alert.resendSenderDisconnected');
+        console.warn(`[ServerFileTransfer] ${reason}`, normalized.request);
+        this.onProgressCallback?.(null);
+        this.onDownloadPageStateChange?.(false);
+        this.sendTransferControlMessage(
+          FILE_TRANSFER_MESSAGE_TYPES.CANCEL,
+          normalized.request.transferId,
+          reason,
+          typeof data.room_name === "string" ? data.room_name : undefined
+        );
+        this.setTransferStatus(reason, "error");
+      }
       return;
     }
 
     try {
-      alertUseMUI(
-        `接收方请求重传 ${normalized.request.chunkIndexes.length}/${normalized.request.missingCount} 个公网分片，正在恢复`,
-        2500,
-        { kind: "info" }
-      );
+      console.debug(`[ServerFileTransfer] Resend requested: ${normalized.request.chunkIndexes.length}/${normalized.request.missingCount} chunks`);
       this.setTransferStatus(
-        `接收方请求重传 ${normalized.request.chunkIndexes.length}/${normalized.request.missingCount} 个公网分片，正在恢复`,
+        t('alert.serverResendRequesting', { count: normalized.request.chunkIndexes.length, missing: normalized.request.missingCount }),
         "warning"
       );
       for (const chunkIndex of normalized.request.chunkIndexes) {
         await this.sendServerChunk(session, chunkIndex, { countProgress: false });
+      }
+      // Check if session was completed by startSending during our await
+      if ((session.status as string) === "completed" || !this.sendingSessions.has(session.transferId)) {
+        console.log("[ServerFileTransfer] Resend completed — session already finalized");
+        return; // Don't send END, don't update progress, don't throw
       }
       this.ensureSendingSessionActive(session);
       this.connectionManager.send({
@@ -1282,7 +1276,7 @@ export class ServerFileTransfer {
       });
       this.onProgressCallback?.(99);
     } catch (error) {
-      const reason = "公网缺失分片重传失败，请重试";
+      const reason = t('alert.serverResendFailed');
       console.warn(`[ServerFileTransfer] ${reason}:`, error);
       this.completionAcks.reject(session.transferId, new Error(reason));
       session.status = "error";
@@ -1299,7 +1293,6 @@ export class ServerFileTransfer {
       this.onProgressCallback?.(null);
       this.onDownloadPageStateChange?.(false);
       this.setTransferStatus(reason, "error");
-      alertUseMUI(reason, 4000, { kind: "error" });
     }
   }
 
@@ -1308,11 +1301,15 @@ export class ServerFileTransfer {
    */
   private handleTransferCancel(data: { transfer_id: string; reason?: string }) {
     const sendingSession = this.sendingSessions.get(data.transfer_id);
+    const receivingSession = this.receivingSessions.get(data.transfer_id);
+
+    // If both sessions are already cleaned up (completed), skip the alert
+    const wasAlreadyComplete = !sendingSession && !receivingSession;
+
     const shouldRejectAck = !!sendingSession && sendingSession.status !== "pending";
     if (sendingSession) {
       sendingSession.status = "cancelled";
     }
-    const receivingSession = this.receivingSessions.get(data.transfer_id);
     if (receivingSession) {
       receivingSession.status = "cancelled";
       receivingSession.buffer = null;
@@ -1320,7 +1317,7 @@ export class ServerFileTransfer {
     if (shouldRejectAck) {
       this.completionAcks.reject(
         data.transfer_id,
-        new Error(data.reason || t('toast.transferCancelled'))
+        new Error(data.reason || t('alert.transferCancelled'))
       );
     } else {
       this.completionAcks.cancel(data.transfer_id);
@@ -1333,7 +1330,9 @@ export class ServerFileTransfer {
     // 🎨 关闭下载页面
     this.onDownloadPageStateChange?.(false);
 
-    alertUseMUI(`${t('toast.transferCancelled')}: ${data.reason || ''}`, 2000, { kind: "warning" });
+    if (!wasAlreadyComplete) {
+      alertUseMUI(`${t('toast.transferCancelled')}: ${data.reason || ''}`, 2000, { kind: "warning" });
+    }
     console.log(`[ServerFileTransfer] Transfer cancelled: ${data.transfer_id}`);
   }
 

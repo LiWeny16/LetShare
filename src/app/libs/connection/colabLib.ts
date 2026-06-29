@@ -1295,8 +1295,8 @@ export class RealTimeColab {
               transferId: message.transferId,
             });
             if (!normalizedMeta.valid) {
-              const reason = `文件传输元数据无效，请重试：${normalizedMeta.reason}`;
-              console.warn(`[P2P FILE] ${reason}`, message);
+              const reason = t('alert.metadataInvalid', { detail: normalizedMeta.reason });
+              console.warn(`[P2P FILE] metadata invalid: ${reason}`, message);
               if (channel.readyState === "open") {
                 channel.send(JSON.stringify({
                   type: "abort",
