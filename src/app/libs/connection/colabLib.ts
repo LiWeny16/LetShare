@@ -1668,13 +1668,17 @@ export class RealTimeColab {
         this.isSendingFile = false;
       }
       if (failureImpact.hasActiveTransfer) {
-        this.setFileTransferProgress(null);
-        this.setDownloadPageState(false);
-        this.setFileTransferStatus(
-          "P2P 连接已断开，当前文件传输已停止，请重试",
-          "error",
-          { autoClearMs: 10_000 }
-        );
+        // 只有在没有活跃的服务器传输时才重置 P2P 传输 UI 状态
+        // 否则会错误地覆盖正在运行的服务器传输的进度显示
+        if ((this.serverFileTransfer?.getActiveTransferCount() ?? 0) === 0) {
+          this.setFileTransferProgress(null);
+          this.setDownloadPageState(false);
+          this.setFileTransferStatus(
+            "P2P 连接已断开，当前文件传输已停止，请重试",
+            "error",
+            { autoClearMs: 10_000 }
+          );
+        }
         alertUseMUI("P2P 连接已断开，当前文件传输已停止，请重试", 4000, { kind: "error" });
       }
       this.receivingFiles.delete(id);
@@ -1726,13 +1730,16 @@ export class RealTimeColab {
         this.isSendingFile = false;
       }
       if (failureImpact.hasActiveTransfer) {
-        this.setFileTransferProgress(null);
-        this.setDownloadPageState(false);
-        this.setFileTransferStatus(
-          "P2P 连接异常，当前文件传输已停止，请重试",
-          "error",
-          { autoClearMs: 10_000 }
-        );
+        // 只有在没有活跃的服务器传输时才重置 P2P 传输 UI 状态
+        if ((this.serverFileTransfer?.getActiveTransferCount() ?? 0) === 0) {
+          this.setFileTransferProgress(null);
+          this.setDownloadPageState(false);
+          this.setFileTransferStatus(
+            "P2P 连接异常，当前文件传输已停止，请重试",
+            "error",
+            { autoClearMs: 10_000 }
+          );
+        }
         alertUseMUI("P2P 连接异常，当前文件传输已停止，请重试", 4000, { kind: "error" });
       }
       this.receivingFiles.delete(id);
@@ -2434,15 +2441,25 @@ export class RealTimeColab {
     }
     this.receivingFiles.clear();
 
-    this.setFileTransferProgress(null);
-    this.setDownloadPageState(false);
-    this.setFileTransferStatus(reason, "warning", {
-      autoClearMs: 10_000,
-    });
-    this.serverFileTransfer?.handleConnectionLost(reason);
-
-    if (p2pActiveCount > 0 && serverActiveCount === 0) {
+    // P2P 传输清理 UI
+    if (p2pActiveCount > 0) {
+      this.setFileTransferProgress(null);
+      this.setDownloadPageState(false);
+      this.setFileTransferStatus(reason, "warning", {
+        autoClearMs: 10_000,
+      });
       alertUseMUI(reason, 5000, { kind: "warning" });
+    }
+
+    // ⚠️ 服务器传输不在此处终止！
+    // 服务器传输走 WebSocket，不依赖页面焦点。页面后台超时只影响 P2P（WebRTC），
+    // 服务器传输将一直运行到完成或 WebSocket 断开。
+    // ServerFileTransfer 已在构造函数中注册了 connectionManager.onDisconnected 回调，
+    // WebSocket 真正断开时自动清理。
+    if (serverActiveCount > 0) {
+      console.log(
+        `[Lifecycle] 跳过终止公网传输：${serverActiveCount} 个服务器传输会话继续在后台运行`
+      );
     }
 
     return true;
@@ -2887,12 +2904,22 @@ export class RealTimeColab {
             activeTransferCount,
           })) {
             this.stopActiveFileTransfersForLifecycle(
-              "页面在后台停留较久，当前文件传输已停止，请回到前台后重试"
+              "页面在后台停留较久，P2P 文件传输已停止，请回到前台后重试"
             );
-            void runTransferHandlerSafely(
-              () => this.disconnect(),
-              (error) => console.warn("Background disconnect failed:", error)
-            );
+            // 仅当没有活跃的服务器传输时才断开 WebSocket
+            // 服务器传输走 WebSocket 不依赖页面焦点，可以继续在后台运行
+            const serverActiveCount =
+              this.serverFileTransfer?.getActiveTransferCount() ?? 0;
+            if (serverActiveCount === 0) {
+              void runTransferHandlerSafely(
+                () => this.disconnect(),
+                (error) => console.warn("Background disconnect failed:", error)
+              );
+            } else {
+              console.log(
+                `[Visibility] 公网传输活跃，保持 WebSocket 连接在后台继续`
+              );
+            }
           } else if (backgroundStartTime && backgroundDurationMs >= overtime) {
             alertUseMUI(
               t("background.timeout", { seconds: overtime / 1000 }),
