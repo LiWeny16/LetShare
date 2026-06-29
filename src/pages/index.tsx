@@ -7,12 +7,12 @@ import { HashRouter, Routes, Route } from "react-router-dom" // 导入正确的�
 import PayNowComponent from "./paynow"
 
 export default function Index() {
-  return (
-    <HashRouter>
-      <Routes>
-        <Route path="/" element={<Share />} />
-        <Route path="/paynow" element={<PayNowComponent />}></Route>
-      </Routes>
-    </HashRouter>
-  )
+ return (
+  <HashRouter>
+   <Routes>
+    <Route path="/" element={<Share />} />
+    <Route path="/paynow" element={<PayNowComponent />}></Route>
+   </Routes>
+  </HashRouter>
+ )
 }

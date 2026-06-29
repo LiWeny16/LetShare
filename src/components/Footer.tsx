@@ -12,194 +12,194 @@ import realTimeColab from '@App/libs/connection/colabLib';
 import { observer } from 'mobx-react-lite';
 
 const Footer = observer(() => {
-    const { t } = useTranslation();
-    const [open, setOpen] = useState(false);
-    const handleOpen = () => setOpen(true);
-    const handleClose = () => setOpen(false);
-    const theme = useTheme();
-    const roomId = settingsStore.get("roomId") || "default-room";
-    // 获取当前实际连接的服务器区域，让扫码者使用同一服务器
-    const getRegionParam = (): string => {
-        const resolved = realTimeColab.getResolvedServerType();
-        if (resolved === 'china') return 'china';
-        if (resolved === 'global') return 'global';
-        // 未连接时回退到用户设置
-        const mode = settingsStore.get('serverMode');
-        if (mode === 'custom') return 'china';
-        if (mode === 'ably') return 'global';
-        return ''; // auto 模式且未连接，无法确定
-    };
-    const region = getRegionParam();
-    const shareUrl = `https://letshare.fun/?room=${encodeURIComponent(roomId)}${region ? `&region=${region}` : ''}`;
-    const githubUrl = 'https://github.com/LiWeny16/LetShare';
-    const [qrMode, _setQrMode] = useState<"share" | "connect">("share");
-    const [qrSignal] = useState(() => new QRCodeSignalChannel(realTimeColab));
+  const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
+  const handleOpen = () => setOpen(true);
+  const handleClose = () => setOpen(false);
+  const theme = useTheme();
+  const roomId = settingsStore.get("roomId") || "default-room";
+  // 获取当前实际连接的服务器区域，让扫码者使用同一服务器
+  const getRegionParam = (): string => {
+    const resolved = realTimeColab.getResolvedServerType();
+    if (resolved === 'china') return 'china';
+    if (resolved === 'global') return 'global';
+    // 未连接时回退到用户设置
+    const mode = settingsStore.get('serverMode');
+    if (mode === 'custom') return 'china';
+    if (mode === 'ably') return 'global';
+    return ''; // auto 模式且未连接，无法确定
+  };
+  const region = getRegionParam();
+  const shareUrl = `https://letshare.fun/?room=${encodeURIComponent(roomId)}${region ? `&region=${region}` : ''}`;
+  const githubUrl = 'https://github.com/LiWeny16/LetShare';
+  const [qrMode, _setQrMode] = useState<"share" | "connect">("share");
+  const [qrSignal] = useState(() => new QRCodeSignalChannel(realTimeColab));
 
-    useEffect(() => {
-        if (qrMode === "connect") {
-            qrSignal.generateOfferQr("你要连接的用户id");
-        }
-    }, [qrMode]);
+  useEffect(() => {
+    if (qrMode === "connect") {
+      qrSignal.generateOfferQr("你要连接的用户id");
+    }
+  }, [qrMode]);
 
-    return (
-        <>
-            <Box
-                component="footer"
-                sx={{
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center',
-                    p: 1,
-                    borderTop: '1px solid #e0e0e0',
-                    borderBottom: '1px solid #e0e0e0',
-                    mb: '20px',
-                    mt: 'auto',
-                }}
-            >
-                <Typography variant="body2" color="text.secondary">
-                    © 2025 LetShare Copyright Author Onion
+  return (
+    <>
+      <Box
+        component="footer"
+        sx={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          p: 1,
+          borderTop: '1px solid #e0e0e0',
+          borderBottom: '1px solid #e0e0e0',
+          mb: '20px',
+          mt: 'auto',
+        }}
+      >
+        <Typography variant="body2" color="text.secondary">
+          © 2025 LetShare Copyright Author Onion
+        </Typography>
+        <Box sx={{ display: 'flex', alignItems: 'center' }}>
+          <IconButton
+            aria-label="GitHub"
+            component="a"
+            href={githubUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            <GitHubIcon />
+          </IconButton>
+          <IconButton aria-label="QR Code" onClick={handleOpen}>
+            <QrCodeScannerIcon />
+          </IconButton>
+          <IconButton onClick={() => { settingsStore.updateUnrmb("settingsPageState", true) }}>
+            <SettingsIcon />
+          </IconButton>
+        </Box>
+      </Box>
+
+      <Dialog
+        open={open}
+        onClose={handleClose}
+        PaperProps={{
+          sx: {
+            borderRadius: 2,
+            bgcolor: 'background.paper',
+            overflow: 'hidden',
+          }
+        }}
+      >
+        <Box sx={{ minHeight: 400, padding: 1, bgcolor: 'background.paper', borderRadius: 2 }}>
+          <DialogTitle>{t('footer.shareTitle')}</DialogTitle>
+          <Divider />
+
+
+          <DialogContent
+            sx={{
+              display: 'flex',
+              justifyContent: 'center',
+              alignItems: 'center',
+              p: 1.4,
+              width: "300px",
+              maxWidth: '100%',
+            }}
+          >
+            {qrMode === "share" ? (
+              <Box sx={{ display: 'flex', flexDirection: "column", alignItems: "center" }}>
+                <Typography
+                  variant="body1"
+                  color="text.secondary"
+                  sx={{ mb: 1 }}
+                >
+                  {t('footer.qrPrompt')}<br /><strong>{settingsStore.get("roomId")}</strong>
                 </Typography>
-                <Box sx={{ display: 'flex', alignItems: 'center' }}>
-                    <IconButton
-                        aria-label="GitHub"
-                        component="a"
-                        href={githubUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                    >
-                        <GitHubIcon />
-                    </IconButton>
-                    <IconButton aria-label="QR Code" onClick={handleOpen}>
-                        <QrCodeScannerIcon />
-                    </IconButton>
-                    <IconButton onClick={() => { settingsStore.updateUnrmb("settingsPageState", true) }}>
-                        <SettingsIcon />
-                    </IconButton>
-                </Box>
-            </Box>
-
-            <Dialog
-                open={open}
-                onClose={handleClose}
-                PaperProps={{
-                    sx: {
-                        borderRadius: 2,
-                        bgcolor: 'background.paper',
-                        overflow: 'hidden',
-                    }
-                }}
+                <QRCode
+                  value={shareUrl}
+                  eyeRadius={1}
+                  size={150}
+                  bgColor={theme.palette.background.paper}
+                  fgColor={theme.palette.text.primary}
+                  ecLevel="H"
+                  quietZone={10}
+                />
+                <Typography
+                  variant="body2"
+                  color="primary"
+                  component="a"
+                  href={shareUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  sx={{ mt: 1, wordBreak: 'break-word', textDecoration: "none", fontSize: '0.8rem' }}
+                >
+                  letshare.fun/?room={roomId}
+                </Typography>
+              </Box>
+            ) : (
+              <Box sx={{ display: 'flex', flexDirection: "column", alignItems: "center" }}>
+                <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                  {t("footer.qrScanPrompt")}
+                </Typography>
+                {qrSignal.offerQRCodeString ? (
+                  <QRCode
+                    value={qrSignal.offerQRCodeString}
+                    size={150}
+                    eyeRadius={1}
+                    bgColor={theme.palette.background.paper}
+                    fgColor={theme.palette.text.primary}
+                    ecLevel="H"
+                    quietZone={10}
+                  />
+                ) : (
+                  <Typography variant="caption" color="text.disabled">
+                    正在生成二维码...
+                  </Typography>
+                )}
+              </Box>
+            )}
+          </DialogContent>
+          {/* 切换控制栏 */}
+          {/* <Box sx={{
+            display: "flex",
+            justifyContent: "center",
+            alignItems: "center",
+            mt: 1,
+            mb: 1,
+          }}>
+            <Box
+              onClick={() => setQrMode("connect")}
+              sx={{
+                flex: 1,
+                textAlign: 'center',
+                py: 1,
+                cursor: 'pointer',
+                bgcolor: qrMode === "connect" ? "primary.light" : "grey.100",
+                borderRadius: "8px 0 0 8px"
+              }}
             >
-                <Box sx={{ minHeight: 400, padding: 1, bgcolor: 'background.paper', borderRadius: 2 }}>
-                    <DialogTitle>{t('footer.shareTitle')}</DialogTitle>
-                    <Divider />
+              <Typography fontWeight="bold">{t('footer.qrConnect')}</Typography>
+            </Box>
+            <Box
+              onClick={() => setQrMode("share")}
+              sx={{
+                flex: 1,
+                textAlign: 'center',
+                py: 1,
+                cursor: 'pointer',
+                bgcolor: qrMode === "share" ? "primary.light" : "grey.100",
+                borderRadius: "0 8px 8px 0"
+              }}
+            >
+              <Typography fontWeight="bold">{t('footer.qrShare')}</Typography>
+            </Box>
+          </Box> */}
+
+        </Box>
+      </Dialog>
 
 
-                    <DialogContent
-                        sx={{
-                            display: 'flex',
-                            justifyContent: 'center',
-                            alignItems: 'center',
-                            p: 1.4,
-                            width: "300px",
-                            maxWidth: '100%',
-                        }}
-                    >
-                        {qrMode === "share" ? (
-                            <Box sx={{ display: 'flex', flexDirection: "column", alignItems: "center" }}>
-                                <Typography
-                                    variant="body1"
-                                    color="text.secondary"
-                                    sx={{ mb: 1 }}
-                                >
-                                    {t('footer.qrPrompt')}<br /><strong>{settingsStore.get("roomId")}</strong>
-                                </Typography>
-                                <QRCode
-                                    value={shareUrl}
-                                    eyeRadius={1}
-                                    size={150}
-                                    bgColor={theme.palette.background.paper}
-                                    fgColor={theme.palette.text.primary}
-                                    ecLevel="H"
-                                    quietZone={10}
-                                />
-                                <Typography
-                                    variant="body2"
-                                    color="primary"
-                                    component="a"
-                                    href={shareUrl}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    sx={{ mt: 1, wordBreak: 'break-word', textDecoration: "none", fontSize: '0.8rem' }}
-                                >
-                                    letshare.fun/?room={roomId}
-                                </Typography>
-                            </Box>
-                        ) : (
-                            <Box sx={{ display: 'flex', flexDirection: "column", alignItems: "center" }}>
-                                <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-                                    {t("footer.qrScanPrompt")}
-                                </Typography>
-                                {qrSignal.offerQRCodeString ? (
-                                    <QRCode
-                                        value={qrSignal.offerQRCodeString}
-                                        size={150}
-                                        eyeRadius={1}
-                                        bgColor={theme.palette.background.paper}
-                                        fgColor={theme.palette.text.primary}
-                                        ecLevel="H"
-                                        quietZone={10}
-                                    />
-                                ) : (
-                                    <Typography variant="caption" color="text.disabled">
-                                        正在生成二维码...
-                                    </Typography>
-                                )}
-                            </Box>
-                        )}
-                    </DialogContent>
-                    {/* 切换控制栏 */}
-                    {/* <Box sx={{
-                        display: "flex",
-                        justifyContent: "center",
-                        alignItems: "center",
-                        mt: 1,
-                        mb: 1,
-                    }}>
-                        <Box
-                            onClick={() => setQrMode("connect")}
-                            sx={{
-                                flex: 1,
-                                textAlign: 'center',
-                                py: 1,
-                                cursor: 'pointer',
-                                bgcolor: qrMode === "connect" ? "primary.light" : "grey.100",
-                                borderRadius: "8px 0 0 8px"
-                            }}
-                        >
-                            <Typography fontWeight="bold">{t('footer.qrConnect')}</Typography>
-                        </Box>
-                        <Box
-                            onClick={() => setQrMode("share")}
-                            sx={{
-                                flex: 1,
-                                textAlign: 'center',
-                                py: 1,
-                                cursor: 'pointer',
-                                bgcolor: qrMode === "share" ? "primary.light" : "grey.100",
-                                borderRadius: "0 8px 8px 0"
-                            }}
-                        >
-                            <Typography fontWeight="bold">{t('footer.qrShare')}</Typography>
-                        </Box>
-                    </Box> */}
-
-                </Box>
-            </Dialog>
-
-
-            <SettingsPage />
-        </>
-    );
+      <SettingsPage />
+    </>
+  );
 });
 
 export { Footer };

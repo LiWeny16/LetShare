@@ -96,18 +96,18 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ open, onClose, targetUserId, targ
         const handleHistoryUpdate = (data: { userId: string }) => {
             // 只有当前打开的聊天用户的消息更新时才刷新
             if (data.userId === targetUserId) {
-                console.log(`[CHAT PANEL] 📨 Received history update event for ${targetUserId}`);
+                console.log(`[CHAT PANEL] Received history update event for ${targetUserId}`);
                 loadChatHistory();
             }
         };
 
         // 监听 ChatIntegration 的历史更新事件
         ChatIntegration.emitter.on('history-updated', handleHistoryUpdate);
-        console.log(`[CHAT PANEL] 🔊 Subscribed to history-updated events for ${targetUserId}`);
+        console.log(`[CHAT PANEL] Subscribed to history-updated events for ${targetUserId}`);
 
         return () => {
             ChatIntegration.emitter.off('history-updated', handleHistoryUpdate);
-            console.log(`[CHAT PANEL] 🔇 Unsubscribed from history-updated events for ${targetUserId}`);
+            console.log(`[CHAT PANEL] Unsubscribed from history-updated events for ${targetUserId}`);
         };
     }, [open, targetUserId]);
 

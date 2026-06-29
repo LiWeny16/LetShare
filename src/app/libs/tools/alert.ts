@@ -1,4 +1,5 @@
 // import { alertEmitter } from ""; // 您的原始导入路径
+import React from "react";
 import type { AlertColor } from "@mui/material";
 import { alertEmitter } from "../../../components/Alert"; // 确保这个路径是正确的
 
@@ -20,38 +21,43 @@ export type ToastCategory = "transfer-status" | "transfer-success";
  * 不同消息之间的调用不受此防抖影响（它们会各自独立触发或被各自的防抖逻辑处理）。
  *
  * @param category - 可选的 toast 分类。同一分类的新 toast 会替换旧 toast，
- *   而不是堆叠显示。主要用于文件传输状态消息的去重。
+ *  而不是堆叠显示。主要用于文件传输状态消息的去重。
  */
 const alertUseMUI = (
-  msg: string,
-  time?: number,
-  objConfig?: {
-    kind?: AlertColor;
-    zIndex?: number;
-    category?: ToastCategory;
-  }
+ msg: React.ReactNode,
+ time?: number,
+ objConfig?: {
+  kind?: AlertColor;
+  zIndex?: number;
+  category?: ToastCategory;
+ }
 ) => {
-  // 如果该消息已经有一个正在等待的计时器，清除它
-  if (messageDebounceTimers.has(msg)) {
-    clearTimeout(messageDebounceTimers.get(msg)!);
+ // Debounce only for string messages (skip for ReactNodes)
+ const msgKey = typeof msg === "string" ? msg : null;
+ if (msgKey && messageDebounceTimers.has(msgKey)) {
+  clearTimeout(messageDebounceTimers.get(msgKey)!);
+ }
+
+ // 为当前消息设置一个新的计时器
+ const timerId = setTimeout(() => {
+  // 计时器触发时，实际显示提示
+  alertEmitter.emit("show", {
+   message: msg,
+   severity: objConfig?.kind ?? "success",
+   duration: time ?? 2500,
+   zIndex: objConfig?.zIndex ?? 9999,
+   category: objConfig?.category,
+  });
+  // 提示显示后，从Map中移除该消息的计时器记录，以便下次同样消息能重新开始防抖
+  if (msgKey) {
+   messageDebounceTimers.delete(msgKey);
   }
+ }, DEBOUNCE_DELAY);
 
-  // 为当前消息设置一个新的计时器
-  const timerId = setTimeout(() => {
-    // 计时器触发时，实际显示提示
-    alertEmitter.emit("show", {
-      message: msg,
-      severity: objConfig?.kind ?? "success",
-      duration: time ?? 2500,
-      zIndex: objConfig?.zIndex ?? 9999,
-      category: objConfig?.category,
-    });
-    // 提示显示后，从Map中移除该消息的计时器记录，以便下次同样消息能重新开始防抖
-    messageDebounceTimers.delete(msg);
-  }, DEBOUNCE_DELAY);
-
-  // 将新的计时器ID存入Map
-  messageDebounceTimers.set(msg, timerId);
+ // 将新的计时器ID存入Map (only for string messages)
+ if (msgKey) {
+  messageDebounceTimers.set(msgKey, timerId);
+ }
 };
 
 export default alertUseMUI;
@@ -60,9 +66,9 @@ export default alertUseMUI;
 /*
 // 模拟 alertEmitter
 const alertEmitterMock = {
-  emit: (event: string, data: any) => {
-    console.log(`[${new Date().toLocaleTimeString()}] Alert Emitter Event:`, event, data);
-  }
+ emit: (event: string, data: any) => {
+  console.log(`[${new Date().toLocaleTimeString()}] Alert Emitter Event:`, event, data);
+ }
 };
 
 // 替换掉真实的 alertEmitter 进行测试

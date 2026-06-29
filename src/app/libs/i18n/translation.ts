@@ -22,12 +22,12 @@ const sharedMalayTranslation = {
             dropToUpload: "Lepaskan untuk muat naik"
         },
         guide: {
-            title: "Panduan Pengguna 🎉:",
+            title: "Panduan Pengguna:",
             step1: "1. Sambungkan kedua-dua peranti ke Wi-Fi yang <strong>sama</strong>",
             step2: "2. ID bilik mesti <strong>sepadan</strong> di kedua-dua peranti!"
         },
         dialog: {
-            newShare: "✨ Kongsi Baru",
+            newShare: "Kongsi Baru",
             incomingMessage: "Anda menerima mesej, adakah anda mahu terima?",
             inputText: "Masukkan Teks"
         },
@@ -56,10 +56,11 @@ const sharedMalayTranslation = {
         },
         // download
         transfer: {
-            sending: "📤 Menghantar fail kepada <strong>{{name}}</strong>",
-            receiving: "📥 Menerima fail dari <strong>{{name}}</strong>: {{filename}}",
+            sending: "Menghantar fail kepada <strong>{{name}}</strong>",
+            receiving: "Menerima fail dari <strong>{{name}}</strong>: {{filename}}",
             byte: "bait",
-            receivedFiles: "📁 Fail yang diterima",
+            receivedFiles: "Fail yang diterima",
+            sentFiles: "Fail yang dihantar",
             awaitingConfirmation: "Menunggu penerima mengesahkan selesai...",
             noTasks: "Tiada tugas aktif"
         },
@@ -205,7 +206,7 @@ const sharedMalayTranslation = {
             disconnected: "Terputus"
         },
         background: {
-            timeout: "⏱ Halaman latar belakang melebihi {{seconds}} saat, memutuskan sambungan pelayan untuk penjimatan"
+            timeout: "Halaman latar belakang melebihi {{seconds}} saat, memutuskan sambungan pelayan untuk penjimatan"
         }
     }
 }
@@ -235,12 +236,12 @@ export const resources = {
                 dropToUpload: "Drop to upload"
             },
             guide: {
-                title: "User Guide 🎉:",
+                title: "User Guide:",
                 step1: "1. Connect both devices to the <strong>same</strong> Wi-Fi",
                 step2: "2. Room IDs <strong>must match</strong> on both devices!"
             },
             dialog: {
-                newShare: "✨ New Share",
+                newShare: "New Share",
                 incomingMessage: "You received a message, accept it?",
                 inputText: "Input Text"
             },
@@ -269,10 +270,11 @@ export const resources = {
             },
             // Download.tsx
             transfer: {
-                sending: "📤 Sending file to <strong>{{name}}</strong>",
-                receiving: "📥 Receiving file from <strong>{{name}}</strong>: {{filename}}",
+                sending: "Sending file to <strong>{{name}}</strong>",
+                receiving: "Receiving file from <strong>{{name}}</strong>: {{filename}}",
                 byte: "byte",
-                receivedFiles: "📁 Received Files",
+                receivedFiles: "Received Files",
+                sentFiles: "Sent Files",
                 awaitingConfirmation: "Waiting for receiver confirmation...",
                 noTasks: "No active tasks"
             },
@@ -424,7 +426,7 @@ export const resources = {
                 disconnected: "Disconnected"
             },
             background: {
-                timeout: "⏱ Background page exceeded {{seconds}} seconds, disconnecting server for saving"
+                timeout: "Background page exceeded {{seconds}} seconds, disconnecting server for saving"
             }
         }
     },
@@ -452,12 +454,12 @@ export const resources = {
                 dropToUpload: "松手上传文件"
             },
             guide: {
-                title: "使用指南🎉：",
+                title: "使用指南：",
                 step1: "1. 两个设备连接到<strong>同一个</strong>局域网（部分公共 WiFi 不可用）",
                 step2: "2. 两个设备房间号<strong>必须相同</strong>！"
             },
             dialog: {
-                newShare: "✨ 新分享",
+                newShare: "新分享",
                 incomingMessage: "您有来自外部的消息，是否接受？",
                 inputText: "输入文本"
             },
@@ -486,10 +488,11 @@ export const resources = {
             },
             // Download
             transfer: {
-                sending: "📤 正在发送文件给 <strong>{{name}}</strong>",
-                receiving: "📥 正在接收来自 <strong>{{name}}</strong> 的文件：{{filename}}",
+                sending: "正在发送文件给 <strong>{{name}}</strong>",
+                receiving: "正在接收来自 <strong>{{name}}</strong> 的文件：{{filename}}",
                 byte: "字节",
-                receivedFiles: "📁 已接收的文件",
+                receivedFiles: "已接收的文件",
+                sentFiles: "已发送的文件",
                 awaitingConfirmation: "等待接收方确认完成...",
                 noTasks: "没有进行中的任务"
             },
@@ -642,7 +645,7 @@ export const resources = {
                 disconnected: "已断开"
             },
             background: {
-                timeout: "⏱ 后台页面超过 {{seconds}} 秒，断开服务器以节省资源"
+                timeout: "后台页面超过 {{seconds}} 秒，断开服务器以节省资源"
             }
 
         }
