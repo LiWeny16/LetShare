@@ -12,20 +12,10 @@ import alertUseMUI from '@App/libs/tools/alert';
 import WorkspacePremiumIcon from '@mui/icons-material/WorkspacePremium';
 import VerifiedIcon from '@mui/icons-material/Verified';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import { PRO_INVITE_CODE, setProCookie, clearProCookie } from '@App/libs/connection/proUpgrade';
 
-const PRO_COOKIE_KEY = 'letshare_admin_pass';
 const PRO_EMAIL = 'a454888395@gmail.com';
-const PRO_INVITE_CODE = 'bigonion';
 
-function setCookie(name: string, value: string, days: number) {
-  const d = new Date();
-  d.setTime(d.getTime() + days * 86400000);
-  document.cookie = `${name}=${encodeURIComponent(value)};expires=${d.toUTCString()};path=/;SameSite=Lax`;
-}
-
-function clearCookie(name: string) {
-  document.cookie = `${name}=;expires=Thu,01 Jan 1970 00:00:00 GMT;path=/;SameSite=Lax`;
-}
 
 type Props = {
   open: boolean;
@@ -51,14 +41,14 @@ const ProUpgradeDialog = ({ open, onClose }: Props) => {
       return;
     }
     if (code === PRO_INVITE_CODE) {
-      setCookie(PRO_COOKIE_KEY, code, 30);
+      setProCookie(code, 30);
       setInviteCode('');
       setInviteError('');
       onClose();
       alertUseMUI('PRO 已激活！50MB+ 服务器中转已解锁', 3000, { kind: 'success' });
     } else {
       setInviteError('邀请码无效');
-      clearCookie(PRO_COOKIE_KEY);
+      clearProCookie();
     }
   };
 

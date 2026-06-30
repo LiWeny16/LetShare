@@ -744,7 +744,7 @@ export function getSafeReceivedFileCacheLimit(deviceType: DeviceType): {
  }
 
  return {
-  maxBytes: 800 * 1024 * 1024,
+  maxBytes: 3500 * 1024 * 1024, // 3.5GB — 单文件 3GB + 余量
   maxFiles: 1000,
  };
 }

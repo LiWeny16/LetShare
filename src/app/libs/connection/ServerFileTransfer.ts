@@ -389,7 +389,7 @@ export class ServerFileTransfer {
    return;
   }
 
-  if (!session.buffer && (!session.receivedChunks || session.receivedChunks.length === 0)) {
+  if (!session.buffer && !session.receivedChunks) {
    console.warn(`[ServerFileTransfer] 无可用写入目标 (transfer=${session.transferId})`);
    this.failReceiveSession(session, t('alert.bufferNotAvailable'));
    return;
@@ -422,7 +422,8 @@ export class ServerFileTransfer {
    }
    session.buffer.set(bytes, offset);
   } else {
-   session.receivedChunks.push(bytes.slice().buffer as ArrayBuffer);
+   // 按 chunkIndex 写入对应位置，确保乱序到达也不影响最终文件正确性
+   session.receivedChunks[chunkIndex] = bytes.slice().buffer as ArrayBuffer;
   }
   session.receivedChunkIndexes.add(chunkIndex);
   session.receivedCount++;
@@ -446,6 +447,12 @@ export class ServerFileTransfer {
   const timeoutId = setTimeout(() => {
    const session = this.receivingSessions.get(transferId);
    if (!session || session.status !== "receiving") {
+    return;
+   }
+
+   // 已收齐全部 chunk → 直接组装，不等 END
+   if (session.receivedCount === session.totalChunks) {
+    this.finalizeReceivedFile(session);
     return;
    }
 
@@ -1527,7 +1534,8 @@ export class ServerFileTransfer {
   }
 
   // 清理
-  session.buffer = null; // 帮助 GC
+  session.buffer = null;
+	  session.receivedChunks = [];
   this.receivingSessions.delete(session.transferId);
   this.clearReceiveTimeout(session.transferId);
 
