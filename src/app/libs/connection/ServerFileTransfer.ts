@@ -1427,6 +1427,7 @@ export class ServerFileTransfer {
   if (receivingSession) {
    receivingSession.status = "cancelled";
    receivingSession.buffer = null;
+   receivingSession.receivedChunks = [];
   }
   if (shouldRejectAck) {
    this.completionAcks.reject(
