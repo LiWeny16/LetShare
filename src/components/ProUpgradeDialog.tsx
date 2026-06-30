@@ -12,7 +12,7 @@ import alertUseMUI from '@App/libs/tools/alert';
 import WorkspacePremiumIcon from '@mui/icons-material/WorkspacePremium';
 import VerifiedIcon from '@mui/icons-material/Verified';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
-import { PRO_INVITE_CODE, setProCookie, clearProCookie } from '@App/libs/connection/proUpgrade';
+import { PRO_INVITE_CODE, setProCookie, clearProCookie, getProCookie } from '@App/libs/connection/proUpgrade';
 
 const PRO_EMAIL = 'a454888395@gmail.com';
 
@@ -27,6 +27,14 @@ const ProUpgradeDialog = ({ open, onClose, isPro = false }: Props) => {
   const [inviteCode, setInviteCode] = React.useState('');
   const [inviteError, setInviteError] = React.useState('');
   const [copied, setCopied] = React.useState(false);
+
+  // 已激活时自动从 cookie 读取邀请码填入
+  React.useEffect(() => {
+    if (open && isPro) {
+      const saved = getProCookie();
+      if (saved) setInviteCode(saved);
+    }
+  }, [open, isPro]);
 
   const handleCopyEmail = () => {
     navigator.clipboard.writeText(PRO_EMAIL).then(() => {
