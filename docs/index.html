@@ -265,7 +265,7 @@
   </style>
   <script type="module" crossorigin src="./static/index-HPfWzpoa.js"></script>
   <link rel="modulepreload" crossorigin href="./static/modulepreload-polyfill-B5Qt9EMX.js">
-  <link rel="modulepreload" crossorigin href="./static/.pnpm-vendor-B9c9p85h.js">
+  <link rel="modulepreload" crossorigin href="./static/pnpm-vendor-B9c9p85h.js">
   <link rel="stylesheet" crossorigin href="./static-g6cDhx4N.index.css">
 <link rel="manifest" href="./manifest.webmanifest"></head>
 
@@ -287,7 +287,7 @@
     </main>
   </noscript>
 
-  <!-- 加载骨架屏 -->
+  <!-- 加载骨架�?-->
   <div id="app-loading">
     <div class="loading-card">
       <img src="./icons/startup-logo-192.png" alt="LetShare" width="96" height="96" decoding="async">
@@ -375,7 +375,7 @@
     }
   </script>
 
-  <!-- 兜底机制：监听 React 挂载 / 超时降级 -->
+  <!-- 兜底机制：监�?React 挂载 / 超时降级 -->
   <script>
     (function() {
       var LOADING = document.getElementById('app-loading');
@@ -400,7 +400,7 @@
         }, delay);
       }
 
-      // 超时检测：8 秒后仍未挂载 → 显示错误
+      // 超时检测：8 秒后仍未挂载 �?显示错误
       var timeout = setTimeout(function() {
         if (ROOT && ROOT.children.length === 0) {
           if (LOADING) LOADING.classList.add('hide');
@@ -408,7 +408,7 @@
         }
       }, 8000);
 
-      // 监听 React 挂载成功 → 隐藏骨架屏
+      // 监听 React 挂载成功 �?隐藏骨架�?
       var observer = new MutationObserver(function() {
         if (ROOT.children.length > 0) {
           hideLoading();
