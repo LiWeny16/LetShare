@@ -609,7 +609,7 @@ export function getSafeReceiveSizeLimit(deviceType: DeviceType): number {
   return 200 * 1024 * 1024;
  }
 
- return 500 * 1024 * 1024;
+ return 3 * 1024 * 1024 * 1024;
 }
 
 export function normalizeTransferMetadata(

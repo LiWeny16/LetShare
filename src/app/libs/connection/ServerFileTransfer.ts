@@ -94,9 +94,10 @@ interface ReceiveSession {
  fileType: string;
  totalChunks: number;
  chunkSize: number;
- /** 预分配缓冲区 — 直接写入对应位置, 避免 Map 碎片和多次拷贝。接受前为 null, 避免 OOM */
+ /** 预分配缓冲区（小文件兼容） — 接受前为 null */
  buffer: Uint8Array | null;
-	receivedChunks: (ArrayBuffer | Uint8Array)[];
+ /** 分块收集 — 避免大文件 OOM，最后用 Blob 组装 */
+ receivedChunks: (ArrayBuffer | Uint8Array)[];
  receivedCount: number;
  receivedChunkIndexes: Set<number>;
  resendAttempts: number;
@@ -129,7 +130,7 @@ export class ServerFileTransfer {
  private completedTransferIds = new Set<string>(); // 已完成传输的 ID — 用于抑制传输完成后的迟到 error/end 消息
  private readonly DEFAULT_CHUNK_SIZE = 64 * 1024; // 64KB
  private readonly BASIC_SIZE_LIMIT = 50 * 1024 * 1024; // 50MB
- /** 对齐 3GB 上限, 防止恶意/超大 file_size 撑爆标签页 */
+ /** 对齐 3GB 上限 */
  private readonly MAX_FILE_SIZE = 3 * 1024 * 1024 * 1024; // 3GB
  private readonly RESEND_CHUNK_LIMIT = 256;
  private readonly MAX_RESEND_ATTEMPTS = 3;
@@ -388,8 +389,9 @@ export class ServerFileTransfer {
    return;
   }
 
-  if (!session.buffer) {
-   console.warn(`[ServerFileTransfer]    this.failReceiveSession(session, t('alert.bufferNotAvailable'));
+  if (!session.buffer && (!session.receivedChunks || session.receivedChunks.length === 0)) {
+   console.warn(`[ServerFileTransfer] 无可用写入目标 (transfer=${session.transferId})`);
+   this.failReceiveSession(session, t('alert.bufferNotAvailable'));
    return;
   }
 
@@ -401,13 +403,8 @@ export class ServerFileTransfer {
   const bytes = data instanceof ArrayBuffer
    ? new Uint8Array(data)
    : new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
-  const offset = chunkIndex * session.chunkSize;
-  if (offset + bytes.byteLength > session.buffer.byteLength) {
-      this.failReceiveSession(session, t('alert.chunkOutOfBounds')); // unreachable — chunks mode, no buffer overflow
-   return;
-  }
   const expectedSize = chunkIndex === session.totalChunks - 1
-   ? session.fileSize - offset
+   ? session.fileSize - (chunkIndex * session.chunkSize)
    : session.chunkSize;
   if (bytes.byteLength !== expectedSize) {
    console.error(`[ServerFileTransfer] Chunk size mismatch! chunk ${chunkIndex} expected=${expectedSize} actual=${bytes.byteLength}`);
@@ -415,7 +412,18 @@ export class ServerFileTransfer {
    return;
   }
 
-  session.receivedChunks.push(bytes.slice());
+  // 双模式写入：优先 buffer（快），降级到 chunks（省内存）
+  if (session.buffer) {
+   const offset = chunkIndex * session.chunkSize;
+   if (offset + bytes.byteLength > session.buffer.byteLength) {
+    console.error(`[ServerFileTransfer] Buffer overflow!`);
+    this.failReceiveSession(session, t('alert.chunkOutOfBounds'));
+    return;
+   }
+   session.buffer.set(bytes, offset);
+  } else {
+   session.receivedChunks.push(bytes.slice().buffer as ArrayBuffer);
+  }
   session.receivedChunkIndexes.add(chunkIndex);
   session.receivedCount++;
   session.resendAttempts = 0;
@@ -930,7 +938,7 @@ export class ServerFileTransfer {
    totalChunks: normalizedMeta.totalChunks,
    chunkSize: normalizedMeta.chunkSize,
    buffer: null,
-	   receivedChunks: [],
+   receivedChunks: [],
    receivedCount: 0,
    receivedChunkIndexes: new Set<number>(),
    resendAttempts: 0,
@@ -991,11 +999,28 @@ export class ServerFileTransfer {
    return;
   }
 
-  // 分块收集模式: 不做内存预分配, 改用 Blob chunks 增量收集
-  session.buffer = null;
+  // 混合策略: ≤100MB 用缓冲区(快), >100MB 用分块收集(省内存)
+  const CHUNK_MODE_THRESHOLD = 100 * 1024 * 1024; // 100MB
+  if (session.fileSize <= CHUNK_MODE_THRESHOLD) {
+   try {
+    session.buffer = new Uint8Array(session.fileSize);
+   } catch (e) {
+    if (e instanceof RangeError) {
+     // 小文件分配失败，降级到 chunks 模式
+     console.warn(`[ServerFileTransfer] buffer 分配失败，降级到 chunks 模式 (${(session.fileSize / 1024 / 1024).toFixed(1)} MB)`);
+     session.buffer = null;
    session.receivedChunks = [];
-  session.receivedChunks = [];
-	  session.status = "receiving";
+    } else {
+     throw e;
+    }
+   }
+  }
+  // 大文件或降级：用 receivedChunks 数组增量收集
+  if (!session.buffer) {
+   session.receivedChunks = [];
+  }
+
+  session.status = "receiving";
   this.refreshReceiveTimeout(transferId);
 
   // 显示下载界面
@@ -1399,7 +1424,6 @@ export class ServerFileTransfer {
   if (receivingSession) {
    receivingSession.status = "cancelled";
    receivingSession.buffer = null;
-	   receivingSession.receivedChunks = [];
   }
   if (shouldRejectAck) {
    this.completionAcks.reject(
@@ -1467,17 +1491,18 @@ export class ServerFileTransfer {
   let completed = false;
 
   try {
-   // 优先使用分块收集 (receivedChunks), 降级到旧 buffer
    let file: File;
    if (session.receivedChunks && session.receivedChunks.length > 0) {
-    const blob = new Blob(session.receivedChunks as BlobPart[], { type: session.fileType || 'application/octet-stream' });
-    file = new File([blob], session.fileName, { type: session.fileType || 'application/octet-stream', lastModified: Date.now() });
+    // 大文件 chunks 模式：Blob 组装
+    const blob = new Blob(session.receivedChunks as BlobPart[], { type: session.fileType || "application/octet-stream" });
+    file = new File([blob], session.fileName, { type: session.fileType || "application/octet-stream", lastModified: Date.now() });
    } else if (session.buffer) {
+    // 小文件 buffer 模式：直接创建 File
     file = createCompletedTransferFile({
      bytes: session.buffer,
      fileName: session.fileName,
      fileType: session.fileType,
-     createFile: (parts, fileName, options) => new File(parts, fileName, options),
+     createFile: (parts: BlobPart[], fileName: string, options?: FilePropertyBag) => new File(parts, fileName, options),
     });
    } else {
     throw new Error("无数据可组装文件");
@@ -1502,8 +1527,7 @@ export class ServerFileTransfer {
   }
 
   // 清理
-  session.buffer = null;
-   session.receivedChunks = []; // 帮助 GC
+  session.buffer = null; // 帮助 GC
   this.receivingSessions.delete(session.transferId);
   this.clearReceiveTimeout(session.transferId);
 
