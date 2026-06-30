@@ -325,14 +325,37 @@ export class RealTimeColab {
    });
 
    // 设置管理员密码请求回调(超过50MB时触发)
+   // 正确密码会缓存到 cookie，有效期 30 天
+   const COOKIE_KEY = "letshare_admin_pass";
+   const getCookie = (name: string): string | null => {
+    const match = document.cookie.match(new RegExp(`(?:^|; )${name.replace(/([.$?*|{}()\[\]\\\/+^])/g, "\\$1")}=([^;]*)`));
+    return match ? decodeURIComponent(match[1]) : null;
+   };
+   const setCookie = (name: string, value: string, days: number) => {
+    const d = new Date();
+    d.setTime(d.getTime() + days * 86400000);
+    document.cookie = `${name}=${encodeURIComponent(value)};expires=${d.toUTCString()};path=/;SameSite=Lax`;
+   };
+   // 暴露清除方法给外部使用
+   (this as any)._clearCachedAdminPassword = () => {
+    document.cookie = `${COOKIE_KEY}=;expires=Thu,01 Jan 1970 00:00:00 GMT;path=/;SameSite=Lax`;
+   };
+
    this.serverFileTransfer.setAdminPasswordRequestCallback(async (fileSize) => {
-    // 使用 prompt 作为默认实现，UI层可以覆盖
     const sizeMB = (fileSize / (1024 * 1024)).toFixed(2);
+    // 1. 优先从 cookie 读取
+    const cached = getCookie(COOKIE_KEY);
+    if (cached) {
+     console.debug("[ColabLib] 使用 cookie 中缓存的管理员密码");
+     return cached;
+    }
+    // 2. 弹窗输入
     return new Promise((resolve) => {
-     const password = prompt(
-      `文件大小 ${sizeMB} MB 超过50MB限制\n请输入管理员密码:`
-     );
-     resolve(password);
+     const password = prompt(`文件大小 ${sizeMB} MB 超过50MB限制\n请输入管理员密码:`);
+     if (password) {
+      setCookie(COOKIE_KEY, password, 30);
+     }
+     resolve(password || null);
     });
    });
 
@@ -2590,7 +2613,14 @@ export class RealTimeColab {
    this.sentFiles.set(`${id}::${file.name}::${Date.now()}`, { name: file.name, size: file.size, toUserId: id, completedAt: Date.now() });
   } catch (error) {
    console.error(" 服务器文件传输失败:", error);
-   alertUseMUI(t('toast.fileTransferFailed'), 3000, { kind: "error" });
+   // 如果密码错误，清除 cookie 缓存，下次传输时重新弹窗
+   const errMsg = error instanceof Error ? error.message : String(error || "");
+   if (errMsg.includes("密码")) {
+    (this as any)._clearCachedAdminPassword?.();
+    alertUseMUI(errMsg, 4000, { kind: "error" });
+   } else {
+    alertUseMUI(t('toast.fileTransferFailed'), 3000, { kind: "error" });
+   }
    this.setFileTransferProgress(null);
   } finally {
    this.isSendingFile = false;
