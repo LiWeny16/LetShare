@@ -534,8 +534,8 @@ export default function DownloadDrawerSlide({
               className="uniformed-scroller"
               sx={{
                 width: "100%",
-                minHeight: drawerExpanded ? "90vh" : 0,
-                maxHeight: drawerExpanded ? "90vh" : 400,
+                minHeight: drawerExpanded ? { xs: "80svh", sm: "90vh" } : 0,
+                maxHeight: drawerExpanded ? { xs: "80svh", sm: "90vh" } : 400,
                 overflowY: "auto",
                 pointerEvents: "auto",
                 backgroundColor: theme.palette.background.paper,
