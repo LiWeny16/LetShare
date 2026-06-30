@@ -498,7 +498,7 @@ export default function DownloadDrawerSlide({
       />
 
       <Slide
-        style={{ userSelect: "none" }}
+        style={{ userSelect: "none", willChange: "transform" }}
         in={open}
         direction="down"
         mountOnEnter
@@ -549,10 +549,6 @@ export default function DownloadDrawerSlide({
                 display: "flex",
                 flexDirection: "column",
                 gap: 2,
-                transition: theme.transitions.create(["min-height", "max-height"], {
-                  duration: 220,
-                  easing: theme.transitions.easing.easeInOut,
-                }),
               }}
             >
             {hasContent && (
