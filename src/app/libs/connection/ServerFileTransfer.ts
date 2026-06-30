@@ -1481,9 +1481,9 @@ export class ServerFileTransfer {
   * 处理传输进度
   */
  private handleTransferProgress(progress: FileTransferProgress) {
-  console.debug(`[ServerFileTransfer] Progress: ${progress.percentage.toFixed(2)}%`);
-  const sendingSession = this.sendingSessions.get(progress.transfer_id);
-  this.onProgressCallback?.(sendingSession ? Math.min(progress.percentage, 99) : progress.percentage);
+  // 忽略服务端进度推送 — 发送端和接收端各自在本地精确计算进度
+  // (sendServerChunk / writeChunkToSession)，避免两套计算打架导致进度条跳动。
+  console.debug(`[ServerFileTransfer] Server progress ignored: ${progress.percentage.toFixed(2)}% (local tracking preferred)`);
  }
 
  /**
