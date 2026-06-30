@@ -27,6 +27,7 @@ export default defineConfig({
               .split("node_modules/")[1]
               .split("/")[0]
               .toString()
+              .replace(/^[.@]/, "") // 去掉 pnpm(.pnpm) 的 dot 前缀 / npm(@scope) 的 @ 前缀
             // 小体积包合并到 common-vendor，减少 modulepreload 请求数
             // ⚠️ scheduler/use-sync-external-store 是 React 内部依赖，不能合并
             const smallLibs = [
