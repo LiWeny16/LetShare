@@ -51,7 +51,7 @@ import { observer } from "mobx-react-lite";
 import settingsStore from "@App/libs/mobx/mobx";
 import { isApp } from "@App/libs/capacitor/user";
 import { Trans, useTranslation } from "react-i18next";
-import { isPro, getProCookie } from "@App/libs/connection/proUpgrade";
+import { getProCookie } from "@App/libs/connection/proUpgrade";
 // import VideoPanel from "@Com/VideoPannel/VideoPannel";
 // import VideoPanel from "@Com/VideoPannel/VideoPannel";
 
@@ -113,11 +113,7 @@ const Share = observer(() => {
   // 发送侧图片预览：懒加载 object URL，选择变化或卸载时 revoke
   const [senderPreviewUrl, setSenderPreviewUrl] = React.useState<string | null>(null);
 
-  // 管理员密码对话框状态
-  const [adminPasswordDialogOpen, setAdminPasswordDialogOpen] = useState(false);
-  const [adminPasswordInput, setAdminPasswordInput] = useState("");
-  const [adminPasswordResolver, setAdminPasswordResolver] = useState<((pass: string | null) => void) | null>(null);
-  const [pendingLargeFileSize, setPendingLargeFileSize] = useState(0);
+
 
   const isPublicNetworkStatus = (status: UserStatus) => (
     status === 'text-only' || status === 'waiting'
@@ -380,8 +376,6 @@ const Share = observer(() => {
           return;
         }
 
-        setDwnloadPageState(true);
-
         const transferPriority = settingsStore.get('transferPriority') as 'p2p' | 'server';
 
         if (transferPriority === 'server') {
@@ -472,19 +466,8 @@ const Share = observer(() => {
     // 设置管理员密码请求回调(使用MUI对话框)
     const sft = realTimeColab.getServerFileTransfer();
     if (sft) {
-      sft.setAdminPasswordRequestCallback(async (fileSize: number) => {
-        // PRO 已激活：自动使用缓存的邀请码，不弹窗
-        if (isPro()) {
-          const code = getProCookie();
-          if (code) return code;
-        }
-        // 非 PRO：弹窗让用户手动输入密码
-        setPendingLargeFileSize(fileSize);
-        setAdminPasswordInput("");
-        return new Promise((resolve) => {
-          setAdminPasswordResolver(() => resolve);
-          setAdminPasswordDialogOpen(true);
-        });
+      sft.setAdminPasswordRequestCallback(async (_fileSize: number) => {
+        return getProCookie();
       });
 
     }
@@ -1123,53 +1106,6 @@ const Share = observer(() => {
         onClose={() => { setDwnloadPageState(false) }}
         open={downloadPageState} progress={fileTransferProgress}
         setProgress={setFileTransferProgress} />
-
-      {/* 管理员密码对话框 */}
-      <Dialog
-        open={adminPasswordDialogOpen}
-        onClose={() => {
-          setAdminPasswordDialogOpen(false);
-          adminPasswordResolver?.(null);
-        }}
-        maxWidth="xs"
-        fullWidth
-      >
-        <DialogTitle>需要管理员密码</DialogTitle>
-        <DialogContent>
-          <DialogContentText sx={{ mb: 2 }}>
-            文件大小 {(pendingLargeFileSize / (1024 * 1024)).toFixed(2)} MB 超过 50MB 限制，
-            请输入管理员密码以继续上传。
-          </DialogContentText>
-          <TextField
-            autoFocus
-            label="管理员密码"
-            type="password"
-            fullWidth
-            value={adminPasswordInput}
-            onChange={(e) => setAdminPasswordInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                setAdminPasswordDialogOpen(false);
-                adminPasswordResolver?.(adminPasswordInput || null);
-              }
-            }}
-          />
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => {
-            setAdminPasswordDialogOpen(false);
-            adminPasswordResolver?.(null);
-          }} color="secondary">
-            取消
-          </Button>
-          <Button onClick={() => {
-            setAdminPasswordDialogOpen(false);
-            adminPasswordResolver?.(adminPasswordInput || null);
-          }} color="primary" variant="contained">
-            确认
-          </Button>
-        </DialogActions>
-      </Dialog>
 
       <AlertPortal />
 
