@@ -56,7 +56,8 @@ const sharedMalayTranslation = {
             clipboardReadUnsupported: "Persekitaran tidak menyokong pembacaan papan klip",
             clipboardReadFailed: "Gagal membaca papan klip, sila semak kebenaran atau tampal secara manual.",
             clipboardWriteUnsupported: "Persekitaran tidak menyokong penulisan papan klip",
-            clipboardWriteFailed: "Penyalinan gagal, sila salin teks secara manual."
+            clipboardWriteFailed: "Penyalinan gagal, sila salin teks secara manual.",
+            serverTransferMode: "Ditukar ke mod pemindahan pelayan"
         },
         // download
         transfer: {
@@ -154,9 +155,9 @@ const sharedMalayTranslation = {
             malformedMessage: "Menerima mesej kawalan tidak sah, pemindahan dihentikan, sila cuba lagi: {{detail}}",
             malformedServerMessage: "Menerima mesej pelayan tidak normal, pemindahan dihentikan, sila cuba lagi: {{detail}}",
             malformedMessageIgnored: "Menerima mesej pelayan tidak normal, diabaikan: {{detail}}",
-            fileTooLarge: "Peranti semasa tidak dapat menerima fail melebihi {{limit}}MB untuk mengelakkan ranap memori",
+            fileTooLarge: "Had saiz fail ialah 3GB setiap fail. Sila pastikan ruang cakera mencukupi",
             cacheLimitExceeded: "Pelayar telah menyimpan {{totalFiles}} fail / {{totalMB}}MB. Had simpanan selamat peranti semasa ialah {{maxFiles}} / {{maxMB}}MB, sila muat turun dan kosongkan fail diterima dahulu.",
-            passwordRequired: "Kata laluan pentadbir diperlukan untuk memindahkan fail melebihi 50MB",
+            passwordRequired: "Keahlian PRO diperlukan untuk memindahkan fail melebihi 50MB. Naik taraf dalam Tetapan",
             capabilityNotSupported: "Sambungan semasa tidak menyokong pemindahan fail pelayan, sila tukar pelayan atau cuba P2P",
             serverCapabilityNotSupported: "Sambungan pelayan semasa tidak menyokong pemindahan fail, sila tukar ke pelayan tersuai atau tunggu P2P",
             serverNotConnected: "Sambungan pelayan tidak tersedia, tidak dapat memindahkan fail, sila sambung semula",
@@ -168,7 +169,7 @@ const sharedMalayTranslation = {
             chunkInvalid: "Menerima cebisan fail tidak sah, sila cuba lagi",
             bufferNotAvailable: "Penimbal penerimaan tidak tersedia, sila cuba lagi",
             transferRequestFailed: "Permintaan pemindahan fail gagal, sila cuba lagi",
-            insufficientMemory: "Memori tidak mencukupi, tidak dapat menerima fail ini, sila cuba fail lebih kecil",
+            insufficientMemory: "Storan peranti tidak mencukupi untuk menerima fail ini",
             fileAssemblyFailed: "Pemasangan fail gagal, sila cuba lagi",
             readTimeout: "Membaca cebisan fail tamat masa, sila cuba lagi",
             unexpectedChunk: "Menerima cebisan bukan milik tugas semasa, pemindahan dihentikan, sila cuba lagi",
@@ -275,7 +276,8 @@ export const resources = {
                 clipboardReadUnsupported: "Clipboard read not supported in this environment",
                 clipboardReadFailed: "Failed to read clipboard, please check permissions or paste manually.",
                 clipboardWriteUnsupported: "Clipboard write not supported in this environment",
-                clipboardWriteFailed: "Copy failed, please copy text manually."
+                clipboardWriteFailed: "Copy failed, please copy text manually.",
+                serverTransferMode: "Switched to server relay mode"
             },
             // Download.tsx
             transfer: {
@@ -379,9 +381,9 @@ export const resources = {
                 malformedMessage: "Received unrecognized control message, transfer stopped, please try again: {{detail}}",
                 malformedServerMessage: "Received abnormal server message, transfer stopped, please try again: {{detail}}",
                 malformedMessageIgnored: "Received abnormal server message, ignored: {{detail}}",
-                fileTooLarge: "Current device cannot receive files over {{limit}}MB to avoid memory crash",
+                fileTooLarge: "File size limit is 3GB per file. Please ensure sufficient disk space",
                 cacheLimitExceeded: "Browser has cached {{totalFiles}} files / {{totalMB}}MB. Device safe cache limit is {{maxFiles}} / {{maxMB}}MB, please download and clear received files first.",
-                passwordRequired: "Admin password required to transfer files over 50MB",
+                passwordRequired: "PRO membership required to transfer files over 50MB. Upgrade in Settings",
                 capabilityNotSupported: "Current connection does not support server file transfer, please switch server or try P2P",
                 serverCapabilityNotSupported: "Current server connection does not support file relay, please switch to custom server or wait for P2P",
                 serverNotConnected: "Server connection unavailable, cannot relay files, please reconnect",
@@ -393,7 +395,7 @@ export const resources = {
                 chunkInvalid: "Received invalid file chunk, please try again",
                 bufferNotAvailable: "Receive buffer not available, please try again",
                 transferRequestFailed: "File transfer request failed, please try again",
-                insufficientMemory: "Insufficient memory, cannot receive this file, please try a smaller file",
+                insufficientMemory: "Insufficient device storage to receive this file",
                 fileAssemblyFailed: "File assembly failed, please try again",
                 readTimeout: "Reading file chunk timed out, please try again",
                 unexpectedChunk: "Received chunk not belonging to current task, transfer stopped, please try again",
@@ -498,7 +500,8 @@ export const resources = {
                 clipboardReadUnsupported: "当前环境不支持读取剪贴板",
                 clipboardReadFailed: "读取剪贴板内容失败，请检查权限或手动粘贴。",
                 clipboardWriteUnsupported: "当前环境不支持复制到剪贴板",
-                clipboardWriteFailed: "复制失败，请手动复制文本。"
+                clipboardWriteFailed: "复制失败，请手动复制文本。",
+                serverTransferMode: "已切换到服务器中转模式"
             },
             // Download
             transfer: {
@@ -603,9 +606,9 @@ export const resources = {
                 malformedMessage: "收到无法识别的控制消息，当前文件传输已停止，请重试：{{detail}}",
                 malformedServerMessage: "收到异常公网传输消息，当前文件传输已停止，请重试：{{detail}}",
                 malformedMessageIgnored: "收到异常公网传输消息，已忽略：{{detail}}",
-                fileTooLarge: "当前设备为避免内存崩溃，单文件接收上限为 {{limit}}MB",
+                fileTooLarge: "当前设备单文件接收上限为 3GB，请确保有足够磁盘空间",
                 cacheLimitExceeded: "当前浏览器已缓存 {{totalFiles}} 个文件 / {{totalMB}}MB。为避免内存崩溃，当前设备安全缓存上限为 {{maxFiles}} 个 / {{maxMB}}MB，请先下载并清空已接收文件后重试。",
-                passwordRequired: "需要管理员密码才能传输超过50MB的文件",
+                passwordRequired: "需要 PRO 会员才能传输超过 50MB 的文件，请在设置中升级",
                 capabilityNotSupported: "当前线路不支持公网文件中转，请切换服务器或重试 P2P",
                 serverCapabilityNotSupported: "当前公网连接不支持文件中转，请切换到自定义服务器或等待 P2P 重连后重试",
                 serverNotConnected: "公网连接不可用，无法中转文件，请重连后重试",
@@ -617,7 +620,7 @@ export const resources = {
                 chunkInvalid: "收到无效的文件分片，请重试",
                 bufferNotAvailable: "接收缓冲区不可用，请重试",
                 transferRequestFailed: "文件传输请求发送失败，请重试",
-                insufficientMemory: "内存不足，无法接收该文件，请换小文件或重试",
+                insufficientMemory: "设备存储空间不足，无法接收该文件",
                 fileAssemblyFailed: "文件组装失败，请重试",
                 readTimeout: "读取文件分片超时，请重试",
                 unexpectedChunk: "收到不属于当前任务的文件分片，已停止当前任务，请重试",
@@ -672,7 +675,14 @@ export const resources = {
             ...sharedMalayTranslation.translation,
             alert: {
                 ...sharedMalayTranslation.translation.alert,
-                p2pOnlyOverseas: "Transfer file memerlukan koneksi peer-to-peer langsung. Kedua pengguna harus online."
+                p2pOnlyOverseas: "Transfer file memerlukan koneksi peer-to-peer langsung. Kedua pengguna harus online.",
+                passwordRequired: "Keanggotaan PRO diperlukan untuk mentransfer file di atas 50MB. Upgrade di Pengaturan",
+                fileTooLarge: "Batas ukuran file adalah 3GB per file. Pastikan ruang disk mencukupi",
+                insufficientMemory: "Penyimpanan perangkat tidak cukup untuk menerima file ini"
+            },
+            toast: {
+                ...sharedMalayTranslation.translation.toast,
+                serverTransferMode: "Beralih ke mode transfer server"
             }
         }
     }

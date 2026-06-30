@@ -17,6 +17,13 @@ import { UserKeyInfo } from "../security/SimpleE2EEncryption";
 import mitt from 'mitt';
 import { ServerFileTransfer } from "./ServerFileTransfer";
 import {
+	isPro,
+	showProUpgradeDialog,
+	getProCookie,
+	clearProCookie,
+	PRO_SIZE_LIMIT,
+} from "./proUpgrade";
+import {
  type ReceiveBufferWriteResult,
  TransferAckTracker,
  TransferReceiveBuffer,
@@ -325,37 +332,13 @@ export class RealTimeColab {
    });
 
    // PRO 会员邀请码回调(超过50MB时触发)
-   // 邀请码缓存在 cookie，有效期 30 天；在设置页面可管理
-   const COOKIE_KEY = "letshare_admin_pass";
-   const getCookie = (name: string): string | null => {
-    const match = document.cookie.match(new RegExp(`(?:^|; )${name.replace(/([.$?*|{}()\[\]\\\/+^])/g, "\\$1")}=([^;]*)`));
-    return match ? decodeURIComponent(match[1]) : null;
-   };
-   const setCookie = (name: string, value: string, days: number) => {
-    const d = new Date();
-    d.setTime(d.getTime() + days * 86400000);
-    document.cookie = `${name}=${encodeURIComponent(value)};expires=${d.toUTCString()};path=/;SameSite=Lax`;
-   };
-   (this as any)._clearCachedAdminPassword = () => {
-    document.cookie = `${COOKIE_KEY}=;expires=Thu,01 Jan 1970 00:00:00 GMT;path=/;SameSite=Lax`;
-   };
-
-   this.serverFileTransfer.setAdminPasswordRequestCallback(async (fileSize) => {
-    const sizeMB = (fileSize / (1024 * 1024)).toFixed(2);
-    const cached = getCookie(COOKIE_KEY);
-    if (cached) {
+   // cookie 管理由 proUpgrade 模块统一处理
+   this.serverFileTransfer.setAdminPasswordRequestCallback(async (_fileSize) => {
+    if (isPro()) {
      console.debug("[ColabLib] PRO 会员邀请码已缓存");
-     return cached;
+     return getProCookie();
     }
-    return new Promise((resolve) => {
-     const code = prompt(
-      `文件大小 ${sizeMB} MB 超过 50MB 限制\n\n请输入 PRO 会员邀请码（可通过设置页面获取）:`
-     );
-     if (code) {
-      setCookie(COOKIE_KEY, code, 30);
-     }
-     resolve(code || null);
-    });
+    return null;
    });
 
    this.serverFileTransfer.setReceivedFileCacheCandidatesCallback(() =>
@@ -2602,6 +2585,14 @@ export class RealTimeColab {
    return;
   }
 
+  // PRO 会员检查：超过 50MB 需要先激活 PRO
+  if (file.size > PRO_SIZE_LIMIT && !isPro()) {
+   const activated = await showProUpgradeDialog();
+   if (!activated || !isPro()) {
+    return;
+   }
+  }
+
   this.setFileSendingTargetUser(id);
   this.isSendingFile = true;
   this.setDownloadPageState(true);
@@ -2615,7 +2606,7 @@ export class RealTimeColab {
    // 如果邀请码无效，清除缓存，下次传输时重新弹窗
    const errMsg = error instanceof Error ? error.message : String(error || "");
    if (errMsg.includes("密码") || errMsg.includes("邀请码")) {
-    (this as any)._clearCachedAdminPassword?.();
+    clearProCookie();
     alertUseMUI(errMsg, 4000, { kind: "error" });
    } else {
     alertUseMUI(t('toast.fileTransferFailed'), 3000, { kind: "error" });
