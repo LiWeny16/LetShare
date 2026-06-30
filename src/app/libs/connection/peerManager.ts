@@ -1,4 +1,4 @@
-import { RealTimeColab } from "@App/libs/connection/colabLib";
+﻿import { RealTimeColab } from "@App/libs/connection/colabLib";
 import alertUseMUI from "../tools/alert";
 import { t } from "i18next";
 import settingsStore from "../mobx/mobx";
@@ -70,10 +70,10 @@ export class PeerManager {
    this.rtc.setupDataChannel(event.channel, id);
   };
   peer.onconnectionstatechange = () => {
-   console.log(`[CONNECT] ${id} 状态:`, peer.connectionState);
+   console.debug(`[CONNECT] ${id} 状态:`, peer.connectionState);
 
    if (peer.connectionState === "connected") {
-    console.log(`[CONNECT] ${id} 连接成功，取消超时`);
+    console.debug(`[CONNECT] ${id} 连接成功，取消超时`);
     const user = this.rtc.userList.get(id);
     if (user) {
      // 标记该用户曾经成功建立过P2P连接
@@ -91,12 +91,12 @@ export class PeerManager {
     
     // 如果用户曾经成功建立过P2P连接，断开时很可能是真的离线了
     if (user?.hadP2PConnection && peer.connectionState === "disconnected") {
-     console.log(`[CONNECT] ${id} had P2P connection before, likely offline, removing user`);
+     console.debug(`[CONNECT] ${id} had P2P connection before, likely offline, removing user`);
      this.rtc.clearCache(id, { clearEncryption: true });
      this.rtc.userList.delete(id);
     } else {
      // 如果从未建立过P2P连接，可能只是连接失败，降级到text-only
-     console.log(`[CONNECT] ${id} P2P failed, switching to text-only mode`);
+     console.debug(`[CONNECT] ${id} P2P failed, switching to text-only mode`);
      this.rtc.clearCache(id);
      if (user) {
       user.status = "text-only";
@@ -122,7 +122,7 @@ export class PeerManager {
   this.rtc.negotiationMap.delete(id);
   this.rtc.lastConnectAttempt.delete(id);
   this.rtc.userList.delete(id);
-  console.log(` 已清除与 ${id} 的连接资源`);
+  console.debug(` 已清除与 ${id} 的连接资源`);
  }
  public isPrivateIP(ip: string) {
   return (

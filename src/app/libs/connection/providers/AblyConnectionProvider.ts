@@ -1,4 +1,4 @@
-import { IConnectionProvider, ConnectionConfig } from "./IConnectionProvider";
+﻿import { IConnectionProvider, ConnectionConfig } from "./IConnectionProvider";
 import { validateRoomName } from "../../tools/tools";
 import settingsStore from "../../mobx/mobx";
 
@@ -65,7 +65,7 @@ export class AblyConnectionProvider implements IConnectionProvider {
       } else {
         const state = this.ably.connection.state;
         if (state === "closed" || state === "disconnected" || state === "suspended") {
-          console.log(`当前连接状态为 ${state}，尝试重新连接 Ably...`);
+          console.debug(`当前连接状态为 ${state}，尝试重新连接 Ably...`);
           this.ably.connection.connect();
           await this.ably.connection.whenState("connected");
         } else if (state === "connecting") {
@@ -153,7 +153,7 @@ export class AblyConnectionProvider implements IConnectionProvider {
 
     if (this.ablyChannel) {
       this.ablyChannel.unsubscribe();
-      console.log(`[A]离开旧房间: ${this.currentRoomId}`);
+      console.debug(`[A]离开旧房间: ${this.currentRoomId}`);
     }
 
     this.ablyChannel = this.ably.channels.get(roomId);

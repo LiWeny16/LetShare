@@ -1,4 +1,4 @@
-import { IConnectionProvider, ConnectionConfig } from "./IConnectionProvider";
+﻿import { IConnectionProvider, ConnectionConfig } from "./IConnectionProvider";
 import { validateRoomName } from "../../tools/tools";
 import settingsStore from "../../mobx/mobx";
 
@@ -45,7 +45,7 @@ export class CustomConnectionProvider implements IConnectionProvider {
 
         this.ws.onopen = async () => {
           clearTimeout(timeout);
-          console.log(" 已连接自定义服务器");
+          console.debug(" 已连接自定义服务器");
           
           // 连接成功后订阅房间
           await this.subscribeToRoom(roomId);
@@ -289,7 +289,6 @@ export class CustomConnectionProvider implements IConnectionProvider {
       
       // 处理文件传输相关消息（检查内层 data.type）
       if (innerData && innerData.type && innerData.type.startsWith("file:transfer:")) {
-        console.log(`[CustomConnectionProvider] 收到文件传输消息: ${innerData.type}`);
         if (this.messageCallback) {
           // 传递内层数据给回调
           this.messageCallback(innerData);
@@ -315,7 +314,6 @@ export class CustomConnectionProvider implements IConnectionProvider {
       
       // 处理顶层的文件传输消息（兼容性）
       if (message.type && message.type.startsWith("file:transfer:")) {
-        console.log(`[CustomConnectionProvider] 收到顶层文件传输消息: ${message.type}`);
         if (this.messageCallback) {
           this.messageCallback(message);
         }
@@ -332,17 +330,6 @@ export class CustomConnectionProvider implements IConnectionProvider {
   }
 
   private handleBinaryMessage(data: ArrayBuffer): void {
-    const byteLength = data.byteLength;
-    console.log(`[CustomConnectionProvider] 收到二进制消息: ${byteLength} 字节`);
-    
-    // 打印前32字节用于调试（如果数据足够长）
-    if (byteLength > 0) {
-      const view = new Uint8Array(data);
-      const preview = view.slice(0, Math.min(32, byteLength));
-      console.log(`[CustomConnectionProvider] 前${preview.length}字节:`, 
-        Array.from(preview).map(b => b.toString(16).padStart(2, '0')).join(' '));
-    }
-    
     if (this.binaryCallback) {
       this.binaryCallback(data);
     } else {

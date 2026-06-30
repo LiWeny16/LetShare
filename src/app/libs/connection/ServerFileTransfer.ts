@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 服务器中转文件传输模块
  * 用于在P2P连接不可用时通过WebSocket服务器转发文件
  */
@@ -119,6 +119,7 @@ export class ServerFileTransfer {
  private receiveTimeouts: Map<string, ReturnType<typeof setTimeout>> = new Map();
  private completionAcks = new TransferAckTracker();
  private unknownBinaryTransferIssueKeys = new Set<string>();
+ private completedTransferIds = new Set<string>(); // 已完成传输的 ID — 用于抑制传输完成后的迟到 error/end 消息
  private readonly DEFAULT_CHUNK_SIZE = 64 * 1024; // 64KB
  private readonly BASIC_SIZE_LIMIT = 50 * 1024 * 1024; // 50MB
  /** 对齐服务端 500MB 上限, 防止恶意/超大 file_size 撑爆标签页 */
@@ -202,7 +203,7 @@ export class ServerFileTransfer {
   * 处理收到的文件传输消息
   */
  public handleFileTransferMessage(type: string, data: any) {
-  console.log(`[ServerFileTransfer] Received message type: ${type}`, data);
+  console.debug(`[ServerFileTransfer] Received message type: ${type}`, data);
 
   const normalizedPayload = normalizeTransferControlPayload(data);
   if (!normalizedPayload.valid) {
@@ -257,7 +258,7 @@ export class ServerFileTransfer {
   * 处理二进制文件块数据 — 直接写入预分配缓冲区, O(1) 无额外拷贝
   */
  public handleBinaryData(data: ArrayBuffer) {
-  console.log(`[ServerFileTransfer] Received binary data: ${data.byteLength} bytes`);
+  console.debug(`[ServerFileTransfer] Received binary data: ${data.byteLength} bytes`);
 
   try {
    const { meta, payload } = decodeTransferFrame(data);
@@ -352,7 +353,7 @@ export class ServerFileTransfer {
   this.onProgressCallback?.(progress);
 
   if (session.receivedCount % 50 === 0 || session.receivedCount === session.totalChunks) {
-   console.log(`[ServerFileTransfer] Chunk ${session.receivedCount}/${session.totalChunks} (${progress.toFixed(1)}%)`);
+   console.debug(`[ServerFileTransfer] Chunk ${session.receivedCount}/${session.totalChunks} (${progress.toFixed(1)}%)`);
   }
 
   if (session.receivedCount === session.totalChunks) {
@@ -370,7 +371,7 @@ export class ServerFileTransfer {
     return;
    }
 
-   if (this.requestMissingServerChunks(session, "接收长时间无进度，请重传缺失分片")) {
+   if (this.requestMissingServerChunks(session, t('alert.serverResendTimeoutReason'))) {
     this.refreshReceiveTimeout(transferId);
     return;
    }
@@ -417,7 +418,7 @@ export class ServerFileTransfer {
    maxChunkIndexesPerRequest: this.RESEND_CHUNK_LIMIT,
    maxResendAttempts: this.MAX_RESEND_ATTEMPTS,
    resendAttemptsUsed: session.resendAttempts,
-  }) ?? "缺失分片重传失败，已停止当前任务，请重试";
+  }) ?? t('alert.resendRecoveryFailed');
  }
 
  private requestMissingServerChunks(session: ReceiveSession, reason: string): boolean {
@@ -448,15 +449,9 @@ export class ServerFileTransfer {
     reason,
     channel: session.roomName,
    }));
-   alertUseMUI(
-    `公网接收长时间无进度，正在请求重传缺失分片（${session.resendAttempts}/${this.MAX_RESEND_ATTEMPTS}）`,
-    4000,
-    { kind: "warning" }
-   );
-   this.setTransferStatus(
-    `公网接收长时间无进度，正在请求重传缺失分片（${session.resendAttempts}/${this.MAX_RESEND_ATTEMPTS}）`,
-    "warning"
-   );
+   const resendMsg = t('alert.serverResendRequestingTimeout', { attempt: session.resendAttempts, max: this.MAX_RESEND_ATTEMPTS });
+   alertUseMUI(resendMsg, 4000, { kind: "warning" });
+   this.setTransferStatus(resendMsg, "warning");
    return true;
   } catch (error) {
    console.warn(`[ServerFileTransfer] 请求缺失分片重传失败:`, error);
@@ -652,7 +647,7 @@ export class ServerFileTransfer {
   const chunkSize = this.DEFAULT_CHUNK_SIZE;
   const totalChunks = Math.max(1, Math.ceil(file.size / chunkSize));
 
-  console.log(`[ServerFileTransfer] Sending file via server:`, {
+  console.debug(`[ServerFileTransfer] Sending file via server:`, {
    transferId,
    fileName: file.name,
    fileSize: file.size,
@@ -669,12 +664,12 @@ export class ServerFileTransfer {
   let adminPass = "";
   if (file.size > this.BASIC_SIZE_LIMIT) {
    const sizeMB = (file.size / (1024 * 1024)).toFixed(2);
-   console.log(`[ServerFileTransfer] 文件大小 ${sizeMB} MB 超过 50MB 限制,需要管理员密码`);
+   console.debug(`[ServerFileTransfer] 文件大小 ${sizeMB} MB 超过 50MB 限制,需要管理员密码`);
 
    if (this.onAdminPasswordRequestCallback) {
     const password = await this.onAdminPasswordRequestCallback(file.size);
     if (!password) {
-     console.log("[ServerFileTransfer] 用户取消了大文件传输");
+     console.debug("[ServerFileTransfer] 用户取消了大文件传输");
      alertUseMUI(t('alert.passwordRequired'), 3000, { kind: "warning" });
      return;
     }
@@ -721,7 +716,7 @@ export class ServerFileTransfer {
    },
   };
 
-  console.log(`[ServerFileTransfer] 发送 REQUEST 消息:`, requestMessage);
+  console.debug(`[ServerFileTransfer] 发送 REQUEST 消息:`, requestMessage);
   try {
    this.connectionManager.send(requestMessage);
   } catch (error) {
@@ -736,7 +731,7 @@ export class ServerFileTransfer {
    return;
   }
   this.scheduleRequestTimeout(transferId);
-  console.log(`[ServerFileTransfer] REQUEST 消息已发送给 ${toUserId}`);
+  console.debug(`[ServerFileTransfer] REQUEST 消息已发送给 ${toUserId}`);
   alertUseMUI(t('toast.waitingForAccept'), 2000, { kind: "info" });
  }
 
@@ -780,7 +775,7 @@ export class ServerFileTransfer {
   * 处理传输请求 — 先校验大小再创建会话, buffer 延迟到 acceptTransfer 分配
   */
  private async handleTransferRequest(request: FileTransferRequest) {
-  console.log(`[ServerFileTransfer] Received transfer request:`, request);
+  console.debug(`[ServerFileTransfer] Received transfer request:`, request);
 
   const normalizedMeta = normalizeTransferMetadata({
    fileName: request.file_name,
@@ -857,11 +852,11 @@ export class ServerFileTransfer {
   const sizeInMB = (request.file_size / (1024 * 1024)).toFixed(2);
   const fromUser = request.from_user_id.split(':')[0];
   
-  console.log(`[ServerFileTransfer] 收到文件传输请求:`);
-  console.log(` - 来自: ${fromUser}`);
-  console.log(` - 文件名: ${request.file_name}`);
-  console.log(` - 大小: ${sizeInMB} MB`);
-  console.log(`[ServerFileTransfer] 自动接受文件传输`);
+  console.debug(`[ServerFileTransfer] 收到文件传输请求:`);
+  console.debug(` - 来自: ${fromUser}`);
+  console.debug(` - 文件名: ${request.file_name}`);
+  console.debug(` - 大小: ${sizeInMB} MB`);
+  console.debug(`[ServerFileTransfer] 自动接受文件传输`);
   console.debug(`[ServerFileTransfer] ${t('alert.autoAcceptFile', { user: fromUser, filename: request.file_name, size: sizeInMB })}`);
   
   // 自动接受
@@ -909,7 +904,7 @@ export class ServerFileTransfer {
   this.onDownloadPageStateChange?.(true);
   this.onProgressCallback?.(0); // 初始化进度条为 0%
 
-  console.log(`[ServerFileTransfer] 准备发送 ACCEPT 消息:`, {
+  console.debug(`[ServerFileTransfer] 准备发送 ACCEPT 消息:`, {
    transferId,
    toUserId,
    roomName: session.roomName,
@@ -926,18 +921,18 @@ export class ServerFileTransfer {
     },
    };
 
-   console.log(`[ServerFileTransfer] 发送 ACCEPT 消息:`, acceptMessage);
+   console.debug(`[ServerFileTransfer] 发送 ACCEPT 消息:`, acceptMessage);
 
    this.connectionManager.send(acceptMessage);
 
-   console.log(`[ServerFileTransfer] ACCEPT 消息已发送: ${transferId}`);
+   console.debug(`[ServerFileTransfer] ACCEPT 消息已发送: ${transferId}`);
   } catch (error) {
    console.error(`[ServerFileTransfer] 发送 ACCEPT 消息失败:`, error);
    this.failReceiveSession(session, t('alert.acceptSendFailed'), FILE_TRANSFER_MESSAGE_TYPES.REJECT);
    return;
   }
 
-  console.log(`[ServerFileTransfer] Accepted transfer: ${transferId}`);
+  console.debug(`[ServerFileTransfer] Accepted transfer: ${transferId}`);
   alertUseMUI(t('toast.receivingFile'), 2000, { kind: "info" });
  }
 
@@ -957,7 +952,7 @@ export class ServerFileTransfer {
    );
   }
 
-  console.log(`[ServerFileTransfer] Rejected transfer: ${transferId}`);
+  console.debug(`[ServerFileTransfer] Rejected transfer: ${transferId}`);
   alertUseMUI(t('toast.transferRejected'), 2000, { kind: "warning" });
  }
 
@@ -974,18 +969,18 @@ export class ServerFileTransfer {
   * 处理传输接受
   */
  private async handleTransferAccept(data: { transfer_id: string }) {
-  console.log(`[ServerFileTransfer] 收到 ACCEPT 消息:`, data);
+  console.debug(`[ServerFileTransfer] 收到 ACCEPT 消息:`, data);
   
   const session = this.sendingSessions.get(data.transfer_id);
   if (!session) {
    console.error(`[ServerFileTransfer] Sending session not found: ${data.transfer_id}`);
-   console.log(`[ServerFileTransfer] 当前发送会话:`, Array.from(this.sendingSessions.keys()));
+   console.debug(`[ServerFileTransfer] 当前发送会话:`, Array.from(this.sendingSessions.keys()));
    return;
   }
 
   this.clearTransferTimeout(data.transfer_id);
   session.status = "accepted";
-  console.log(`[ServerFileTransfer] Transfer accepted: ${data.transfer_id}`);
+  console.debug(`[ServerFileTransfer] Transfer accepted: ${data.transfer_id}`);
   
   // 开始发送文件
   try {
@@ -1041,7 +1036,7 @@ export class ServerFileTransfer {
   // 关闭下载页面
 
   alertUseMUI(`${t('toast.transferRejected')}: ${data.reason || t('alert.unknownReason')}`, 3000, { kind: "warning" });
-  console.log(`[ServerFileTransfer] Transfer rejected: ${transferId}`);
+  console.debug(`[ServerFileTransfer] Transfer rejected: ${transferId}`);
  }
 
  /**
@@ -1099,7 +1094,7 @@ export class ServerFileTransfer {
    this.onProgressCallback?.(progress);
   }
 
-  console.log(`[ServerFileTransfer] Sent chunk ${chunkIndex + 1}/${session.totalChunks}`);
+  console.debug(`[ServerFileTransfer] Sent chunk ${chunkIndex + 1}/${session.totalChunks}`);
   await new Promise(resolve => setTimeout(resolve, 10));
  }
 
@@ -1146,7 +1141,7 @@ export class ServerFileTransfer {
    this.currentSendingTransferId = null;
   }
 
-  console.log(`[ServerFileTransfer] File sending completed and receiver confirmed: ${session.transferId}`);
+  console.debug(`[ServerFileTransfer] File sending completed and receiver confirmed: ${session.transferId}`);
   alertUseMUI(t('toast.fileSent'), 2000, { kind: "success" });
   this.onProgressCallback?.(100);
   this.setTransferStatus(t('alert.serverTransferComplete'), "success");
@@ -1165,7 +1160,7 @@ export class ServerFileTransfer {
   if (!session) return;
 
   session.status = "receiving";
-  console.log(`[ServerFileTransfer] Transfer started: ${data.transfer_id}`);
+  console.debug(`[ServerFileTransfer] Transfer started: ${data.transfer_id}`);
  }
 
  /**
@@ -1179,18 +1174,19 @@ export class ServerFileTransfer {
   }
   // 将元数据里的真实索引暂存, handleBinaryData 会在下一帧读取它
   session.pendingChunkIndex = chunkMeta.chunk_index;
-  console.log(`[ServerFileTransfer] Chunk metadata received: index=${chunkMeta.chunk_index}/${chunkMeta.total_chunks - 1} transfer=${chunkMeta.transfer_id}`);
+  console.debug(`[ServerFileTransfer] Chunk metadata received: index=${chunkMeta.chunk_index}/${chunkMeta.total_chunks - 1} transfer=${chunkMeta.transfer_id}`);
  }
 
  /**
   * 处理传输结束
   */
  private handleTransferEnd(data: { transfer_id: string }) {
+  if (this.completedTransferIds.has(data.transfer_id)) { return; } // 传输已完成，忽略迟到 end
   const receiveSession = this.receivingSessions.get(data.transfer_id);
   if (receiveSession) {
    if (receiveSession.receivedCount !== receiveSession.totalChunks) {
     const missingCount = this.getMissingChunkCount(receiveSession);
-    if (this.requestMissingServerChunks(receiveSession, "发送端已结束但接收端仍缺少分片，请重传")) {
+    if (this.requestMissingServerChunks(receiveSession, t('alert.resendTimeoutReason'))) {
      this.refreshReceiveTimeout(receiveSession.transferId);
      console.warn(`[ServerFileTransfer] Receive ended with missing chunks, requested resend: missing=${missingCount} transfer=${receiveSession.transferId}`);
      return;
@@ -1199,7 +1195,7 @@ export class ServerFileTransfer {
     console.warn(`[ServerFileTransfer] Receive ended with missing chunks: ${receiveSession.receivedCount}/${receiveSession.totalChunks}`);
    } else {
     this.finalizeReceivedFile(receiveSession);
-    console.log(`[ServerFileTransfer] Receive completed: ${data.transfer_id}`);
+    console.debug(`[ServerFileTransfer] Receive completed: ${data.transfer_id}`);
    }
   }
  }
@@ -1209,7 +1205,7 @@ export class ServerFileTransfer {
   */
  private handleTransferComplete(data: { transfer_id: string }) {
   if (this.completionAcks.acknowledge(data.transfer_id)) {
-   console.log(`[ServerFileTransfer] Receiver confirmed completion: ${data.transfer_id}`);
+   console.debug(`[ServerFileTransfer] Receiver confirmed completion: ${data.transfer_id}`);
   }
  }
 
@@ -1255,7 +1251,7 @@ export class ServerFileTransfer {
    }
    // Check if session was completed by startSending during our await
    if ((session.status as string) === "completed" || !this.sendingSessions.has(session.transferId)) {
-    console.log("[ServerFileTransfer] Resend completed — session already finalized");
+    console.debug("[ServerFileTransfer] Resend completed — session already finalized");
     return; // Don't send END, don't update progress, don't throw
    }
    this.ensureSendingSessionActive(session);
@@ -1320,13 +1316,14 @@ export class ServerFileTransfer {
   if (!wasAlreadyComplete) {
    alertUseMUI(`${t('toast.transferCancelled')}: ${data.reason || ''}`, 2000, { kind: "warning" });
   }
-  console.log(`[ServerFileTransfer] Transfer cancelled: ${data.transfer_id}`);
+  console.debug(`[ServerFileTransfer] Transfer cancelled: ${data.transfer_id}`);
  }
 
  /**
   * 处理传输错误
   */
  private handleTransferError(data: { transfer_id: string; error?: string }) {
+  if (this.completedTransferIds.has(data.transfer_id)) { return; } // 传输已完成，忽略迟到 error
   const sendingSession = this.sendingSessions.get(data.transfer_id);
   if (sendingSession && sendingSession.status !== "pending") {
    this.completionAcks.reject(
@@ -1351,7 +1348,7 @@ export class ServerFileTransfer {
   * 处理传输进度
   */
  private handleTransferProgress(progress: FileTransferProgress) {
-  console.log(`[ServerFileTransfer] Progress: ${progress.percentage.toFixed(2)}%`);
+  console.debug(`[ServerFileTransfer] Progress: ${progress.percentage.toFixed(2)}%`);
   const sendingSession = this.sendingSessions.get(progress.transfer_id);
   this.onProgressCallback?.(sendingSession ? Math.min(progress.percentage, 99) : progress.percentage);
  }
@@ -1361,7 +1358,7 @@ export class ServerFileTransfer {
   */
  private finalizeReceivedFile(session: ReceiveSession) {
   const startTime = performance.now();
-  console.log(`[ServerFileTransfer] Finalizing: ${session.fileName} (${(session.fileSize / 1024 / 1024).toFixed(1)}MB)`);
+  console.debug(`[ServerFileTransfer] Finalizing: ${session.fileName} (${(session.fileSize / 1024 / 1024).toFixed(1)}MB)`);
   let completed = false;
 
   try {
@@ -1376,17 +1373,18 @@ export class ServerFileTransfer {
    });
 
    const elapsed = (performance.now() - startTime).toFixed(0);
-   console.log(`[ServerFileTransfer] File ready in ${elapsed}ms: ${file.name} (${file.size} bytes)`);
+   console.debug(`[ServerFileTransfer] File ready in ${elapsed}ms: ${file.name} (${file.size} bytes)`);
 
    this.onFileReceivedCallback?.(file, session.fromUserId);
    this.sendTransferCompleteMessage(session.transferId, session.roomName);
+   this.completedTransferIds.add(session.transferId);
    completed = true;
   } catch (err) {
    console.error(`[ServerFileTransfer] Finalize failed:`, err);
    this.sendTransferControlMessage(
     FILE_TRANSFER_MESSAGE_TYPES.CANCEL,
     session.transferId,
-    "文件组装失败，请重试",
+    t('alert.fileAssemblyFailed'),
     session.roomName
    );
    alertUseMUI(t('toast.fileAssemblyError'), 3000, { kind: "error" });

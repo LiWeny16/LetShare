@@ -93,7 +93,7 @@ const SettingsPage = () => {
       }
     } catch (error) {
       console.error('服务器模式切换失败:', error);
-      alertUseMUI('服务器模式切换失败: ' + (error as Error).message, 2000, { kind: "error" });
+      alertUseMUI(t('settings.advanced.serverMode.switchErrorDetail', { detail: (error as Error).message }), 2000, { kind: "error" });
     }
   };
 

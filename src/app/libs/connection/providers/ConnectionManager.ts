@@ -1,4 +1,4 @@
-import { IConnectionProvider, ConnectionConfig } from "./IConnectionProvider";
+﻿import { IConnectionProvider, ConnectionConfig } from "./IConnectionProvider";
 import { CustomConnectionProvider } from "./CustomConnectionProvider";
 import settingsStore from "../../mobx/mobx";
 import { testIp } from "../../tools/tools";
@@ -132,8 +132,8 @@ export class ConnectionManager implements IConnectionProvider {
     const ipResult = await testIp();
     const isOverseas = this.isOverseasRegion(ipResult);
     settingsStore.updateUnrmb("staticIp", ipResult.ip || "");
-    // console.log(` 检测到IP信息:`, ipResult);
-    // console.log(` 海外地区: ${isOverseas}`);
+    // console.debug(` 检测到IP信息:`, ipResult);
+    // console.debug(` 海外地区: ${isOverseas}`);
     
     // 海外优先使用 Ably，国内优先使用 Custom
     const primaryProvider = isOverseas ? 'ably' : 'custom';
@@ -213,7 +213,7 @@ export class ConnectionManager implements IConnectionProvider {
         }
         
         this.failureCount.set(providerType, 0); // 重置失败计数
-        console.log(` 成功连接到 ${providerType} 提供者`);
+        console.debug(` 成功连接到 ${providerType} 提供者`);
         return true;
       } else {
         // 连接失败，增加失败计数
@@ -250,11 +250,11 @@ export class ConnectionManager implements IConnectionProvider {
                 country?.includes('中国');
     
     if (isChinaMainland) {
-      console.log(" 检测到中国大陆，使用国内服务器");
+      console.debug(" 检测到中国大陆，使用国内服务器");
       return false;
     }
     
-    console.log(` 检测到海外地区 (${countryCode}/${country})，使用海外服务器`);
+    console.debug(` 检测到海外地区 (${countryCode}/${country})，使用海外服务器`);
     return true;
   }
 

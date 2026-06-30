@@ -1,7 +1,9 @@
 import { Clipboard } from '@capacitor/clipboard';
 import alertUseMUI from './tools/alert';
 import { isApp } from './capacitor/user';
+import i18n from './i18n/i18n';
 
+const t = i18n.t;
 
 
 /**
@@ -17,11 +19,11 @@ export async function readClipboard(): Promise<string> {
       const text = await navigator.clipboard.readText();
       return text || '';
     } else {
-      alertUseMUI('当前环境不支持读取剪贴板', 3000, { kind: 'warning' });
+      alertUseMUI(t('toast.clipboardReadUnsupported'), 3000, { kind: 'warning' });
     }
   } catch (err) {
     console.error('读取剪贴板失败: ', err);
-    alertUseMUI('读取剪贴板内容失败，请检查权限或手动粘贴。', 3000, { kind: 'error' });
+    alertUseMUI(t('toast.clipboardReadFailed'), 3000, { kind: 'error' });
   }
 
   return '';
@@ -54,11 +56,11 @@ export async function writeClipboard(text: string): Promise<boolean> {
         return true; // 无法验证但已写入
       }
     } else {
-      alertUseMUI('当前环境不支持复制到剪贴板', 3000, { kind: 'warning' });
+      alertUseMUI(t('toast.clipboardWriteUnsupported'), 3000, { kind: 'warning' });
     }
   } catch (err) {
     console.error('复制失败:', err);
-    alertUseMUI('复制失败，请手动复制文本。', 3000, { kind: 'warning' });
+    alertUseMUI(t('toast.clipboardWriteFailed'), 3000, { kind: 'warning' });
   }
 
   return false;

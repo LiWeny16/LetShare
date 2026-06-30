@@ -1189,7 +1189,8 @@ export function createCompletedTransferFile<TFile>(options: {
   options: FilePropertyBag
  ) => TFile;
 }): TFile {
- return options.createFile([options.bytes], options.fileName, {
+ // TS5.2+ Uint8Array.buffer is ArrayBufferLike, not ArrayBuffer — safe cast since we own the buffer
+ return options.createFile([options.bytes as unknown as BlobPart], options.fileName, {
   type: options.fileType,
  });
 }

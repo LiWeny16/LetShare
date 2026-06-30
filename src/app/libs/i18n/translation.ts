@@ -52,7 +52,11 @@ const sharedMalayTranslation = {
             fileAssemblyError: "Pemasangan fail gagal, sila cuba lagi",
             fileReceived: "Berjaya menerima fail!",
             serverTransferNotAvailable: "Pemindahan pelayan tidak tersedia",
-            notInRoom: "Tidak dalam bilik"
+            notInRoom: "Tidak dalam bilik",
+            clipboardReadUnsupported: "Persekitaran tidak menyokong pembacaan papan klip",
+            clipboardReadFailed: "Gagal membaca papan klip, sila semak kebenaran atau tampal secara manual.",
+            clipboardWriteUnsupported: "Persekitaran tidak menyokong penulisan papan klip",
+            clipboardWriteFailed: "Penyalinan gagal, sila salin teks secara manual."
         },
         // download
         transfer: {
@@ -87,7 +91,8 @@ const sharedMalayTranslation = {
                         global: "Global",
                         china: "China",
                         switchSuccess: "Berjaya beralih ke pelayan {{mode}}",
-                        switchError: "Gagal beralih ke pelayan {{mode}}"
+                        switchError: "Gagal beralih ke pelayan {{mode}}",
+                        switchErrorDetail: "Pertukaran mod pelayan gagal: {{detail}}"
                     },
                 customServerUrl: {
                     label: "URL Pelayan Tersuai",
@@ -266,7 +271,11 @@ export const resources = {
                 fileAssemblyError: "File assembly failed, please try again",
                 fileReceived: "File received successfully!",
                 serverTransferNotAvailable: "Server transfer not available",
-                notInRoom: "Not in room"
+                notInRoom: "Not in room",
+                clipboardReadUnsupported: "Clipboard read not supported in this environment",
+                clipboardReadFailed: "Failed to read clipboard, please check permissions or paste manually.",
+                clipboardWriteUnsupported: "Clipboard write not supported in this environment",
+                clipboardWriteFailed: "Copy failed, please copy text manually."
             },
             // Download.tsx
             transfer: {
@@ -301,7 +310,8 @@ export const resources = {
                         global: "Global",
                         china: "China",
                         switchSuccess: "Successfully switched to {{mode}} server",
-                        switchError: "Failed to switch to {{mode}} server"
+                        switchError: "Failed to switch to {{mode}} server",
+                        switchErrorDetail: "Server mode switch failed: {{detail}}"
                     },
                     customServerUrl: {
                         label: "Custom Server URL",
@@ -484,7 +494,11 @@ export const resources = {
                 fileAssemblyError: "文件组装失败，请重试",
                 fileReceived: "文件接收成功！",
                 serverTransferNotAvailable: "服务器传输不可用",
-                notInRoom: "未加入房间"
+                notInRoom: "未加入房间",
+                clipboardReadUnsupported: "当前环境不支持读取剪贴板",
+                clipboardReadFailed: "读取剪贴板内容失败，请检查权限或手动粘贴。",
+                clipboardWriteUnsupported: "当前环境不支持复制到剪贴板",
+                clipboardWriteFailed: "复制失败，请手动复制文本。"
             },
             // Download
             transfer: {
@@ -520,7 +534,8 @@ export const resources = {
                         global: "海外",
                         china: "中国",
                         switchSuccess: "成功切换到{{mode}}服务器",
-                        switchError: "切换到{{mode}}服务器失败"
+                        switchError: "切换到{{mode}}服务器失败",
+                        switchErrorDetail: "服务器模式切换失败: {{detail}}"
                     },
                     customServerUrl: {
                         label: "自定义服务器URL",
