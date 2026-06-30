@@ -51,6 +51,7 @@ import { observer } from "mobx-react-lite";
 import settingsStore from "@App/libs/mobx/mobx";
 import { isApp } from "@App/libs/capacitor/user";
 import { Trans, useTranslation } from "react-i18next";
+import { isPro, getProCookie } from "@App/libs/connection/proUpgrade";
 // import VideoPanel from "@Com/VideoPannel/VideoPannel";
 // import VideoPanel from "@Com/VideoPannel/VideoPannel";
 
@@ -472,6 +473,12 @@ const Share = observer(() => {
     const sft = realTimeColab.getServerFileTransfer();
     if (sft) {
       sft.setAdminPasswordRequestCallback(async (fileSize: number) => {
+        // PRO 已激活：自动使用缓存的邀请码，不弹窗
+        if (isPro()) {
+          const code = getProCookie();
+          if (code) return code;
+        }
+        // 非 PRO：弹窗让用户手动输入密码
         setPendingLargeFileSize(fileSize);
         setAdminPasswordInput("");
         return new Promise((resolve) => {
