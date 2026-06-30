@@ -34,6 +34,7 @@ import SettingsIcon from '@mui/icons-material/Settings';
 import RestartAltIcon from '@mui/icons-material/RestartAlt';
 import WorkspacePremiumIcon from '@mui/icons-material/WorkspacePremium';
 import VerifiedIcon from '@mui/icons-material/Verified';
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 
 const PRO_COOKIE_KEY = "letshare_admin_pass";
 const PRO_EMAIL = "a454888395@gmail.com";
@@ -62,34 +63,37 @@ const SettingsPage = () => {
   const originalRoomIdRef = React.useRef(settingsStore.get("roomId"));
   // PRO 会员状态：从 cookie 读取
   const [isPro, setIsPro] = React.useState(() => getCookie(PRO_COOKIE_KEY) === PRO_INVITE_CODE);
+  const [upgradeOpen, setUpgradeOpen] = React.useState(false);
   const [inviteCode, setInviteCode] = React.useState("");
   const [inviteError, setInviteError] = React.useState("");
+  const [copied, setCopied] = React.useState(false);
+
+  const handleCopyEmail = () => {
+    navigator.clipboard.writeText(PRO_EMAIL).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  };
 
   const handleActivatePro = () => {
     const code = inviteCode.trim();
-    if (!code) {
-      setInviteError("请输入邀请码");
-      return;
-    }
+    if (!code) { setInviteError("请输入邀请码"); return; }
     if (code === PRO_INVITE_CODE) {
       setCookie(PRO_COOKIE_KEY, code, 30);
       setIsPro(true);
-      setInviteCode("");
-      setInviteError("");
-      alertUseMUI("PRO 会员已激活！现在可以传输超过 50MB 的文件", 3000, { kind: "success" });
+      setInviteCode(""); setInviteError("");
+      setUpgradeOpen(false);
+      alertUseMUI("PRO 已激活！50MB+ 服务器中转已解锁", 3000, { kind: "success" });
     } else {
       setInviteError("邀请码无效");
-      setIsPro(false);
-      clearCookie(PRO_COOKIE_KEY);
+      setIsPro(false); clearCookie(PRO_COOKIE_KEY);
     }
   };
 
   const handleDeactivatePro = () => {
     clearCookie(PRO_COOKIE_KEY);
-    setIsPro(false);
-    setInviteCode("");
-    setInviteError("");
-    alertUseMUI("PRO 会员已取消", 2000, { kind: "info" });
+    setIsPro(false); setInviteCode(""); setInviteError("");
+    alertUseMUI("PRO 已取消", 2000, { kind: "info" });
   };
 
   const handleChangeRoomId = (key: SettingsKey, value: any) => {
@@ -211,6 +215,7 @@ const SettingsPage = () => {
   }, []);
 
   return (
+    <>
     <Dialog
       onClose={handleClose}
       open={settingsStore.getUnrmb("settingsPageState") ?? false}
@@ -302,67 +307,24 @@ const SettingsPage = () => {
             helperText={!settings.roomId ? t('settings.roomId.required') : t('settings.roomId.helper')}
           />
 
-          {/* PRO 会员等级 */}
-          <Box sx={{
-            display: 'flex', alignItems: 'center', gap: 1.5, px: 0.5,
-            py: 1.5, borderRadius: 2,
-            bgcolor: isPro ? 'rgba(76,175,80,0.08)' : 'rgba(158,158,158,0.06)',
-            border: '1px solid',
-            borderColor: isPro ? 'rgba(76,175,80,0.25)' : 'divider',
-          }}>
+          {/* PRO 会员等级 — 紧凑单行 */}
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 0.5 }}>
             {isPro
-              ? <VerifiedIcon sx={{ color: 'success.main', fontSize: 28 }} />
-              : <WorkspacePremiumIcon sx={{ color: 'text.disabled', fontSize: 28 }} />
+              ? <VerifiedIcon sx={{ color: 'success.main', fontSize: 22, flexShrink: 0 }} />
+              : <WorkspacePremiumIcon sx={{ color: 'text.secondary', fontSize: 22, flexShrink: 0 }} />
             }
-            <Box sx={{ flex: 1 }}>
-              <Typography variant="body2" fontWeight={600}>
-                {isPro ? 'PRO 会员' : 'Free'}
-              </Typography>
-              <Typography variant="caption" color="text.secondary">
-                {isPro
-                  ? '已解锁 50MB+ 大文件服务器中转传输'
-                  : '大文件传输仅限 P2P · 升级 PRO 解锁服务器中转'
-                }
-              </Typography>
-            </Box>
-            {!isPro && (
-              <Button size="small" variant="outlined" color="primary"
-                onClick={() => window.open(`mailto:${PRO_EMAIL}?subject=LetShare%20PRO%20升级`, '_blank')}
-                sx={{ whiteSpace: 'nowrap', flexShrink: 0, borderRadius: 2, textTransform: 'none' }}
-              >
-                联系升级
-              </Button>
-            )}
-          </Box>
-
-          {/* 邀请码输入（激活 PRO） */}
-          <Box sx={{ display: 'flex', gap: 1, alignItems: 'flex-start' }}>
-            <TextField
-              size="small"
-              label={isPro ? '已激活 · 输入新码替换' : '邀请码'}
-              fullWidth
-              variant="outlined"
-              value={inviteCode}
-              onChange={(e) => { setInviteCode(e.target.value); setInviteError(''); }}
-              error={!!inviteError}
-              helperText={inviteError || (isPro ? '' : `联系 ${PRO_EMAIL} 获取邀请码`)}
-              onKeyDown={(e) => { if (e.key === 'Enter') handleActivatePro(); }}
-              sx={{ flex: 1 }}
-            />
+            <Typography variant="body2" fontWeight={600} sx={{ flex: 1, lineHeight: 1 }}>
+              {isPro ? 'PRO 会员' : 'Free'}
+            </Typography>
             {isPro ? (
-              <Button size="small" variant="outlined" color="warning"
-                onClick={handleDeactivatePro}
-                sx={{ mt: 0.5, whiteSpace: 'nowrap', borderRadius: 2, textTransform: 'none' }}
-              >
-                取消 PRO
+              <Button size="small" variant="text" color="warning" onClick={handleDeactivatePro}
+                sx={{ minWidth: 0, px: 1, textTransform: 'none', fontSize: '0.75rem' }}>
+                取消
               </Button>
             ) : (
-              <Button size="small" variant="contained" color="primary"
-                onClick={handleActivatePro}
-                disabled={!inviteCode.trim()}
-                sx={{ mt: 0.5, whiteSpace: 'nowrap', borderRadius: 2, textTransform: 'none' }}
-              >
-                激活
+              <Button size="small" variant="contained" color="primary" onClick={() => setUpgradeOpen(true)}
+                sx={{ minWidth: 0, px: 2, textTransform: 'none', borderRadius: 2, fontSize: '0.75rem', py: 0.4 }}>
+                升级
               </Button>
             )}
           </Box>
@@ -455,6 +417,70 @@ const SettingsPage = () => {
         </Box>
       </Box>
     </Dialog>
+
+    {/* PRO 升级弹窗 */}
+    <Dialog open={upgradeOpen} onClose={() => setUpgradeOpen(false)} maxWidth="xs" fullWidth>
+      <Box sx={{ p: 3, display: 'flex', flexDirection: 'column', gap: 2.5 }}>
+        <Typography variant="h6" fontWeight={700} textAlign="center">升级 LetShare PRO</Typography>
+
+        {/* Free 方案 */}
+        <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2, p: 2, opacity: 0.7 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+            <WorkspacePremiumIcon sx={{ color: 'text.secondary', fontSize: 24 }} />
+            <Typography fontWeight={600}>Free</Typography>
+            <Box sx={{ flex: 1 }} />
+            <Typography fontWeight={700} fontSize="1.1rem">免费</Typography>
+          </Box>
+          <Typography variant="caption" color="text.secondary">
+            • P2P 直连传输（不限大小）<br/>
+            • 基础文本/消息功能
+          </Typography>
+        </Box>
+
+        {/* PRO 方案 */}
+        <Box sx={{ border: '2px solid', borderColor: 'primary.main', borderRadius: 2, p: 2, bgcolor: 'rgba(25,118,210,0.04)' }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+            <VerifiedIcon sx={{ color: 'primary.main', fontSize: 24 }} />
+            <Typography fontWeight={600} color="primary.main">PRO</Typography>
+            <Box sx={{ flex: 1 }} />
+            <Typography fontWeight={700} fontSize="1.1rem" color="primary.main">¥19.9<span style={{ fontSize: '0.75rem' }}>/年</span></Typography>
+          </Box>
+          <Typography variant="caption" color="text.secondary">
+            • 服务器中转传输（不限大小）<br/>
+            • P2P 直连传输（不限大小）<br/>
+            • 优先技术支持
+          </Typography>
+        </Box>
+
+        {/* 联系方式 */}
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, justifyContent: 'center' }}>
+          <Typography variant="caption" color="text.secondary">购买请联系：</Typography>
+          <Typography variant="caption" fontWeight={500}>{PRO_EMAIL}</Typography>
+          <Tooltip title={copied ? "已复制" : "复制邮箱"} arrow>
+            <IconButton size="small" onClick={handleCopyEmail} sx={{ p: 0.5 }}>
+              <ContentCopyIcon sx={{ fontSize: 16, color: copied ? 'success.main' : 'text.secondary' }} />
+            </IconButton>
+          </Tooltip>
+        </Box>
+
+        {/* 激活码输入 */}
+        <Box sx={{ display: 'flex', gap: 1 }}>
+          <TextField size="small" label="激活码" fullWidth
+            value={inviteCode}
+            onChange={(e) => { setInviteCode(e.target.value); setInviteError(''); }}
+            error={!!inviteError}
+            helperText={inviteError}
+            onKeyDown={(e) => { if (e.key === 'Enter') handleActivatePro(); }}
+          />
+          <Button variant="contained" onClick={handleActivatePro}
+            disabled={!inviteCode.trim()}
+            sx={{ minWidth: 72, whiteSpace: 'nowrap', borderRadius: 2, textTransform: 'none' }}>
+            激活
+          </Button>
+        </Box>
+      </Box>
+    </Dialog>
+    </>
   );
 };
 
