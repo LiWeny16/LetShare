@@ -324,8 +324,8 @@ export class RealTimeColab {
     });
    });
 
-   // 设置管理员密码请求回调(超过50MB时触发)
-   // 正确密码会缓存到 cookie，有效期 30 天
+   // PRO 会员邀请码回调(超过50MB时触发)
+   // 邀请码缓存在 cookie，有效期 30 天；在设置页面可管理
    const COOKIE_KEY = "letshare_admin_pass";
    const getCookie = (name: string): string | null => {
     const match = document.cookie.match(new RegExp(`(?:^|; )${name.replace(/([.$?*|{}()\[\]\\\/+^])/g, "\\$1")}=([^;]*)`));
@@ -336,26 +336,25 @@ export class RealTimeColab {
     d.setTime(d.getTime() + days * 86400000);
     document.cookie = `${name}=${encodeURIComponent(value)};expires=${d.toUTCString()};path=/;SameSite=Lax`;
    };
-   // 暴露清除方法给外部使用
    (this as any)._clearCachedAdminPassword = () => {
     document.cookie = `${COOKIE_KEY}=;expires=Thu,01 Jan 1970 00:00:00 GMT;path=/;SameSite=Lax`;
    };
 
    this.serverFileTransfer.setAdminPasswordRequestCallback(async (fileSize) => {
     const sizeMB = (fileSize / (1024 * 1024)).toFixed(2);
-    // 1. 优先从 cookie 读取
     const cached = getCookie(COOKIE_KEY);
     if (cached) {
-     console.debug("[ColabLib] 使用 cookie 中缓存的管理员密码");
+     console.debug("[ColabLib] PRO 会员邀请码已缓存");
      return cached;
     }
-    // 2. 弹窗输入
     return new Promise((resolve) => {
-     const password = prompt(`文件大小 ${sizeMB} MB 超过50MB限制\n请输入管理员密码:`);
-     if (password) {
-      setCookie(COOKIE_KEY, password, 30);
+     const code = prompt(
+      `文件大小 ${sizeMB} MB 超过 50MB 限制\n\n请输入 PRO 会员邀请码（可通过设置页面获取）:`
+     );
+     if (code) {
+      setCookie(COOKIE_KEY, code, 30);
      }
-     resolve(password || null);
+     resolve(code || null);
     });
    });
 
@@ -2613,9 +2612,9 @@ export class RealTimeColab {
    this.sentFiles.set(`${id}::${file.name}::${Date.now()}`, { name: file.name, size: file.size, toUserId: id, completedAt: Date.now() });
   } catch (error) {
    console.error(" 服务器文件传输失败:", error);
-   // 如果密码错误，清除 cookie 缓存，下次传输时重新弹窗
+   // 如果邀请码无效，清除缓存，下次传输时重新弹窗
    const errMsg = error instanceof Error ? error.message : String(error || "");
-   if (errMsg.includes("密码")) {
+   if (errMsg.includes("密码") || errMsg.includes("邀请码")) {
     (this as any)._clearCachedAdminPassword?.();
     alertUseMUI(errMsg, 4000, { kind: "error" });
    } else {

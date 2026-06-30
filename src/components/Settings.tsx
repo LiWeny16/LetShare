@@ -32,7 +32,25 @@ import SettingsIcon from '@mui/icons-material/Settings';
 // import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 // import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import RestartAltIcon from '@mui/icons-material/RestartAlt';
+import WorkspacePremiumIcon from '@mui/icons-material/WorkspacePremium';
+import VerifiedIcon from '@mui/icons-material/Verified';
 
+const PRO_COOKIE_KEY = "letshare_admin_pass";
+const PRO_EMAIL = "a454888395@gmail.com";
+const PRO_INVITE_CODE = "bigonion";
+
+function getCookie(name: string): string | null {
+  const match = document.cookie.match(new RegExp(`(?:^|; )${name.replace(/([.$?*|{}()\[\]\\\/+^])/g, "\\$1")}=([^;]*)`));
+  return match ? decodeURIComponent(match[1]) : null;
+}
+function setCookie(name: string, value: string, days: number) {
+  const d = new Date();
+  d.setTime(d.getTime() + days * 86400000);
+  document.cookie = `${name}=${encodeURIComponent(value)};expires=${d.toUTCString()};path=/;SameSite=Lax`;
+}
+function clearCookie(name: string) {
+  document.cookie = `${name}=;expires=Thu,01 Jan 1970 00:00:00 GMT;path=/;SameSite=Lax`;
+}
 
 const SettingsPage = () => {
   const { t } = useTranslation();
@@ -42,6 +60,37 @@ const SettingsPage = () => {
   const languageLabel = t('settings.languageLabel');
   // 初始值只记录一次（建议放在 useEffect 或 useRef）
   const originalRoomIdRef = React.useRef(settingsStore.get("roomId"));
+  // PRO 会员状态：从 cookie 读取
+  const [isPro, setIsPro] = React.useState(() => getCookie(PRO_COOKIE_KEY) === PRO_INVITE_CODE);
+  const [inviteCode, setInviteCode] = React.useState("");
+  const [inviteError, setInviteError] = React.useState("");
+
+  const handleActivatePro = () => {
+    const code = inviteCode.trim();
+    if (!code) {
+      setInviteError("请输入邀请码");
+      return;
+    }
+    if (code === PRO_INVITE_CODE) {
+      setCookie(PRO_COOKIE_KEY, code, 30);
+      setIsPro(true);
+      setInviteCode("");
+      setInviteError("");
+      alertUseMUI("PRO 会员已激活！现在可以传输超过 50MB 的文件", 3000, { kind: "success" });
+    } else {
+      setInviteError("邀请码无效");
+      setIsPro(false);
+      clearCookie(PRO_COOKIE_KEY);
+    }
+  };
+
+  const handleDeactivatePro = () => {
+    clearCookie(PRO_COOKIE_KEY);
+    setIsPro(false);
+    setInviteCode("");
+    setInviteError("");
+    alertUseMUI("PRO 会员已取消", 2000, { kind: "info" });
+  };
 
   const handleChangeRoomId = (key: SettingsKey, value: any) => {
     settingsStore.update(key, value);
@@ -252,6 +301,71 @@ const SettingsPage = () => {
             inputProps={{ maxLength: 12 }}
             helperText={!settings.roomId ? t('settings.roomId.required') : t('settings.roomId.helper')}
           />
+
+          {/* PRO 会员等级 */}
+          <Box sx={{
+            display: 'flex', alignItems: 'center', gap: 1.5, px: 0.5,
+            py: 1.5, borderRadius: 2,
+            bgcolor: isPro ? 'rgba(76,175,80,0.08)' : 'rgba(158,158,158,0.06)',
+            border: '1px solid',
+            borderColor: isPro ? 'rgba(76,175,80,0.25)' : 'divider',
+          }}>
+            {isPro
+              ? <VerifiedIcon sx={{ color: 'success.main', fontSize: 28 }} />
+              : <WorkspacePremiumIcon sx={{ color: 'text.disabled', fontSize: 28 }} />
+            }
+            <Box sx={{ flex: 1 }}>
+              <Typography variant="body2" fontWeight={600}>
+                {isPro ? 'PRO 会员' : 'Free'}
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                {isPro
+                  ? '已解锁 50MB+ 大文件服务器中转传输'
+                  : '大文件传输仅限 P2P · 升级 PRO 解锁服务器中转'
+                }
+              </Typography>
+            </Box>
+            {!isPro && (
+              <Button size="small" variant="outlined" color="primary"
+                onClick={() => window.open(`mailto:${PRO_EMAIL}?subject=LetShare%20PRO%20升级`, '_blank')}
+                sx={{ whiteSpace: 'nowrap', flexShrink: 0, borderRadius: 2, textTransform: 'none' }}
+              >
+                联系升级
+              </Button>
+            )}
+          </Box>
+
+          {/* 邀请码输入（激活 PRO） */}
+          <Box sx={{ display: 'flex', gap: 1, alignItems: 'flex-start' }}>
+            <TextField
+              size="small"
+              label={isPro ? '已激活 · 输入新码替换' : '邀请码'}
+              fullWidth
+              variant="outlined"
+              value={inviteCode}
+              onChange={(e) => { setInviteCode(e.target.value); setInviteError(''); }}
+              error={!!inviteError}
+              helperText={inviteError || (isPro ? '' : `联系 ${PRO_EMAIL} 获取邀请码`)}
+              onKeyDown={(e) => { if (e.key === 'Enter') handleActivatePro(); }}
+              sx={{ flex: 1 }}
+            />
+            {isPro ? (
+              <Button size="small" variant="outlined" color="warning"
+                onClick={handleDeactivatePro}
+                sx={{ mt: 0.5, whiteSpace: 'nowrap', borderRadius: 2, textTransform: 'none' }}
+              >
+                取消 PRO
+              </Button>
+            ) : (
+              <Button size="small" variant="contained" color="primary"
+                onClick={handleActivatePro}
+                disabled={!inviteCode.trim()}
+                sx={{ mt: 0.5, whiteSpace: 'nowrap', borderRadius: 2, textTransform: 'none' }}
+              >
+                激活
+              </Button>
+            )}
+          </Box>
 
           {/* 高级设置展开区域 */}
           <Collapse in={advancedOpen} timeout={300}>
