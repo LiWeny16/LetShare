@@ -630,14 +630,7 @@ export class ServerFileTransfer {
   data: unknown,
   error: unknown
  ): void {
-  // 抑制重连期间的重复畸形消息告警（移动端网络切换/后台恢复时常见）
   const now = Date.now();
-  if (now - this.lastMalformedAlertTime < 3000) {
-   console.warn('[ServerFileTransfer] Suppressing duplicate malformed message alert');
-   return;
-  }
-  this.lastMalformedAlertTime = now;
-
   const errorDetail = error instanceof Error ? error.message : String(error);
   const transferId =
    typeof data === "object" &&
@@ -653,34 +646,35 @@ export class ServerFileTransfer {
   if (!transferId) {
    // 不要因为单条畸形消息就杀死所有传输会话 — 移动端网络切换/后台恢复
    // 导致的迟到或无头消息是正常现象，静默丢弃即可
-   console.warn(`[ServerFileTransfer] Malformed message without transferId ignored: ${type}`, data);
    return;
   }
 
-  // Fix 4: 静默忽略已完成传输的迟到/失效消息, 避免移动端重连后误报错误
+  // 静默忽略已完成传输的迟到/失效消息, 避免移动端重连后误报错误
   if (this.completedTransferIds.has(transferId)) {
-   console.warn(`[ServerFileTransfer] Ignoring message for already-completed transfer: ${transferId}`);
    return;
   }
 
-  // Fix 1: 重连宽限期内, 未匹配到活跃会话的转输消息静默忽略
+  // 重连宽限期内, 未匹配到活跃会话的转输消息静默忽略
   // 移动端网络切换/后台恢复时, 服务器可能在断开期间已清理会话
   const withinReconnectGrace = (now - this.lastDisconnectTime) < this.reconnectGraceMs;
   const receivingSession = this.receivingSessions.get(transferId);
   const sendingSession = this.sendingSessions.get(transferId);
 
   if (!receivingSession && !sendingSession) {
-   if (withinReconnectGrace) {
-    console.warn(`[ServerFileTransfer] Ignoring stale message for untracked transfer (within reconnect grace): ${transferId}`);
+   if (!withinReconnectGrace) {
+    console.debug(`[ServerFileTransfer] No session for transfer: ${transferId} (type: ${type})`);
    }
    return;
   }
 
+  // ⚠️ 会话清理逻辑必须在防抖之前执行 — 否则 3s 窗口内的第二条消息会跳过清理
   if (receivingSession) {
    this.failReceiveSession(receivingSession, reason);
   }
 
   if (!sendingSession) {
+   // 防抖：仅抑制用户可见的告警，不抑制会话清理
+   this.throttleAlert(reason);
    return;
   }
 
@@ -704,6 +698,15 @@ export class ServerFileTransfer {
    sendingSession.roomName
   );
 
+ }
+
+ /** 防抖告警：3秒内同类型错误只弹一次，避免移动端重连风暴刷屏 */
+ private throttleAlert(reason: string): void {
+  const now = Date.now();
+  if (now - this.lastMalformedAlertTime < 3000) return;
+  this.lastMalformedAlertTime = now;
+  this.setTransferStatus(reason, "error");
+  alertUseMUI(reason, 4000, { kind: "error" });
  }
 
  public handleConnectionLost(reason: string): void {
