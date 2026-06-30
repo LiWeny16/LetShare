@@ -308,6 +308,24 @@ const SettingsPage = () => {
                 </RadioGroup>
               </FormControl>
 
+              {/* 传输优先级选择 */}
+              <FormControl>
+                <FormLabel id="transfer-priority-label">{t('settings.transferPriority.label')}</FormLabel>
+                <RadioGroup
+                  row
+                  aria-labelledby="transfer-priority-label"
+                  name="transfer-priority"
+                  value={settingsStore.get('transferPriority')}
+                  onChange={(e) => settingsStore.update('transferPriority', e.target.value as 'p2p' | 'server')}
+                >
+                  <FormControlLabel value="p2p" control={<Radio />} label={t('settings.transferPriority.p2p')} />
+                  <FormControlLabel value="server" control={<Radio />} label={t('settings.transferPriority.server')} />
+                </RadioGroup>
+                <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5 }}>
+                  {t('settings.transferPriority.helper')}
+                </Typography>
+              </FormControl>
+
               {/* 自定义服务器URL */}
               <TextField
                 label={t('settings.advanced.customServerUrl.label')}

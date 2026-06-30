@@ -11,6 +11,7 @@ const DEFAULT_SETTINGS = {
   customServerUrl: "wss://ecs.letshare.fun/",
   authToken: "98d9a399675116e5256e9082c192bc06eb6434937af99f201252e9424c7a5652",
   ablyKey: "4TtssQ.e9OvDA:wYBGdtWQNgicbeIKNtgeV_s5XEKmfLKD_Gue5XQrWuw",
+  transferPriority: 'p2p' as 'p2p' | 'server',
   version: "3.3.0",
   isNewUser: true
 };
@@ -26,7 +27,7 @@ type UnrmbKey = keyof typeof DEFAULT_UNRMB;
 
 class SettingsStore {
   settings: Record<SettingsKey, any> = { ...DEFAULT_SETTINGS };
-  unrmb: Record<UnrmbKey, any> = { ...DEFAULT_UNRMB }; // � 临时状态
+  unrmb: Record<UnrmbKey, any> = { ...DEFAULT_UNRMB }; // � 临时状态
 
   constructor() {
     makeAutoObservable(this);

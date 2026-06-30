@@ -112,6 +112,12 @@ const sharedMalayTranslation = {
                 },
                 resetAll: "Set Semula Semua Tetapan",
                 resetConfirm: "Adakah anda pasti mahu menetapkan semula semua tetapan? Ini akan memadamkan semua konfigurasi dan memuat semula halaman."
+            },
+            transferPriority: {
+                label: "Keutamaan Pemindahan",
+                p2p: "P2P Dahulu",
+                server: "Rangkaian Awam Dahulu",
+                helper: "P2P lebih pantas tetapi memerlukan kedua-dua peranti boleh dihubungi. Geganti rangkaian awam lebih stabil tetapi lebih perlahan."
             }
         },
         footer: {
@@ -332,6 +338,12 @@ export const resources = {
                     },
                     resetAll: "Reset All Settings",
                     resetConfirm: "Are you sure you want to reset all settings? This will clear all configurations and refresh the page."
+                },
+                transferPriority: {
+                    label: "Transfer Priority",
+                    p2p: "P2P First",
+                    server: "Public Network First",
+                    helper: "P2P is faster but requires both devices to be reachable. Public network relay is more reliable but slower."
                 }
             },
             footer: {
@@ -557,6 +569,12 @@ export const resources = {
                     },
                     resetAll: "重置所有设置",
                     resetConfirm: "确定要重置所有设置吗？这将清除所有配置并刷新页面。"
+                },
+                transferPriority: {
+                    label: "传输优先级",
+                    p2p: "优先 P2P",
+                    server: "优先公网传输",
+                    helper: "P2P 速度更快但要求双方设备可直连。公网中继更稳定但速度较慢。"
                 }
             },
             footer: {

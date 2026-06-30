@@ -6,6 +6,7 @@ import {
   Dialog,
   IconButton,
   Tooltip,
+  Collapse,
 } from '@mui/material';
 import React from 'react';
 import alertUseMUI from '@App/libs/tools/alert';
@@ -27,12 +28,17 @@ const ProUpgradeDialog = ({ open, onClose, isPro = false }: Props) => {
   const [inviteCode, setInviteCode] = React.useState('');
   const [inviteError, setInviteError] = React.useState('');
   const [copied, setCopied] = React.useState(false);
+  const [showActivate, setShowActivate] = React.useState(false);
 
   // 已激活时自动从 cookie 读取邀请码填入
   React.useEffect(() => {
     if (open && isPro) {
       const saved = getProCookie();
       if (saved) setInviteCode(saved);
+    }
+    if (!open) {
+      setShowActivate(false);
+      setInviteError('');
     }
   }, [open, isPro]);
 
@@ -53,12 +59,19 @@ const ProUpgradeDialog = ({ open, onClose, isPro = false }: Props) => {
       setProCookie(code, 30);
       setInviteCode('');
       setInviteError('');
+      setShowActivate(false);
       onClose();
       alertUseMUI('PRO 已激活！50MB+ 服务器中转已解锁', 3000, { kind: 'success' });
     } else {
       setInviteError('邀请码无效');
       clearProCookie();
     }
+  };
+
+  const handleDowngrade = () => {
+    clearProCookie();
+    onClose();
+    alertUseMUI('已降级为 Free 计划', 2000, { kind: 'info' });
   };
 
   return (
@@ -81,7 +94,7 @@ const ProUpgradeDialog = ({ open, onClose, isPro = false }: Props) => {
             fontWeight={700}
             sx={{ letterSpacing: '-0.01em', lineHeight: 1.35 }}
           >
-            升级 LetShare PRO
+            选择计划
           </Typography>
           <Typography
             variant="caption"
@@ -92,16 +105,39 @@ const ProUpgradeDialog = ({ open, onClose, isPro = false }: Props) => {
           </Typography>
         </Box>
 
+        {/* Free 计划 */}
         <Box
           sx={{
             border: '1px solid',
-            borderColor: 'divider',
+            borderColor: isPro ? 'divider' : 'primary.main',
             borderRadius: 2.5,
             p: 2.5,
-            bgcolor: 'grey.100',
-            opacity: 0.8,
+            bgcolor: isPro ? 'grey.100' : 'primary.50',
+            opacity: isPro ? 0.85 : 1,
+            position: 'relative',
+            boxShadow: isPro ? 'none' : '0 0 0 1px inset rgba(25,118,210,0.2)',
           }}
         >
+          {!isPro && (
+            <Box
+              sx={{
+                position: 'absolute',
+                top: -1,
+                right: 20,
+                bgcolor: 'primary.main',
+                color: '#fff',
+                px: 1.5,
+                py: 0.2,
+                borderRadius: '0 0 6px 6px',
+                fontSize: '0.6rem',
+                fontWeight: 800,
+                letterSpacing: '0.08em',
+                lineHeight: 1.8,
+              }}
+            >
+              当前计划
+            </Box>
+          )}
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 1.5 }}>
             <Box
               sx={{
@@ -137,19 +173,34 @@ const ProUpgradeDialog = ({ open, onClose, isPro = false }: Props) => {
               服务器中转（≤50MB）
             </Typography>
           </Box>
+          {isPro && (
+            <Button
+              fullWidth
+              size="small"
+              variant="outlined"
+              color="warning"
+              onClick={handleDowngrade}
+              sx={{ mt: 2, textTransform: 'none', borderRadius: 2, fontSize: '0.75rem' }}
+            >
+              降级为 Free
+            </Button>
+          )}
         </Box>
 
+        {/* PRO 计划 */}
         <Box
           sx={{
             position: 'relative',
             border: '1.5px solid',
-            borderColor: '#d0a44a',
+            borderColor: isPro ? 'success.main' : '#d0a44a',
             borderRadius: 2.5,
             p: 2.5,
-            background:
-              'linear-gradient(145deg, rgba(208,164,74,0.1) 0%, rgba(208,164,74,0.03) 55%, transparent 100%)',
-            boxShadow:
-              '0 1px 3px rgba(0,0,0,0.03), 0 4px 16px rgba(208,164,74,0.08)',
+            background: isPro
+              ? 'linear-gradient(145deg, rgba(46,125,50,0.08) 0%, rgba(46,125,50,0.02) 55%, transparent 100%)'
+              : 'linear-gradient(145deg, rgba(208,164,74,0.1) 0%, rgba(208,164,74,0.03) 55%, transparent 100%)',
+            boxShadow: isPro
+              ? '0 1px 3px rgba(0,0,0,0.03), 0 4px 16px rgba(46,125,50,0.1)'
+              : '0 1px 3px rgba(0,0,0,0.03), 0 4px 16px rgba(208,164,74,0.08)',
           }}
         >
           <Box
@@ -157,7 +208,7 @@ const ProUpgradeDialog = ({ open, onClose, isPro = false }: Props) => {
               position: 'absolute',
               top: -1,
               right: 20,
-              bgcolor: '#c8963e',
+              bgcolor: isPro ? 'success.main' : '#c8963e',
               color: '#fff',
               px: 1.5,
               py: 0.2,
@@ -168,7 +219,7 @@ const ProUpgradeDialog = ({ open, onClose, isPro = false }: Props) => {
               lineHeight: 1.8,
             }}
           >
-            推荐
+            {isPro ? '当前计划' : '推荐'}
           </Box>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 1.5 }}>
             <Box
@@ -176,11 +227,15 @@ const ProUpgradeDialog = ({ open, onClose, isPro = false }: Props) => {
                 width: 38,
                 height: 38,
                 borderRadius: 2,
-                background: 'linear-gradient(135deg, #c8963e 0%, #dab860 100%)',
+                background: isPro
+                  ? 'linear-gradient(135deg, #2e7d32 0%, #43a047 100%)'
+                  : 'linear-gradient(135deg, #c8963e 0%, #dab860 100%)',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                boxShadow: '0 2px 6px rgba(200,150,62,0.28)',
+                boxShadow: isPro
+                  ? '0 2px 6px rgba(46,125,50,0.28)'
+                  : '0 2px 6px rgba(200,150,62,0.28)',
               }}
             >
               <VerifiedIcon sx={{ color: '#fff', fontSize: 21 }} />
@@ -189,7 +244,7 @@ const ProUpgradeDialog = ({ open, onClose, isPro = false }: Props) => {
               <Typography
                 fontWeight={700}
                 fontSize="0.9rem"
-                sx={{ color: '#9b7a1f', lineHeight: 1.3 }}
+                sx={{ color: isPro ? 'success.main' : '#9b7a1f', lineHeight: 1.3 }}
               >
                 PRO
               </Typography>
@@ -202,7 +257,7 @@ const ProUpgradeDialog = ({ open, onClose, isPro = false }: Props) => {
               <Typography
                 fontWeight={700}
                 fontSize="1.15rem"
-                sx={{ color: '#9b7a1f', lineHeight: 1.2 }}
+                sx={{ color: isPro ? 'success.main' : '#9b7a1f', lineHeight: 1.2 }}
               >
                 ¥19.9
               </Typography>
@@ -226,8 +281,37 @@ const ProUpgradeDialog = ({ open, onClose, isPro = false }: Props) => {
               优先技术支持
             </Typography>
           </Box>
+          {!isPro && !showActivate && (
+            <Button
+              fullWidth
+              variant="contained"
+              onClick={() => setShowActivate(true)}
+              sx={{
+                mt: 2,
+                textTransform: 'none',
+                borderRadius: 2,
+                fontWeight: 600,
+                background: 'linear-gradient(135deg, #c8963e 0%, #dab860 100%)',
+                boxShadow: '0 2px 8px rgba(200,150,62,0.3)',
+                '&:hover': {
+                  background: 'linear-gradient(135deg, #b8860e 0%, #c9a840 100%)',
+                  boxShadow: '0 3px 12px rgba(200,150,62,0.4)',
+                },
+              }}
+            >
+              升级到 PRO
+            </Button>
+          )}
+          {isPro && (
+            <Box sx={{ textAlign: 'center', mt: 1.5 }}>
+              <Typography variant="caption" color="success.main" fontWeight={600}>
+                ✓ 已激活
+              </Typography>
+            </Box>
+          )}
         </Box>
 
+        {/* 购买联系 */}
         <Box
           sx={{
             display: 'flex',
@@ -261,58 +345,49 @@ const ProUpgradeDialog = ({ open, onClose, isPro = false }: Props) => {
           </Tooltip>
         </Box>
 
-        {isPro && (
-          <Box sx={{ textAlign: 'center' }}>
-            <Typography variant="caption" color="success.main" fontWeight={600}>✅ PRO 已激活</Typography>
-            <Button fullWidth size="small" variant="outlined" color="warning"
-              onClick={() => { clearProCookie(); onClose(); }}
-              sx={{ mt: 1, textTransform: 'none', borderRadius: 2, fontSize: '0.75rem' }}>
-              降级为 Free
+        {/* 激活码输入区 — 只在点击升级按钮后显示 */}
+        <Collapse in={showActivate && !isPro}>
+          <Box sx={{ display: 'flex', gap: 1 }}>
+            <TextField
+              size="small"
+              label="激活码"
+              fullWidth
+              value={inviteCode}
+              onChange={(e) => {
+                setInviteCode(e.target.value);
+                setInviteError('');
+              }}
+              error={!!inviteError}
+              helperText={inviteError}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') handleActivatePro();
+              }}
+              sx={{
+                '& .MuiOutlinedInput-root': {
+                  borderRadius: 2,
+                },
+              }}
+            />
+            <Button
+              variant="contained"
+              onClick={handleActivatePro}
+              disabled={!inviteCode.trim()}
+              sx={{
+                minWidth: 72,
+                whiteSpace: 'nowrap',
+                borderRadius: 2,
+                textTransform: 'none',
+                fontWeight: 600,
+                boxShadow: 'none',
+                '&:hover': {
+                  boxShadow: 'none',
+                },
+              }}
+            >
+              激活
             </Button>
           </Box>
-        )}
-        {!isPro && (
-        <Box sx={{ display: 'flex', gap: 1, mt: -0.5 }}>
-          <TextField
-            size="small"
-            label="激活码"
-            fullWidth
-            value={inviteCode}
-            onChange={(e) => {
-              setInviteCode(e.target.value);
-              setInviteError('');
-            }}
-            error={!!inviteError}
-            helperText={inviteError}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') handleActivatePro();
-            }}
-            sx={{
-              '& .MuiOutlinedInput-root': {
-                borderRadius: 2,
-              },
-            }}
-          />
-          <Button
-            variant="contained"
-            onClick={handleActivatePro}
-            disabled={!inviteCode.trim()}
-            sx={{
-              minWidth: 72,
-              whiteSpace: 'nowrap',
-              borderRadius: 2,
-              textTransform: 'none',
-              fontWeight: 600,
-              boxShadow: 'none',
-              '&:hover': {
-                boxShadow: 'none',
-              },
-            }}
-          >
-            激活
-          </Button>
-        </Box>
-        )}
+        </Collapse>
       </Box>
     </Dialog>
   );
