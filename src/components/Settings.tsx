@@ -410,62 +410,220 @@ const SettingsPage = () => {
     </Dialog>
 
     {/* PRO 升级弹窗 */}
-    <Dialog open={upgradeOpen} onClose={() => setUpgradeOpen(false)} maxWidth="xs" fullWidth>
-      <Box sx={{ p: 3, display: 'flex', flexDirection: 'column', gap: 2.5 }}>
-        <Typography variant="h6" fontWeight={700} textAlign="center">升级 LetShare PRO</Typography>
-
-        {/* Free 方案 */}
-        <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2, p: 2, opacity: 0.7 }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-            <WorkspacePremiumIcon sx={{ color: 'text.secondary', fontSize: 24 }} />
-            <Typography fontWeight={600}>Free</Typography>
-            <Box sx={{ flex: 1 }} />
-            <Typography fontWeight={700} fontSize="1.1rem">免费</Typography>
-          </Box>
-          <Typography variant="caption" color="text.secondary">
-            • P2P 直连传输（不限大小）<br/>
-            • 基础文本/消息功能
+    <Dialog
+      open={upgradeOpen}
+      onClose={() => setUpgradeOpen(false)}
+      maxWidth="xs"
+      fullWidth
+      PaperProps={{
+        sx: {
+          borderRadius: 3,
+          background: 'linear-gradient(180deg, #fefcf8 0%, #f7f2ea 100%)',
+        }
+      }}
+    >
+      <Box sx={{ p: 3.5, display: 'flex', flexDirection: 'column', gap: 3 }}>
+        <Box sx={{ textAlign: 'center' }}>
+          <Typography variant="h6" fontWeight={700} sx={{ letterSpacing: '-0.01em', lineHeight: 1.35 }}>
+            升级 LetShare PRO
+          </Typography>
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.6, lineHeight: 1.5 }}>
+            解锁服务器中转传输，体验更稳定快速的连接
           </Typography>
         </Box>
 
-        {/* PRO 方案 */}
-        <Box sx={{ border: '2px solid', borderColor: 'primary.main', borderRadius: 2, p: 2, bgcolor: 'rgba(25,118,210,0.04)' }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-            <VerifiedIcon sx={{ color: 'primary.main', fontSize: 24 }} />
-            <Typography fontWeight={600} color="primary.main">PRO</Typography>
+        <Box
+          sx={{
+            border: '1px solid',
+            borderColor: 'divider',
+            borderRadius: 2.5,
+            p: 2.5,
+            bgcolor: 'grey.100',
+            opacity: 0.8,
+          }}
+        >
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 1.5 }}>
+            <Box
+              sx={{
+                width: 38,
+                height: 38,
+                borderRadius: 2,
+                bgcolor: 'grey.200',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              <WorkspacePremiumIcon sx={{ color: 'text.secondary', fontSize: 21 }} />
+            </Box>
+            <Box>
+              <Typography fontWeight={600} fontSize="0.9rem" lineHeight={1.3}>
+                Free
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                基础体验
+              </Typography>
+            </Box>
             <Box sx={{ flex: 1 }} />
-            <Typography fontWeight={700} fontSize="1.1rem" color="primary.main">¥19.9<span style={{ fontSize: '0.75rem' }}>/年</span></Typography>
+            <Typography fontWeight={700} fontSize="1.05rem" color="text.secondary">
+              免费
+            </Typography>
           </Box>
-          <Typography variant="caption" color="text.secondary">
-            • 服务器中转传输（不限大小）<br/>
-            • P2P 直连传输（不限大小）<br/>
-            • 优先技术支持
-          </Typography>
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+            <Typography variant="caption" color="text.secondary" sx={{ lineHeight: 1.7 }}>
+              P2P 直连传输（不限大小）
+            </Typography>
+            <Typography variant="caption" color="text.secondary" sx={{ lineHeight: 1.7 }}>
+              基础文本/消息功能
+            </Typography>
+          </Box>
         </Box>
 
-        {/* 联系方式 */}
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, justifyContent: 'center' }}>
-          <Typography variant="caption" color="text.secondary">购买请联系：</Typography>
-          <Typography variant="caption" fontWeight={500}>{PRO_EMAIL}</Typography>
-          <Tooltip title={copied ? "已复制" : "复制邮箱"} arrow>
-            <IconButton size="small" onClick={handleCopyEmail} sx={{ p: 0.5 }}>
-              <ContentCopyIcon sx={{ fontSize: 16, color: copied ? 'success.main' : 'text.secondary' }} />
+        <Box
+          sx={{
+            position: 'relative',
+            border: '1.5px solid',
+            borderColor: '#d0a44a',
+            borderRadius: 2.5,
+            p: 2.5,
+            background: 'linear-gradient(145deg, rgba(208,164,74,0.1) 0%, rgba(208,164,74,0.03) 55%, transparent 100%)',
+            boxShadow: '0 1px 3px rgba(0,0,0,0.03), 0 4px 16px rgba(208,164,74,0.08)',
+          }}
+        >
+          <Box
+            sx={{
+              position: 'absolute',
+              top: -1,
+              right: 20,
+              bgcolor: '#c8963e',
+              color: '#fff',
+              px: 1.5,
+              py: 0.2,
+              borderRadius: '0 0 6px 6px',
+              fontSize: '0.6rem',
+              fontWeight: 800,
+              letterSpacing: '0.08em',
+              lineHeight: 1.8,
+            }}
+          >
+            推荐
+          </Box>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 1.5 }}>
+            <Box
+              sx={{
+                width: 38,
+                height: 38,
+                borderRadius: 2,
+                background: 'linear-gradient(135deg, #c8963e 0%, #dab860 100%)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                boxShadow: '0 2px 6px rgba(200,150,62,0.28)',
+              }}
+            >
+              <VerifiedIcon sx={{ color: '#fff', fontSize: 21 }} />
+            </Box>
+            <Box>
+              <Typography fontWeight={700} fontSize="0.9rem" sx={{ color: '#9b7a1f', lineHeight: 1.3 }}>
+                PRO
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                完整体验
+              </Typography>
+            </Box>
+            <Box sx={{ flex: 1 }} />
+            <Box sx={{ textAlign: 'right' }}>
+              <Typography fontWeight={700} fontSize="1.15rem" sx={{ color: '#9b7a1f', lineHeight: 1.2 }}>
+                ¥19.9
+              </Typography>
+              <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.65rem' }}>
+                /年
+              </Typography>
+            </Box>
+          </Box>
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+            <Typography variant="caption" sx={{ lineHeight: 1.7, color: 'text.primary' }}>
+              服务器中转传输（不限大小）
+            </Typography>
+            <Typography variant="caption" sx={{ lineHeight: 1.7, color: 'text.primary' }}>
+              P2P 直连传输（不限大小）
+            </Typography>
+            <Typography variant="caption" sx={{ lineHeight: 1.7, color: 'text.primary' }}>
+              优先技术支持
+            </Typography>
+          </Box>
+        </Box>
+
+        <Box
+          sx={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 1.5,
+            justifyContent: 'center',
+            py: 0.75,
+            px: 1.5,
+            borderRadius: 2,
+            bgcolor: 'grey.100',
+            border: '1px solid',
+            borderColor: 'divider',
+          }}
+        >
+          <Typography variant="caption" color="text.secondary" sx={{ flexShrink: 0 }}>
+            购买联系
+          </Typography>
+          <Typography variant="caption" fontWeight={600} sx={{ letterSpacing: '0.01em' }}>
+            {PRO_EMAIL}
+          </Typography>
+          <Tooltip title={copied ? '已复制' : '复制邮箱'} arrow>
+            <IconButton size="small" onClick={handleCopyEmail} sx={{ p: 0.5, ml: -0.5 }}>
+              <ContentCopyIcon
+                sx={{
+                  fontSize: 15,
+                  color: copied ? 'success.main' : 'text.secondary',
+                  transition: 'color 0.2s ease',
+                }}
+              />
             </IconButton>
           </Tooltip>
         </Box>
 
-        {/* 激活码输入 */}
-        <Box sx={{ display: 'flex', gap: 1 }}>
-          <TextField size="small" label="激活码" fullWidth
+        <Box sx={{ display: 'flex', gap: 1, mt: -0.5 }}>
+          <TextField
+            size="small"
+            label="激活码"
+            fullWidth
             value={inviteCode}
-            onChange={(e) => { setInviteCode(e.target.value); setInviteError(''); }}
+            onChange={(e) => {
+              setInviteCode(e.target.value);
+              setInviteError('');
+            }}
             error={!!inviteError}
             helperText={inviteError}
-            onKeyDown={(e) => { if (e.key === 'Enter') handleActivatePro(); }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') handleActivatePro();
+            }}
+            sx={{
+              '& .MuiOutlinedInput-root': {
+                borderRadius: 2,
+              },
+            }}
           />
-          <Button variant="contained" onClick={handleActivatePro}
+          <Button
+            variant="contained"
+            onClick={handleActivatePro}
             disabled={!inviteCode.trim()}
-            sx={{ minWidth: 72, whiteSpace: 'nowrap', borderRadius: 2, textTransform: 'none' }}>
+            sx={{
+              minWidth: 72,
+              whiteSpace: 'nowrap',
+              borderRadius: 2,
+              textTransform: 'none',
+              fontWeight: 600,
+              boxShadow: 'none',
+              '&:hover': {
+                boxShadow: 'none',
+              },
+            }}
+          >
             激活
           </Button>
         </Box>
