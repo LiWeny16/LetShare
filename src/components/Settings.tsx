@@ -90,12 +90,6 @@ const SettingsPage = () => {
     }
   };
 
-  const handleDeactivatePro = () => {
-    clearCookie(PRO_COOKIE_KEY);
-    setIsPro(false); setInviteCode(""); setInviteError("");
-    alertUseMUI("PRO 已取消", 2000, { kind: "info" });
-  };
-
   const handleChangeRoomId = (key: SettingsKey, value: any) => {
     settingsStore.update(key, value);
   };
@@ -258,22 +252,41 @@ const SettingsPage = () => {
             ...invisibleScrollerSx,
           }}
         >
-          {/* 标题和高级设置按钮 */}
+          {/* 标题和高级设置按钮 + PRO 状态 */}
           <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <Typography variant="h6">
               {t('settings.title')}
             </Typography>
-            <Tooltip title={t('settings.advanced.title')}>
-              <IconButton 
-                onClick={() => setAdvancedOpen(!advancedOpen)}
-                sx={{ 
-                  transition: 'transform 0.3s ease',
-                  transform: advancedOpen ? 'rotate(180deg)' : 'rotate(0deg)'
-                }}
-              >
-                <SettingsIcon />
-              </IconButton>
-            </Tooltip>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+              {/* PRO 徽章 */}
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mr: 0.5 }}>
+                {isPro
+                  ? <VerifiedIcon sx={{ color: 'success.main', fontSize: 18 }} />
+                  : <WorkspacePremiumIcon sx={{ color: 'text.secondary', fontSize: 18 }} />
+                }
+                <Typography variant="caption" fontWeight={600} color={isPro ? 'success.main' : 'text.secondary'}>
+                  {isPro ? 'PRO' : 'Free'}
+                </Typography>
+                {!isPro && (
+                  <Button size="small" variant="contained" color="primary"
+                    onClick={() => setUpgradeOpen(true)}
+                    sx={{ minWidth: 0, px: 1, py: 0.2, fontSize: '0.7rem', textTransform: 'none', borderRadius: 1.5, ml: 0.5 }}>
+                    升级
+                  </Button>
+                )}
+              </Box>
+              <Tooltip title={t('settings.advanced.title')}>
+                <IconButton
+                  onClick={() => setAdvancedOpen(!advancedOpen)}
+                  sx={{
+                    transition: 'transform 0.3s ease',
+                    transform: advancedOpen ? 'rotate(180deg)' : 'rotate(0deg)'
+                  }}
+                >
+                  <SettingsIcon />
+                </IconButton>
+              </Tooltip>
+            </Box>
           </Box>
 
           <ThemeSelector />
@@ -306,28 +319,6 @@ const SettingsPage = () => {
             inputProps={{ maxLength: 12 }}
             helperText={!settings.roomId ? t('settings.roomId.required') : t('settings.roomId.helper')}
           />
-
-          {/* PRO 会员等级 — 紧凑单行 */}
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 0.5 }}>
-            {isPro
-              ? <VerifiedIcon sx={{ color: 'success.main', fontSize: 22, flexShrink: 0 }} />
-              : <WorkspacePremiumIcon sx={{ color: 'text.secondary', fontSize: 22, flexShrink: 0 }} />
-            }
-            <Typography variant="body2" fontWeight={600} sx={{ flex: 1, lineHeight: 1 }}>
-              {isPro ? 'PRO 会员' : 'Free'}
-            </Typography>
-            {isPro ? (
-              <Button size="small" variant="text" color="warning" onClick={handleDeactivatePro}
-                sx={{ minWidth: 0, px: 1, textTransform: 'none', fontSize: '0.75rem' }}>
-                取消
-              </Button>
-            ) : (
-              <Button size="small" variant="contained" color="primary" onClick={() => setUpgradeOpen(true)}
-                sx={{ minWidth: 0, px: 2, textTransform: 'none', borderRadius: 2, fontSize: '0.75rem', py: 0.4 }}>
-                升级
-              </Button>
-            )}
-          </Box>
 
           {/* 高级设置展开区域 */}
           <Collapse in={advancedOpen} timeout={300}>
