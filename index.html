@@ -343,6 +343,32 @@
   <script type="module" src="/src/main.tsx"></script>
 
   <script>
+    // SW 自愈：检测旧 SW 导致的 dot-prefix 资源加载失败，自动注销并重载
+    if ("serviceWorker" in navigator && location.protocol === "https:") {
+      var swPoisonPattern = /\.(pnpm-vendor|common-vendor|ably-vendor|react-vendor|mobx-vendor|mui-vendor|emotion-vendor|jszip-vendor)/;
+      window.addEventListener("error", function(e) {
+        var target = e.target;
+        if (!target || !target.tagName) return;
+        var src = target.src || target.href || "";
+        if (swPoisonPattern.test(src)) {
+          console.warn("[SW-Heal] Stale SW resource blocked: " + src + " — unregistering and reloading");
+          navigator.serviceWorker.getRegistrations().then(function(regs) {
+            return Promise.all(regs.map(function(r) { return r.unregister(); }));
+          }).then(function() {
+            if ("caches" in window) {
+              return caches.keys().then(function(keys) {
+                return Promise.all(keys.map(function(k) { return caches.delete(k); }));
+              });
+            }
+          }).finally(function() {
+            location.reload();
+          });
+        }
+      }, true);
+    }
+  </script>
+
+  <script>
     if ("serviceWorker" in navigator && location.protocol === "https:") {
       window.addEventListener("load", function() {
         var hadController = Boolean(navigator.serviceWorker.controller);

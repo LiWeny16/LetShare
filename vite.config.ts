@@ -46,6 +46,9 @@ export default defineConfig({
     assetsInlineLimit: 4096000, // 4000kb  超过会以base64字符串显示
     outDir: "docs", // 输出名称
     assetsDir: "static", // 静态资源目录
+    // Keep previous hashed chunks available while CDN edges and service workers
+    // can still serve older HTML that references them.
+    emptyOutDir: false,
   },
   resolve: {
     alias: {

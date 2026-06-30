@@ -5,6 +5,7 @@ import { join } from "node:path";
 
 const indexHtml = readFileSync(join(process.cwd(), "index.html"), "utf8");
 const viteConfig = readFileSync(join(process.cwd(), "vite.config.ts"), "utf8");
+const dotfileFixScript = readFileSync(join(process.cwd(), "scripts", "fix-dotfiles.cjs"), "utf8");
 
 test("service worker registration actively checks for updates and reloads controlled tabs", () => {
   assert.match(indexHtml, /updateViaCache:\s*"none"/);
@@ -37,4 +38,13 @@ test("initial loading shell uses stable dimensions before React boots", () => {
 test("local app shell is not served stale-first by a runtime cache", () => {
   assert.doesNotMatch(viteConfig, /cacheName:\s*['"]app-cache-v\d+['"]/);
   assert.doesNotMatch(viteConfig, /urlPattern:\s*\/\^\\\/\.\*\\\.\(js\|css\|html\)\$\/,/);
+});
+
+test("build keeps old hashed assets for CDN and service worker overlap", () => {
+  assert.match(viteConfig, /emptyOutDir:\s*false/);
+});
+
+test("dotfile fixer rewrites retained legacy chunk references", () => {
+  assert.doesNotMatch(dotfileFixScript, /dotFiles\.length === 0[\s\S]*process\.exit\(0\)/);
+  assert.match(dotfileFixScript, /rewriteLegacyDotReferences/);
 });
