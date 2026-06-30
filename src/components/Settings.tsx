@@ -229,8 +229,11 @@ const SettingsPage = () => {
               {t('settings.title')}
             </Typography>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-              {/* PRO 徽章 */}
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mr: 0.5 }}>
+              {/* PRO 徽章 — 点击打开升级弹窗 */}
+              <Button
+                onClick={() => setUpgradeOpen(true)}
+                sx={{ minWidth: 0, p: 0, textTransform: 'none', display: 'flex', alignItems: 'center', gap: 0.5, mr: 0.5, '&:hover': { bgcolor: 'action.hover' }, borderRadius: 1.5 }}
+              >
                 {isPro
                   ? <VerifiedIcon sx={{ color: 'success.main', fontSize: 18 }} />
                   : <WorkspacePremiumIcon sx={{ color: 'text.secondary', fontSize: 18 }} />
@@ -238,14 +241,7 @@ const SettingsPage = () => {
                 <Typography variant="caption" fontWeight={600} color={isPro ? 'success.main' : 'text.secondary'}>
                   {isPro ? 'PRO' : 'Free'}
                 </Typography>
-                {!isPro && (
-                  <Button size="small" variant="contained" color="primary"
-                    onClick={() => setUpgradeOpen(true)}
-                    sx={{ minWidth: 0, px: 1, py: 0.2, fontSize: '0.7rem', textTransform: 'none', borderRadius: 1.5, ml: 0.5 }}>
-                    升级
-                  </Button>
-                )}
-              </Box>
+              </Button>
               <Tooltip title={t('settings.advanced.title')}>
                 <IconButton
                   onClick={() => setAdvancedOpen(!advancedOpen)}
@@ -382,6 +378,7 @@ const SettingsPage = () => {
 
     <ProUpgradeDialog
       open={upgradeOpen}
+      isPro={isPro}
       onClose={() => {
         setUpgradeOpen(false);
         const active = checkIsPro();

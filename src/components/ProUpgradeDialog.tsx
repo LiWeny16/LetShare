@@ -20,9 +20,10 @@ const PRO_EMAIL = 'a454888395@gmail.com';
 type Props = {
   open: boolean;
   onClose: () => void;
+  isPro?: boolean;
 };
 
-const ProUpgradeDialog = ({ open, onClose }: Props) => {
+const ProUpgradeDialog = ({ open, onClose, isPro = false }: Props) => {
   const [inviteCode, setInviteCode] = React.useState('');
   const [inviteError, setInviteError] = React.useState('');
   const [copied, setCopied] = React.useState(false);
@@ -252,6 +253,17 @@ const ProUpgradeDialog = ({ open, onClose }: Props) => {
           </Tooltip>
         </Box>
 
+        {isPro && (
+          <Box sx={{ textAlign: 'center' }}>
+            <Typography variant="caption" color="success.main" fontWeight={600}>✅ PRO 已激活</Typography>
+            <Button fullWidth size="small" variant="outlined" color="warning"
+              onClick={() => { clearProCookie(); onClose(); }}
+              sx={{ mt: 1, textTransform: 'none', borderRadius: 2, fontSize: '0.75rem' }}>
+              降级为 Free
+            </Button>
+          </Box>
+        )}
+        {!isPro && (
         <Box sx={{ display: 'flex', gap: 1, mt: -0.5 }}>
           <TextField
             size="small"
@@ -292,6 +304,7 @@ const ProUpgradeDialog = ({ open, onClose }: Props) => {
             激活
           </Button>
         </Box>
+        )}
       </Box>
     </Dialog>
   );
