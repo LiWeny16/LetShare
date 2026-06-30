@@ -236,6 +236,43 @@ export class ServerFileTransfer {
  public handleFileTransferMessage(type: string, data: any) {
   console.debug(`[ServerFileTransfer] Received message type: ${type}`, data);
 
+  // 处理旧版 "error" 类型消息(服务器 sendError 使用的旧格式, 不含 transfer_id 顶层字段)
+  if (type === "error") {
+   const errorPayload = data?.error || data;
+   const errorMsg = errorPayload?.message || errorPayload?.error || t('alert.unknownError');
+   console.error(`[ServerFileTransfer] Server error:`, errorMsg);
+   const errTransferId = errorPayload?.transfer_id || (data as any)?.transfer_id;
+   if (errTransferId) {
+    const sendingSession = this.sendingSessions.get(errTransferId);
+    if (sendingSession) {
+     const wasPending = sendingSession.status === "pending";
+     sendingSession.status = "error";
+     this.sendingSessions.delete(errTransferId);
+     this.clearTransferTimeout(errTransferId);
+     if (this.currentSendingTransferId === errTransferId) {
+      this.currentSendingTransferId = null;
+     }
+     if (wasPending) {
+      this.completionAcks.cancel(errTransferId);
+     } else {
+      this.completionAcks.reject(errTransferId, new Error(errorMsg));
+     }
+     this.onProgressCallback?.(null);
+     this.setTransferStatus(errorMsg, "error");
+     this.rejectSendCompletion(errTransferId, new Error(errorMsg));
+    }
+    const receivingSession = this.receivingSessions.get(errTransferId);
+    if (receivingSession) {
+     this.failReceiveSession(receivingSession, errorMsg, FILE_TRANSFER_MESSAGE_TYPES.ERROR);
+    }
+   } else {
+    // 无 transfer_id — 通用错误, 展示给用户
+    this.setTransferStatus(errorMsg, "error");
+    alertUseMUI(errorMsg, 4000, { kind: "error" });
+   }
+   return;
+  }
+
   const normalizedPayload = normalizeTransferControlPayload(data);
   if (!normalizedPayload.valid) {
    this.handleMalformedTransferMessage(type, data, normalizedPayload.reason);
@@ -696,23 +733,52 @@ export class ServerFileTransfer {
    throw new Error("current connection provider does not support binary relay");
   }
 
-  // 检查是否需要管理员密码(文件超过50MB)
+  // 1. 先创建发送完成等待器(必须在任何异步操作之前创建, 确保 handleConnectionLost 可以清理)
+  let abortPasswordWait: ((err: Error) => void) | null = null;
+  const waiterPromise = new Promise<void>((resolve, reject) => {
+   const wrappedReject = (err: Error) => {
+    if (abortPasswordWait) {
+     abortPasswordWait(err);
+    }
+    reject(err);
+   };
+   this.sendCompletionWaiters.set(transferId, { resolve, reject: wrappedReject });
+  });
+
+  // 2. 检查是否需要管理员密码(文件超过50MB) — 带超时保护, 支持 disconnect 中断
   let adminPass = "";
   if (file.size > this.BASIC_SIZE_LIMIT) {
    const sizeMB = (file.size / (1024 * 1024)).toFixed(2);
    console.debug(`[ServerFileTransfer] 文件大小 ${sizeMB} MB 超过 50MB 限制,需要管理员密码`);
 
    if (this.onAdminPasswordRequestCallback) {
-    const password = await this.onAdminPasswordRequestCallback(file.size);
-    if (!password) {
-     console.debug("[ServerFileTransfer] 用户取消了大文件传输");
-     alertUseMUI(t('alert.passwordRequired'), 3000, { kind: "warning" });
-     throw new Error(t('alert.passwordRequired'));
+    try {
+     const password = await Promise.race([
+      this.onAdminPasswordRequestCallback(file.size),
+      new Promise<string | null>((_, reject) =>
+       setTimeout(() => reject(new Error(t('alert.passwordTimeout'))), 60_000)
+      ),
+      new Promise<string | null>((_, reject) => {
+       abortPasswordWait = reject;
+      }),
+     ]);
+     abortPasswordWait = null;
+     if (!password) {
+      console.debug("[ServerFileTransfer] 用户取消了大文件传输");
+      this.sendCompletionWaiters.delete(transferId);
+      alertUseMUI(t('alert.passwordRequired'), 3000, { kind: "warning" });
+      throw new Error(t('alert.passwordRequired'));
+     }
+     adminPass = password;
+    } catch (error: any) {
+     abortPasswordWait = null;
+     this.sendCompletionWaiters.delete(transferId);
+     throw error;
     }
-    adminPass = password;
    } else {
     const password = prompt(`文件大小 ${sizeMB} MB 超过50MB限制\n请输入管理员密码:`);
     if (!password) {
+     this.sendCompletionWaiters.delete(transferId);
      alertUseMUI(t('alert.passwordRequired'), 3000, { kind: "warning" });
      throw new Error(t('alert.passwordRequired'));
     }
@@ -720,7 +786,7 @@ export class ServerFileTransfer {
    }
   }
 
-  // 创建发送会话
+  // 3. 创建发送会话
   const session: TransferSession = {
    transferId,
    file,
@@ -759,6 +825,7 @@ export class ServerFileTransfer {
    console.error(`[ServerFileTransfer] REQUEST 消息发送失败:`, error);
    session.status = "error";
    this.sendingSessions.delete(transferId);
+   this.sendCompletionWaiters.delete(transferId);
    if (this.currentSendingTransferId === transferId) {
     this.currentSendingTransferId = null;
    }
@@ -769,9 +836,8 @@ export class ServerFileTransfer {
   this.scheduleRequestTimeout(transferId);
   console.debug(`[ServerFileTransfer] REQUEST 消息已发送给 ${toUserId}`);
   alertUseMUI(t('toast.waitingForAccept'), 2000, { kind: "info" });
-  return new Promise<void>((resolve, reject) => {
-   this.sendCompletionWaiters.set(transferId, { resolve, reject });
-  });
+  // 4. 返回预创建的 waiter promise(此时 sendCompletionWaiters 中已有该 transferId, handleConnectionLost 可以清理)
+  return waiterPromise;
  }
 
  private scheduleRequestTimeout(transferId: string) {

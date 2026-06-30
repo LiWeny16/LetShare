@@ -420,7 +420,7 @@ export class RealTimeColab {
   // 设置文件传输消息处理器
   if (this.connectionManager.onMessageReceived) {
    this.connectionManager.onMessageReceived((message) => {
-    if (message.type && message.type.startsWith("file:transfer:")) {
+    if (message.type && (message.type.startsWith("file:transfer:") || message.type === "error")) {
      // 如果 data 是嵌套的，需要提取实际数据
      const actualData = message.data?.transfer_id ? message.data : message;
      this.serverFileTransfer?.handleFileTransferMessage(message.type, actualData);
