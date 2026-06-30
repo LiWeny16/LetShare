@@ -642,9 +642,8 @@ export class ServerFileTransfer {
   if (!transferId) {
    if (this.sendingSessions.size > 0 || this.receivingSessions.size > 0) {
     this.handleConnectionLost(reason);
-   } else {
-    alertUseMUI(t('alert.malformedMessageIgnored', { detail: errorDetail }), 3000, { kind: "warning" });
    }
+   // 无活跃会话时静默丢弃（取消传输后的迟到消息是正常现象）
    return;
   }
 
@@ -1443,8 +1442,9 @@ export class ServerFileTransfer {
   this.clearTransferTimeout(data.transfer_id);
   this.clearReceiveTimeout(data.transfer_id);
   this.onProgressCallback?.(null);
-  // 关闭下载页面
+  this.onDownloadPageStateChange?.(false);
 
+  // 被取消方（非主动取消方）才需要提示
   if (!wasAlreadyComplete) {
    alertUseMUI(`${t('toast.transferCancelled')}: ${data.reason || ''}`, 2000, { kind: "warning" });
   }
@@ -1554,22 +1554,20 @@ export class ServerFileTransfer {
   if (this.currentSendingTransferId) {
    const session = this.sendingSessions.get(this.currentSendingTransferId);
    if (session) {
+    const reason = t('alert.userCancelReceive');
     this.sendTransferControlMessage(
      FILE_TRANSFER_MESSAGE_TYPES.CANCEL,
      this.currentSendingTransferId,
-     "用户取消",
+     reason,
      session.roomName
     );
-    
+
     if (session.status !== "pending") {
-     this.completionAcks.reject(
-      this.currentSendingTransferId,
-      new Error("用户取消")
-     );
+     this.completionAcks.reject(this.currentSendingTransferId, new Error(reason));
     } else {
      this.completionAcks.cancel(this.currentSendingTransferId);
     }
-    this.rejectSendCompletion(this.currentSendingTransferId, new Error("用户取消"));
+    this.rejectSendCompletion(this.currentSendingTransferId, new Error(reason));
     this.sendingSessions.delete(this.currentSendingTransferId);
     this.clearTransferTimeout(this.currentSendingTransferId);
     this.currentSendingTransferId = null;
@@ -1581,13 +1579,14 @@ export class ServerFileTransfer {
    if (session.status === "completed" || session.status === "cancelled") {
     continue;
    }
+   const reason = t('alert.userCancelReceive');
    session.status = "cancelled";
    session.buffer = null;
    session.receivedChunks = [];
    this.sendTransferControlMessage(
     FILE_TRANSFER_MESSAGE_TYPES.CANCEL,
     session.transferId,
-    "用户取消",
+    reason,
     session.roomName
    );
    this.receivingSessions.delete(session.transferId);
@@ -1597,7 +1596,8 @@ export class ServerFileTransfer {
 
   if (cancelled) {
    this.onProgressCallback?.(null);
-   this.setTransferStatus(t('toast.transferCancelled'), "warning");
+   this.onDownloadPageStateChange?.(false);
+   this.setTransferStatus(null, "info");
   }
  }
 

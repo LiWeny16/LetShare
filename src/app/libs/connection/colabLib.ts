@@ -2608,8 +2608,13 @@ export class RealTimeColab {
    this.sentFiles.set(`${id}::${file.name}::${Date.now()}`, { name: file.name, size: file.size, toUserId: id, completedAt: Date.now() });
   } catch (error) {
    console.error(" 服务器文件传输失败:", error);
-   // 如果邀请码无效，清除缓存，下次传输时重新弹窗
    const errMsg = error instanceof Error ? error.message : String(error || "");
+   // 用户主动取消：正常操作，不是错误，静默处理
+   if (errMsg.includes(t('alert.userCancelReceive')) || errMsg.includes(t('alert.transferCancelled'))) {
+    this.setFileTransferProgress(null);
+    return;
+   }
+   // 如果邀请码无效，清除缓存，下次传输时重新弹窗
    if (errMsg.includes("密码") || errMsg.includes("邀请码")) {
     clearProCookie();
     alertUseMUI(errMsg, 4000, { kind: "error" });
