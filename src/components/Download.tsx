@@ -96,8 +96,11 @@ function downloadFileInBrowser(file: File, fileName: string) {
   scheduleObjectUrlRevoke(url);
 }
 
-function formatSizeMB(bytes: number): string {
-  return (bytes / 1024 / 1024).toFixed(bytes >= 10 * 1024 * 1024 ? 0 : 1);
+function formatSize(bytes: number): string {
+  if (bytes >= 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${bytes} B`;
 }
 
 type PendingBrowserDownload = {
@@ -257,10 +260,8 @@ export default function DownloadDrawerSlide({
         getDeviceType()
       );
       if (!zipGuard.allowed) {
-        const maxMB = (zipGuard.maxBytes / 1024 / 1024).toFixed(0);
-        const totalMB = (zipGuard.totalBytes / 1024 / 1024).toFixed(1);
         alertUseMUI(
-          `文件较多或较大（${zipGuard.totalFiles} 个，${totalMB}MB），为避免浏览器内存崩溃，请逐个下载。当前设备安全打包上限：${zipGuard.maxFiles} 个 / ${maxMB}MB。`,
+          `文件较多或较大（${zipGuard.totalFiles} 个，${formatSize(zipGuard.totalBytes)}），为避免浏览器内存崩溃，请逐个下载。当前设备安全打包上限：${zipGuard.maxFiles} 个 / ${formatSize(zipGuard.maxBytes)}。`,
           6000,
           { kind: "warning" }
         );
@@ -403,7 +404,7 @@ export default function DownloadDrawerSlide({
       );
       if (!downloadGuard.allowed) {
         alertUseMUI(
-          `${file.name} 较大（${formatSizeMB(file.size)}MB），为避免浏览器下载时内存崩溃，已阻止直接下载。当前设备安全下载上限：${formatSizeMB(downloadGuard.maxBytes)}MB。请使用桌面端/原生 App，或拆分后重新传输。`,
+          `${file.name} 较大（${formatSize(file.size)}），为避免浏览器下载时内存崩溃，已阻止直接下载。当前设备安全下载上限：${formatSize(downloadGuard.maxBytes)}。请使用桌面端/原生 App，或拆分后重新传输。`,
           7000,
           { kind: "warning" }
         );
@@ -429,7 +430,7 @@ export default function DownloadDrawerSlide({
     );
     if (!previewGuard.allowed) {
       alertUseMUI(
-        `${file.name} 较大（${formatSizeMB(file.size)}MB），为避免浏览器解码原图时崩溃，已跳过预览。当前设备安全预览上限：${formatSizeMB(previewGuard.maxBytes)}MB，可点下载按钮保存原图。`,
+        `${file.name} 较大（${formatSize(file.size)}），为避免浏览器解码原图时崩溃，已跳过预览。当前设备安全预览上限：${formatSize(previewGuard.maxBytes)}，可点下载按钮保存原图。`,
         6000,
         { kind: "warning" }
       );
@@ -590,7 +591,7 @@ export default function DownloadDrawerSlide({
                           variant="caption"
                           sx={{ display: "block", mt: 0.5 }}
                         >
-                          {pendingBrowserDownload.fileName} · {formatSizeMB(pendingBrowserDownload.size)}MB
+                          {pendingBrowserDownload.fileName} · {formatSize(pendingBrowserDownload.size)}
                         </Typography>
                       )}
                     </Box>
@@ -777,7 +778,7 @@ export default function DownloadDrawerSlide({
                             color="text.secondary"
                           >
                             {receiveProgress.toFixed(1)}%（
-                            {file.receivedSize} / {file.size}  {t('transfer.byte')}）
+                            {formatSize(file.receivedSize)} / {formatSize(file.size)}）
                           </Typography>
                           <LinearProgress
                             variant="determinate"

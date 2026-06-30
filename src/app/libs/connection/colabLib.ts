@@ -69,6 +69,13 @@ const CONFIG = {
  TRANSFER_COMPLETE_DELAY: 1500    // 传输完成延迟
 } as const;
 
+function formatSize(bytes: number): string {
+ if (bytes >= 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+ if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+ if (bytes >= 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+ return `${bytes} B`;
+}
+
 // 创建一个类型安全的事件发射器类型
 type ColabEvents = {
  'message-sent': { to: string; message: string };
@@ -2350,9 +2357,7 @@ export class RealTimeColab {
   maxBytes: number;
   maxFiles: number;
  }): string {
-  const totalMB = (guard.totalBytes / 1024 / 1024).toFixed(1);
-  const maxMB = (guard.maxBytes / 1024 / 1024).toFixed(0);
-  return `当前浏览器已缓存 ${guard.totalFiles} 个文件 / ${totalMB}MB。为避免内存崩溃，当前设备安全缓存上限为 ${guard.maxFiles} 个 / ${maxMB}MB，请先下载并清空已接收文件后重试。`;
+  return `当前浏览器已缓存 ${guard.totalFiles} 个文件 / ${formatSize(guard.totalBytes)}。为避免内存崩溃，当前设备安全缓存上限为 ${guard.maxFiles} 个 / ${formatSize(guard.maxBytes)}，请先下载并清空已接收文件后重试。`;
  }
 
  public clearReceivedFiles(): void {
