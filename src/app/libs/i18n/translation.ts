@@ -124,6 +124,31 @@ const sharedMalayTranslation = {
             shareTitle: "Kongsi · Segera",
             qrPrompt: "Imbas kod QR untuk menyertai bilik:",
         },
+        chat: {
+            noMessages: "Tiada mesej sembang",
+            inputPlaceholder: "Taip mesej...",
+            deleteHistory: "Padam sejarah sembang",
+            sendFile: "Hantar fail",
+            fileUploading: "Menghantar...",
+            fileDownloading: "Menerima...",
+            fileCompleted: "Dihantar ✓",
+            fileFailed: "Pemindahan gagal",
+            fileDownload: "Muat turun",
+            fileSaved: "Disimpan",
+            fileRetry: "Cuba lagi",
+            dragDropFile: "Lepaskan fail di sini",
+            deleteHistoryConfirm: "Padam semua sejarah sembang dengan {{name}}? Ini tidak boleh dibuat asal.",
+            messageCount: "{{count}} mesej",
+            startChat: "Mula bersembang",
+        },
+        download: {
+            deleteSelected: "Padam Dipilih",
+            selectAll: "Pilih Semua",
+            deleteAllFrom: 'Padam semua dari {{name}}',
+            confirmDeleteFiles: 'Padam {{count}} fail? Ini tidak boleh dibuat asal.',
+            noReceivedFiles: "Tiada fail diterima",
+            totalStorage: "Storan: {{size}}",
+        },
         userId: {
             inputError: "Hanya huruf, nombor",
             display: "ID anda"
@@ -354,7 +379,26 @@ export const resources = {
                 noMessages: "No chat messages yet",
                 inputPlaceholder: "Type a message...",
                 deleteHistory: "Delete chat history",
-                sendFile: "Send file"
+                sendFile: "Send file",
+                fileUploading: "Sending...",
+                fileDownloading: "Downloading...",
+                fileCompleted: "Sent ✓",
+                fileFailed: "Transfer failed",
+                fileDownload: "Download",
+                fileSaved: "Saved",
+                fileRetry: "Retry",
+                dragDropFile: "Drop file here",
+                deleteHistoryConfirm: "Delete all chat history with {{name}}? This cannot be undone.",
+                messageCount: "{{count}} messages",
+                startChat: "Start chatting",
+            },
+            download: {
+                deleteSelected: "Delete Selected",
+                selectAll: "Select All",
+                deleteAllFrom: 'Delete all from {{name}}',
+                confirmDeleteFiles: 'Delete {{count}} file(s)? This cannot be undone.',
+                noReceivedFiles: "No received files",
+                totalStorage: "Storage: {{size}}",
             },
             userId: {
                 inputError: "Only letters, numbers",
@@ -585,7 +629,26 @@ export const resources = {
                 noMessages: "暂无聊天记录",
                 inputPlaceholder: "输入消息...",
                 deleteHistory: "删除聊天记录",
-                sendFile: "发送文件"
+                sendFile: "发送文件",
+                fileUploading: "发送中...",
+                fileDownloading: "接收中...",
+                fileCompleted: "已发送 ✓",
+                fileFailed: "传输失败",
+                fileDownload: "下载",
+                fileSaved: "已保存",
+                fileRetry: "重试",
+                dragDropFile: "拖拽文件到此处",
+                deleteHistoryConfirm: "确定要删除与 {{name}} 的所有聊天记录吗？此操作无法撤销。",
+                messageCount: "{{count}} 条消息",
+                startChat: "开始聊天",
+            },
+            download: {
+                deleteSelected: "删除选中",
+                selectAll: "全选",
+                deleteAllFrom: '删除来自 {{name}} 的所有文件',
+                confirmDeleteFiles: '确定删除 {{count}} 个文件吗？此操作无法撤销。',
+                noReceivedFiles: "暂无接收的文件",
+                totalStorage: "存储: {{size}}",
             },
             userId: {
                 inputError: "只允许12字符以内的字母、数字和汉字",
@@ -701,6 +764,12 @@ export const resources = {
             toast: {
                 ...sharedMalayTranslation.translation.toast,
                 serverTransferMode: "Beralih ke mode transfer server"
+            },
+            chat: {
+                ...sharedMalayTranslation.translation.chat,
+                deleteHistoryConfirm: "Hapus semua riwayat chat dengan {{name}}? Ini tidak dapat dibatalkan.",
+                messageCount: "{{count}} pesan",
+                startChat: "Mulai mengobrol",
             }
         }
     }

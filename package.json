@@ -13,6 +13,10 @@
     "app-start": "npx cap open android",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "preview": "vite preview",
+    "test": "node --import tsx --test tests/*.test.ts",
+    "test:unit": "node --import tsx --test tests/fileMessage-unit.test.ts",
+    "test:db": "node --import tsx --test tests/fileBlobStore.test.ts",
+    "test:e2e": "node --import tsx --test tests/fileMessage-e2e.test.ts",
     "gen-img": "npx @capacitor/assets generate"
   },
   "dependencies": {
@@ -55,6 +59,9 @@
     "eslint": "^8.57.0",
     "eslint-plugin-react-hooks": "^4.6.0",
     "eslint-plugin-react-refresh": "^0.4.6",
+    "fake-indexeddb": "^6.2.5",
+    "happy-dom": "^20.10.6",
+    "tsx": "^4.22.4",
     "typescript": "^5.2.2",
     "vconsole": "^3.15.1",
     "vite": "^5.2.0",

@@ -80,6 +80,9 @@ function formatSize(bytes: number): string {
 type ColabEvents = {
  'message-sent': { to: string; message: string };
  'message-received': { from: string; message: string };
+ 'file-sent': { to: string; fileName: string; fileSize: number; transferId?: string };
+ 'file-received': { from: string; fileName: string; fileSize: number; file: File };
+ 'file-progress': { to: string; progress: number };
 };
 
 interface NegotiationState {
@@ -250,6 +253,7 @@ export class RealTimeColab {
   };
 
  private aborted = false;
+ private sendingToUserId: string | null = null;
 
  public initTransferConfig() {
   this.transferConfig = getSafeTransferConfig(getDeviceType());
@@ -315,6 +319,9 @@ export class RealTimeColab {
   if (this.serverFileTransfer) {
    this.serverFileTransfer.setProgressCallback((progress) => {
     this.setFileTransferProgress(progress);
+    if (progress !== null && this.sendingToUserId) {
+     this.emitter.emit('file-progress', { to: this.sendingToUserId, progress });
+    }
    });
    
    this.serverFileTransfer.setFileReceivedCallback((file, fromUserId) => {
@@ -2525,6 +2532,8 @@ export class RealTimeColab {
 
   alertUseMUI(t("alert.fileReceived", { name: id.split(":")[0] }), 2000, { kind: "success" });
   this.setFileTransferProgress(null);
+  // Emit file-received event for ChatIntegration
+  this.emitter.emit('file-received', { from: id, fileName: file.name, fileSize: file.size, file });
  }
  public isConnectedToUser(id: string): boolean {
   const channel = this.dataChannels.get(id);
@@ -2599,6 +2608,7 @@ export class RealTimeColab {
   }
 
   this.setFileSendingTargetUser(id);
+  this.sendingToUserId = id;
   this.isSendingFile = true;
   this.setDownloadPageState(true);
 
@@ -2606,12 +2616,15 @@ export class RealTimeColab {
    await this.serverFileTransfer.sendFileViaServer(id, file, roomId);
    console.debug(` 文件通过服务器发送完成`);
    this.sentFiles.set(`${id}::${file.name}::${Date.now()}`, { name: file.name, size: file.size, toUserId: id, completedAt: Date.now() });
+   // Emit file-sent event for ChatIntegration
+   this.emitter.emit('file-sent', { to: id, fileName: file.name, fileSize: file.size });
   } catch (error) {
    console.error(" 服务器文件传输失败:", error);
    const errMsg = error instanceof Error ? error.message : String(error || "");
    // 用户主动取消：正常操作，不是错误，静默处理
    if (errMsg.includes(t('alert.userCancelReceive')) || errMsg.includes(t('alert.transferCancelled'))) {
     this.setFileTransferProgress(null);
+    this.sendingToUserId = null;
     return;
    }
    // 如果邀请码无效，清除缓存，下次传输时重新弹窗
@@ -2623,6 +2636,7 @@ export class RealTimeColab {
    }
    this.setFileTransferProgress(null);
   } finally {
+   this.sendingToUserId = null;
    this.isSendingFile = false;
   }
  }
@@ -2644,11 +2658,13 @@ export class RealTimeColab {
  ): Promise<void> {
   const channel = this.dataChannels.get(id);
   this.setFileSendingTargetUser(id);
+  this.sendingToUserId = id;
   if (!channel || channel.readyState !== "open") {
    console.error(`Data channel with user ${id} is not available.`);
    // 如果P2P不可用,尝试通过服务器转发
    console.debug(" P2P不可用，尝试通过服务器转发文件");
    await this.sendFileViaServer(id, file);
+   this.sendingToUserId = null;
    return;
   }
 
@@ -2749,6 +2765,7 @@ export class RealTimeColab {
     chunksSent++;
     const progress = Math.min((chunksSent / totalChunks) * 100, 99);
     this.setFileTransferProgress(progress);
+    this.emitter.emit('file-progress', { to: id, progress });
    }
   };
 
@@ -2794,6 +2811,8 @@ export class RealTimeColab {
     autoClearMs: CONFIG.TRANSFER_COMPLETE_DELAY,
     showPanel: false,
    });
+   // Emit file-sent event for ChatIntegration
+   this.emitter.emit('file-sent', { to: id, fileName: file.name, fileSize: file.size, transferId });
   } catch (err) {
    if (!stillOwnsTransfer()) {
     console.warn("Ignoring stale P2P transfer worker failure:", err);
@@ -2825,6 +2844,7 @@ export class RealTimeColab {
    });
    throw err;
   } finally {
+   this.sendingToUserId = null;
    if (this.p2pSendContexts.get(id)?.transferId === transferId) {
     this.p2pSendContexts.delete(id);
    }

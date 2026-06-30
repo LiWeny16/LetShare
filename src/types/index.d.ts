@@ -7,6 +7,8 @@ type ArraySetter<T> = StateSetter<T[]>;
 type ObjectSetter<T extends object> = StateSetter<T>;
 type UserType = "apple" | "android" | "desktop"
 type LanguageType = 'system' | 'en' | 'zh' | 'ms' | 'id';
+type FileCategory = 'image' | 'video' | 'archive' | 'pdf' | 'document' | 'code' | 'other';
+type FileTransferStatus = 'uploading' | 'downloading' | 'completed' | 'failed';
 
 // width: {
 //     xs: '100%',     // 手机：占满

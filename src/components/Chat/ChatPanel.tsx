@@ -20,6 +20,9 @@ import { useTranslation } from 'react-i18next';
 import ChatHistoryManager, { ChatMessage, ChatHistory } from '@App/libs/chat/ChatHistoryManager';
 import ChatIntegration from '@App/libs/chat/ChatIntegration';
 import realTimeColab from '@App/libs/connection/colabLib';
+import FileBubble from './FileBubble';
+import ImageBubble from './ImageBubble';
+import type { FileChatMessage } from '@App/libs/chat/ChatHistoryManager';
 
 interface ChatPanelProps {
     open: boolean;
@@ -168,19 +171,27 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ open, onClose, targetUserId, targ
         setEmojiAnchor(null);
     };
 
-    const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const handleFileSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
         const files = event.target.files;
-        if (files && files.length > 0) {
-            // 这里可以调用现有的文件发送逻辑
-            console.log('Selected file:', files[0]);
-            // TODO: 集成现有的文件发送API
+        if (!files || files.length === 0) return;
+        const file = files[0];
+        // Reset input so same file can be selected again
+        event.target.value = '';
+        console.log('[CHAT PANEL] Sending file:', file.name, file.size, file.type);
+        try {
+            const result = await ChatIntegration.sendFileMessage(targetUserId, file);
+            if (result.error) {
+                console.error('[CHAT PANEL] Failed to send file:', result.error);
+            }
+        } catch (error) {
+            console.error('[CHAT PANEL] File send error:', error);
         }
     };
 
     const handleDeleteHistory = async () => {
         // 使用浏览器原生确认对话框
         const isConfirmed = window.confirm(
-            `确定要删除与 ${targetUserName} 的所有聊天记录吗？此操作无法撤销。`
+            t('chat.deleteHistoryConfirm', { name: targetUserName })
         );
 
         if (!isConfirmed) {
@@ -218,62 +229,66 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ open, onClose, targetUserId, targ
     const renderMessage = (message: ChatMessage) => {
         const currentUserId = getCurrentUserId();
         const isMyMessage = message.senderId === currentUserId;
+
+        if (message.type === 'file' || message.type === 'image') {
+            const fileMsg = message as FileChatMessage;
+            const handleFileBubbleDownload = async (fileKey?: string) => {
+                if (!fileKey) return;
+                const FileBlobStore = (await import('@App/libs/chat/FileBlobStore')).default;
+                const file = await FileBlobStore.getFile(fileKey);
+                if (file) {
+                    const url = URL.createObjectURL(file);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = file.name;
+                    a.click();
+                    setTimeout(() => URL.revokeObjectURL(url), 60000);
+                }
+            };
+            const handleFileBubbleRetry = async (_messageId: string) => {
+                // For received files, retry downloading from storage
+                if (!isMyMessage && fileMsg.fileMetadata.fileKey) {
+                    await handleFileBubbleDownload(fileMsg.fileMetadata.fileKey);
+                    return;
+                }
+                // For sent files, we can't resend without original File — just log
+                console.warn('[CHAT PANEL] Retry requested for sent file, but original file not available.');
+            };
+
+            if (message.type === 'image') {
+                return (
+                    <ImageBubble
+                        key={message.id}
+                        message={fileMsg}
+                        isMyMessage={isMyMessage}
+                        onDownload={handleFileBubbleDownload}
+                        onRetry={handleFileBubbleRetry}
+                    />
+                );
+            }
+            return (
+                <FileBubble
+                    key={message.id}
+                    message={fileMsg}
+                    isMyMessage={isMyMessage}
+                    onDownload={handleFileBubbleDownload}
+                    onRetry={handleFileBubbleRetry}
+                />
+            );
+        }
+
+        // Existing text message rendering (keep it exactly as-is)
         const avatarText = isMyMessage ? 'Me' : targetUserName.charAt(0).toUpperCase();
-
-        console.log(`[CHAT PANEL] Rendering message:`, message, `isMyMessage: ${isMyMessage}, currentUserId: ${currentUserId}`);
-
         return (
-            <Box
-                key={message.id}
-                sx={{
-                    display: 'flex',
-                    flexDirection: isMyMessage ? 'row-reverse' : 'row',
-                    alignItems: 'flex-start',
-                    gap: 1,
-                    mb: 2,
-                }}
-            >
-                <Avatar
-                    sx={{
-                        width: 32,
-                        height: 32,
-                        bgcolor: isMyMessage ? theme.palette.primary.main : theme.palette.secondary.main,
-                        fontSize: '0.875rem'
-                    }}
-                >
+            <Box key={message.id} sx={{ display: 'flex', flexDirection: isMyMessage ? 'row-reverse' : 'row', alignItems: 'flex-start', gap: 1, mb: 2 }}>
+                <Avatar sx={{ width: 32, height: 32, bgcolor: isMyMessage ? theme.palette.primary.main : theme.palette.secondary.main, fontSize: '0.875rem' }}>
                     {avatarText}
                 </Avatar>
-                <Box
-                    sx={{
-                        maxWidth: '70%',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        alignItems: isMyMessage ? 'flex-end' : 'flex-start',
-                    }}
-                >
-                    <Box
-                        sx={{
-                            px: 2,
-                            py: 1,
-                            borderRadius: 3,
-                            backgroundColor: isMyMessage
-                                ? theme.palette.primary.main
-                                : theme.palette.grey[100],
-                            color: isMyMessage
-                                ? theme.palette.primary.contrastText
-                                : theme.palette.text.primary,
-                            wordBreak: 'break-word',
-                        }}
-                    >
-                        <Typography variant="body2">
-                            {message.content}
-                        </Typography>
+                <Box sx={{ maxWidth: '70%', display: 'flex', flexDirection: 'column', alignItems: isMyMessage ? 'flex-end' : 'flex-start' }}>
+                    <Box sx={{ px: 2, py: 1, borderRadius: 3, backgroundColor: isMyMessage ? theme.palette.primary.main : theme.palette.grey[100], color: isMyMessage ? theme.palette.primary.contrastText : theme.palette.text.primary, wordBreak: 'break-word' }}>
+                        <Typography variant="body2">{message.content}</Typography>
                     </Box>
-                    <Typography
-                        variant="caption"
-                        color="text.secondary"
-                        sx={{ mt: 0.5, fontSize: '0.7rem' }}
-                    >
+                    <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, fontSize: '0.7rem' }}>
                         {formatTime(message.timestamp)}
                     </Typography>
                 </Box>
@@ -368,7 +383,7 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ open, onClose, targetUserId, targ
                                             {targetUserName}
                                         </Typography>
                                         <Typography variant="caption" color="text.secondary">
-                                            {hasMessages ? `${chatHistory.messages.length} 条消息` : '开始聊天'}
+                                            {hasMessages ? t('chat.messageCount', { count: chatHistory.messages.length }) : t('chat.startChat')}
                                         </Typography>
                                     </Box>
                                 </Box>
@@ -384,6 +399,23 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ open, onClose, targetUserId, targ
                             {/* 消息列表区域 */}
                             <Box
                                 className="uniformed-scroller"
+                                onPaste={(e: React.ClipboardEvent) => {
+                                    const items = e.clipboardData?.items;
+                                    if (items) {
+                                        for (let i = 0; i < items.length; i++) {
+                                            if (items[i].kind === 'file') {
+                                                const file = items[i].getAsFile();
+                                                if (file) {
+                                                    e.preventDefault();
+                                                    ChatIntegration.sendFileMessage(targetUserId, file).catch(
+                                                        (err: Error) => console.error('[CHAT PANEL] Paste file error:', err)
+                                                    );
+                                                    return;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }}
                                 sx={{
                                     flex: 1,
                                     overflowY: 'auto',

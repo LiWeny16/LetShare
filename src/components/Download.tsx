@@ -7,6 +7,8 @@ import {
   useTheme,
   Backdrop,
   Button,
+  Checkbox,
+  Collapse,
   Dialog,
   DialogContent,
   IconButton,
@@ -30,6 +32,8 @@ import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
 import KeyboardArrowUpIcon from "@mui/icons-material/KeyboardArrowUp";
 import { buttonStyleNormal } from "../pages/share";
 import React from "react";
+import ChatIntegration from "@App/libs/chat/ChatIntegration";
+import FileBlobStore from "@App/libs/chat/FileBlobStore";
 import alertUseMUI from "@App/libs/tools/alert";
 import realTimeColab from "@App/libs/connection/colabLib";
 import { isApp } from "@App/libs/capacitor/user";
@@ -136,9 +140,14 @@ export default function DownloadDrawerSlide({
   const [visible, setVisible] = React.useState(open);
   const [drawerExpanded, setDrawerExpanded] = React.useState(false);
   const [, forceUpdate] = React.useReducer((x) => x + 1, 0);
+  const [persistentFileCount, setPersistentFileCount] = React.useState(0);
 
   // 缩略图缓存：key(receivedFiles key) → dataURL
   const [thumbnails, setThumbnails] = React.useState<Map<string, string>>(new Map());
+
+  // 批量选择与用户分组
+  const [selectedFiles, setSelectedFiles] = React.useState<Set<string>>(new Set());
+  const [expandedUsers, setExpandedUsers] = React.useState<Set<string>>(new Set());
 
   // 全屏预览状态：存储懒加载的 object URL 和对应的 File
   const [previewUrl, setPreviewUrl] = React.useState<string | null>(null);
@@ -160,6 +169,20 @@ export default function DownloadDrawerSlide({
   const receivedMap = realTimeColab.receivedFiles as Map<string, File>;
   const receivingList = Array.from(receivingMap.entries());
   const receivedList = Array.from(receivedMap.entries());
+
+  // 按用户分组接收到的文件
+  const groupedByUser = React.useMemo(() => {
+    const groups: Map<string, { userName: string; files: Array<{ key: string; file: File }> }> = new Map();
+    for (const [key, file] of receivedMap.entries()) {
+      const userId = key.split('::')[0] || 'Unknown';
+      const userName = userId.split(':')[0] || 'Unknown';
+      if (!groups.has(userId)) groups.set(userId, { userName, files: [] });
+      groups.get(userId)!.files.push({ key, file });
+    }
+    return groups;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [receivedList.length, realTimeColab.receivedFiles]);
+
   const replacePendingBrowserDownload = React.useCallback((next: PendingBrowserDownload | null) => {
     setPendingBrowserDownload((current) => {
       if (current && current.url !== next?.url) {
@@ -242,6 +265,49 @@ export default function DownloadDrawerSlide({
       thumbnailKeys.clear();
     };
   }, []);
+
+  // Populate receivedFiles from IndexedDB when in-memory map is empty (e.g. after page refresh)
+  React.useEffect(() => {
+    const receivedMap = realTimeColab.receivedFiles as Map<string, File>;
+    if (receivedMap.size > 0) return;
+
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const fileMessages = await ChatIntegration.getAllFileMessages();
+        let loadedCount = 0;
+
+        for (const { message, userId } of fileMessages) {
+          if (cancelled) return;
+          const fileKey = message.fileMetadata.fileKey;
+          if (!fileKey) continue;
+
+          if (!(await FileBlobStore.hasFile(fileKey))) continue;
+
+          const file = await FileBlobStore.getFile(fileKey);
+          if (!file) continue;
+
+          const mapKey = `${userId}::${file.name}`;
+          if (receivedMap.has(mapKey)) continue;
+
+          receivedMap.set(mapKey, file);
+          loadedCount++;
+        }
+
+        if (!cancelled && loadedCount > 0) {
+          setPersistentFileCount(loadedCount);
+          forceUpdate();
+        }
+      } catch (err) {
+        console.warn('[Download] Failed to load persisted files from IndexedDB:', err);
+      }
+    })();
+
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const handleSlideExited = () => {
     setVisible(false);
     onClose();
@@ -462,8 +528,114 @@ export default function DownloadDrawerSlide({
     realTimeColab.clearReceivedFiles();
     setThumbnails(new Map());
     thumbnailKeysRef.current.clear();
+    setSelectedFiles(new Set());
     forceUpdate();
     alertUseMUI("已清空接收列表并释放浏览器缓存", 2000, { kind: "success" });
+  };
+
+  // —— 批量选择与用户分组操作 ——
+
+  const toggleFileSelection = (key: string) => {
+    setSelectedFiles((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  const toggleSelectAllInGroup = (userId: string, selectAll: boolean) => {
+    const group = groupedByUser.get(userId);
+    if (!group) return;
+    setSelectedFiles((prev) => {
+      const next = new Set(prev);
+      group.files.forEach(({ key }) => {
+        if (selectAll) next.add(key);
+        else next.delete(key);
+      });
+      return next;
+    });
+  };
+
+  const deleteSelectedFiles = () => {
+    if (selectedFiles.size === 0) return;
+    if (!window.confirm(`确定要删除选中的 ${selectedFiles.size} 个文件吗？`)) return;
+
+    // 如果正在预览的文件被删除，先关闭预览
+    if (previewUrlRef.current) {
+      const previewKey = Array.from(realTimeColab.receivedFiles.entries()).find(
+        ([, f]) => f === previewFile
+      )?.[0];
+      if (previewKey && selectedFiles.has(previewKey)) {
+        closePreview();
+      }
+    }
+
+    selectedFiles.forEach((key) => {
+      realTimeColab.receivedFiles.delete(key);
+      if (thumbnailsRef.current.has(key)) {
+        const dataUrl = thumbnailsRef.current.get(key)!;
+        URL.revokeObjectURL(dataUrl);
+        thumbnailKeysRef.current.delete(key);
+      }
+    });
+
+    setThumbnails((prev) => {
+      const next = new Map(prev);
+      selectedFiles.forEach((key) => next.delete(key));
+      return next;
+    });
+    setSelectedFiles(new Set());
+    forceUpdate();
+  };
+
+  const deleteUserFiles = (userId: string) => {
+    const group = groupedByUser.get(userId);
+    if (!group) return;
+    if (!window.confirm(`确定要删除 ${group.userName} 的全部 ${group.files.length} 个文件吗？`)) return;
+
+    // 如果正在预览的文件属于该用户，先关闭预览
+    if (previewUrlRef.current) {
+      const previewKey = Array.from(realTimeColab.receivedFiles.entries()).find(
+        ([, f]) => f === previewFile
+      )?.[0];
+      if (previewKey) {
+        const previewUserId = previewKey.split('::')[0];
+        if (previewUserId === userId) {
+          closePreview();
+        }
+      }
+    }
+
+    group.files.forEach(({ key }) => {
+      realTimeColab.receivedFiles.delete(key);
+      if (thumbnailsRef.current.has(key)) {
+        const dataUrl = thumbnailsRef.current.get(key)!;
+        URL.revokeObjectURL(dataUrl);
+        thumbnailKeysRef.current.delete(key);
+      }
+    });
+
+    setThumbnails((prev) => {
+      const next = new Map(prev);
+      group.files.forEach(({ key }) => next.delete(key));
+      return next;
+    });
+    setSelectedFiles((prev) => {
+      const next = new Set(prev);
+      group.files.forEach(({ key }) => next.delete(key));
+      return next;
+    });
+    forceUpdate();
+  };
+
+  const toggleUserExpand = (userId: string) => {
+    setExpandedUsers((prev) => {
+      const next = new Set(prev);
+      if (next.has(userId)) next.delete(userId);
+      else next.add(userId);
+      return next;
+    });
   };
 
   const transferStatus = realTimeColab.fileTransferStatus;
@@ -847,11 +1019,33 @@ export default function DownloadDrawerSlide({
                   );
                 })()}
 
-                {/* 已接收文件展示 - 列表样式 */}
+                {/* 已接收文件展示 - 按用户分组 */}
                 {receivedList.length > 0 && (
                   <Box>
                     <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", mt: 2, mb: 1 }}>
-                      <Typography variant="subtitle2"><FolderIcon sx={{ mr: 0.5, verticalAlign: 'middle', fontSize: '1.1em' }} />{t('transfer.receivedFiles')}</Typography>
+                      <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
+                        <Checkbox
+                          size="small"
+                          checked={selectedFiles.size > 0 && selectedFiles.size === receivedList.length}
+                          indeterminate={selectedFiles.size > 0 && selectedFiles.size < receivedList.length}
+                          onChange={() => {
+                            if (selectedFiles.size === receivedList.length) {
+                              setSelectedFiles(new Set());
+                            } else {
+                              setSelectedFiles(new Set(receivedList.map(([k]) => k)));
+                            }
+                          }}
+                        />
+                        <Typography variant="subtitle2">
+                          <FolderIcon sx={{ mr: 0.5, verticalAlign: 'middle', fontSize: '1.1em' }} />
+                          {t('transfer.receivedFiles')}
+                          {persistentFileCount > 0 && (
+                            <Typography variant="caption" color="text.secondary" component="span" sx={{ ml: 0.75 }}>
+                              ({persistentFileCount} restored)
+                            </Typography>
+                          )}
+                        </Typography>
+                      </Box>
                       <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
                         <Button onClick={clearReceivedFiles} size="small">
                           清空
@@ -860,78 +1054,170 @@ export default function DownloadDrawerSlide({
                           {t("button.downloadAll")}
                         </Button>
                       </Box>
-                      {/* <IconButton onClick={downloadAllAsZip} size="small" >
-
-                        <DownloadIcon fontSize="small" />
-                      </IconButton> */}
                     </Box>
 
-                    <Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
-                      {receivedList.map(([key, file]) => {
-                        const isImg = isImageFile(file.name);
-                        const thumbUrl = thumbnails.get(key);
+                    <Box sx={{ display: "flex", flexDirection: "column", gap: 1.5 }}>
+                      {Array.from(groupedByUser.entries()).map(([userId, group]) => {
+                        const isExpanded = expandedUsers.has(userId) || groupedByUser.size === 1;
+                        const allSelected = group.files.every(({ key }) => selectedFiles.has(key));
+                        const someSelected = group.files.some(({ key }) => selectedFiles.has(key));
+                        const totalSize = group.files.reduce((sum, { file }) => sum + file.size, 0);
+
                         return (
                           <Box
-                            key={key}
-                            onClick={() => {
-                              // 图片：点击打开全屏预览；其他文件：直接下载
-                              if (isImg) {
-                                openPreview(file);
-                              } else {
-                                downloadFile(file);
-                              }
-                            }}
+                            key={userId}
                             sx={{
-                              display: "flex",
-                              alignItems: "center",
-                              gap: 1.5,
-                              px: 2,
-                              py: 1.5,
                               borderRadius: 2,
-                              boxShadow: 1,
-                              cursor: "pointer",
-                              transition: "0.2s",
-                              "&:hover": {
-                                boxShadow: 3,
-                                backgroundColor: theme.palette.action.hover,
-                              },
+                              border: `1px solid ${theme.palette.divider}`,
+                              overflow: "hidden",
                             }}
                           >
-                            {/* 图片：显示缩略图（已生成）或通用图标（生成中） */}
-                            {isImg && thumbUrl ? (
-                              <Box
-                                component="img"
-                                src={thumbUrl}
-                                alt={file.name}
-                                sx={{
-                                  width: 40,
-                                  height: 40,
-                                  objectFit: "cover",
-                                  borderRadius: 1,
-                                  flexShrink: 0,
-                                }}
-                              />
-                            ) : (
-                              getFileIcon(file.name)
-                            )}
-                            <Typography variant="body2" noWrap sx={{ flex: 1 }}>
-                              {file.name}
-                            </Typography>
-                            <IconButton
-                              size="small"
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                downloadFile(file);
+                            {/* 用户组头部 */}
+                            <Box
+                              sx={{
+                                display: "flex",
+                                alignItems: "center",
+                                gap: 1,
+                                px: 1.5,
+                                py: 1,
+                                backgroundColor: theme.palette.action.hover,
+                                cursor: "pointer",
                               }}
-                              aria-label={`download ${file.name}`}
-                              sx={{ color: "text.secondary", flexShrink: 0 }}
+                              onClick={() => toggleUserExpand(userId)}
                             >
-                              <DownloadIcon fontSize="small" />
-                            </IconButton>
+                              <Checkbox
+                                size="small"
+                                checked={allSelected}
+                                indeterminate={someSelected && !allSelected}
+                                onChange={(event) => {
+                                  event.stopPropagation();
+                                  toggleSelectAllInGroup(userId, !allSelected);
+                                }}
+                                onClick={(event) => event.stopPropagation()}
+                              />
+                              {isExpanded ? (
+                                <KeyboardArrowUpIcon fontSize="small" sx={{ color: "text.secondary" }} />
+                              ) : (
+                                <KeyboardArrowDownIcon fontSize="small" sx={{ color: "text.secondary" }} />
+                              )}
+                              <Typography variant="body2" sx={{ fontWeight: 600, flex: 1 }}>
+                                {group.userName}
+                              </Typography>
+                              <Typography variant="caption" color="text.secondary">
+                                {group.files.length} / {formatSize(totalSize)}
+                              </Typography>
+                              <Tooltip title={t('download.deleteAllFrom', { name: group.userName })}>
+                                <IconButton
+                                  size="small"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    deleteUserFiles(userId);
+                                  }}
+                                  sx={{ color: "text.secondary", flexShrink: 0 }}
+                                >
+                                  <CloseIcon fontSize="small" />
+                                </IconButton>
+                              </Tooltip>
+                            </Box>
+
+                            {/* 文件列表（可折叠） */}
+                            <Collapse in={isExpanded}>
+                              <Box sx={{ display: "flex", flexDirection: "column" }}>
+                                {group.files.map(({ key, file }) => {
+                                  const isImg = isImageFile(file.name);
+                                  const thumbUrl = thumbnails.get(key);
+                                  const isSelected = selectedFiles.has(key);
+                                  return (
+                                    <Box
+                                      key={key}
+                                      sx={{
+                                        display: "flex",
+                                        alignItems: "center",
+                                        gap: 1.5,
+                                        px: 2,
+                                        py: 1.25,
+                                        borderTop: `1px solid ${theme.palette.divider}`,
+                                        cursor: "pointer",
+                                        transition: "0.15s",
+                                        "&:hover": {
+                                          backgroundColor: theme.palette.action.hover,
+                                        },
+                                      }}
+                                      onClick={() => {
+                                        if (isImg) {
+                                          openPreview(file);
+                                        } else {
+                                          downloadFile(file);
+                                        }
+                                      }}
+                                    >
+                                      <Checkbox
+                                        size="small"
+                                        checked={isSelected}
+                                        onChange={(event) => {
+                                          event.stopPropagation();
+                                          toggleFileSelection(key);
+                                        }}
+                                        onClick={(event) => event.stopPropagation()}
+                                      />
+                                      {/* 图片：显示缩略图（已生成）或通用图标（生成中） */}
+                                      {isImg && thumbUrl ? (
+                                        <Box
+                                          component="img"
+                                          src={thumbUrl}
+                                          alt={file.name}
+                                          sx={{
+                                            width: 36,
+                                            height: 36,
+                                            objectFit: "cover",
+                                            borderRadius: 1,
+                                            flexShrink: 0,
+                                          }}
+                                        />
+                                      ) : (
+                                        getFileIcon(file.name)
+                                      )}
+                                      <Typography variant="body2" noWrap sx={{ flex: 1 }}>
+                                        {file.name}
+                                      </Typography>
+                                      <Typography variant="caption" color="text.secondary" sx={{ flexShrink: 0 }}>
+                                        {formatSize(file.size)}
+                                      </Typography>
+                                      <IconButton
+                                        size="small"
+                                        onClick={(event) => {
+                                          event.stopPropagation();
+                                          downloadFile(file);
+                                        }}
+                                        aria-label={`download ${file.name}`}
+                                        sx={{ color: "text.secondary", flexShrink: 0 }}
+                                      >
+                                        <DownloadIcon fontSize="small" />
+                                      </IconButton>
+                                    </Box>
+                                  );
+                                })}
+                              </Box>
+                            </Collapse>
                           </Box>
                         );
                       })}
                     </Box>
+
+                    {/* 批量删除按钮 */}
+                    {selectedFiles.size > 0 && (
+                      <Box sx={{ display: "flex", justifyContent: "center", mt: 2 }}>
+                        <Button
+                          variant="contained"
+                          color="error"
+                          size="small"
+                          onClick={deleteSelectedFiles}
+                          sx={{ ...buttonStyleNormal }}
+                        >
+                          {t('download.deleteSelected')} ({selectedFiles.size})
+                        </Button>
+                      </Box>
+                    )}
                   </Box>
                 )}
               </>
