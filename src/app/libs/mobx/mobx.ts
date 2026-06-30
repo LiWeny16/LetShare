@@ -32,6 +32,8 @@ class SettingsStore {
   constructor() {
     makeAutoObservable(this);
     this.loadFromLocalStorage();
+    // version 必须始终跟随 app 构建版本，不能被 localStorage 旧值覆盖
+    this.settings.version = DEFAULT_SETTINGS.version;
 
     // 自动保存 settings 到 localStorage（unrmb 不存）
     reaction(
