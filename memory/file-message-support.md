@@ -25,7 +25,7 @@ Added complete file message support to the chat panel, unifying the previously s
 - `src/components/Download.tsx` — Added per-user file grouping, collapsible sections, batch select/delete, select-all, clear-all.
 - `src/app/libs/i18n/translation.ts` — Added 14 new i18n keys across en/zh/ms/id.
 - `src/types/index.d.ts` — Added FileCategory and FileTransferStatus types.
-- `vite.config.ts` — SW cache bumped to v9.
+- `vite.config.ts` — SW cache bumped to v9 (bumped to v10 in v3.4.0).
 
 ## Architecture decisions
 - File blobs stored in IndexedDB (same DB as chat history, shared connection via ChatHistoryManager.getDB())

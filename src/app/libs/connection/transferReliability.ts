@@ -203,6 +203,8 @@ export interface PageLifecycleTransferCandidate {
  backgroundDurationMs: number;
  timeoutMs: number;
  activeTransferCount: number;
+ /** 设备类型 — 移动端 (apple/android) 需要更长的后台超时以适配 iOS Safari 挂起行为 */
+ deviceType?: DeviceType;
 }
 
 export type ServerTransferCapability =
@@ -305,10 +307,18 @@ export function isP2PSendTransferCurrent(
 export function shouldStopTransfersForPageLifecycle(
  candidate: PageLifecycleTransferCandidate
 ): boolean {
- return (
-  candidate.activeTransferCount > 0 &&
-  candidate.backgroundDurationMs >= candidate.timeoutMs
- );
+ if (candidate.activeTransferCount === 0) {
+  return false;
+ }
+
+ // 移动端 (iPhone/iPad/Android) 页面从后台恢复更慢, 将超时从 30s 延长到 60s
+ // 避免 iOS Safari 挂起 WebSocket 后被过早判定为传输超时
+ const isMobile = candidate.deviceType === "apple" || candidate.deviceType === "android";
+ const effectiveTimeoutMs = isMobile
+  ? Math.max(candidate.timeoutMs, 60_000)
+  : candidate.timeoutMs;
+
+ return candidate.backgroundDurationMs >= effectiveTimeoutMs;
 }
 
 export function getTransferCompletionAckTimeoutMs(options: {

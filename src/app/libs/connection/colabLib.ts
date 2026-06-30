@@ -2918,6 +2918,7 @@ export class RealTimeColab {
       backgroundDurationMs,
       timeoutMs: overtime,
       activeTransferCount,
+      deviceType: getDeviceType(),
      })) {
       this.stopActiveFileTransfersForLifecycle(
        t('alert.p2pBackgroundTimeout')
@@ -2956,7 +2957,11 @@ export class RealTimeColab {
      ablyTimeoutHandle = null;
     }
     if (!this.isConnected()) {
-     // console.debug(" 页面回到前台，重新连接Ably...");
+     // 移动端重连后清理残留的发送会话和传输进度状态
+     // 服务器在断开期间可能已清理会话, 本地残留的 sending session 需要清除
+     this.serverFileTransfer?.cancelAllSendingSessions();
+     this.setFileTransferProgress(null);
+     this.setFileTransferStatus(null, "info");
     }
    }
   });

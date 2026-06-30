@@ -119,7 +119,7 @@ export default defineConfig({
             urlPattern: /^https:\/\/.*/i,
             handler: 'StaleWhileRevalidate',
             options: {
-              cacheName: 'external-cache-v9',
+              cacheName: 'external-cache-v11',
               expiration: {
                 maxEntries: 200,
                 maxAgeSeconds: 60 * 60 * 24 * 7 // 7天

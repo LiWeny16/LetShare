@@ -128,6 +128,9 @@ export class ServerFileTransfer {
  private sendCompletionWaiters: Map<string, SendCompletionWaiter> = new Map();
  private unknownBinaryTransferIssueKeys = new Set<string>();
  private completedTransferIds = new Set<string>(); // 已完成传输的 ID — 用于抑制传输完成后的迟到 error/end 消息
+ private lastMalformedAlertTime = 0; // 抑制重连期间重复的畸形消息告警
+ private readonly reconnectGraceMs = 5000; // 重连宽限期 — 在此期间忽略迟到/失效的传输控制消息
+ private lastDisconnectTime = 0;
  private readonly DEFAULT_CHUNK_SIZE = 64 * 1024; // 64KB
  private readonly BASIC_SIZE_LIMIT = 50 * 1024 * 1024; // 50MB
  /** 对齐 3GB 上限 */
@@ -627,6 +630,14 @@ export class ServerFileTransfer {
   data: unknown,
   error: unknown
  ): void {
+  // 抑制重连期间的重复畸形消息告警（移动端网络切换/后台恢复时常见）
+  const now = Date.now();
+  if (now - this.lastMalformedAlertTime < 3000) {
+   console.warn('[ServerFileTransfer] Suppressing duplicate malformed message alert');
+   return;
+  }
+  this.lastMalformedAlertTime = now;
+
   const errorDetail = error instanceof Error ? error.message : String(error);
   const transferId =
    typeof data === "object" &&
@@ -640,17 +651,28 @@ export class ServerFileTransfer {
   console.warn(`[ServerFileTransfer] Malformed transfer message ${type}`, data, error);
 
   if (!transferId) {
-   if (this.sendingSessions.size > 0 || this.receivingSessions.size > 0) {
-    this.handleConnectionLost(reason);
-   }
-   // 无活跃会话时静默丢弃（取消传输后的迟到消息是正常现象）
+   // 不要因为单条畸形消息就杀死所有传输会话 — 移动端网络切换/后台恢复
+   // 导致的迟到或无头消息是正常现象，静默丢弃即可
+   console.warn(`[ServerFileTransfer] Malformed message without transferId ignored: ${type}`, data);
    return;
   }
 
+  // Fix 4: 静默忽略已完成传输的迟到/失效消息, 避免移动端重连后误报错误
+  if (this.completedTransferIds.has(transferId)) {
+   console.warn(`[ServerFileTransfer] Ignoring message for already-completed transfer: ${transferId}`);
+   return;
+  }
+
+  // Fix 1: 重连宽限期内, 未匹配到活跃会话的转输消息静默忽略
+  // 移动端网络切换/后台恢复时, 服务器可能在断开期间已清理会话
+  const withinReconnectGrace = (now - this.lastDisconnectTime) < this.reconnectGraceMs;
   const receivingSession = this.receivingSessions.get(transferId);
   const sendingSession = this.sendingSessions.get(transferId);
 
   if (!receivingSession && !sendingSession) {
+   if (withinReconnectGrace) {
+    console.warn(`[ServerFileTransfer] Ignoring stale message for untracked transfer (within reconnect grace): ${transferId}`);
+   }
    return;
   }
 
@@ -685,6 +707,7 @@ export class ServerFileTransfer {
  }
 
  public handleConnectionLost(reason: string): void {
+  this.lastDisconnectTime = Date.now(); // 记录断开时间, 用于重连宽限期判断
   const activeTransferCount = this.sendingSessions.size + this.receivingSessions.size;
   const pendingAckCount = this.completionAcks.rejectAll(
    new TransferTimeoutError(reason)
@@ -710,8 +733,11 @@ export class ServerFileTransfer {
   this.clearAllTimeouts();
   this.currentSendingTransferId = null;
   this.onProgressCallback?.(null);
-  this.setTransferStatus(reason, "error");
-  alertUseMUI(reason, 4000, { kind: "error" });
+
+  // 使用连接丢失专用提示（区别于畸形消息错误）
+  const displayReason = reason || t('alert.serverConnectionLost');
+  this.setTransferStatus(displayReason, "error");
+  alertUseMUI(displayReason, 4000, { kind: "error" });
  }
 
  /**
@@ -1617,5 +1643,29 @@ export class ServerFileTransfer {
 
  public getActiveTransferCount(): number {
   return this.sendingSessions.size + this.receivingSessions.size;
+ }
+
+ /**
+  * 清理所有发送会话 — 移动端重连后调用, 避免残留的 pending/accepted 会话阻塞新传输
+  */
+ public cancelAllSendingSessions(): void {
+  if (this.sendingSessions.size === 0) return;
+
+  const reason = t('alert.serverConnectionLost');
+  for (const [transferId, session] of this.sendingSessions) {
+   if (session.status === "completed") continue;
+
+   if (session.status !== "pending") {
+    this.completionAcks.reject(transferId, new TransferTimeoutError(reason));
+   } else {
+    this.completionAcks.cancel(transferId);
+   }
+   this.rejectSendCompletion(transferId, new TransferTimeoutError(reason));
+   this.clearTransferTimeout(transferId);
+  }
+  this.sendingSessions.clear();
+  this.currentSendingTransferId = null;
+  this.onProgressCallback?.(null);
+  console.debug(`[ServerFileTransfer] All sending sessions cleared after reconnection`);
  }
 }

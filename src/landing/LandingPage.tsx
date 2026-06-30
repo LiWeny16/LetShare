@@ -86,7 +86,7 @@ const defaultStoredSettings = {
   customServerUrl: "wss://ecs.letshare.fun/",
   authToken: "98d9a399675116e5256e9082c192bc06eb6434937af99f201252e9424c7a5652",
   ablyKey: "4TtssQ.e9OvDA:wYBGdtWQNgicbeIKNtgeV_s5XEKmfLKD_Gue5XQrWuw",
-  version: "3.3.0",
+  version: "3.4.0",
   isNewUser: true,
 };
 
