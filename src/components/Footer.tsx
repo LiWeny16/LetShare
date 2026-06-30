@@ -57,7 +57,7 @@ const Footer = observer(() => {
         }}
       >
         <Typography variant="body2" color="text.secondary">
-          © 2026 LetShare v{settingsStore.get("version")}
+          © 2026 Copyright LetShare v{settingsStore.get("version")} · By Onion
         </Typography>
         <Box sx={{ display: 'flex', alignItems: 'center' }}>
           <IconButton
