@@ -345,7 +345,7 @@
   <script>
     // SW 自愈：检测旧 SW 导致的 dot-prefix 资源加载失败，自动注销并重载
     if ("serviceWorker" in navigator && location.protocol === "https:") {
-      var swPoisonPattern = /\.(pnpm-vendor|common-vendor|ably-vendor|react-vendor|mobx-vendor|mui-vendor|emotion-vendor|jszip-vendor)/;
+      var swPoisonPattern = /\.(pnpm-vendor|common-vendor|ably-vendor|react-vendor|mobx-vendor|mui-vendor|emotion-vendor|jszip-vendor|index-)/;
       window.addEventListener("error", function(e) {
         var target = e.target;
         if (!target || !target.tagName) return;

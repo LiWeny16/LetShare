@@ -46,9 +46,9 @@ export default defineConfig({
     assetsInlineLimit: 4096000, // 4000kb  超过会以base64字符串显示
     outDir: "docs", // 输出名称
     assetsDir: "static", // 静态资源目录
-    // Keep previous hashed chunks available while CDN edges and service workers
-    // can still serve older HTML that references them.
-    emptyOutDir: false,
+    // CDN edges should serve fresh content; stale chunks cause 404s.
+    // Combined with NetworkFirst HTML caching, old files are no longer needed.
+    emptyOutDir: true,
   },
   resolve: {
     alias: {
@@ -87,11 +87,11 @@ export default defineConfig({
         skipWaiting: true,
         // 设置检查更新的间隔(毫秒)
         cleanupOutdatedCaches: true,
-        navigateFallbackDenylist: [/^\/landing\.html(?:\?.*)?$/],
-        // Landing page has its own entry and animation bundle. Keep it out of
-        // app precache so the root sharing tool does not fetch GSAP in the
-        // background during first use.
+        // Don't precache index.html — stale HTML from SW cache is the #1 source
+        // of "loading failed" errors. Use NetworkFirst runtime route instead.
+        navigateFallback: undefined,
         globIgnores: [
+          '**/index.html',
           '**/landing.html',
           '**/*landing*.js',
           '**/*landing*.css',
@@ -102,11 +102,24 @@ export default defineConfig({
         // 设置运行时缓存策略
         runtimeCaching: [
           {
+            // Navigation: NetworkFirst — always get fresh HTML, fall back to cache
+            urlPattern: ({request}: {request: Request}) => request.mode === 'navigate',
+            handler: 'NetworkFirst',
+            options: {
+              cacheName: 'html-cache-v1',
+              networkTimeoutSeconds: 3,
+              expiration: {
+                maxEntries: 10,
+                maxAgeSeconds: 60 * 60 // 1 hour
+              },
+            },
+          },
+          {
             // 缓存外部资源,使用 StaleWhileRevalidate 策略
             urlPattern: /^https:\/\/.*/i,
             handler: 'StaleWhileRevalidate',
             options: {
-              cacheName: 'external-cache-v6',
+              cacheName: 'external-cache-v7',
               expiration: {
                 maxEntries: 200,
                 maxAgeSeconds: 60 * 60 * 24 * 7 // 7天
