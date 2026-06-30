@@ -792,13 +792,9 @@ export class ServerFileTransfer {
      throw error;
     }
    } else {
-    const password = prompt(`文件大小 ${sizeMB} MB 超过50MB限制\n请输入管理员密码:`);
-    if (!password) {
-     this.sendCompletionWaiters.delete(transferId);
-     alertUseMUI(t('alert.passwordRequired'), 3000, { kind: "warning" });
-     throw new Error(t('alert.passwordRequired'));
-    }
-    adminPass = password;
+    // 未注册 PRO 回调 — 直接拒绝（不应到达这里，colabLib 总是注册回调）
+    this.sendCompletionWaiters.delete(transferId);
+    throw new Error(t('alert.passwordRequired'));
    }
   }
 
