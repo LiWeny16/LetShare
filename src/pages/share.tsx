@@ -162,6 +162,102 @@ const Share = observer(() => {
 
   // 文件/图片按钮可用条件: 有已连接用户, 或已连上服务器 (有用户即可通过P2P/中继发送)
   const canSendFile = hasConnectedUsers || isConnectedToServer;
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+
+    const history = ((window as any).__LET_SHARE_E2E_HISTORY__ ||= {
+      statuses: [],
+      progress: [],
+      dom: [],
+    });
+    const transferStatus = realTimeColab.fileTransferStatus;
+    const lastStatus = history.statuses[history.statuses.length - 1];
+    if (
+      transferStatus.message &&
+      (
+        lastStatus?.message !== transferStatus.message ||
+        lastStatus?.kind !== transferStatus.kind
+      )
+    ) {
+      history.statuses.push({
+        message: transferStatus.message,
+        kind: transferStatus.kind,
+        at: Date.now(),
+      });
+    }
+
+    const outgoing = realTimeColab.hasActiveOutgoingFileTransfer();
+    const lastProgress = history.progress[history.progress.length - 1];
+    if (
+      fileTransferProgress !== null &&
+      (lastProgress?.value !== fileTransferProgress || lastProgress?.outgoing !== outgoing)
+    ) {
+      history.progress.push({
+        value: fileTransferProgress,
+        outgoing,
+        fileName: realTimeColab.fileMetaInfo.name,
+        at: Date.now(),
+      });
+    }
+
+    const domState = {
+      sendVisible: document.querySelector('[data-testid="server-send-progress"]') !== null,
+      receiveVisible: document.querySelector('[data-testid="server-receive-progress"]') !== null,
+    };
+    const lastDom = history.dom[history.dom.length - 1];
+    if (
+      !lastDom ||
+      lastDom.sendVisible !== domState.sendVisible ||
+      lastDom.receiveVisible !== domState.receiveVisible
+    ) {
+      history.dom.push({ ...domState, at: Date.now() });
+    }
+    const e2eApi = {
+      getHistory: () => (window as any).__LET_SHARE_E2E_HISTORY__ ?? {
+        statuses: [],
+        progress: [],
+        dom: [],
+      },
+      getState: () => ({
+        uniqId: realTimeColab.getUniqId(),
+        users: Array.from(realTimeColab.userList.entries()).map(([uniqId, user]) => ({
+          uniqId,
+          status: user.status,
+          userType: user.userType,
+        })),
+        connectedUsers,
+        receivedFiles: Array.from(realTimeColab.receivedFiles.entries()).map(([key, file]) => ({
+          key,
+          name: file.name,
+          size: file.size,
+          type: file.type,
+        })),
+        sentFiles: Array.from(realTimeColab.sentFiles.entries()).map(([key, file]) => ({
+          key,
+          ...file,
+        })),
+        fileTransferStatus: realTimeColab.fileTransferStatus,
+        selectedButton,
+        selectedFileName: selectedFile?.name ?? null,
+        fileTransferProgress,
+        fileSendingTargetUser,
+        hasActiveOutgoingFileTransfer: realTimeColab.hasActiveOutgoingFileTransfer(),
+        serverSendProgressVisible: document.querySelector('[data-testid="server-send-progress"]') !== null,
+        serverReceiveProgressVisible: document.querySelector('[data-testid="server-receive-progress"]') !== null,
+        isConnectedToServer: settingsStore.getUnrmb("isConnectedToServer") === true,
+      }),
+      broadcastDiscover: () => {
+        realTimeColab.broadcastSignal({ type: "discover", userType: getDeviceType() });
+      },
+    };
+
+    (window as any).__LET_SHARE_E2E__ = e2eApi;
+    return () => {
+      if ((window as any).__LET_SHARE_E2E__ === e2eApi) {
+        delete (window as any).__LET_SHARE_E2E__;
+      }
+    };
+  }, [connectedUsers, selectedButton, selectedFile, fileTransferProgress, fileSendingTargetUser, downloadPageState]);
 
 
   const getUserTypeIcon = (userType: string) => {
@@ -743,6 +839,8 @@ const Share = observer(() => {
               <Box key={user.uniqId}>
                 <ButtonBase
                   component="div"
+                  data-testid="connected-user"
+                  data-user-id={user.uniqId}
                   onClick={(e) => {
                     if (selectedButton === "video") {
                       // 如果尚未建立视频连接，则主动发起连接

@@ -32,6 +32,7 @@ export class CustomConnectionProvider implements IConnectionProvider {
       const url = `${serverUrl}?token=${authToken}&userId=${this.config.uniqId}`;
 
       this.ws = new WebSocket(url);
+      this.ws.binaryType = "arraybuffer";
 
       return new Promise((resolve, reject) => {
         if (!this.ws) {

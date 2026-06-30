@@ -313,6 +313,14 @@ export default function DownloadDrawerSlide({
     if (receivingMap.size === 0) setVisible(false);
   };
 
+  const handleCancelServerReceive = () => {
+    onClose()
+    alertUseMUI("终止接收", 2000, { kind: "error" });
+    realTimeColab.abortFileTransferToUser?.();
+    setProgress(0);
+    if (receivingMap.size === 0) setVisible(false);
+  };
+
 
   // 文件扩展名映射图标组件
   const getFileIcon = (filename: string) => {
@@ -460,9 +468,15 @@ export default function DownloadDrawerSlide({
   const transferStatus = realTimeColab.fileTransferStatus;
   const statusMessage = transferStatus.message;
   const showSendingProgress = progress !== null && realTimeColab.hasActiveOutgoingFileTransfer();
+  const showServerReceivingProgress =
+    progress !== null &&
+    !realTimeColab.hasActiveOutgoingFileTransfer() &&
+    receivingList.length === 0;
+  const serverReceivingFileName = realTimeColab.fileMetaInfo?.name ?? "";
   const sentCount = (realTimeColab.sentFiles?.size ?? 0);
   const hasContent =
     showSendingProgress ||
+    showServerReceivingProgress ||
     receivingList.length > 0 ||
     receivedList.length > 0 ||
     sentCount > 0 ||
@@ -613,6 +627,7 @@ export default function DownloadDrawerSlide({
                 {showSendingProgress && (
                   <Box
                     key="sending"
+                    data-testid="server-send-progress"
                     sx={{
                       display: "flex",
                       flexDirection: "column",
@@ -654,6 +669,72 @@ export default function DownloadDrawerSlide({
                         color="error"
                         size="small"
                         onClick={handleCancelSend}
+                        sx={{
+                          whiteSpace: "nowrap",
+                          minWidth: 64,
+                          ...buttonStyleNormal,
+                        }}
+                      >
+                        取消
+                      </Button>
+                    </Box>
+                  </Box>
+                )}
+
+                {showServerReceivingProgress && (
+                  <Box
+                    key="server-receiving"
+                    data-testid="server-receive-progress"
+                    sx={{
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 1,
+                    }}
+                  >
+                    <Typography variant="body2" color="text.secondary">
+                      <DownloadIcon sx={{ mr: 0.5, verticalAlign: 'middle', fontSize: '1.1em' }} />
+                      {t("toast.receivingFile")}
+                    </Typography>
+                    <Box
+                      sx={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 2,
+                      }}
+                    >
+                      <Box sx={{ flex: 1, minWidth: 0 }}>
+                        {serverReceivingFileName && (
+                          <Typography
+                            variant="caption"
+                            color="text.secondary"
+                            sx={{ display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                          >
+                            {serverReceivingFileName}
+                          </Typography>
+                        )}
+                        <Typography
+                          variant="caption"
+                          color="text.secondary"
+                        >
+                          {(progress ?? 0) >= 99
+                            ? t("transfer.awaitingConfirmation")
+                            : `${(progress ?? 0).toFixed(1)}%`}
+                        </Typography>
+                        <LinearProgress
+                          variant="determinate"
+                          value={progress ?? 0}
+                          sx={{
+                            height: 8,
+                            borderRadius: 5,
+                            mt: 0.5,
+                          }}
+                        />
+                      </Box>
+                      <Button
+                        variant="contained"
+                        color="error"
+                        size="small"
+                        onClick={handleCancelServerReceive}
                         sx={{
                           whiteSpace: "nowrap",
                           minWidth: 64,

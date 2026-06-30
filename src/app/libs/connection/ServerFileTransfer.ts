@@ -111,6 +111,11 @@ interface ReceiveSession {
 
 type TransferStatusKind = "info" | "warning" | "error" | "success";
 
+type SendCompletionWaiter = {
+ resolve: () => void;
+ reject: (error: Error) => void;
+};
+
 export class ServerFileTransfer {
  private connectionManager: ConnectionManager;
  private sendingSessions: Map<string, TransferSession> = new Map();
@@ -118,6 +123,7 @@ export class ServerFileTransfer {
  private transferTimeouts: Map<string, ReturnType<typeof setTimeout>> = new Map();
  private receiveTimeouts: Map<string, ReturnType<typeof setTimeout>> = new Map();
  private completionAcks = new TransferAckTracker();
+ private sendCompletionWaiters: Map<string, SendCompletionWaiter> = new Map();
  private unknownBinaryTransferIssueKeys = new Set<string>();
  private completedTransferIds = new Set<string>(); // 已完成传输的 ID — 用于抑制传输完成后的迟到 error/end 消息
  private readonly DEFAULT_CHUNK_SIZE = 64 * 1024; // 64KB
@@ -191,6 +197,31 @@ export class ServerFileTransfer {
   this.onTransferStatusChange?.(message, kind);
  }
 
+ private toError(reason: unknown): Error {
+  if (reason instanceof Error) return reason;
+  return new Error(String(reason || t('toast.fileTransferFailed')));
+ }
+
+ private resolveSendCompletion(transferId: string): void {
+  const waiter = this.sendCompletionWaiters.get(transferId);
+  if (!waiter) return;
+  this.sendCompletionWaiters.delete(transferId);
+  waiter.resolve();
+ }
+
+ private rejectSendCompletion(transferId: string, reason: unknown): void {
+  const waiter = this.sendCompletionWaiters.get(transferId);
+  if (!waiter) return;
+  this.sendCompletionWaiters.delete(transferId);
+  waiter.reject(this.toError(reason));
+ }
+
+ private rejectAllSendCompletions(reason: unknown): void {
+  for (const transferId of Array.from(this.sendCompletionWaiters.keys())) {
+   this.rejectSendCompletion(transferId, reason);
+  }
+ }
+
  /**
   * 设置消息处理器
   */
@@ -262,6 +293,10 @@ export class ServerFileTransfer {
 
   try {
    const { meta, payload } = decodeTransferFrame(data);
+   if (this.completedTransferIds.has(meta.transfer_id)) {
+    console.debug(`[ServerFileTransfer] Ignoring late chunk for completed transfer=${meta.transfer_id}`);
+    return;
+   }
    const session = this.receivingSessions.get(meta.transfer_id);
    if (!session || session.status !== "receiving") {
     const reason = t('alert.chunkWithoutTransfer');
@@ -357,10 +392,9 @@ export class ServerFileTransfer {
   }
 
   if (session.receivedCount === session.totalChunks) {
-   this.finalizeReceivedFile(session);
-  } else {
-   this.refreshReceiveTimeout(session.transferId);
+   console.debug(`[ServerFileTransfer] All chunks received, waiting for transfer end: ${session.transferId}`);
   }
+  this.refreshReceiveTimeout(session.transferId);
  }
 
  private refreshReceiveTimeout(transferId: string) {
@@ -604,6 +638,7 @@ export class ServerFileTransfer {
   const pendingAckCount = this.completionAcks.rejectAll(
    new TransferTimeoutError(reason)
   );
+  this.rejectAllSendCompletions(new TransferTimeoutError(reason));
 
   if (activeTransferCount === 0 && pendingAckCount === 0) {
    return;
@@ -624,6 +659,7 @@ export class ServerFileTransfer {
   this.currentSendingTransferId = null;
   this.onProgressCallback?.(null);
   this.setTransferStatus(reason, "error");
+  alertUseMUI(reason, 4000, { kind: "error" });
  }
 
  /**
@@ -640,7 +676,7 @@ export class ServerFileTransfer {
     : t('alert.serverNotConnected');
    this.onProgressCallback?.(null);
    this.setTransferStatus(message, "warning");
-   return;
+   throw new Error(message);
   }
 
   const transferId = this.generateTransferId();
@@ -671,14 +707,14 @@ export class ServerFileTransfer {
     if (!password) {
      console.debug("[ServerFileTransfer] 用户取消了大文件传输");
      alertUseMUI(t('alert.passwordRequired'), 3000, { kind: "warning" });
-     return;
+     throw new Error(t('alert.passwordRequired'));
     }
     adminPass = password;
    } else {
     const password = prompt(`文件大小 ${sizeMB} MB 超过50MB限制\n请输入管理员密码:`);
     if (!password) {
      alertUseMUI(t('alert.passwordRequired'), 3000, { kind: "warning" });
-     return;
+     throw new Error(t('alert.passwordRequired'));
     }
     adminPass = password;
    }
@@ -728,11 +764,14 @@ export class ServerFileTransfer {
    }
    this.onProgressCallback?.(null);
    this.setTransferStatus(t('alert.sendRequestFailed'), "error");
-   return;
+   throw this.toError(error);
   }
   this.scheduleRequestTimeout(transferId);
   console.debug(`[ServerFileTransfer] REQUEST 消息已发送给 ${toUserId}`);
   alertUseMUI(t('toast.waitingForAccept'), 2000, { kind: "info" });
+  return new Promise<void>((resolve, reject) => {
+   this.sendCompletionWaiters.set(transferId, { resolve, reject });
+  });
  }
 
  private scheduleRequestTimeout(transferId: string) {
@@ -750,6 +789,7 @@ export class ServerFileTransfer {
    }
    this.onProgressCallback?.(null);
    this.setTransferStatus(t('alert.serverRejectTimeout'), "warning");
+   this.rejectSendCompletion(transferId, new TransferTimeoutError(t('alert.serverRejectTimeout')));
   }, 30_000);
   this.transferTimeouts.set(transferId, timeoutId);
  }
@@ -997,6 +1037,7 @@ export class ServerFileTransfer {
    if (this.currentSendingTransferId === session.transferId) {
     this.currentSendingTransferId = null;
    }
+   this.rejectSendCompletion(session.transferId, error);
    const message = error instanceof TransferTimeoutError
     ? t('alert.transferInterrupted')
     : t('toast.fileTransferFailed');
@@ -1032,6 +1073,7 @@ export class ServerFileTransfer {
    );
   }
   this.sendingSessions.delete(transferId);
+  this.rejectSendCompletion(transferId, new Error(data.reason || t('toast.transferRejected')));
   this.onProgressCallback?.(null);
   // 关闭下载页面
 
@@ -1145,6 +1187,7 @@ export class ServerFileTransfer {
   alertUseMUI(t('toast.fileSent'), 2000, { kind: "success" });
   this.onProgressCallback?.(100);
   this.setTransferStatus(t('alert.serverTransferComplete'), "success");
+  this.resolveSendCompletion(session.transferId);
   
   // 延迟关闭下载页面，让用户看到100%完成
   setTimeout(() => {
@@ -1308,6 +1351,7 @@ export class ServerFileTransfer {
   }
   this.sendingSessions.delete(data.transfer_id);
   this.receivingSessions.delete(data.transfer_id);
+  this.rejectSendCompletion(data.transfer_id, new Error(data.reason || t('alert.transferCancelled')));
   this.clearTransferTimeout(data.transfer_id);
   this.clearReceiveTimeout(data.transfer_id);
   this.onProgressCallback?.(null);
@@ -1335,6 +1379,7 @@ export class ServerFileTransfer {
   }
   this.sendingSessions.delete(data.transfer_id);
   this.receivingSessions.delete(data.transfer_id);
+  this.rejectSendCompletion(data.transfer_id, new Error(data.error || t('toast.transferError')));
   this.clearTransferTimeout(data.transfer_id);
   this.clearReceiveTimeout(data.transfer_id);
   this.onProgressCallback?.(null);
@@ -1400,6 +1445,7 @@ export class ServerFileTransfer {
   }, 1500);
 
   if (completed) {
+   this.setTransferStatus(t('alert.fileReceivedComplete'), "success");
    alertUseMUI(t('toast.fileReceived'), 2000, { kind: "success" });
   }
  }
@@ -1408,6 +1454,7 @@ export class ServerFileTransfer {
   * 取消当前传输
   */
  public cancelCurrentTransfer() {
+  let cancelled = false;
   if (this.currentSendingTransferId) {
    const session = this.sendingSessions.get(this.currentSendingTransferId);
    if (session) {
@@ -1426,11 +1473,34 @@ export class ServerFileTransfer {
     } else {
      this.completionAcks.cancel(this.currentSendingTransferId);
     }
+    this.rejectSendCompletion(this.currentSendingTransferId, new Error("用户取消"));
     this.sendingSessions.delete(this.currentSendingTransferId);
     this.clearTransferTimeout(this.currentSendingTransferId);
     this.currentSendingTransferId = null;
-    this.onProgressCallback?.(null);
+    cancelled = true;
    }
+  }
+
+  for (const session of Array.from(this.receivingSessions.values())) {
+   if (session.status === "completed" || session.status === "cancelled") {
+    continue;
+   }
+   session.status = "cancelled";
+   session.buffer = null;
+   this.sendTransferControlMessage(
+    FILE_TRANSFER_MESSAGE_TYPES.CANCEL,
+    session.transferId,
+    "用户取消",
+    session.roomName
+   );
+   this.receivingSessions.delete(session.transferId);
+   this.clearReceiveTimeout(session.transferId);
+   cancelled = true;
+  }
+
+  if (cancelled) {
+   this.onProgressCallback?.(null);
+   this.setTransferStatus(t('toast.transferCancelled'), "warning");
   }
  }
 
