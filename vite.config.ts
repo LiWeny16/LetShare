@@ -46,9 +46,9 @@ export default defineConfig({
     assetsInlineLimit: 4096000, // 4000kb  超过会以base64字符串显示
     outDir: "docs", // 输出名称
     assetsDir: "static", // 静态资源目录
-    // CDN edges should serve fresh content; stale chunks cause 404s.
-    // Combined with NetworkFirst HTML caching, old files are no longer needed.
-    emptyOutDir: true,
+    // Old clients may still have stale SW with precached old index.html
+    // referencing old chunks. Keep them until SW updates propagate.
+    emptyOutDir: false,
   },
   resolve: {
     alias: {
