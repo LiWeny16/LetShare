@@ -1203,6 +1203,13 @@ export class ServerFileTransfer {
    return;
   }
 
+  if (session.status !== "pending") {
+   console.warn(
+    `[ServerFileTransfer] Ignoring ACCEPT for ${data.transfer_id} while session is ${session.status}`
+   );
+   return;
+  }
+
   this.clearTransferTimeout(data.transfer_id);
   session.status = "accepted";
   session.flowControl = data.flow_control === this.RELAY_FLOW_CONTROL_VERSION;

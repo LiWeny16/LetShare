@@ -9,6 +9,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import "./setup-browser-globals";
 
 // Dynamic imports: app modules loaded after browser globals are polyfilled
 let ChatHistoryManager: any;

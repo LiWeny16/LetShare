@@ -284,7 +284,7 @@ test("file transfer end handler validates current state is transferring or resen
 });
 
 test("file transfer accept handler validates current state is pending", () => {
-  const region = findMethodRegion("private async handleTransferAccept(data: { transfer_id: string })");
+  const region = findMethodRegion("private async handleTransferAccept(data:");
   const body = source.slice(region.start, region.end);
 
   // Fix: the handler should check session.status === "pending" before
@@ -292,6 +292,12 @@ test("file transfer accept handler validates current state is pending", () => {
   // on an already-transferring session should be ignored.
   assert.match(body, /session\.status\s*=\s*"accepted"/,
     "should set status to accepted");
+
+  assert.match(
+    body,
+    /session\.status\s*!==\s*"pending"/,
+    "should ignore stale accept messages unless session is pending"
+  );
 
   // The fix adds validation: only pending sessions should transition to accepted.
   // Verify the clearTransferTimeout call (part of the pending->accepted flow)
