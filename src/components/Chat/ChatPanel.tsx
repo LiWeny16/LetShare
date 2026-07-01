@@ -171,6 +171,10 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ open, onClose, targetUserId, targ
         setEmojiAnchor(null);
     };
 
+    const blurTrigger = (event: React.MouseEvent<HTMLElement>) => {
+        event.currentTarget.blur();
+    };
+
     const handleFileSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
         const files = event.target.files;
         if (!files || files.length === 0) return;
@@ -484,7 +488,10 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ open, onClose, targetUserId, targ
 
                                 <Box sx={{ display: 'flex', gap: 0.5 }}>
                                     <IconButton
-                                        onClick={(e) => setEmojiAnchor(e.currentTarget)}
+                                        onClick={(e) => {
+                                            blurTrigger(e);
+                                            setEmojiAnchor(e.currentTarget);
+                                        }}
                                         size="small"
                                     >
                                         <EmojiIcon />
@@ -497,7 +504,10 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ open, onClose, targetUserId, targ
                                         onChange={handleFileSelect}
                                     />
                                     <IconButton
-                                        onClick={() => fileInputRef.current?.click()}
+                                        onClick={(e) => {
+                                            blurTrigger(e);
+                                            fileInputRef.current?.click();
+                                        }}
                                         size="small"
                                     >
                                         <AttachFileIcon />
@@ -534,6 +544,7 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ open, onClose, targetUserId, targ
                 disableScrollLock // 防止滚动锁定
                 disableEnforceFocus // 防止焦点强制
                 disableAutoFocus // 防止自动聚焦
+                disableRestoreFocus // 避免关闭时把焦点还给 aria-hidden 根节点内的触发按钮
                 container={document.body} // 确保渲染到 body，避免被 ChatPanel 裁剪
                 sx={{
                     zIndex: 1400, // 确保在 ChatPanel 之上
