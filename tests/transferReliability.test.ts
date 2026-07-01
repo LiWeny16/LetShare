@@ -10,6 +10,7 @@ import {
   canGenerateSafeImageThumbnail,
   canRetainReceivedFiles,
   canPreviewImageSafely,
+  createTransferAckMessage,
   createTransferControlMessage,
   createTransferCompleteMessage,
   createCompletedTransferFile,
@@ -28,6 +29,7 @@ import {
   getTransferCompletionAckTimeoutMs,
   isP2PSendTransferCurrent,
   normalizeTransferMetadata,
+  normalizeTransferAckPayload,
   parseDataChannelControlMessage,
   canRecoverMissingChunksWithResend,
   normalizeTransferControlPayload,
@@ -487,7 +489,7 @@ test("apple transfer config uses smaller chunks and lower concurrency", () => {
 test("apple receive limit avoids large in-memory allocations", () => {
   assert.equal(getSafeReceiveSizeLimit("apple"), 64 * 1024 * 1024);
   assert.equal(getSafeReceiveSizeLimit("android"), 200 * 1024 * 1024);
-  assert.equal(getSafeReceiveSizeLimit("desktop"), 500 * 1024 * 1024);
+  assert.equal(getSafeReceiveSizeLimit("desktop"), 3 * 1024 * 1024 * 1024);
 });
 
 test("transfer metadata is normalized before allocating receive buffers", () => {
@@ -1052,6 +1054,73 @@ test("creates transfer resend request messages with missing chunk detail", () =>
         missing_count: 3,
         total_chunks: 5,
         reason: "missing chunks",
+      },
+    }
+  );
+});
+
+test("normalizes receiver ACK payloads for server relay flow control", () => {
+  assert.deepEqual(
+    normalizeTransferAckPayload(
+      {
+        transfer_id: "transfer-1",
+        chunk_index: 7,
+        received_chunks: 8,
+        total_chunks: 20,
+        bytes_received: 524288,
+      },
+      { expectedTransferId: "transfer-1", totalChunks: 20 }
+    ),
+    {
+      valid: true,
+      ack: {
+        transferId: "transfer-1",
+        chunkIndex: 7,
+        receivedChunks: 8,
+        totalChunks: 20,
+        bytesReceived: 524288,
+      },
+    }
+  );
+
+  assert.deepEqual(
+    normalizeTransferAckPayload(
+      {
+        transfer_id: "transfer-1",
+        chunk_index: 20,
+        received_chunks: 21,
+        total_chunks: 20,
+        bytes_received: 1,
+      },
+      { totalChunks: 20 }
+    ),
+    {
+      valid: false,
+      reason: "chunk index out of bounds",
+    }
+  );
+});
+
+test("creates transfer ACK messages with receiver progress detail", () => {
+  assert.deepEqual(
+    createTransferAckMessage({
+      type: "file:transfer:ack",
+      transferId: "transfer-1",
+      chunkIndex: 15,
+      receivedChunks: 16,
+      totalChunks: 20,
+      bytesReceived: 1048576,
+      channel: "room-1",
+    }),
+    {
+      type: "file:transfer:ack",
+      channel: "room-1",
+      data: {
+        transfer_id: "transfer-1",
+        chunk_index: 15,
+        received_chunks: 16,
+        total_chunks: 20,
+        bytes_received: 1048576,
       },
     }
   );

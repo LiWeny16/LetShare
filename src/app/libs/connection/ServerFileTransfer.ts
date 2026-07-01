@@ -12,6 +12,7 @@ import {
  canRecoverMissingChunksWithResend,
  canRetainReceivedFiles,
  createCompletedTransferFile,
+ createTransferAckMessage,
  createTransferCompleteMessage,
  createTransferControlMessage,
  createTransferResendRequestMessage,
@@ -22,6 +23,7 @@ import {
  getServerTransferCapability,
  getTransferCompletionAckTimeoutMs,
  normalizeTransferControlPayload,
+ normalizeTransferAckPayload,
  normalizeTransferMetadata,
  normalizeTransferResendRequest,
  runTransferHandlerSafely,
@@ -42,6 +44,7 @@ export const FILE_TRANSFER_MESSAGE_TYPES = {
  CHUNK: "file:transfer:chunk",
  END: "file:transfer:end",
  COMPLETE: "file:transfer:complete",
+ ACK: "file:transfer:ack",
  RESEND: "file:transfer:resend",
  CANCEL: "file:transfer:cancel",
  ERROR: "file:transfer:error",
@@ -58,6 +61,7 @@ export interface FileTransferRequest {
  from_user_id: string;
  to_user_id: string;
  room_name: string;
+ flow_control?: string;
 }
 
 export interface FileTransferProgress {
@@ -76,6 +80,14 @@ export interface FileTransferChunk {
  total_chunks: number;
 }
 
+export interface FileTransferAck {
+ transfer_id: string;
+ chunk_index: number;
+ received_chunks: number;
+ total_chunks: number;
+ bytes_received: number;
+}
+
 interface TransferSession {
  transferId: string;
  file: File;
@@ -84,6 +96,8 @@ interface TransferSession {
  totalChunks: number;
  chunkSize: number;
  sentChunks: number;
+ ackedChunks: number;
+ flowControl: boolean;
  status: "pending" | "accepted" | "transferring" | "completed" | "cancelled" | "error";
 }
 
@@ -101,6 +115,8 @@ interface ReceiveSession {
  receivedCount: number;
  receivedChunkIndexes: Set<number>;
  resendAttempts: number;
+ flowControl: boolean;
+ lastAckedReceivedCount: number;
  /**
   * 下一个待写入块的真实索引 (来自 file:transfer:chunk 元数据)。
   * 初始 -1 表示尚未收到元数据帧; 二进制帧写入后重置回 -1。
@@ -138,6 +154,10 @@ export class ServerFileTransfer {
  private readonly RESEND_CHUNK_LIMIT = 256;
  private readonly MAX_RESEND_ATTEMPTS = 3;
  private readonly RECEIVE_TIMEOUT_MS = 30_000;
+ private readonly RELAY_FLOW_CONTROL_VERSION = "receiver_ack_v1";
+ private readonly RELAY_ACK_EVERY_CHUNKS = 8;
+ private readonly RELAY_ACK_WINDOW_CHUNKS = 24;
+ private readonly RELAY_ACK_STALL_TIMEOUT_MS = 120_000;
  private onProgressCallback: ((progress: number | null) => void) | null = null;
  private onFileReceivedCallback: ((file: File, fromUserId: string) => void) | null = null;
  private currentSendingTransferId: string | null = null;
@@ -309,6 +329,9 @@ export class ServerFileTransfer {
     case FILE_TRANSFER_MESSAGE_TYPES.COMPLETE:
      this.handleTransferComplete(payload);
      break;
+    case FILE_TRANSFER_MESSAGE_TYPES.ACK:
+     this.handleTransferAck(payload);
+     break;
     case FILE_TRANSFER_MESSAGE_TYPES.RESEND:
      await this.handleTransferResend(payload);
      break;
@@ -431,6 +454,7 @@ export class ServerFileTransfer {
   session.receivedChunkIndexes.add(chunkIndex);
   session.receivedCount++;
   session.resendAttempts = 0;
+  this.maybeSendReceiverAck(session, chunkIndex);
 
   const progress = (session.receivedCount / session.totalChunks) * 100;
   this.onProgressCallback?.(progress);
@@ -443,6 +467,39 @@ export class ServerFileTransfer {
    console.debug(`[ServerFileTransfer] All chunks received, waiting for transfer end: ${session.transferId}`);
   }
   this.refreshReceiveTimeout(session.transferId);
+ }
+
+ private maybeSendReceiverAck(session: ReceiveSession, chunkIndex: number): void {
+  if (!session.flowControl) {
+   return;
+  }
+
+  const shouldAck =
+   session.receivedCount === session.totalChunks ||
+   session.receivedCount - session.lastAckedReceivedCount >= this.RELAY_ACK_EVERY_CHUNKS;
+  if (!shouldAck) {
+   return;
+  }
+
+  session.lastAckedReceivedCount = session.receivedCount;
+  const bytesReceived = Math.min(
+   session.fileSize,
+   session.receivedCount * session.chunkSize
+  );
+
+  try {
+   this.connectionManager.send(createTransferAckMessage({
+    type: FILE_TRANSFER_MESSAGE_TYPES.ACK,
+    transferId: session.transferId,
+    chunkIndex,
+    receivedChunks: session.receivedCount,
+    totalChunks: session.totalChunks,
+    bytesReceived,
+    channel: session.roomName,
+   }));
+  } catch (error) {
+   console.warn(`[ServerFileTransfer] 发送接收 ACK 失败: ${session.transferId}`, error);
+  }
  }
 
  private refreshReceiveTimeout(transferId: string) {
@@ -836,6 +893,8 @@ export class ServerFileTransfer {
    totalChunks,
    chunkSize,
    sentChunks: 0,
+   ackedChunks: 0,
+   flowControl: false,
    status: "pending",
   };
   this.sendingSessions.set(transferId, session);
@@ -856,6 +915,7 @@ export class ServerFileTransfer {
     to_user_id: toUserId,
     room_name: roomName,
     admin_pass: adminPass,
+    flow_control: this.RELAY_FLOW_CONTROL_VERSION,
    },
   };
 
@@ -974,6 +1034,8 @@ export class ServerFileTransfer {
    receivedCount: 0,
    receivedChunkIndexes: new Set<number>(),
    resendAttempts: 0,
+   flowControl: request.flow_control === this.RELAY_FLOW_CONTROL_VERSION,
+   lastAckedReceivedCount: 0,
    pendingChunkIndex: -1,
    fromUserId: request.from_user_id,
    roomName: request.room_name,
@@ -1074,6 +1136,13 @@ export class ServerFileTransfer {
     channel: session.roomName,
     data: {
      transfer_id: transferId,
+     ...(session.flowControl
+      ? {
+       flow_control: this.RELAY_FLOW_CONTROL_VERSION,
+       ack_every_chunks: this.RELAY_ACK_EVERY_CHUNKS,
+       ack_window_chunks: this.RELAY_ACK_WINDOW_CHUNKS,
+      }
+      : {}),
     },
    };
 
@@ -1124,7 +1193,7 @@ export class ServerFileTransfer {
  /**
   * 处理传输接受
   */
- private async handleTransferAccept(data: { transfer_id: string }) {
+ private async handleTransferAccept(data: { transfer_id: string; flow_control?: string; ack_window_chunks?: number }) {
   console.debug(`[ServerFileTransfer] 收到 ACCEPT 消息:`, data);
   
   const session = this.sendingSessions.get(data.transfer_id);
@@ -1136,6 +1205,10 @@ export class ServerFileTransfer {
 
   this.clearTransferTimeout(data.transfer_id);
   session.status = "accepted";
+  session.flowControl = data.flow_control === this.RELAY_FLOW_CONTROL_VERSION;
+  if (session.flowControl) {
+   session.ackedChunks = 0;
+  }
   console.debug(`[ServerFileTransfer] Transfer accepted: ${data.transfer_id}`);
   
   // 开始发送文件
@@ -1216,6 +1289,46 @@ export class ServerFileTransfer {
   }
  }
 
+ private getUnackedChunkCount(session: TransferSession): number {
+  if (!session.flowControl) {
+   return 0;
+  }
+  return Math.max(session.sentChunks - session.ackedChunks, 0);
+ }
+
+ private async waitForReceiverAckWindow(
+  session: TransferSession,
+  maxInFlightChunks = this.RELAY_ACK_WINDOW_CHUNKS
+ ): Promise<void> {
+  if (!session.flowControl) {
+   return;
+  }
+
+  const startedAt = Date.now();
+  while (this.getUnackedChunkCount(session) >= maxInFlightChunks) {
+   this.ensureSendingSessionActive(session);
+   if (Date.now() - startedAt > this.RELAY_ACK_STALL_TIMEOUT_MS) {
+    throw new TransferTimeoutError(t('alert.transferInterrupted'));
+   }
+   await new Promise(resolve => setTimeout(resolve, 100));
+  }
+ }
+
+ private async waitForReceiverAckDrain(session: TransferSession): Promise<void> {
+  if (!session.flowControl) {
+   return;
+  }
+
+  const startedAt = Date.now();
+  while (session.ackedChunks < session.totalChunks) {
+   this.ensureSendingSessionActive(session);
+   if (Date.now() - startedAt > this.RELAY_ACK_STALL_TIMEOUT_MS) {
+    throw new TransferTimeoutError(t('alert.transferInterrupted'));
+   }
+   await new Promise(resolve => setTimeout(resolve, 100));
+  }
+ }
+
  private async sendServerChunk(
   session: TransferSession,
   chunkIndex: number,
@@ -1223,6 +1336,7 @@ export class ServerFileTransfer {
  ): Promise<void> {
   const countProgress = options.countProgress ?? true;
   this.ensureSendingSessionActive(session);
+  await this.waitForReceiverAckWindow(session);
 
   const offset = chunkIndex * session.chunkSize;
   const chunk = session.file.slice(offset, offset + session.chunkSize);
@@ -1251,8 +1365,10 @@ export class ServerFileTransfer {
 
   if (countProgress) {
    session.sentChunks++;
-   const progress = Math.min((session.sentChunks / session.totalChunks) * 100, 99);
-   this.onProgressCallback?.(progress);
+   if (!session.flowControl) {
+    const progress = Math.min((session.sentChunks / session.totalChunks) * 100, 99);
+    this.onProgressCallback?.(progress);
+   }
   }
 
   console.debug(`[ServerFileTransfer] Sent chunk ${chunkIndex + 1}/${session.totalChunks}`);
@@ -1279,6 +1395,8 @@ export class ServerFileTransfer {
    await this.sendServerChunk(session, chunkIndex);
   }
 
+  this.ensureSendingSessionActive(session);
+  await this.waitForReceiverAckDrain(session);
   this.ensureSendingSessionActive(session);
   // 发送完成消息
   this.connectionManager.send({
@@ -1369,6 +1487,30 @@ export class ServerFileTransfer {
   if (this.completionAcks.acknowledge(data.transfer_id)) {
    console.debug(`[ServerFileTransfer] Receiver confirmed completion: ${data.transfer_id}`);
   }
+ }
+
+ private handleTransferAck(data: Record<string, unknown>) {
+  const transferId = typeof data.transfer_id === "string" ? data.transfer_id : "";
+  const session = transferId ? this.sendingSessions.get(transferId) : undefined;
+  const normalized = normalizeTransferAckPayload(data, {
+   expectedTransferId: session?.transferId,
+   totalChunks: session?.totalChunks,
+  });
+
+  if (!normalized.valid) {
+   console.warn(`[ServerFileTransfer] 忽略无效接收 ACK: ${normalized.reason}`, data);
+   return;
+  }
+  if (!session || !session.flowControl) {
+   return;
+  }
+
+  session.ackedChunks = Math.max(session.ackedChunks, normalized.ack.receivedChunks);
+  const progress = Math.min((session.ackedChunks / session.totalChunks) * 100, 99);
+  this.onProgressCallback?.(progress);
+  console.debug(
+   `[ServerFileTransfer] Receiver ACK ${session.ackedChunks}/${session.totalChunks} transfer=${session.transferId}`
+  );
  }
 
  private async handleTransferResend(data: Record<string, unknown>) {

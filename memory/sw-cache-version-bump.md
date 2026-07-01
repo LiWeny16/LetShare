@@ -9,7 +9,7 @@ metadata:
 
 When adding new JS files, chunks, or PWA-related changes, ALWAYS bump the `external-cache-v{N}` cache name in `vite.config.ts` runtimeCaching.
 
-Current version: v12
-Location: `vite.config.ts` line ~122, `cacheName: 'external-cache-v12'`
+Current version: v13
+Location: `vite.config.ts` line ~122, `cacheName: 'external-cache-v13'`
 
 Why: Service Worker caches old chunks. Without a version bump, returning users get stale SW caches referencing deleted chunks, causing "loading failed" errors.

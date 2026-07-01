@@ -12,7 +12,7 @@ const DEFAULT_SETTINGS = {
   authToken: "98d9a399675116e5256e9082c192bc06eb6434937af99f201252e9424c7a5652",
   ablyKey: "4TtssQ.e9OvDA:wYBGdtWQNgicbeIKNtgeV_s5XEKmfLKD_Gue5XQrWuw",
   transferPriority: 'p2p' as 'p2p' | 'server',
-  version: "3.4.1",
+  version: "3.4.2",
   isNewUser: true
 };
 export type SettingsKey = keyof typeof DEFAULT_SETTINGS;

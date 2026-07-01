@@ -131,6 +131,18 @@ export interface TransferResendRequestMessage {
  };
 }
 
+export interface TransferAckMessage {
+ type: string;
+ channel?: string;
+ data: {
+  transfer_id: string;
+  chunk_index: number;
+  received_chunks: number;
+  total_chunks: number;
+  bytes_received: number;
+ };
+}
+
 export type DataChannelControlMessage = Record<string, unknown> & {
  type: string;
 };
@@ -171,6 +183,24 @@ export type TransferResendRequestResult =
  | {
    valid: true;
    request: TransferResendRequest;
+  }
+ | {
+   valid: false;
+   reason: string;
+  };
+
+export interface TransferAckPayload {
+ transferId: string;
+ chunkIndex: number;
+ receivedChunks: number;
+ totalChunks: number;
+ bytesReceived: number;
+}
+
+export type TransferAckPayloadResult =
+ | {
+   valid: true;
+   ack: TransferAckPayload;
   }
  | {
    valid: false;
@@ -1023,6 +1053,133 @@ export function createTransferResendRequestMessage(options: {
    missing_count: normalized.request.missingCount,
    total_chunks: normalized.request.totalChunks,
    ...(normalized.request.reason ? { reason: normalized.request.reason } : {}),
+  },
+ };
+}
+
+export function normalizeTransferAckPayload(
+ payload: unknown,
+ options: {
+  expectedTransferId?: string;
+  totalChunks?: number;
+ } = {}
+): TransferAckPayloadResult {
+ if (
+  typeof payload !== "object" ||
+  payload === null ||
+  Array.isArray(payload)
+ ) {
+  return {
+   valid: false,
+   reason: "ack payload must be an object",
+  };
+ }
+
+ const raw = payload as Record<string, unknown>;
+ const transferId = raw.transfer_id ?? raw.transferId;
+ if (typeof transferId !== "string" || transferId.trim() === "") {
+  return {
+   valid: false,
+   reason: "transfer id is required",
+  };
+ }
+ if (options.expectedTransferId && transferId !== options.expectedTransferId) {
+  return {
+   valid: false,
+   reason: "transfer id mismatch",
+  };
+ }
+
+ const totalChunks = Number(raw.total_chunks ?? raw.totalChunks ?? options.totalChunks);
+ if (!Number.isSafeInteger(totalChunks) || totalChunks <= 0) {
+  return {
+   valid: false,
+   reason: "total chunks must be positive",
+  };
+ }
+ if (
+  options.totalChunks !== undefined &&
+  Number.isSafeInteger(options.totalChunks) &&
+  totalChunks !== options.totalChunks
+ ) {
+  return {
+   valid: false,
+   reason: "total chunks mismatch",
+  };
+ }
+
+ const chunkIndex = Number(raw.chunk_index ?? raw.chunkIndex);
+ if (!Number.isSafeInteger(chunkIndex) || chunkIndex < 0 || chunkIndex >= totalChunks) {
+  return {
+   valid: false,
+   reason: "chunk index out of bounds",
+  };
+ }
+
+ const receivedChunks = Number(raw.received_chunks ?? raw.receivedChunks ?? (chunkIndex + 1));
+ if (!Number.isSafeInteger(receivedChunks) || receivedChunks < 0 || receivedChunks > totalChunks) {
+  return {
+   valid: false,
+   reason: "received chunks out of bounds",
+  };
+ }
+
+ const bytesReceived = Number(raw.bytes_received ?? raw.bytesReceived ?? 0);
+ if (!Number.isFinite(bytesReceived) || bytesReceived < 0) {
+  return {
+   valid: false,
+   reason: "bytes received must be non-negative",
+  };
+ }
+
+ return {
+  valid: true,
+  ack: {
+   transferId,
+   chunkIndex,
+   receivedChunks,
+   totalChunks,
+   bytesReceived,
+  },
+ };
+}
+
+export function createTransferAckMessage(options: {
+ type: string;
+ transferId: string;
+ chunkIndex: number;
+ receivedChunks: number;
+ totalChunks: number;
+ bytesReceived: number;
+ channel?: string;
+}): TransferAckMessage {
+ if (!options.type) {
+  throw new Error("transfer ack message type is required");
+ }
+ if (!options.transferId) {
+  throw new Error("transfer ack message transferId is required");
+ }
+
+ const normalized = normalizeTransferAckPayload({
+  transfer_id: options.transferId,
+  chunk_index: options.chunkIndex,
+  received_chunks: options.receivedChunks,
+  total_chunks: options.totalChunks,
+  bytes_received: options.bytesReceived,
+ });
+ if (!normalized.valid) {
+  throw new Error(`invalid transfer ack: ${normalized.reason}`);
+ }
+
+ return {
+  type: options.type,
+  ...(options.channel ? { channel: options.channel } : {}),
+  data: {
+   transfer_id: normalized.ack.transferId,
+   chunk_index: normalized.ack.chunkIndex,
+   received_chunks: normalized.ack.receivedChunks,
+   total_chunks: normalized.ack.totalChunks,
+   bytes_received: normalized.ack.bytesReceived,
   },
  };
 }

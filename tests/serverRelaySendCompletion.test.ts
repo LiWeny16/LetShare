@@ -11,6 +11,10 @@ const serverWebSocketSource = readFileSync(
   join(process.cwd(), "server", "internal", "handler", "websocket.go"),
   "utf8"
 );
+const serverModelSource = readFileSync(
+  join(process.cwd(), "server", "internal", "model", "message.go"),
+  "utf8"
+);
 
 function extractMethodBody(name: string): string {
   const start = source.indexOf(name);
@@ -64,6 +68,35 @@ test("server relay receiver finalizes only after server transfer end", () => {
   assert.match(endBody, /this\.finalizeReceivedFile\(receiveSession\)/);
 });
 
+test("server relay sender uses receiver ACK flow control before advancing", () => {
+  assert.match(source, /ACK:\s*"file:transfer:ack"/);
+  assert.match(source, /RELAY_FLOW_CONTROL_VERSION\s*=\s*"receiver_ack_v1"/);
+  assert.match(serverModelSource, /FlowControl\s+string\s+`json:"flow_control,omitempty"`/);
+
+  const sendBody = extractMethodBody("private async sendServerChunk");
+  const waitIndex = sendBody.indexOf("await this.waitForReceiverAckWindow(session)");
+  const sendIndex = sendBody.indexOf("this.connectionManager.sendBinary(binaryMessage)");
+  assert.notEqual(waitIndex, -1, "sendServerChunk should wait for receiver ACK window");
+  assert.ok(waitIndex < sendIndex, "ACK window wait should happen before binary send");
+  assert.match(sendBody, /if\s*\(!session\.flowControl\)\s*\{/);
+
+  const startBody = extractMethodBody("private async startSending");
+  const drainIndex = startBody.indexOf("await this.waitForReceiverAckDrain(session)");
+  const endIndex = startBody.indexOf("type: FILE_TRANSFER_MESSAGE_TYPES.END");
+  assert.notEqual(drainIndex, -1, "startSending should wait for receiver ACK drain");
+  assert.ok(drainIndex < endIndex, "sender should not send END before receiver ACK drain");
+});
+
+test("server relay receiver sends ACKs after writing chunks", () => {
+  const writeBody = extractMethodBody("private writeChunkToSession");
+  assert.match(writeBody, /this\.maybeSendReceiverAck\(session,\s*chunkIndex\)/);
+
+  const ackBody = extractMethodBody("private maybeSendReceiverAck");
+  assert.match(ackBody, /createTransferAckMessage/);
+  assert.match(ackBody, /FILE_TRANSFER_MESSAGE_TYPES\.ACK/);
+  assert.match(ackBody, /session\.lastAckedReceivedCount\s*=\s*session\.receivedCount/);
+});
+
 test("server relay current-transfer cancel also cancels active receiving sessions", () => {
   const cancelBody = extractMethodBody("public cancelCurrentTransfer");
   assert.match(cancelBody, /this\.receivingSessions\.values\(\)/);
@@ -83,6 +116,21 @@ test("server relay request-stage errors include transfer id so sender can leave 
     /if err != nil \{[\s\S]*h\.sendFileTransferError\(client,\s*400,\s*err\.Error\(\),\s*request\.TransferID\)/,
     "CreateTransferSession failures must preserve request.TransferID"
   );
+});
+
+test("server relay backend forwards receiver ACK messages to the sender", () => {
+  assert.match(serverWebSocketSource, /MessageTypeFileTransferAck/);
+  assert.match(serverWebSocketSource, /handleFileTransferAck\(client,\s*message\)/);
+
+  const ackHandlerIndex = serverWebSocketSource.indexOf("func (h *WebSocketHandler) handleFileTransferAck");
+  assert.notEqual(ackHandlerIndex, -1, "handleFileTransferAck should exist");
+  const resendIndex = serverWebSocketSource.indexOf("func (h *WebSocketHandler) handleFileTransferResend", ackHandlerIndex);
+  assert.notEqual(resendIndex, -1, "handleFileTransferResend should follow ACK handler");
+  const body = serverWebSocketSource.slice(ackHandlerIndex, resendIndex);
+
+  assert.match(body, /session\.ToUserID\s*!=\s*client\.UserID/);
+  assert.match(body, /model\.MessageTypeFileTransferAck/);
+  assert.match(body, /SendMessageToUser\(session\.FromUserID/);
 });
 
 test("server relay terminal sender messages clear current sending transfer id", () => {

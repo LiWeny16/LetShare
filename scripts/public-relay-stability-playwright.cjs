@@ -31,6 +31,10 @@ const PUBLIC_HEALTH_URL =
 const PRO_INVITE_CODE = process.env.PRO_INVITE_CODE || "bigonion";
 const SIZES_MB = parseSizes(process.env.SIZES_MB || "0.25,5,20,55");
 const ITERATIONS = parsePositiveInt(process.env.ITERATIONS || "1", "ITERATIONS");
+const RECEIVER_DOWNLOAD_KB_PER_SEC = parseOptionalPositiveNumber(
+  process.env.RECEIVER_DOWNLOAD_KB_PER_SEC,
+  "RECEIVER_DOWNLOAD_KB_PER_SEC"
+);
 const PORT_BASE = 22_000 + Math.floor(Math.random() * 20_000);
 const FRONTEND_PORT = parsePositiveInt(
   process.env.FRONTEND_PORT || String(PORT_BASE),
@@ -59,6 +63,7 @@ async function main() {
     roomId: ROOM_ID,
     sizesMb: SIZES_MB,
     iterations: ITERATIONS,
+    receiverDownloadKBPerSec: RECEIVER_DOWNLOAD_KB_PER_SEC,
     artifacts: ARTIFACT_ROOT,
   });
 
@@ -99,6 +104,9 @@ async function main() {
       userId: "receiver",
       uniqId: "receiver:public-relay",
     });
+    if (RECEIVER_DOWNLOAD_KB_PER_SEC) {
+      await throttleReceiverDownload(receiver, RECEIVER_DOWNLOAD_KB_PER_SEC);
+    }
     const sender = await createClient(browser, {
       userId: "sender",
       uniqId: "sender:public-relay",
@@ -174,6 +182,7 @@ async function main() {
     roomId: ROOM_ID,
     sizesMb: SIZES_MB,
     iterations: ITERATIONS,
+    receiverDownloadKBPerSec: RECEIVER_DOWNLOAD_KB_PER_SEC,
     results,
   };
   const reportPath = join(ARTIFACT_ROOT, "report.json");
@@ -223,7 +232,7 @@ async function createClient(browser, { userId, uniqId }) {
         authToken: AUTH_TOKEN,
         ablyKey: "",
         transferPriority: "server",
-        version: "3.4.1",
+        version: "3.4.2",
         isNewUser: false,
       },
       memorable: { userId, uniqId },
@@ -235,6 +244,22 @@ async function createClient(browser, { userId, uniqId }) {
   return { context, page, diagnostics, userId, uniqId };
 }
 
+async function throttleReceiverDownload(client, downloadKBPerSec) {
+  const cdp = await client.context.newCDPSession(client.page);
+  await cdp.send("Network.enable");
+  await cdp.send("Network.emulateNetworkConditions", {
+    offline: false,
+    latency: 80,
+    downloadThroughput: Math.max(1, Math.floor(downloadKBPerSec * 1024)),
+    uploadThroughput: -1,
+    connectionType: "cellular3g",
+  });
+  client.diagnostics.networkThrottle = {
+    downloadKBPerSec,
+    appliedAt: Date.now(),
+  };
+}
+
 async function runTransferCase({ sender, receiver, sizeMb, iteration }) {
   const sizeBytes = Math.max(1, Math.round(sizeMb * 1024 * 1024));
   const sizeLabel = String(sizeMb).replace(/\./g, "p");
@@ -244,7 +269,15 @@ async function runTransferCase({ sender, receiver, sizeMb, iteration }) {
   writeFileSync(filePath, "");
   truncateSync(filePath, sizeBytes);
   const startedAt = Date.now();
-  const timeoutMs = Math.max(120_000, Math.ceil(sizeMb * 12_000));
+  const throttleTimeoutMs = RECEIVER_DOWNLOAD_KB_PER_SEC
+    ? Math.ceil((sizeBytes / (RECEIVER_DOWNLOAD_KB_PER_SEC * 1024)) * 1000 * 20) +
+      60_000
+    : 0;
+  const timeoutMs = Math.max(
+    120_000,
+    Math.ceil(sizeMb * 12_000),
+    throttleTimeoutMs
+  );
 
   try {
     await sender.page.setInputFiles("#multi-file-input", filePath);
@@ -644,6 +677,17 @@ function parsePositiveInt(value, name) {
   const number = Number(value);
   if (!Number.isInteger(number) || number <= 0) {
     throw new Error(`${name} must be a positive integer`);
+  }
+  return number;
+}
+
+function parseOptionalPositiveNumber(value, name) {
+  if (value === undefined || value === "") {
+    return null;
+  }
+  const number = Number(value);
+  if (!Number.isFinite(number) || number <= 0) {
+    throw new Error(`${name} must be a positive number`);
   }
   return number;
 }
