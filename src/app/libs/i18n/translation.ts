@@ -143,6 +143,7 @@ const sharedMalayTranslation = {
         },
         download: {
             deleteSelected: "Padam Dipilih",
+            downloadSelected: "Muat Turun Dipilih",
             selectAll: "Pilih Semua",
             deleteAllFrom: 'Padam semua dari {{name}}',
             confirmDeleteFiles: 'Padam {{count}} fail? Ini tidak boleh dibuat asal.',
@@ -233,7 +234,6 @@ const sharedMalayTranslation = {
             autoAcceptFile: "{{user}} sedang menghantar fail: {{filename}} ({{size}} MB)"
         },
         status: {
-            textOnly: "Teks Sahaja",
             publicNetwork: "Internet",
             publicNetworkTooltip: "Disambungkan melalui rangkaian awam. Teks boleh dihantar; sambungan P2P terus belum tersedia.",
             p2pTooltip: "Sambungan P2P terus tersedia untuk pemindahan pantas.",
@@ -394,6 +394,7 @@ export const resources = {
             },
             download: {
                 deleteSelected: "Delete Selected",
+                downloadSelected: "Download Selected",
                 selectAll: "Select All",
                 deleteAllFrom: 'Delete all from {{name}}',
                 confirmDeleteFiles: 'Delete {{count}} file(s)? This cannot be undone.',
@@ -484,7 +485,6 @@ export const resources = {
                 autoAcceptFile: "{{user}} is sending file: {{filename}} ({{size}} MB)"
             },
             status: {
-                textOnly: "Text Only",
                 publicNetwork: "Internet",
                 publicNetworkTooltip: "Connected through the public network channel. Text can be sent; direct P2P is not established.",
                 p2pTooltip: "Direct P2P connection is available for faster transfer.",
@@ -644,6 +644,7 @@ export const resources = {
             },
             download: {
                 deleteSelected: "删除选中",
+                downloadSelected: "下载选中",
                 selectAll: "全选",
                 deleteAllFrom: '删除来自 {{name}} 的所有文件',
                 confirmDeleteFiles: '确定删除 {{count}} 个文件吗？此操作无法撤销。',
@@ -734,7 +735,6 @@ export const resources = {
                 autoAcceptFile: "{{user}} 正在发送文件: {{filename}} ({{size}} MB)"
             },
             status: {
-                textOnly: "仅文本",
                 publicNetwork: "公网",
                 publicNetworkTooltip: "已通过公网通道连接，可发送文本；P2P 直连尚未建立。",
                 p2pTooltip: "已建立 P2P 直连，可用于更快传输。",

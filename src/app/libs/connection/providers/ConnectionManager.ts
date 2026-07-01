@@ -43,6 +43,11 @@ export class ConnectionManager implements IConnectionProvider {
     }
   }
 
+  async connectUsingProvider(providerType: 'ably' | 'custom', roomId: string): Promise<boolean> {
+    this.failureCount.delete(providerType);
+    return this.connectWithProvider(providerType, roomId);
+  }
+
   async disconnect(soft?: boolean): Promise<void> {
     if (this.currentProvider) {
       await this.currentProvider.disconnect(soft);

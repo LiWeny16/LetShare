@@ -53,6 +53,40 @@ import { getDeviceType } from "@App/libs/tools/tools";
 const IMAGE_EXTS = ["png", "jpg", "jpeg", "gif", "bmp", "webp", "svg"];
 
 /** 判断文件名是否是图片 */
+type ZipDownloadEntry = {
+  key: string;
+  file: File;
+};
+
+function getSenderNameFromReceivedKey(key: string): string {
+  const delimiterIndex = key.indexOf("::");
+  const senderId = delimiterIndex >= 0 ? key.slice(0, delimiterIndex) : key;
+  return senderId.split(":")[0] || "unknown";
+}
+
+function safeZipSegment(value: string): string {
+  const segment = value.replace(/[\\/:*?"<>|]+/g, "_").trim();
+  return segment && segment !== "." && segment !== ".." ? segment : "unknown";
+}
+
+function getUniqueZipPath(entry: ZipDownloadEntry, usedPaths: Set<string>): string {
+  const senderName = safeZipSegment(getSenderNameFromReceivedKey(entry.key));
+  const fileName = safeZipSegment(entry.file.name);
+  const dotIndex = fileName.lastIndexOf(".");
+  const baseName = dotIndex > 0 ? fileName.slice(0, dotIndex) : fileName;
+  const extension = dotIndex > 0 ? fileName.slice(dotIndex) : "";
+  let candidate = `${senderName}/${fileName}`;
+  let index = 1;
+
+  while (usedPaths.has(candidate)) {
+    candidate = `${senderName}/${baseName} (${index})${extension}`;
+    index += 1;
+  }
+
+  usedPaths.add(candidate);
+  return candidate;
+}
+
 function isImageFile(filename: string): boolean {
   const ext = filename.split(".").pop()?.toLowerCase() ?? "";
   return IMAGE_EXTS.includes(ext);
@@ -314,15 +348,14 @@ export default function DownloadDrawerSlide({
   };
   const isDownloadingRef = React.useRef(false);
 
-  const downloadAllAsZip = async () => {
-    if (receivedList.length === 0) return;
-    // 防止重复点击导致双重 ZIP 生成
+  const downloadReceivedFilesAsZip = async (entries: ZipDownloadEntry[], zipFileName: string) => {
+    if (entries.length === 0) return;
     if (isDownloadingRef.current) return;
     isDownloadingRef.current = true;
 
     try {
       const zipGuard = canCreateSafeZipBundle(
-        receivedList.map(([, file]) => ({ size: file.size })),
+        entries.map(({ file }) => ({ size: file.size })),
         getDeviceType()
       );
       if (!zipGuard.allowed) {
@@ -336,11 +369,11 @@ export default function DownloadDrawerSlide({
 
       const { default: JSZip } = await import("jszip");
       const zip = new JSZip();
-      receivedList.forEach(([, file]) => {
-        zip.file(file.name, file);
+      const usedZipPaths = new Set<string>();
+      entries.forEach((entry) => {
+        zip.file(getUniqueZipPath(entry, usedZipPaths), entry.file);
       });
       const content = await zip.generateAsync({ type: "blob" });
-      const zipFileName = `letshare_${Date.now()}.zip`;
 
       const zipFile = new File([content], zipFileName, {
         type: "application/zip",
@@ -361,6 +394,15 @@ export default function DownloadDrawerSlide({
     } finally {
       isDownloadingRef.current = false;
     }
+  };
+
+  const downloadAllAsZip = async () => {
+    if (receivedList.length === 0) return;
+    const zipFileName = `letshare_${Date.now()}.zip`;
+    await downloadReceivedFilesAsZip(
+      receivedList.map(([key, file]) => ({ key, file })),
+      zipFileName
+    );
   };
 
 
@@ -481,6 +523,27 @@ export default function DownloadDrawerSlide({
       setBrowserDownloadNotice(notice);
       alertUseMUI(notice, 7000, { kind: "info" });
     }
+  };
+
+  const downloadSelectedFiles = async () => {
+    if (selectedFiles.size === 0) return;
+
+    const entries: ZipDownloadEntry[] = [];
+    selectedFiles.forEach((key) => {
+      const file = receivedMap.get(key);
+      if (file) entries.push({ key, file });
+    });
+
+    if (entries.length === 0) return;
+    if (entries.length === 1) {
+      await downloadFile(entries[0].file);
+      return;
+    }
+
+    await downloadReceivedFilesAsZip(
+      entries,
+      `letshare_selected_${Date.now()}.zip`
+    );
   };
 
 
@@ -1022,8 +1085,18 @@ export default function DownloadDrawerSlide({
                 {/* 已接收文件展示 - 按用户分组 */}
                 {receivedList.length > 0 && (
                   <Box>
-                    <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", mt: 2, mb: 1 }}>
-                      <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
+                    <Box
+                      sx={{
+                        display: "flex",
+                        alignItems: { xs: "stretch", sm: "center" },
+                        justifyContent: "space-between",
+                        flexWrap: "wrap",
+                        gap: 1,
+                        mt: 2,
+                        mb: 1,
+                      }}
+                    >
+                      <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, minWidth: 0, flex: "1 1 180px" }}>
                         <Checkbox
                           size="small"
                           checked={selectedFiles.size > 0 && selectedFiles.size === receivedList.length}
@@ -1036,7 +1109,7 @@ export default function DownloadDrawerSlide({
                             }
                           }}
                         />
-                        <Typography variant="subtitle2">
+                        <Typography variant="subtitle2" sx={{ minWidth: 0 }}>
                           <FolderIcon sx={{ mr: 0.5, verticalAlign: 'middle', fontSize: '1.1em' }} />
                           {t('transfer.receivedFiles')}
                           {persistentFileCount > 0 && (
@@ -1046,7 +1119,16 @@ export default function DownloadDrawerSlide({
                           )}
                         </Typography>
                       </Box>
-                      <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                      <Box
+                        sx={{
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: { xs: "flex-end", sm: "flex-end" },
+                          flexWrap: "wrap",
+                          flexBasis: { xs: "100%", sm: "auto" },
+                          gap: 1,
+                        }}
+                      >
                         <Button onClick={clearReceivedFiles} size="small">
                           清空
                         </Button>
@@ -1077,6 +1159,7 @@ export default function DownloadDrawerSlide({
                               sx={{
                                 display: "flex",
                                 alignItems: "center",
+                                flexWrap: "wrap",
                                 gap: 1,
                                 px: 1.5,
                                 py: 1,
@@ -1100,10 +1183,18 @@ export default function DownloadDrawerSlide({
                               ) : (
                                 <KeyboardArrowDownIcon fontSize="small" sx={{ color: "text.secondary" }} />
                               )}
-                              <Typography variant="body2" sx={{ fontWeight: 600, flex: 1 }}>
+                              <Typography
+                                variant="body2"
+                                sx={{
+                                  fontWeight: 600,
+                                  flex: "1 1 120px",
+                                  minWidth: 0,
+                                  wordBreak: "break-word",
+                                }}
+                              >
                                 {group.userName}
                               </Typography>
-                              <Typography variant="caption" color="text.secondary">
+                              <Typography variant="caption" color="text.secondary" sx={{ flexShrink: 0 }}>
                                 {group.files.length} / {formatSize(totalSize)}
                               </Typography>
                               <Tooltip title={t('download.deleteAllFrom', { name: group.userName })}>
@@ -1133,8 +1224,9 @@ export default function DownloadDrawerSlide({
                                       sx={{
                                         display: "flex",
                                         alignItems: "center",
-                                        gap: 1.5,
-                                        px: 2,
+                                        gap: { xs: 1, sm: 1.5 },
+                                        minWidth: 0,
+                                        px: { xs: 1, sm: 2 },
                                         py: 1.25,
                                         borderTop: `1px solid ${theme.palette.divider}`,
                                         cursor: "pointer",
@@ -1177,7 +1269,15 @@ export default function DownloadDrawerSlide({
                                       ) : (
                                         getFileIcon(file.name)
                                       )}
-                                      <Typography variant="body2" noWrap sx={{ flex: 1 }}>
+                                      <Typography
+                                        variant="body2"
+                                        sx={{
+                                          flex: 1,
+                                          minWidth: 0,
+                                          wordBreak: "break-word",
+                                          overflowWrap: "anywhere",
+                                        }}
+                                      >
                                         {file.name}
                                       </Typography>
                                       <Typography variant="caption" color="text.secondary" sx={{ flexShrink: 0 }}>
@@ -1204,9 +1304,9 @@ export default function DownloadDrawerSlide({
                       })}
                     </Box>
 
-                    {/* 批量删除按钮 */}
+                    {/* 批量操作按钮 */}
                     {selectedFiles.size > 0 && (
-                      <Box sx={{ display: "flex", justifyContent: "center", mt: 2 }}>
+                      <Box sx={{ display: "flex", justifyContent: "center", flexWrap: "wrap", gap: 1, mt: 2 }}>
                         <Button
                           variant="contained"
                           color="error"
@@ -1215,6 +1315,16 @@ export default function DownloadDrawerSlide({
                           sx={{ ...buttonStyleNormal }}
                         >
                           {t('download.deleteSelected')} ({selectedFiles.size})
+                        </Button>
+                        <Button
+                          variant="contained"
+                          color="primary"
+                          size="small"
+                          startIcon={<DownloadIcon />}
+                          onClick={downloadSelectedFiles}
+                          sx={{ ...buttonStyleNormal }}
+                        >
+                          {t('download.downloadSelected')} ({selectedFiles.size})
                         </Button>
                       </Box>
                     )}

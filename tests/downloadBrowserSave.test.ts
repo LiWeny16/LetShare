@@ -41,10 +41,10 @@ test("download drawer has a centered floating height toggle", () => {
   assert.match(downloadSource, /KeyboardArrowUpIcon/);
   assert.match(downloadSource, /const \[drawerExpanded, setDrawerExpanded\] = React\.useState\(false\);/);
   assert.doesNotMatch(downloadSource, /height:\s*drawerExpanded \? "90vh" : "auto"/);
-  assert.match(downloadSource, /minHeight:\s*drawerExpanded \? "90vh" : 0/);
-  assert.match(downloadSource, /maxHeight:\s*drawerExpanded \? "90vh" : 400/);
-  assert.match(downloadSource, /min-height/);
-  assert.match(downloadSource, /max-height/);
+  assert.match(downloadSource, /minHeight:\s*drawerExpanded \? \{ xs: "calc\(100dvh - 56px\)", sm: "90vh" \} : 0/);
+  assert.match(downloadSource, /maxHeight:\s*drawerExpanded \? \{ xs: "calc\(100dvh - 56px\)", sm: "90vh" \} : 400/);
+  assert.match(downloadSource, /minHeight/);
+  assert.match(downloadSource, /maxHeight/);
   assert.match(downloadSource, /left:\s*"50%"/);
   assert.match(downloadSource, /transform:\s*"translateX\(-50%\)"/);
   assert.match(downloadSource, /color:\s*"common\.black"/);
@@ -55,4 +55,26 @@ test("download drawer outside area passes clicks through to the backdrop", () =>
   assert.match(downloadSource, /<Backdrop[\s\S]*onClick=\{onClose\}/);
   assert.match(downloadSource, /pointerEvents:\s*"none"/);
   assert.match(downloadSource, /pointerEvents:\s*"auto"/);
+});
+
+test("selected received files can be downloaded from the batch action bar", () => {
+  assert.match(downloadSource, /const downloadSelectedFiles = async \(\) =>/);
+  assert.match(downloadSource, /selectedFiles\.forEach/);
+  assert.match(downloadSource, /t\('download\.downloadSelected'\)/);
+  assert.match(downloadSource, /startIcon=\{<DownloadIcon \/>}/);
+});
+
+test("zip downloads preserve sender context and avoid duplicate file name overwrite", () => {
+  assert.match(downloadSource, /type ZipDownloadEntry = \{/);
+  assert.match(downloadSource, /getSenderNameFromReceivedKey/);
+  assert.match(downloadSource, /getUniqueZipPath\(entry, usedZipPaths\)/);
+  assert.doesNotMatch(downloadSource, /zip\.file\(file\.name,\s*file\)/);
+  assert.match(downloadSource, /receivedList\.map\(\(\[key, file\]\) => \(\{ key, file \}\)\)/);
+});
+
+test("received file controls keep narrow screens from squeezing the layout", () => {
+  assert.match(downloadSource, /flexWrap:\s*"wrap"/);
+  assert.match(downloadSource, /minWidth:\s*0/);
+  assert.match(downloadSource, /wordBreak:\s*"break-word"/);
+  assert.match(downloadSource, /flexBasis:\s*\{\s*xs:\s*"100%"/);
 });

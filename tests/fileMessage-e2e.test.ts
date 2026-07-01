@@ -9,6 +9,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import "fake-indexeddb/auto";
 
 // Dynamic imports: app modules loaded after browser globals are polyfilled
 let ChatHistoryManager: any;

@@ -77,35 +77,24 @@ export class PeerManager {
     const user = this.rtc.userList.get(id);
     if (user) {
      // 标记该用户曾经成功建立过P2P连接
-     user.status = "connected";
-     user.hadP2PConnection = true;
-     this.rtc.userList.set(id, user);
+     this.rtc.markP2PConnected(id, user);
     }
     clearTimeout(this.rtc.connectionTimeouts.get(id));
    }
 
    if (["failed", "disconnected", "closed"].includes(peer.connectionState)) {
-    console.warn(`[CONNECT] ${id} 连接失败或断开`);
-    
+    console.debug(`[CONNECT] ${id} P2P unavailable, keeping relay fallback`);
+
     const user = this.rtc.userList.get(id);
-    
-    // 如果用户曾经成功建立过P2P连接，断开时很可能是真的离线了
-    if (user?.hadP2PConnection && peer.connectionState === "disconnected") {
-     console.debug(`[CONNECT] ${id} had P2P connection before, likely offline, removing user`);
-     this.rtc.clearCache(id, { clearEncryption: true });
-     this.rtc.userList.delete(id);
-    } else {
-     // 如果从未建立过P2P连接，可能只是连接失败，降级到text-only
-     console.debug(`[CONNECT] ${id} P2P failed, switching to text-only mode`);
-     this.rtc.clearCache(id);
-     if (user) {
-      user.status = "text-only";
-      user.lastSeen = Date.now();
-      this.rtc.userList.set(id, user);
-     }
+
+    this.rtc.clearCache(id);
+    if (user) {
+     this.rtc.markP2PUnavailable(id, user);
     }
-    
-    peer.close();
+
+    if (peer.connectionState !== "closed") {
+     peer.close();
+    }
     RealTimeColab.peers.delete(id);
     this.rtc.updateConnectedUsers(this.rtc.userList);
    }
