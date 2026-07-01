@@ -90,22 +90,18 @@ interface NegotiationState {
  queue: any[]; // 暂存要处理的Offer或Answer
 }
 export type UserStatus =
- | "online"
- | "offline";
-export type P2PStatus =
- | "idle"
+ | "waiting"
  | "connecting"
  | "connected"
- | "unavailable";
+ | "disconnected"
+ | "text-only";
 const t = i18n.t;
 export interface UserInfo {
  status: UserStatus;
- p2pStatus: P2PStatus;
  attempts: number;
  lastSeen: number;
  userType: UserType;
  hadP2PConnection?: boolean; // 标记该用户是否曾经成功建立过P2P连接
- nextP2PRetryAt?: number;
 }
 
 interface P2PReceivingFile {
@@ -169,27 +165,18 @@ export class RealTimeColab {
    uniqId: uniqId,
   };
   this.connectionManager = new ConnectionManager(config);
-  this.serverRelayConnectionManager = new ConnectionManager(config);
 
   // 初始化加密功能
   this.secureWrapper = new SecureMessageWrapper();
   
-  // 初始化服务器文件传输：custom 主连接复用主连接；Ably 主连接使用独立 custom relay。
-  this.primaryServerFileTransfer = new ServerFileTransfer(this.connectionManager);
-  this.relayServerFileTransfer = new ServerFileTransfer(this.serverRelayConnectionManager);
-  this.serverFileTransfer = this.primaryServerFileTransfer;
+  // 初始化服务器文件传输
+  this.serverFileTransfer = new ServerFileTransfer(this.connectionManager);
  }
  // In RealTimeColab
  private connectionManager: ConnectionManager;
- private serverRelayConnectionManager: ConnectionManager;
  
  // 服务器文件传输
- private primaryServerFileTransfer: ServerFileTransfer;
- private relayServerFileTransfer: ServerFileTransfer;
- private serverFileTransfer: ServerFileTransfer;
- private serverRelayStatus: "idle" | "connected" | "unavailable" = "idle";
- private primaryServerTransferHandlersConfigured = false;
- private relayServerTransferHandlersConfigured = false;
+ private serverFileTransfer: ServerFileTransfer | null = null;
 
  // 加密相关属性
  private secureWrapper: SecureMessageWrapper;
@@ -292,7 +279,7 @@ export class RealTimeColab {
    this.setDownloadPageState(true);
   }
 
- if (message && options.autoClearMs) {
+  if (message && options.autoClearMs) {
    this.transferStatusClearTimeout = setTimeout(() => {
     this.fileTransferStatus = {
      message: null,
@@ -307,87 +294,6 @@ export class RealTimeColab {
     }
    }, options.autoClearMs);
   }
- }
-
- public markP2PUnavailable(id: string, user = this.userList.get(id), countAttempt = true): UserInfo | undefined {
-  if (!user) return undefined;
-  user.status = "online";
-  user.p2pStatus = "unavailable";
-  user.lastSeen = Date.now();
-  if (countAttempt) {
-   user.attempts = (user.attempts || 0) + 1;
-   const retryDelay = Math.min(
-    CONFIG.PEER_RESET_COOLDOWN * Math.max(1, user.attempts),
-    60_000
-   );
-   user.nextP2PRetryAt = Date.now() + retryDelay;
-  }
-  this.userList.set(id, user);
-  return user;
- }
-
- public markP2PConnected(id: string, user = this.userList.get(id)): UserInfo | undefined {
-  if (!user) return undefined;
-  user.status = "online";
-  user.p2pStatus = "connected";
-  user.attempts = 0;
-  delete user.nextP2PRetryAt;
-  user.hadP2PConnection = true;
-  user.lastSeen = Date.now();
-  this.userList.set(id, user);
-  return user;
- }
-
- private configureServerFileTransferCallbacks(transfer: ServerFileTransfer): void {
-  transfer.setProgressCallback((progress) => {
-   this.setFileTransferProgress(progress);
-   if (progress !== null && this.sendingToUserId) {
-    this.emitter.emit('file-progress', { to: this.sendingToUserId, progress });
-   }
-  });
-
-  transfer.setFileReceivedCallback((file, fromUserId) => {
-   console.debug(`[ColabLib] File received from ${fromUserId}:`, file.name);
-   this.handleReceivedFile(file, fromUserId);
-  });
-
-  transfer.setDownloadPageStateCallback((show) => {
-   this.setDownloadPageState(show);
-  });
-
-  transfer.setFileMetaInfoCallback((fileName) => {
-   this.fileMetaInfo.name = fileName;
-  });
-
-  transfer.setTransferStatusCallback((message, kind) => {
-   this.setFileTransferStatus(message, kind, {
-    autoClearMs: kind === "success" || kind === "error" ? 10_000 : undefined,
-   });
-  });
-
-  transfer.setAdminPasswordRequestCallback(async (_fileSize) => {
-   if (isPro()) {
-    console.debug("[ColabLib] PRO 会员邀请码已缓存");
-    return getProCookie();
-   }
-   return null;
-  });
-
- transfer.setReceivedFileCacheCandidatesCallback(() =>
-  this.getReceivedFileCacheCandidates()
-  );
- }
-
- private handleServerRelayConnectionLost(transfer: ServerFileTransfer): void {
-  if (this.serverFileTransfer !== transfer) {
-   return;
-  }
-
-  this.serverRelayStatus = "unavailable";
-  this.setFileTransferStatus(t('toast.serverTransferNotAvailable'), "error", {
-   autoClearMs: 10_000,
-   showPanel: false,
-  });
  }
 
  /**
@@ -410,16 +316,50 @@ export class RealTimeColab {
   this.setupVisibilityWatcher();
 
   // 设置服务器文件传输回调
-  this.configureServerFileTransferCallbacks(this.primaryServerFileTransfer);
-  this.configureServerFileTransferCallbacks(this.relayServerFileTransfer);
-  this.primaryServerFileTransfer.setConnectionLostCallback(() => {
-   this.handleServerRelayConnectionLost(this.primaryServerFileTransfer);
-  });
-  this.relayServerFileTransfer.setConnectionLostCallback(() => {
-   this.handleServerRelayConnectionLost(this.relayServerFileTransfer);
-  });
-  this.setupPrimaryServerTransferHandlers();
-  this.setupServerRelayHandlers();
+  if (this.serverFileTransfer) {
+   this.serverFileTransfer.setProgressCallback((progress) => {
+    this.setFileTransferProgress(progress);
+    if (progress !== null && this.sendingToUserId) {
+     this.emitter.emit('file-progress', { to: this.sendingToUserId, progress });
+    }
+   });
+   
+   this.serverFileTransfer.setFileReceivedCallback((file, fromUserId) => {
+    console.debug(`[ColabLib] File received from ${fromUserId}:`, file.name);
+    this.handleReceivedFile(file, fromUserId);
+   });
+
+   // 设置下载页面状态回调
+   this.serverFileTransfer.setDownloadPageStateCallback((show) => {
+    this.setDownloadPageState(show);
+   });
+
+   // 设置文件元信息回调
+   this.serverFileTransfer.setFileMetaInfoCallback((fileName) => {
+    this.fileMetaInfo.name = fileName;
+   });
+
+   this.serverFileTransfer.setTransferStatusCallback((message, kind) => {
+    this.setFileTransferStatus(message, kind, {
+     autoClearMs: kind === "success" || kind === "error" ? 10_000 : undefined,
+    });
+   });
+
+   // PRO 会员邀请码回调(超过50MB时触发)
+   // cookie 管理由 proUpgrade 模块统一处理
+   this.serverFileTransfer.setAdminPasswordRequestCallback(async (_fileSize) => {
+    if (isPro()) {
+     console.debug("[ColabLib] PRO 会员邀请码已缓存");
+     return getProCookie();
+    }
+    return null;
+   });
+
+   this.serverFileTransfer.setReceivedFileCacheCandidatesCallback(() =>
+    this.getReceivedFileCacheCandidates()
+   );
+
+  }
   this.setupPageUnloadHandler();
 
   // 初始化加密功能
@@ -436,17 +376,18 @@ export class RealTimeColab {
 
   setInterval(async () => {
    for (const [id, user] of this.userList.entries()) {
-    // 只处理 P2P connecting 状态的用户
-    if (user.p2pStatus === "connecting") {
+    // 只处理connecting状态的用户
+    if (user.status === "connecting") {
      // 检查连接时间是否过长（超过10秒）
      const connectionTimeout = this.connectionTimeouts.get(id);
      const isStuckInConnecting = !connectionTimeout; // 如果没有超时器，说明可能卡住了
 
      if (user.attempts >= CONFIG.MAX_RETRY_ATTEMPTS || isStuckInConnecting) {
-      console.debug(
-       `[USER CHECK] ${id} P2P 连接尝试${user.attempts >= 3 ? '过多' : '卡住'}，标记为公网模式`
+      console.warn(
+       `[USER CHECK] ${id} 连接尝试${user.attempts >= 3 ? '过多' : '卡住'}，切换到 text-only 模式`
       );
-      this.markP2PUnavailable(id, user);
+      user.status = "text-only";
+      this.userList.set(id, user);
       this.updateUI();
       continue;
      }
@@ -457,16 +398,20 @@ export class RealTimeColab {
 
      if (peer?.connectionState === "connected" && channel?.readyState === "open") {
       console.debug(`[USER CHECK] ${id} 连接已建立，更新状态`);
-      this.markP2PConnected(id, user);
+      user.status = "connected";
+      user.hadP2PConnection = true;
+      this.userList.set(id, user);
       this.updateUI();
       continue;
      }
 
-     // 如果连接状态异常，重置为公网模式
+     // 如果连接状态异常，重置为text-only
      if (peer && ["failed", "closed"].includes(peer.connectionState)) {
-      console.debug(`[USER CHECK] ${id} P2P 状态异常 (${peer.connectionState})，标记为公网模式`);
+      console.warn(`[USER CHECK] ${id} 连接状态异常 (${peer.connectionState})，重置为text-only`);
       this.clearCache(id);
-      this.markP2PUnavailable(id, user);
+      user.status = "text-only";
+      user.attempts++;
+      this.userList.set(id, user);
       this.updateUI();
      }
     }
@@ -478,54 +423,6 @@ export class RealTimeColab {
   * @description Connect To Server@jServer
   */
  // In RealTimeColab
- private setupServerTransferHandlers(manager: ConnectionManager, transfer: ServerFileTransfer): void {
-  manager.onMessageReceived((message) => {
-   if (message.type && (message.type.startsWith("file:transfer:") || message.type === "error")) {
-    const actualData = message.data?.transfer_id ? message.data : message;
-    transfer.handleFileTransferMessage(message.type, actualData);
-   }
-  });
-
-  manager.onBinaryReceived((data) => {
-   transfer.handleBinaryData(data);
-  });
- }
-
- private setupPrimaryServerTransferHandlers(): void {
-  if (this.primaryServerTransferHandlersConfigured) return;
-  this.setupServerTransferHandlers(this.connectionManager, this.primaryServerFileTransfer);
-  this.primaryServerTransferHandlersConfigured = true;
- }
-
- private setupServerRelayHandlers(): void {
-  if (this.relayServerTransferHandlersConfigured) return;
-  this.setupServerTransferHandlers(this.serverRelayConnectionManager, this.relayServerFileTransfer);
-  this.relayServerTransferHandlersConfigured = true;
- }
-
- private async ensureServerRelayConnected(roomId: string): Promise<boolean> {
-  if (this.connectionManager.getConnectionType() === "custom") {
-   this.serverFileTransfer = this.primaryServerFileTransfer;
-   this.serverRelayStatus = this.connectionManager.isConnected() ? "connected" : "unavailable";
-   return this.connectionManager.isConnected();
-  }
-
-  this.serverFileTransfer = this.relayServerFileTransfer;
-  if (this.serverRelayConnectionManager.isConnected()) {
-   this.serverRelayStatus = "connected";
-   return true;
-  }
-  this.setupServerRelayHandlers();
-  const connected = await this.serverRelayConnectionManager.connectUsingProvider("custom", roomId);
-  if (!connected) {
-   this.serverRelayStatus = "unavailable";
-   console.warn("[Relay] Custom server relay connection unavailable");
-  } else {
-   this.serverRelayStatus = "connected";
-  }
-  return connected;
- }
-
  public async connectToServer(): Promise<boolean> {
   // 原来的 connectToServer
   const roomId = settingsStore.get("roomId");
@@ -538,18 +435,35 @@ export class RealTimeColab {
   
   // 设置信号处理器
   this.connectionManager.onSignalReceived(this.handleSignal.bind(this));
+  
+  // 设置文件传输消息处理器
+  if (this.connectionManager.onMessageReceived) {
+   this.connectionManager.onMessageReceived((message) => {
+    if (message.type && (message.type.startsWith("file:transfer:") || message.type === "error")) {
+     // 如果 data 是嵌套的，需要提取实际数据
+     const actualData = message.data?.transfer_id ? message.data : message;
+     this.serverFileTransfer?.handleFileTransferMessage(message.type, actualData);
+    }
+   });
+   console.debug(`[ColabLib] 文件传输消息回调已设置`);
+  } else {
+   console.warn(`[ColabLib] ConnectionManager 不支持 onMessageReceived 回调`);
+  }
+  
+  // 设置二进制数据处理器
+  if (this.connectionManager.onBinaryReceived) {
+   this.connectionManager.onBinaryReceived((data) => {
+    this.serverFileTransfer?.handleBinaryData(data);
+   });
+   console.debug(`[ColabLib] 二进制数据回调已设置`);
+  } else {
+   console.warn(`[ColabLib] ConnectionManager 不支持 onBinaryReceived 回调`);
+  }
 
   // 现在连接到服务器
   const success = await this.connectionManager.connect(roomId!);
   if (success) {
    settingsStore.updateUnrmb("isConnectedToServer", true);
-   const relayConnected = await this.ensureServerRelayConnected(roomId!);
-   if (!relayConnected) {
-    this.setFileTransferStatus(t('toast.serverTransferNotAvailable'), "error", {
-     autoClearMs: 10_000,
-     showPanel: false,
-    });
-   }
    const myPublicKeys = this.userPublicKeys.get(this.getUniqId()!);
    this.broadcastSignal({
     type: "discover",
@@ -575,9 +489,7 @@ export class RealTimeColab {
    await new Promise(resolve => setTimeout(resolve, CONFIG.LEAVE_MESSAGE_DELAY));
   }
 
-  await this.connectionManager.disconnect(soft);
-  await this.serverRelayConnectionManager.disconnect(soft);
-  this.serverRelayStatus = "idle";
+  this.connectionManager.disconnect(soft);
 
   // 更新连接状态
   settingsStore.updateUnrmb("isConnectedToServer", false);
@@ -604,8 +516,22 @@ export class RealTimeColab {
     // 没有活跃连接，建立新连接
     console.debug(` 没有活跃连接，建立新连接到房间: ${newRoomId}`);
 
-    // 重新设置回调，确保新连接能接收到信号
+    // 重新设置所有回调，确保新连接能接收到信号和文件传输消息
     this.connectionManager.onSignalReceived(this.handleSignal.bind(this));
+    
+    if (this.connectionManager.onMessageReceived) {
+     this.connectionManager.onMessageReceived((message) => {
+      if (message.type && message.type.startsWith("file:transfer:")) {
+       this.serverFileTransfer?.handleFileTransferMessage(message.type, message.data || message);
+      }
+     });
+    }
+
+    if (this.connectionManager.onBinaryReceived) {
+     this.connectionManager.onBinaryReceived((data) => {
+      this.serverFileTransfer?.handleBinaryData(data);
+     });
+    }
 
     const success = await this.connectionManager.connect(newRoomId!);
     if (!success) {
@@ -613,15 +539,6 @@ export class RealTimeColab {
      return;
     }
     settingsStore.updateUnrmb("isConnectedToServer", true);
-   }
-
-   await this.serverRelayConnectionManager.disconnect();
-   const relayConnected = await this.ensureServerRelayConnected(newRoomId!);
-   if (!relayConnected) {
-    this.setFileTransferStatus(t('toast.serverTransferNotAvailable'), "error", {
-     autoClearMs: 10_000,
-     showPanel: false,
-    });
    }
 
    // 等待一小段时间确保连接完全建立，然后广播discover信号
@@ -821,34 +738,28 @@ export class RealTimeColab {
 
   // 处理新用户或更新现有用户
   if (!user) {
+   // 新用户默认为text-only状态，连接服务器后就可以发送文本消息
    user = {
-    status: "online",
-    p2pStatus: "idle",
+    status: "text-only",
     attempts: 0,
     lastSeen: now,
     userType: data.userType,
    };
    this.userList.set(fromId, user);
-   console.debug(`[DISCOVER] New user ${fromId} joined, public online`);
+   console.debug(`[DISCOVER] New user ${fromId} joined, status: text-only`);
   } else {
    // 更新现有用户的活跃时间
-   const wasOffline = user.status === "offline";
    user.lastSeen = now;
-   user.status = "online";
-   user.userType = data.userType;
 
-   if (user.p2pStatus === undefined) {
-    user.p2pStatus = "idle";
-   }
-
-   // 如果用户之前离线，恢复公网在线
-   if (wasOffline) {
+   // 如果用户之前是disconnected状态，恢复为text-only
+   if (user.status === "disconnected") {
+    user.status = "text-only";
     user.attempts = 0; // 重置失败计数
-    console.debug(`[DISCOVER] User ${fromId} back online`);
+    console.debug(`[DISCOVER] User ${fromId} back online, status: disconnected -> text-only`);
    }
 
-   // 如果用户之前曾经建立过P2P连接但现在不可用，可能需要重试P2P
-   if (user.hadP2PConnection && user.p2pStatus === "unavailable") {
+   // 如果用户之前曾经建立过P2P连接但现在是text-only，可能需要重试P2P
+   if (user.hadP2PConnection && user.status === "text-only") {
     console.debug(`[DISCOVER] User ${fromId} had P2P before, may retry connection`);
    }
 
@@ -886,21 +797,32 @@ export class RealTimeColab {
   if (shouldAttemptP2P) {
    console.debug(`[DISCOVER] Attempting P2P connection with ${fromId}`);
    try {
-    currentUser.status = "online";
-    currentUser.p2pStatus = "connecting";
+    // 设置connecting状态
+    currentUser.status = "connecting";
     currentUser.attempts = (currentUser.attempts || 0);
     this.userList.set(fromId, currentUser);
 
     // 尝试连接
-   await this.connectToUser(fromId);
+    await this.connectToUser(fromId);
    } catch (e) {
     console.warn(`[DISCOVER] P2P connection attempt failed:`, e);
-    this.markP2PUnavailable(fromId, currentUser);
+    currentUser.attempts++;
 
     // 如果尝试次数过多，停止尝试P2P连接
     if (currentUser.attempts >= CONFIG.MAX_RETRY_ATTEMPTS) {
-     console.debug(`[DISCOVER] User ${fromId} P2P failed too many times, staying on public relay`);
+     currentUser.status = "text-only";
+     console.debug(`[DISCOVER] User ${fromId} P2P failed too many times, staying in text-only mode`);
+     alertUseMUI(t("alert.p2pFailed", { name: fromId.split(":")[0] }), 2000, { kind: "warning" });
+     // 海外后端额外提示：P2P 直连要求双方网络可穿透
+     if (this.connectionManager.getConnectionType() === "ably") {
+      alertUseMUI(t("alert.p2pOnlyOverseas"), 4000, { kind: "warning" });
+     }
+    } else {
+     // 回退到text-only，等待下次discover重试
+     currentUser.status = "text-only";
     }
+
+    this.userList.set(fromId, currentUser);
    }
   }
 
@@ -912,21 +834,13 @@ export class RealTimeColab {
   */
  private shouldAttemptP2PConnection(userId: string, user: UserInfo): boolean {
   // 如果已经在连接或已连接，不重复尝试
-  if (user.p2pStatus === "connecting" || user.p2pStatus === "connected") {
-   return false;
-  }
-
-  if (user.nextP2PRetryAt && Date.now() < user.nextP2PRetryAt) {
+  if (user.status === "connecting" || user.status === "connected") {
    return false;
   }
 
   // 如果尝试次数过多，不再尝试
   if (user.attempts >= CONFIG.MAX_RETRY_ATTEMPTS) {
-   if (!user.nextP2PRetryAt) {
-    return false;
-   }
-   user.attempts = 0;
-   delete user.nextP2PRetryAt;
+   return false;
   }
 
   // 检查是否已有有效的P2P连接
@@ -935,14 +849,18 @@ export class RealTimeColab {
 
   if (existingPeer?.connectionState === "connected" && existingChannel?.readyState === "open") {
    console.debug(`[DISCOVER] ${userId} already has valid P2P connection`);
-   this.markP2PConnected(userId, user);
+   user.status = "connected";
+   this.userList.set(userId, user);
    return false;
   }
 
   // 只有ID较大的一方主动发起连接（避免冲突）
   const shouldInitiate = compareUniqIdPriority(this.getUniqId()!, userId);
 
-  return shouldInitiate && user.status === "online";
+  // 必须是text-only状态才尝试升级到P2P
+  const isTextOnlyStatus = user.status === "text-only";
+
+  return shouldInitiate && isTextOnlyStatus;
  }
 
  /**
@@ -970,20 +888,22 @@ export class RealTimeColab {
   // 更新用户状态，确保用户存在于列表中
   const user = this.userList.get(fromId);
   if (user) {
-   user.status = "online";
-   user.p2pStatus = user.p2pStatus ?? "unavailable";
    user.lastSeen = Date.now();
-   this.userList.set(fromId, user);
+   // 如果用户当前是disconnected状态，改为text-only
+   if (user.status === "disconnected") {
+    user.status = "text-only";
+    this.userList.set(fromId, user);
+    console.debug(`[RECV MSG] User ${fromId} status changed to text-only`);
+   }
   } else {
-   // 如果用户不存在，创建一个公网在线用户
+   // 如果用户不存在，创建一个text-only用户
    this.userList.set(fromId, {
-    status: "online",
-    p2pStatus: "unavailable",
+    status: "text-only",
     attempts: 0,
     lastSeen: Date.now(),
     userType: data.userType || "desktop",
    });
-   console.debug(`[RECV MSG] Created new public relay user: ${fromId}`);
+   console.debug(`[RECV MSG] Created new text-only user: ${fromId}`);
   }
 
   // 解密消息（如果是加密消息）
@@ -1093,7 +1013,7 @@ export class RealTimeColab {
 
   if (options.clearEncryption) {
    // 只有用户真正离开/被删除时才清理加密数据。
-   // P2P 失败只是直连能力不可用，公网文本/文件中转仍需要这些密钥。
+   // P2P 失败后仍会降级到 text-only，服务器转发文本还需要这些密钥。
    this.secureWrapper.clearUserData(id);
    this.userPublicKeys.delete(id);
   }
@@ -1322,18 +1242,20 @@ export class RealTimeColab {
    if (!user) {
     console.warn(" User not found, adding automatically when channel opens:", id);
     user = {
-     status: "online",
-     p2pStatus: "connected",
+     status: "connected",
      attempts: 0,
      lastSeen: Date.now(),
      userType: "desktop", // 或回退推断
      hadP2PConnection: true,
     };
-   this.userList.set(id, user);
+    this.userList.set(id, user);
    } else {
-    // 更新现有用户 P2P 状态为 connected
-    this.markP2PConnected(id, user);
-    console.debug(`[DATACHANNEL] ${id} DataChannel opened, P2P status updated to connected`);
+    // 更新现有用户状态为connected
+    user.status = "connected";
+    user.hadP2PConnection = true;
+    user.lastSeen = Date.now();
+    this.userList.set(id, user);
+    console.debug(`[DATACHANNEL] ${id} DataChannel opened, status updated to connected`);
    }
 
    alertUseMUI(t("alert.newUser", { name: id.split(":")[0] }), 2000, {
@@ -1502,7 +1424,7 @@ export class RealTimeColab {
       if (normalizedMeta.transferId) {
        this.p2pUnknownTransferIssueKeys.delete(normalizedMeta.transferId);
       }
-      this.setFileTransferStatus(t('alert.receivingFile'), "info", { showPanel: false });
+      this.setFileTransferStatus("正在接收文件", "info", { showPanel: false });
       this.refreshP2PReceiveTimeout(id);
 
       realTimeColab.fileMetaInfo.name = normalizedMeta.fileName;
@@ -1557,7 +1479,8 @@ export class RealTimeColab {
 
       const user = this.userList.get(id);
       if (user) {
-       this.markP2PConnected(id, user);
+       user.status = "connected";
+       this.userList.set(id, user);
       }
       this.pingFailures.set(id, 0);
       this.updateUI();
@@ -1732,7 +1655,7 @@ export class RealTimeColab {
 
  
   channel.onclose = () => {
-   console.debug(` DataChannel closed for ${id}, marking P2P unavailable`);
+   console.warn(` DataChannel closed for ${id}, setting user to text-only status`);
    const transferId = this.p2pSendingTransferIds.get(id);
    const failureImpact = getP2PChannelFailureImpact({
     sendingTransferId: transferId,
@@ -1770,11 +1693,14 @@ export class RealTimeColab {
    this.clearP2PReceiveTimeout(id);
    this.clearCache(id);
 
-   // 不删除用户，只更新 P2P 能力状态
+   // 不删除用户，而是设置为text-only状态
    const user = this.userList.get(id);
    if (user) {
-    this.markP2PUnavailable(id, user);
-    console.debug(` User ${id} remains online via public relay`);
+    user.status = "text-only";
+    user.lastSeen = Date.now();
+    this.userList.set(id, user);
+    console.debug(` User ${id} switched to text-only mode, can continue text communication`);
+    alertUseMUI(t("alert.p2pDisconnected", { name: id.split(":")[0] }), 2000, { kind: "warning" });
    } else {
     // 如果用户不存在，删除相关数据
     console.warn(` User ${id} does not exist in user list, cleaning up directly`);
@@ -1835,10 +1761,12 @@ export class RealTimeColab {
    // 删除引用
    this.dataChannels.delete(id);
 
-   // 不删除用户，只更新 P2P 能力状态
+   // 不删除用户，而是设置为text-only状态
    const user = this.userList.get(id);
    if (user) {
-    this.markP2PUnavailable(id, user);
+    user.status = "text-only";
+    user.lastSeen = Date.now();
+    this.userList.set(id, user);
    }
 
    this.lastPongTimes.delete(id);
@@ -2175,14 +2103,13 @@ export class RealTimeColab {
   }
   this.connectionQueue.set(id, true);
 
-  // 更新 P2P 状态为 connecting
+  // 更新用户状态为connecting
   const user = this.userList.get(id);
-  if (user && user.p2pStatus !== "connected") {
-   user.status = "online";
-   user.p2pStatus = "connecting";
+  if (user && user.status !== "connected") {
+   user.status = "connecting";
    this.userList.set(id, user);
    this.updateUI();
-   console.debug(`[CONNECT] User ${id} P2P status updated to connecting`);
+   console.debug(`[CONNECT] User ${id} status updated to connecting`);
   }
 
   try {
@@ -2217,7 +2144,7 @@ export class RealTimeColab {
     this.clearCache(id);
     // const user = this.userList.get(id);
     // if (user) {
-    //   user.status = "offline";
+    //   user.status = "disconnected";
     //   this.userList.set(id, user);
     // }
     // this.updateUI()
@@ -2245,18 +2172,25 @@ export class RealTimeColab {
     const user = this.userList.get(id);
 
     if (
-     user?.p2pStatus !== "connected" &&
+     user?.status !== "connected" &&
      current &&
      current.iceConnectionState !== "connected" &&
      current.iceConnectionState !== "checking"
     ) {
-     console.debug(`[CONNECT] ${id} P2P connection timed out, marking P2P unavailable`);
+     console.warn(`[CONNECT] ⏰ ${id} P2P connection timed out, setting to text-only status`);
      this.clearCache(id);
 
-     // 不删除用户，只更新 P2P 能力状态
+     // 不删除用户，而是设置为text-only状态
      if (user) {
-      this.markP2PUnavailable(id, user);
-      console.debug(` User ${id} remains online via public relay after P2P timeout`);
+      user.status = "text-only";
+      user.lastSeen = Date.now();
+      this.userList.set(id, user);
+      console.debug(` User ${id} switched to text-only due to timeout`);
+      alertUseMUI(t("alert.p2pTimeout", { name: id.split(":")[0] }), 2000, { kind: "warning" });
+      // 海外后端额外提示：Ably 不支持服务器中转大文件，需 P2P 直连
+      if (this.connectionManager.getConnectionType() === "ably") {
+       alertUseMUI(t("alert.p2pOnlyOverseas"), 4000, { kind: "warning" });
+      }
      }
 
      this.updateUI();
@@ -2307,8 +2241,8 @@ export class RealTimeColab {
    }
   }
 
-  // 如果P2P不可用，公网在线用户仍可通过信令发送消息
-  if (user?.status === "online") {
+  // 如果P2P不可用，检查用户是否为可通过信令发送消息的状态
+  if (user?.status === "text-only" || user?.status === "waiting" || user?.status === "connecting") {
    try {
     // 加密信令消息
     const wrappedMessage = await this.secureWrapper.wrapOutgoingMessage(id, {
@@ -2351,7 +2285,7 @@ export class RealTimeColab {
   }
 
   console.warn(
-   `[SEND MSG] Channel not open with user ${id} and user is not publicly online. User status: ${user?.status}, P2P status: ${user?.p2pStatus}`
+   `[SEND MSG] Channel not open with user ${id} and user is not in text sendable mode. User status: ${user?.status}`
   );
  }
  public abortFileTransferToUser() {
@@ -2621,23 +2555,28 @@ export class RealTimeColab {
   );
  }
 
- public isPublicRelayOnlyUser(id: string): boolean {
-  const user = this.userList.get(id);
-  return user?.status === "online" && user.p2pStatus !== "connected";
- }
-
+ /**
+  * @description 检查用户是否只能发送文本（text-only状态）
+  */
  public isTextOnlyUser(id: string): boolean {
-  return this.isPublicRelayOnlyUser(id);
+  const user = this.userList.get(id);
+  return user?.status === "text-only";
  }
 
  /**
-  * @description 检查用户是否可以接收消息（P2P连接或公网在线）
+  * @description 检查用户是否可以接收消息（P2P连接或text-only状态）
   */
  public canSendMessageToUser(id: string): boolean {
   const isConnected = this.isConnectedToUser(id);
+  const isTextOnly = this.isTextOnlyUser(id);
   const user = this.userList.get(id);
 
-  return isConnected || user?.status === "online";
+  // 支持P2P连接、text-only、waiting和connecting状态发送文本消息
+  const canSendText = isConnected || isTextOnly ||
+   user?.status === "waiting" ||
+   user?.status === "connecting";
+
+  return canSendText;
  }
 
  /**
@@ -2657,11 +2596,6 @@ export class RealTimeColab {
   if (!roomId) {
    console.error(" 未加入房间");
    alertUseMUI(t('toast.notInRoom'), 2000, { kind: "error" });
-   return;
-  }
-
-  if (!(await this.ensureServerRelayConnected(roomId))) {
-   alertUseMUI(t('toast.serverTransferNotAvailable'), 2000, { kind: "error" });
    return;
   }
 
@@ -2933,10 +2867,6 @@ export class RealTimeColab {
   return this.connectionManager.isConnected(); // 新的实现
  }
 
- public getServerRelayStatus(): "idle" | "connected" | "unavailable" {
-  return this.serverRelayStatus;
- }
-
  /** 获取当前实际连接的服务器类型（china=自定义服务器, global=Ably, none=未连接） */
  public getResolvedServerType(): 'china' | 'global' | 'none' {
   const connType = this.connectionManager.getConnectionType();
@@ -2947,7 +2877,7 @@ export class RealTimeColab {
 
  public getConnectedUserIds(): string[] {
   return Array.from(this.userList.entries())
-   .filter(([, info]) => info.status === "online")
+   .filter(([, info]) => info.status === "connected") // 加上 return 判断条件
    .map(([id]) => id);
  }
 
@@ -3089,7 +3019,7 @@ export class RealTimeColab {
   */
  public getUserCommunicationMode(userId: string): "encrypted" | "plaintext" | "unavailable" {
   const user = this.userList.get(userId);
-  if (!user || user.status === "offline") {
+  if (!user || user.status === "disconnected") {
    return "unavailable";
   }
 

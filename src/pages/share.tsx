@@ -24,7 +24,7 @@ import {
   IconButton,
   Tooltip,
 } from "@mui/material";
-import realTimeColab, { P2PStatus, UserInfo, UserStatus } from "@App/libs/connection/colabLib";
+import realTimeColab, { UserInfo, UserStatus } from "@App/libs/connection/colabLib";
 import FileIcon from "@mui/icons-material/Description";
 import ImageIcon from "@mui/icons-material/Image";
 import TextIcon from "@mui/icons-material/TextFields";
@@ -82,7 +82,6 @@ type ConnectedUser = {
   userType: UserType
   name?: string;
   status: UserStatus
-  p2pStatus: P2PStatus
 };
 export const buttonStyleNormal = {
   borderRadius: "5px",
@@ -116,15 +115,14 @@ const Share = observer(() => {
 
 
 
-  const isPublicNetworkStatus = (user: ConnectedUser) => (
-    user.status === 'online' && (user.p2pStatus === 'idle' || user.p2pStatus === 'unavailable')
+  const isPublicNetworkStatus = (status: UserStatus) => (
+    status === 'text-only' || status === 'waiting'
   );
 
-  const getConnectionStatusTooltip = (user: ConnectedUser) => {
-    if (user.status === 'offline') return t('status.disconnected');
-    if (user.p2pStatus === 'connected') return t('status.p2pTooltip');
-    if (user.p2pStatus === 'connecting') return t('status.connectingTooltip');
-    if (isPublicNetworkStatus(user)) return t('status.publicNetworkTooltip');
+  const getConnectionStatusTooltip = (status: UserStatus) => {
+    if (status === 'connected') return t('status.p2pTooltip');
+    if (status === 'connecting') return t('status.connectingTooltip');
+    if (isPublicNetworkStatus(status)) return t('status.publicNetworkTooltip');
     return t('status.disconnected');
   };
 
@@ -144,7 +142,7 @@ const Share = observer(() => {
     // 检查当前聊天目标用户是否还在连接列表中
     const targetUser = connectedUsers.find(user => user.uniqId === chatTargetUser);
 
-    if (!targetUser || targetUser.status === 'offline') {
+    if (!targetUser || targetUser.status === 'disconnected') {
       console.log(`[CHAT UI] Target user ${chatTargetUser} disconnected, closing chat panel`);
       setChatPanelOpen(false);
       setChatTargetUser(null);
@@ -153,7 +151,7 @@ const Share = observer(() => {
 
   // 检查是否有连接的用户(P2P或服务器都可以)
   const hasConnectedUsers = connectedUsers.some(user =>
-    user.status === 'online'
+    user.status !== 'disconnected'
   );
 
   // 是否连接到服务器
@@ -222,7 +220,6 @@ const Share = observer(() => {
         users: Array.from(realTimeColab.userList.entries()).map(([uniqId, user]) => ({
           uniqId,
           status: user.status,
-          p2pStatus: user.p2pStatus,
           userType: user.userType,
         })),
         connectedUsers,
@@ -286,7 +283,6 @@ const Share = observer(() => {
           uniqId: idPart ? `${namePart}:${idPart}` : id, // 保持完整 ID
           name: namePart || id,           // 没有冒号时用 id 作为 name
           status: userInfo.status,        // 携带状态
-          p2pStatus: userInfo.p2pStatus ?? "unavailable",
           userType: userInfo.userType
         };
       }
@@ -843,7 +839,7 @@ const Share = observer(() => {
               </Typography></Box>
             </Box></> : <></>}
             {[...connectedUsers].sort((a, b) => {
-              if (a.p2pStatus === 'connected' && b.p2pStatus === 'connected') {
+              if (a.status === 'connected' && b.status === 'connected') {
                 return compareUniqIdPriority(a.uniqId, b.uniqId) ? -1 : 1;
               }
               return 0;
@@ -871,22 +867,22 @@ const Share = observer(() => {
                     ...settingsBodyContentBoxStyle,
                     width: "96%",
                     textAlign: "inherit",
-                    backgroundColor: user.p2pStatus === 'connected'
+                    backgroundColor: user.status === 'connected'
                       ? 'rgba(76, 175, 80, 0.1)' // � P2P直连 — 淡绿色
-                      : isPublicNetworkStatus(user)
+                      : isPublicNetworkStatus(user.status)
                         ? 'rgba(33, 150, 243, 0.08)' // 公网通道 — 淡蓝色
-                        : user.p2pStatus === 'connecting'
+                        : user.status === 'connecting'
                           ? theme.palette.action.hover
                           : theme.palette.background.paper,
-                    opacity: user.p2pStatus === 'connecting' ? 0.7 : 1,
+                    opacity: user.status === 'connecting' ? 0.7 : 1,
                     transition: 'all 0.3s ease-in-out',
                     '&:hover': {
-                      boxShadow: user.p2pStatus === 'connected' ? 2 : 1,
-                      bgcolor: user.p2pStatus === 'connected'
+                      boxShadow: user.status === 'connected' ? 2 : 1,
+                      bgcolor: user.status === 'connected'
                         ? 'rgba(76, 175, 80, 0.15)'
-                        : isPublicNetworkStatus(user)
+                        : isPublicNetworkStatus(user.status)
                           ? 'rgba(33, 150, 243, 0.15)' // hover 深蓝
-                          : user.p2pStatus === 'connecting'
+                          : user.status === 'connecting'
                             ? 'rgba(0, 0, 0, 0.12)'
                             : 'background.default',
                     },
@@ -902,7 +898,7 @@ const Share = observer(() => {
                     gap: 1,
                     width: "100%",
                     transition: 'opacity 0.3s ease',
-                    opacity: user.p2pStatus === 'connecting' ? 0.8 : 1
+                    opacity: user.status === 'connecting' ? 0.8 : 1
                   }}>
                     {getUserTypeIcon(user.userType)}
 
@@ -911,9 +907,9 @@ const Share = observer(() => {
                       sx={{
                         width: "100%",
                         textAlign: "left",
-                        color: user.p2pStatus === 'connected'
+                        color: user.status === 'connected'
                           ? 'text.primary'
-                          : isPublicNetworkStatus(user)
+                          : isPublicNetworkStatus(user.status)
                             ? 'text.primary'
                             : 'text.secondary',
                         transition: 'color 0.3s ease'
@@ -925,15 +921,15 @@ const Share = observer(() => {
 
 
                     {/* 状态图标 */}
-                    <Tooltip title={getConnectionStatusTooltip(user)} arrow enterDelay={250}>
+                    <Tooltip title={getConnectionStatusTooltip(user.status)} arrow enterDelay={250}>
                       <Box sx={{ display: "flex", alignItems: "center", mr: "5px" }}>
-                        {user.p2pStatus === 'connected' && (
+                        {user.status === 'connected' && (
                           <LinkIcon sx={{ color: 'success.main', fontSize: 27 }} />
                         )}
-                        {user.p2pStatus === 'connecting' && (
+                        {user.status === 'connecting' && (
                           <SyncIcon sx={{ color: 'text.secondary', fontSize: 27 }} />
                         )}
-                        {isPublicNetworkStatus(user) && (
+                        {isPublicNetworkStatus(user.status) && (
                           <Box sx={{ display: 'flex', flexDirection: "row", alignItems: "center" }}>
                             <Chip
                               label={t('status.publicNetwork')}

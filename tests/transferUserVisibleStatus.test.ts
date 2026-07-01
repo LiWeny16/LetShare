@@ -88,7 +88,7 @@ test("server relay binary chunks without a receive session publish a persistent 
 test("server relay connection loss publishes a persistent retry status", () => {
   const body = extractMethodBody(serverFileTransferSource, "public handleConnectionLost");
 
-  assert.match(body, /this\.setTransferStatus\(\s*displayReason,\s*"error"/);
+  assert.match(body, /this\.setTransferStatus\(\s*reason,\s*"error"/);
 });
 
 test("malformed server relay messages that stop a sender publish a persistent retry status", () => {
@@ -132,7 +132,7 @@ test("P2P receive completion clears stale receiving progress and status", () => 
   const branch = colabLibSource.slice(completionStart, completionEnd);
 
   assert.match(branch, /this\.setFileTransferProgress\(null\)/);
-  assert.match(branch, /this\.setFileTransferStatus\(\s*t\('alert\.fileReceivedComplete'\),\s*"success"[\s\S]*autoClearMs:\s*CONFIG\.TRANSFER_COMPLETE_DELAY/);
+  assert.match(branch, /this\.setFileTransferStatus\(\s*"文件接收完成",\s*"success"[\s\S]*autoClearMs:\s*CONFIG\.TRANSFER_COMPLETE_DELAY/);
 });
 
 test("P2P channel close publishes a persistent retry status for active transfers", () => {
@@ -144,14 +144,14 @@ test("P2P channel close publishes a persistent retry status for active transfers
 
   const body = colabLibSource.slice(closeStart, closeEnd);
 
-  assert.match(body, /this\.setFileTransferStatus\(\s*t\('alert\.p2pDisconnectedTransfer'\),\s*"error"/);
+  assert.match(body, /this\.setFileTransferStatus\(\s*"P2P 连接已断开，当前文件传输已停止，请重试",\s*"error"/);
   assert.match(body, /autoClearMs:\s*10_000/);
 });
 
 test("P2P channel error cleanup publishes a persistent retry status for active transfers", () => {
   const body = extractMethodBody(colabLibSource, "private cleanupDataChannel");
 
-  assert.match(body, /this\.setFileTransferStatus\(\s*t\('alert\.p2pErrorTransfer'\),\s*"error"/);
+  assert.match(body, /this\.setFileTransferStatus\(\s*"P2P 连接异常，当前文件传输已停止，请重试",\s*"error"/);
   assert.match(body, /autoClearMs:\s*10_000/);
 });
 
@@ -180,10 +180,10 @@ test("P2P file metadata rejection reasons remain visible", () => {
   const statusPattern = /this\.setFileTransferStatus\(\s*reason,\s*"(?:error|warning)"[\s\S]*autoClearMs:\s*10_000/;
 
   assertBranchPublishesReasonStatus(branch, "alert.metadataInvalid", statusPattern);
-  assertBranchPublishesReasonStatus(branch, "alert.alreadyReceiving", statusPattern);
-  assertBranchPublishesReasonStatus(branch, "alert.fileTooLarge", statusPattern);
+  assertBranchPublishesReasonStatus(branch, "已有文件正在接收，请等待完成后重试", statusPattern);
+  assertBranchPublishesReasonStatus(branch, "当前设备为避免内存崩溃，单文件接收上限", statusPattern);
   assertBranchPublishesReasonStatus(branch, "this.getReceivedCacheLimitMessage", statusPattern);
-  assertBranchPublishesReasonStatus(branch, "alert.insufficientMemory", statusPattern);
+  assertBranchPublishesReasonStatus(branch, "当前设备内存不足，无法接收该文件，请换小文件或重试", statusPattern);
 });
 
 test("server relay incoming request rejection reasons remain visible", () => {

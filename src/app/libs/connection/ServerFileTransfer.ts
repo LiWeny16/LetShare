@@ -166,14 +166,12 @@ export class ServerFileTransfer {
  private onTransferStatusChange: ((message: string | null, kind: TransferStatusKind) => void) | null = null;
  private onAdminPasswordRequestCallback: ((fileSize: number) => Promise<string | null>) | null = null;
  private receivedFileCacheCandidatesCallback: (() => Array<{ size: number }>) | null = null;
- private onConnectionLostCallback: ((reason?: string) => void) | null = null;
 
  constructor(connectionManager: ConnectionManager) {
   this.connectionManager = connectionManager;
   this.setupMessageHandlers();
   this.connectionManager.onDisconnected?.((reason) => {
    this.handleConnectionLost(reason || t('alert.serverConnectionLost'));
-   this.onConnectionLostCallback?.(reason);
   });
  }
 
@@ -218,10 +216,6 @@ export class ServerFileTransfer {
 
  public setReceivedFileCacheCandidatesCallback(callback: () => Array<{ size: number }>) {
   this.receivedFileCacheCandidatesCallback = callback;
- }
-
- public setConnectionLostCallback(callback: (reason?: string) => void) {
-  this.onConnectionLostCallback = callback;
  }
 
  private setTransferStatus(message: string | null, kind: TransferStatusKind = "info") {
@@ -1206,13 +1200,6 @@ export class ServerFileTransfer {
   if (!session) {
    console.error(`[ServerFileTransfer] Sending session not found: ${data.transfer_id}`);
    console.debug(`[ServerFileTransfer] 当前发送会话:`, Array.from(this.sendingSessions.keys()));
-   return;
-  }
-
-  if (session.status !== "pending") {
-   console.warn(
-    `[ServerFileTransfer] Ignoring stale ACCEPT for ${data.transfer_id}, current status: ${session.status}`
-   );
    return;
   }
 
