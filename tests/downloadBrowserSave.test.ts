@@ -41,14 +41,23 @@ test("download drawer has a centered floating height toggle", () => {
   assert.match(downloadSource, /KeyboardArrowUpIcon/);
   assert.match(downloadSource, /const \[drawerExpanded, setDrawerExpanded\] = React\.useState\(false\);/);
   assert.doesNotMatch(downloadSource, /height:\s*drawerExpanded \? "90vh" : "auto"/);
-  assert.match(downloadSource, /minHeight:\s*drawerExpanded \? "90vh" : 0/);
-  assert.match(downloadSource, /maxHeight:\s*drawerExpanded \? "90vh" : 400/);
-  assert.match(downloadSource, /min-height/);
-  assert.match(downloadSource, /max-height/);
+  assert.match(downloadSource, /minHeight:\s*drawerExpanded \? \{ xs: "calc\(100dvh - 56px\)", sm: "90vh" \} : 0/);
+  assert.match(downloadSource, /maxHeight:\s*drawerExpanded \? \{ xs: "calc\(100dvh - 56px\)", sm: "90vh" \} : 400/);
+  assert.match(downloadSource, /minHeight/);
+  assert.match(downloadSource, /maxHeight/);
   assert.match(downloadSource, /left:\s*"50%"/);
   assert.match(downloadSource, /transform:\s*"translateX\(-50%\)"/);
   assert.match(downloadSource, /color:\s*"common\.black"/);
   assert.match(downloadSource, /drawerExpanded \? <KeyboardArrowUpIcon \/> : <KeyboardArrowDownIcon \/>/);
+});
+
+test("received files drawer layout adapts to narrow widths", () => {
+  assert.match(downloadSource, /xs:\s*"calc\(100vw - 24px\)"/);
+  assert.match(downloadSource, /flexWrap:\s*"wrap"/);
+  assert.match(downloadSource, /whiteSpace:\s*"nowrap"/);
+  assert.match(downloadSource, /gridTemplateColumns:\s*\{\s*xs:\s*"auto auto minmax\(0, 1fr\) auto"/);
+  assert.match(downloadSource, /minWidth:\s*0/);
+  assert.match(downloadSource, /overflowWrap:\s*"anywhere"/);
 });
 
 test("download drawer outside area passes clicks through to the backdrop", () => {

@@ -695,11 +695,12 @@ export default function DownloadDrawerSlide({
               position: "relative",
               pointerEvents: "none",
               width: {
-                xs: "88%",
+                xs: "calc(100vw - 24px)",
                 sm: "80%",
                 md: "60%",
                 lg: "50%",
               },
+              maxWidth: 720,
               mb: 4,
             }}
           >
@@ -714,7 +715,7 @@ export default function DownloadDrawerSlide({
                 backgroundColor: theme.palette.background.paper,
                 boxShadow: 3,
                 boxSizing: "border-box",
-                px: 2,
+                px: { xs: 1.5, sm: 2 },
                 pt: 2,
                 pb: 5,
                 borderBottomLeftRadius: 19,
@@ -1022,8 +1023,26 @@ export default function DownloadDrawerSlide({
                 {/* 已接收文件展示 - 按用户分组 */}
                 {receivedList.length > 0 && (
                   <Box>
-                    <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", mt: 2, mb: 1 }}>
-                      <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
+                    <Box
+                      sx={{
+                        display: "flex",
+                        alignItems: { xs: "flex-start", sm: "center" },
+                        justifyContent: "space-between",
+                        gap: 1,
+                        flexWrap: "wrap",
+                        mt: 2,
+                        mb: 1,
+                      }}
+                    >
+                      <Box
+                        sx={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 0.5,
+                          minWidth: 0,
+                          flex: "1 1 180px",
+                        }}
+                      >
                         <Checkbox
                           size="small"
                           checked={selectedFiles.size > 0 && selectedFiles.size === receivedList.length}
@@ -1035,22 +1054,63 @@ export default function DownloadDrawerSlide({
                               setSelectedFiles(new Set(receivedList.map(([k]) => k)));
                             }
                           }}
+                          sx={{ flexShrink: 0 }}
                         />
-                        <Typography variant="subtitle2">
-                          <FolderIcon sx={{ mr: 0.5, verticalAlign: 'middle', fontSize: '1.1em' }} />
-                          {t('transfer.receivedFiles')}
+                        <Typography
+                          variant="subtitle2"
+                          sx={{
+                            display: "flex",
+                            alignItems: "center",
+                            flexWrap: "wrap",
+                            minWidth: 0,
+                            columnGap: 0.5,
+                            rowGap: 0.25,
+                          }}
+                        >
+                          <FolderIcon sx={{ flexShrink: 0, fontSize: '1.1em' }} />
+                          <Box component="span" sx={{ minWidth: 0, overflowWrap: "anywhere" }}>
+                            {t('transfer.receivedFiles')}
+                          </Box>
                           {persistentFileCount > 0 && (
-                            <Typography variant="caption" color="text.secondary" component="span" sx={{ ml: 0.75 }}>
+                            <Typography
+                              variant="caption"
+                              color="text.secondary"
+                              component="span"
+                              sx={{ whiteSpace: "nowrap" }}
+                            >
                               ({persistentFileCount} restored)
                             </Typography>
                           )}
                         </Typography>
                       </Box>
-                      <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-                        <Button onClick={clearReceivedFiles} size="small">
+                      <Box
+                        sx={{
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "flex-end",
+                          gap: 0.5,
+                          flexWrap: "wrap",
+                          ml: "auto",
+                        }}
+                      >
+                        <Button
+                          onClick={clearReceivedFiles}
+                          size="small"
+                          sx={{ minWidth: "auto", px: 1, whiteSpace: "nowrap" }}
+                        >
                           清空
                         </Button>
-                        <Button onClick={downloadAllAsZip} endIcon={<DownloadIcon/>}>
+                        <Button
+                          onClick={downloadAllAsZip}
+                          size="small"
+                          endIcon={<DownloadIcon/>}
+                          sx={{
+                            minWidth: "auto",
+                            px: 1,
+                            whiteSpace: "nowrap",
+                            "& .MuiButton-endIcon": { ml: 0.5 },
+                          }}
+                        >
                           {t("button.downloadAll")}
                         </Button>
                       </Box>
@@ -1075,10 +1135,15 @@ export default function DownloadDrawerSlide({
                             {/* 用户组头部 */}
                             <Box
                               sx={{
-                                display: "flex",
+                                display: "grid",
+                                gridTemplateColumns: {
+                                  xs: "auto auto minmax(0, 1fr) auto",
+                                  sm: "auto auto minmax(0, 1fr) auto",
+                                },
                                 alignItems: "center",
-                                gap: 1,
-                                px: 1.5,
+                                columnGap: { xs: 0.5, sm: 1 },
+                                rowGap: 0.25,
+                                px: { xs: 1, sm: 1.5 },
                                 py: 1,
                                 backgroundColor: theme.palette.action.hover,
                                 cursor: "pointer",
@@ -1094,18 +1159,37 @@ export default function DownloadDrawerSlide({
                                   toggleSelectAllInGroup(userId, !allSelected);
                                 }}
                                 onClick={(event) => event.stopPropagation()}
+                                sx={{ p: { xs: 0.5, sm: 1 }, flexShrink: 0 }}
                               />
                               {isExpanded ? (
-                                <KeyboardArrowUpIcon fontSize="small" sx={{ color: "text.secondary" }} />
+                                <KeyboardArrowUpIcon fontSize="small" sx={{ color: "text.secondary", justifySelf: "center" }} />
                               ) : (
-                                <KeyboardArrowDownIcon fontSize="small" sx={{ color: "text.secondary" }} />
+                                <KeyboardArrowDownIcon fontSize="small" sx={{ color: "text.secondary", justifySelf: "center" }} />
                               )}
-                              <Typography variant="body2" sx={{ fontWeight: 600, flex: 1 }}>
-                                {group.userName}
-                              </Typography>
-                              <Typography variant="caption" color="text.secondary">
-                                {group.files.length} / {formatSize(totalSize)}
-                              </Typography>
+                              <Box sx={{ minWidth: 0 }}>
+                                <Typography
+                                  variant="body2"
+                                  sx={{
+                                    fontWeight: 600,
+                                    minWidth: 0,
+                                    overflow: "hidden",
+                                    overflowWrap: "anywhere",
+                                    display: "-webkit-box",
+                                    WebkitLineClamp: 2,
+                                    WebkitBoxOrient: "vertical",
+                                    lineHeight: 1.25,
+                                  }}
+                                >
+                                  {group.userName}
+                                </Typography>
+                                <Typography
+                                  variant="caption"
+                                  color="text.secondary"
+                                  sx={{ display: "block", lineHeight: 1.2, whiteSpace: "nowrap" }}
+                                >
+                                  {group.files.length} / {formatSize(totalSize)}
+                                </Typography>
+                              </Box>
                               <Tooltip title={t('download.deleteAllFrom', { name: group.userName })}>
                                 <IconButton
                                   size="small"
@@ -1113,7 +1197,7 @@ export default function DownloadDrawerSlide({
                                     event.stopPropagation();
                                     deleteUserFiles(userId);
                                   }}
-                                  sx={{ color: "text.secondary", flexShrink: 0 }}
+                                  sx={{ color: "text.secondary", flexShrink: 0, justifySelf: "end" }}
                                 >
                                   <CloseIcon fontSize="small" />
                                 </IconButton>
@@ -1131,10 +1215,15 @@ export default function DownloadDrawerSlide({
                                     <Box
                                       key={key}
                                       sx={{
-                                        display: "flex",
+                                        display: "grid",
+                                        gridTemplateColumns: {
+                                          xs: "auto auto minmax(0, 1fr) auto",
+                                          sm: "auto auto minmax(0, 1fr) auto auto",
+                                        },
                                         alignItems: "center",
-                                        gap: 1.5,
-                                        px: 2,
+                                        columnGap: { xs: 0.75, sm: 1.5 },
+                                        rowGap: 0.25,
+                                        px: { xs: 1, sm: 2 },
                                         py: 1.25,
                                         borderTop: `1px solid ${theme.palette.divider}`,
                                         cursor: "pointer",
@@ -1159,28 +1248,53 @@ export default function DownloadDrawerSlide({
                                           toggleFileSelection(key);
                                         }}
                                         onClick={(event) => event.stopPropagation()}
+                                        sx={{ p: { xs: 0.5, sm: 1 }, flexShrink: 0 }}
                                       />
                                       {/* 图片：显示缩略图（已生成）或通用图标（生成中） */}
-                                      {isImg && thumbUrl ? (
-                                        <Box
-                                          component="img"
-                                          src={thumbUrl}
-                                          alt={file.name}
-                                          sx={{
-                                            width: 36,
-                                            height: 36,
-                                            objectFit: "cover",
-                                            borderRadius: 1,
-                                            flexShrink: 0,
-                                          }}
-                                        />
-                                      ) : (
-                                        getFileIcon(file.name)
-                                      )}
-                                      <Typography variant="body2" noWrap sx={{ flex: 1 }}>
-                                        {file.name}
-                                      </Typography>
-                                      <Typography variant="caption" color="text.secondary" sx={{ flexShrink: 0 }}>
+                                      <Box
+                                        sx={{
+                                          width: { xs: 28, sm: 36 },
+                                          height: { xs: 28, sm: 36 },
+                                          display: "flex",
+                                          alignItems: "center",
+                                          justifyContent: "center",
+                                          flexShrink: 0,
+                                          color: "text.secondary",
+                                        }}
+                                      >
+                                        {isImg && thumbUrl ? (
+                                          <Box
+                                            component="img"
+                                            src={thumbUrl}
+                                            alt={file.name}
+                                            sx={{
+                                              width: "100%",
+                                              height: "100%",
+                                              objectFit: "cover",
+                                              borderRadius: 1,
+                                            }}
+                                          />
+                                        ) : (
+                                          getFileIcon(file.name)
+                                        )}
+                                      </Box>
+                                      <Box sx={{ minWidth: 0 }}>
+                                        <Typography variant="body2" noWrap sx={{ display: "block" }}>
+                                          {file.name}
+                                        </Typography>
+                                        <Typography
+                                          variant="caption"
+                                          color="text.secondary"
+                                          sx={{ display: { xs: "block", sm: "none" }, lineHeight: 1.2, whiteSpace: "nowrap" }}
+                                        >
+                                          {formatSize(file.size)}
+                                        </Typography>
+                                      </Box>
+                                      <Typography
+                                        variant="caption"
+                                        color="text.secondary"
+                                        sx={{ display: { xs: "none", sm: "block" }, flexShrink: 0, whiteSpace: "nowrap" }}
+                                      >
                                         {formatSize(file.size)}
                                       </Typography>
                                       <IconButton
@@ -1190,7 +1304,7 @@ export default function DownloadDrawerSlide({
                                           downloadFile(file);
                                         }}
                                         aria-label={`download ${file.name}`}
-                                        sx={{ color: "text.secondary", flexShrink: 0 }}
+                                        sx={{ color: "text.secondary", flexShrink: 0, justifySelf: "end" }}
                                       >
                                         <DownloadIcon fontSize="small" />
                                       </IconButton>
