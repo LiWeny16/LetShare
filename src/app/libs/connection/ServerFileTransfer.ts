@@ -689,6 +689,7 @@ export class ServerFileTransfer {
   if (this.currentSendingTransferId === transferId) {
    this.currentSendingTransferId = null;
   }
+  this.rejectSendCompletion(transferId, new Error(reason));
   this.onProgressCallback?.(null);
   this.setTransferStatus(reason, "error");
   this.sendTransferControlMessage(
@@ -1188,6 +1189,9 @@ export class ServerFileTransfer {
    );
   }
   this.sendingSessions.delete(transferId);
+  if (this.currentSendingTransferId === transferId) {
+   this.currentSendingTransferId = null;
+  }
   this.rejectSendCompletion(transferId, new Error(data.reason || t('toast.transferRejected')));
   this.onProgressCallback?.(null);
   // 关闭下载页面
@@ -1467,6 +1471,9 @@ export class ServerFileTransfer {
   }
   this.sendingSessions.delete(data.transfer_id);
   this.receivingSessions.delete(data.transfer_id);
+  if (this.currentSendingTransferId === data.transfer_id) {
+   this.currentSendingTransferId = null;
+  }
   this.rejectSendCompletion(data.transfer_id, new Error(data.reason || t('alert.transferCancelled')));
   this.clearTransferTimeout(data.transfer_id);
   this.clearReceiveTimeout(data.transfer_id);
@@ -1496,6 +1503,9 @@ export class ServerFileTransfer {
   }
   this.sendingSessions.delete(data.transfer_id);
   this.receivingSessions.delete(data.transfer_id);
+  if (this.currentSendingTransferId === data.transfer_id) {
+   this.currentSendingTransferId = null;
+  }
   this.rejectSendCompletion(data.transfer_id, new Error(data.error || t('toast.transferError')));
   this.clearTransferTimeout(data.transfer_id);
   this.clearReceiveTimeout(data.transfer_id);
