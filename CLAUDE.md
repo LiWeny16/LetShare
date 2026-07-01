@@ -50,3 +50,11 @@
 npm run build    # tsc && vite build → docs/
 git push         # GitHub Pages auto-deploys from docs/
 ```
+
+### Versioning Before Deploy
+- Before any deploy/push that changes app behavior, release assets, PWA/service worker output, or user-visible UI, bump the app version.
+- Keep the version synchronized in both `package.json` and `src/app/libs/mobx/mobx.ts` (`DEFAULT_SETTINGS.version`).
+- Use semver: patch for bug fixes, minor for new features, major for breaking changes.
+- Run the production build after the version bump so `docs/` is generated from the new version.
+- For JS chunk, PWA, or service worker changes, also bump the `external-cache-v{N}` cache name in `vite.config.ts` per `memory/sw-cache-version-bump.md`.
+- Include the version bump in the same deploy commit and mention the new version in the final deploy summary.

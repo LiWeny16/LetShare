@@ -223,7 +223,7 @@ async function createClient(browser, { userId, uniqId }) {
         authToken: AUTH_TOKEN,
         ablyKey: "",
         transferPriority: "server",
-        version: "3.4.0",
+        version: "3.4.1",
         isNewUser: false,
       },
       memorable: { userId, uniqId },
