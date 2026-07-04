@@ -148,7 +148,6 @@ export class ServerFileTransfer {
  private readonly reconnectGraceMs = 5000; // 重连宽限期 — 在此期间忽略迟到/失效的传输控制消息
  private lastDisconnectTime = 0;
  private readonly DEFAULT_CHUNK_SIZE = 64 * 1024; // 64KB
- private readonly BASIC_SIZE_LIMIT = 50 * 1024 * 1024; // 50MB
  /** 对齐 3GB 上限 */
  private readonly MAX_FILE_SIZE = 3 * 1024 * 1024 * 1024; // 3GB
  private readonly RESEND_CHUNK_LIMIT = 256;
@@ -164,7 +163,6 @@ export class ServerFileTransfer {
  private onDownloadPageStateChange: ((show: boolean) => void) | null = null;
  private onFileMetaInfoChange: ((name: string) => void) | null = null;
  private onTransferStatusChange: ((message: string | null, kind: TransferStatusKind) => void) | null = null;
- private onAdminPasswordRequestCallback: ((fileSize: number) => Promise<string | null>) | null = null;
  private receivedFileCacheCandidatesCallback: (() => Array<{ size: number }>) | null = null;
 
  constructor(connectionManager: ConnectionManager) {
@@ -207,12 +205,6 @@ export class ServerFileTransfer {
   this.onTransferStatusChange = callback;
  }
 
- /**
-  * 设置管理员密码请求回调(超过50MB时请求密码)
-  */
- public setAdminPasswordRequestCallback(callback: (fileSize: number) => Promise<string | null>) {
-  this.onAdminPasswordRequestCallback = callback;
- }
 
  public setReceivedFileCacheCandidatesCallback(callback: () => Array<{ size: number }>) {
   this.receivedFileCacheCandidatesCallback = callback;
@@ -835,56 +827,12 @@ export class ServerFileTransfer {
    throw new Error("current connection provider does not support binary relay");
   }
 
-  // 1. 先创建发送完成等待器(必须在任何异步操作之前创建, 确保 handleConnectionLost 可以清理)
-  let abortPasswordWait: ((err: Error) => void) | null = null;
+  // 1. 创建发送完成等待器
   const waiterPromise = new Promise<void>((resolve, reject) => {
-   const wrappedReject = (err: Error) => {
-    if (abortPasswordWait) {
-     abortPasswordWait(err);
-    }
-    reject(err);
-   };
-   this.sendCompletionWaiters.set(transferId, { resolve, reject: wrappedReject });
+    this.sendCompletionWaiters.set(transferId, { resolve, reject });
   });
 
-  // 2. 检查是否需要管理员密码(文件超过50MB) — 带超时保护, 支持 disconnect 中断
-  let adminPass = "";
-  if (file.size > this.BASIC_SIZE_LIMIT) {
-   const sizeMB = (file.size / (1024 * 1024)).toFixed(2);
-   console.debug(`[ServerFileTransfer] 文件大小 ${sizeMB} MB 超过 50MB 限制,需要管理员密码`);
-
-   if (this.onAdminPasswordRequestCallback) {
-    try {
-     const password = await Promise.race([
-      this.onAdminPasswordRequestCallback(file.size),
-      new Promise<string | null>((_, reject) =>
-       setTimeout(() => reject(new Error(t('alert.passwordTimeout'))), 60_000)
-      ),
-      new Promise<string | null>((_, reject) => {
-       abortPasswordWait = reject;
-      }),
-     ]);
-     abortPasswordWait = null;
-     if (!password) {
-      console.debug("[ServerFileTransfer] 用户取消了大文件传输");
-      this.sendCompletionWaiters.delete(transferId);
-      alertUseMUI(t('alert.passwordRequired'), 3000, { kind: "warning" });
-      throw new Error(t('alert.passwordRequired'));
-     }
-     adminPass = password;
-    } catch (error: any) {
-     abortPasswordWait = null;
-     this.sendCompletionWaiters.delete(transferId);
-     throw error;
-    }
-   } else {
-    // 未注册 PRO 回调 — 直接拒绝（不应到达这里，colabLib 总是注册回调）
-    this.sendCompletionWaiters.delete(transferId);
-    throw new Error(t('alert.passwordRequired'));
-   }
-  }
-
-  // 3. 创建发送会话
+  // 2. 创建发送会话
   const session: TransferSession = {
    transferId,
    file,
@@ -914,7 +862,6 @@ export class ServerFileTransfer {
     from_user_id: this.connectionManager.getUniqId(),
     to_user_id: toUserId,
     room_name: roomName,
-    admin_pass: adminPass,
     flow_control: this.RELAY_FLOW_CONTROL_VERSION,
    },
   };

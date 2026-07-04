@@ -1,0 +1,53 @@
+#!/usr/bin/env sh
+set -e
+
+echo ""
+echo "╔══════════════════════════════════════╗"
+echo "║    LetShare Pre-Push CI Check        ║"
+echo "╚══════════════════════════════════════╝"
+echo ""
+
+# ── Frontend ──────────────────────────────────
+echo "━━━ Frontend: TypeScript check ━━━"
+npx tsc --noEmit
+echo "  ✅ tsc passed"
+
+echo ""
+echo "━━━ Frontend: Unit tests ━━━"
+pnpm test:unit
+echo "  ✅ unit tests passed"
+
+echo ""
+echo "━━━ Frontend: E2E tests ━━━"
+pnpm test:e2e
+echo "  ✅ e2e tests passed"
+
+echo ""
+echo "━━━ Frontend: Production build ━━━"
+pnpm build
+echo "  ✅ build passed"
+
+# ── Backend ───────────────────────────────────
+echo ""
+echo "━━━ Backend: Go vet ━━━"
+cd server
+go vet ./cmd/... ./internal/...
+echo "  ✅ go vet passed"
+
+echo ""
+echo "━━━ Backend: Go test ━━━"
+go test ./internal/... -count=1
+echo "  ✅ go test passed"
+
+echo ""
+echo "━━━ Backend: Go build ━━━"
+go build ./cmd/server/
+echo "  ✅ go build passed"
+
+cd ..
+
+echo ""
+echo "╔══════════════════════════════════════╗"
+echo "║    All checks passed. Pushing...     ║"
+echo "╚══════════════════════════════════════╝"
+echo ""

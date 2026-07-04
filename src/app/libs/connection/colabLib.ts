@@ -19,7 +19,6 @@ import { ServerFileTransfer } from "./ServerFileTransfer";
 import {
 	isPro,
 	showProUpgradeDialog,
-	getProCookie,
 	clearProCookie,
 	PRO_SIZE_LIMIT,
 } from "./proUpgrade";
@@ -343,16 +342,6 @@ export class RealTimeColab {
     this.setFileTransferStatus(message, kind, {
      autoClearMs: kind === "success" || kind === "error" ? 10_000 : undefined,
     });
-   });
-
-   // PRO 会员邀请码回调(超过50MB时触发)
-   // cookie 管理由 proUpgrade 模块统一处理
-   this.serverFileTransfer.setAdminPasswordRequestCallback(async (_fileSize) => {
-    if (isPro()) {
-     console.debug("[ColabLib] PRO 会员邀请码已缓存");
-     return getProCookie();
-    }
-    return null;
    });
 
    this.serverFileTransfer.setReceivedFileCacheCandidatesCallback(() =>
@@ -2627,9 +2616,12 @@ export class RealTimeColab {
     this.sendingToUserId = null;
     return;
    }
-   // 如果邀请码无效，清除缓存，下次传输时重新弹窗
-   if (errMsg.includes("密码") || errMsg.includes("邀请码")) {
+   // 非 PRO 用户超 50MB → 清除 cookie 并提示升级
+   if (errMsg.includes("升级到 PRO")) {
     clearProCookie();
+    alertUseMUI(errMsg, 4000, { kind: "error" });
+   } else if (errMsg.includes("文件大小超过限制")) {
+    // 超过 3GB 硬上限
     alertUseMUI(errMsg, 4000, { kind: "error" });
    } else {
     alertUseMUI(t('toast.fileTransferFailed'), 3000, { kind: "error" });

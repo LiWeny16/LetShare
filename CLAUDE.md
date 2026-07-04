@@ -1,41 +1,82 @@
 # CLAUDE.md — LetShare Project
 
-## Karpathy's 4 Rules
+## 1. Harness Binding & Startup
 
-### 1. Think Before Coding
-- State assumptions explicitly. If uncertain, **ask** rather than guess.
-- Present multiple interpretations when ambiguity exists.
-- Push back when a simpler approach exists.
-- Stop and name what's unclear rather than coding through confusion.
+- If `Harness/` exists, this repository is governed by the Harness contract. Treat these files as mandatory operating instructions, not optional references.
+- Every session: load `Harness/MEMORY.md` first, then `Harness/README.md`.
+- If `Harness/SETUP.md` exists, follow it before normal project work; it is the install/bootstrap contract and may be deleted after setup is complete.
+- `Harness/MEMORY.md` is the memory/resource router: agents, skills, durable memories, and cross-session lessons. Follow its registrations when selecting agents/skills or recording memory.
+- `Harness/README.md` is the task router. For every request, check `Harness/README.md#Load By Task`; if a row matches, read and follow those docs before acting.
+- `Harness/PROGRESS.md` is the global task index. Load at session start to see active task and task history.
+- If work spans more than one step, create a task capsule from `Harness/tasks/_template/` and update `Harness/tasks/<task-id>/PROGRESS.md`.
+- Use `/wf <task>`, `/wf-max [task]`, `wf mode`, `workflow mode`, `wk mode`, `Harness/WF.md`, or `Harness/WF-MAX.md` for long, difficult, uncertain, multi-file, or repeated-failure work.
+- Use `subagent-orchestrator` and `Harness/subagents.md` when coordinating multiple subagents.
+- Use `/wf update` to check for and apply scaffold updates from GitHub. See `.claude/skills/wf-update/SKILL.md`.
+- Subagents are readers and reporters. Only the main agent writes to `Harness/tasks/<task-id>/PROGRESS.md` and `Harness/tasks/<task-id>/PLAN.md`.
+- For memory writing and consolidation (repeated failures, user corrections, closeout), dispatch `memory-master`.
+- For context analysis and compression alerts (~85% window), dispatch `context-master`.
+- Universal rules live in `.claude/rules/ecc/common.md`.
+- Never bulk-read `Harness/`; route through `Harness/README.md` and `Harness/MEMORY.md`.
+- At session start, create or update a compact task record in `Harness/PROGRESS.md` before any code changes. Keep task records compact — only active task, current phase, and last heartbeat.
+- This file defines the three-layer architecture: rules (what to enforce), skills (how to execute), agents (who to dispatch). Roles are not hook-enforced; CLAUDE.md is the sole runtime authority.
 
-### 2. Simplicity First
-- No features beyond what was explicitly asked.
+## 2. Think Before Coding
+
+- You must have >=95% confidence in user intent before writing implementation code.
+- If confidence is below 95%, stop and ask up to 3 blocking questions.
+- If multiple valid approaches exist and the choice affects architecture, scope, stack, or user-facing behavior, present trade-offs instead of picking silently.
+- State assumptions before implementation and record durable assumptions, decisions, blockers, handoffs, and verification evidence in `Harness/tasks/<task-id>/PLAN.md`.
+- If something is unclear, stop. Name what is unclear and ask instead of guessing.
+
+## 3. Simplicity First
+
+- No features beyond what was asked.
 - No abstractions for single-use code.
-- No configurable options that weren't requested.
-- If 200 lines could be 50, rewrite it.
+- No unrequested flexibility, configurability, or speculative error handling.
+- Use explicit interfaces or state models only when they protect a real boundary, clarify ownership, or make verification/recovery simpler.
+- If a simpler approach exists, say so and prefer the smallest change that satisfies the request.
+- If the solution is growing faster than the problem, reduce scope before coding more.
 
-### 3. Surgical Changes
-- Touch only what the user's request requires.
-- Match existing style even if you'd do it differently.
-- If you notice unrelated dead code, mention it — don't delete it.
-- Every changed line should trace directly to the request.
+## 4. Surgical Changes
 
-### 4. Goal-Driven Execution
-- Give success criteria, not step-by-step instructions.
-- For multi-step tasks: state a brief plan with verification steps **before** touching code.
-- Strong success criteria let the model loop independently; weak criteria require constant interruption.
+- Touch only files and lines required by the task.
+- Do not improve adjacent code, comments, formatting, or architecture unless it is required for the task.
+- Match existing style even when you would choose a different style in a new project.
+- Clean up imports, variables, functions, and files made unused by your own changes; do not delete pre-existing dead code unless asked.
+- Keep every changed line traceable to the user's request.
+
+## 5. Goal-Driven Execution
+
+- Define verifiable success criteria before implementation.
+- For bugs, reproduce the failure or document why reproduction is impossible before fixing.
+- For multi-step work, keep `Harness/tasks/<task-id>/PROGRESS.md` and `Harness/tasks/<task-id>/PLAN.md` current. The main agent is the only state committer; subagents return suggestions only.
+- Every task needs a test, build check, validator run, or recorded manual check.
+- Do not claim web/UI acceptance without real-browser evidence from Chrome DevTools, CDP, Playwright, or documented manual browser checks.
+- Do not place project build scripts, git conventions, run commands, or release process in this file. Put them in `README.md`.
+- Do not place code architecture here. Put architecture in `Harness/architecture.md` or the current feature doc.
+- If this file has accumulated unrelated project notes, pause and propose moving them to the right place.
+
+## 6. Memory & Self-Learning
+
+- `Harness/MEMORY.md` is the resource index. Detailed durable memory lives in `Harness/memory/`.
+- **Tool reflection trigger**: record a lightweight reflection when the same tool/use pattern fails 3+ times, or when a better command pattern/environment fix is found. Write it newest-first in `Harness/memory/tool-usage-reflections.md`.
+- **User correction trigger**: record a lightweight preference/correction when the user asks to remember it, or when the user corrects the same assumption/pattern 2+ times. Write it newest-first in `Harness/memory/user-corrections-preferences.md`.
+- **Agent lesson trigger**: record reusable lessons from review/debug loops in `Harness/memory/agent-lessons-patterns.md` when they would prevent recurrence.
+- **WF auto-trigger**: when the same failure class happens 3+ times in a WF recovery loop, dispatch `memory-master` to record the failure pattern to `Harness/memory/agent-lessons-patterns.md` before asking the user.
+- **Context threshold trigger**: when context approaches ~85% of the window, dispatch `context-master` to analyze and write a non-blocking compression suggestion to `Harness/tasks/<task-id>/PROGRESS.md#Heartbeat`.
+- **Closeout trigger**: during WF closeout, dispatch `context-master` to extract durable knowledge, then `memory-master` to consolidate into `Harness/memory/*`.
+- Never record secrets, credentials, tokens, or private data.
+- **Project memory system**: also load `memory/MEMORY.md` for LetShare-specific project context and domain knowledge. Memory files in `memory/` use frontmatter (`name`, `description`, `metadata`). Link related memories with `[[their-name]]`.
+
+## 7. CEO Constraints
+
+- Never call `EnterPlanMode` — delegate planning to `planner` subagents (see `Harness/WF.md`).
+- Never write code directly in `/wf` or `/wf-max` mode — delegate all implementation to subagents (see `Harness/WF-MAX.md`).
 
 ---
 
-## Project-Specific Rules
+## Project Architecture
 
-### MEMORY REQUIREMENT
-- **Every session**: Read `memory/MEMORY.md` to load project context.
-- **After significant changes**: Write/update memory files in `memory/`.
-- Memory files use frontmatter: `name`, `description`, `metadata` (type: user|feedback|project|reference).
-- Link related memories with `[[their-name]]`.
-
-### Project Architecture
 - **Frontend**: React 18 + Vite + MUI, built to `docs/` (GitHub Pages)
 - **Backend**: Go WebSocket server (`server/` submodule), deployed on Alibaba Cloud ECS
 - **CDN**: Alibaba Cloud CDN (China) + Fastly (Global) → GitHub Pages origin
@@ -45,13 +86,15 @@
 - **Connection**: Ably (Global, lazy-loaded) or Custom WebSocket (China)
 - **Key lazy-loaded chunks**: `ably`, `jszip`, `AblyConnectionProvider`, `vconsole`
 
-### Build & Deploy
+## Build & Deploy
+
 ```bash
 npm run build    # tsc && vite build → docs/
 git push         # GitHub Pages auto-deploys from docs/
 ```
 
-### Versioning Before Deploy
+## Versioning Before Deploy
+
 - Before any deploy/push that changes app behavior, release assets, PWA/service worker output, or user-visible UI, bump the app version.
 - Keep the version synchronized in both `package.json` and `src/app/libs/mobx/mobx.ts` (`DEFAULT_SETTINGS.version`).
 - Use semver: patch for bug fixes, minor for new features, major for breaking changes.

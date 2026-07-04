@@ -7,13 +7,15 @@ import {
   IconButton,
   Tooltip,
   Collapse,
+  CircularProgress,
 } from '@mui/material';
 import React from 'react';
 import alertUseMUI from '@App/libs/tools/alert';
 import WorkspacePremiumIcon from '@mui/icons-material/WorkspacePremium';
 import VerifiedIcon from '@mui/icons-material/Verified';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
-import { PRO_INVITE_CODE, setProCookie, clearProCookie, getProCookie } from '@App/libs/connection/proUpgrade';
+import { setProCookie, clearProCookie, getProCookie, activatePro, setProToken } from '@App/libs/connection/proUpgrade';
+import realTimeColab from '@App/libs/connection/colabLib';
 
 const PRO_EMAIL = 'a454888395@gmail.com';
 
@@ -29,6 +31,7 @@ const ProUpgradeDialog = ({ open, onClose, isPro = false }: Props) => {
   const [inviteError, setInviteError] = React.useState('');
   const [copied, setCopied] = React.useState(false);
   const [showActivate, setShowActivate] = React.useState(false);
+  const [isActivating, setIsActivating] = React.useState(false);
 
   // 已激活时自动从 cookie 读取邀请码填入
   React.useEffect(() => {
@@ -49,25 +52,36 @@ const ProUpgradeDialog = ({ open, onClose, isPro = false }: Props) => {
     });
   };
 
-  const handleActivatePro = () => {
+  const handleActivatePro = async () => {
     const code = inviteCode.trim();
     if (!code) {
       setInviteError('请输入邀请码');
       return;
     }
-    if (code === PRO_INVITE_CODE) {
+
+    const userId = realTimeColab.getUniqId();
+    if (!userId) {
+      setInviteError('用户ID未初始化，请刷新页面后重试');
+      return;
+    }
+
+    setIsActivating(true);
+    try {
+      const result = await activatePro(userId, code);
+      setProToken(result.token, 30);
       setProCookie(code, 30);
       setInviteCode('');
       setInviteError('');
       setShowActivate(false);
       onClose();
       alertUseMUI('PRO 已激活！50MB+ 服务器中转已解锁', 3000, { kind: 'success' });
-    } else {
-      setInviteError('邀请码无效');
+    } catch (err: any) {
+      setInviteError(err.message || '激活失败');
       clearProCookie();
+    } finally {
+      setIsActivating(false);
     }
   };
-
   const handleDowngrade = () => {
     clearProCookie();
     onClose();
@@ -359,8 +373,9 @@ const ProUpgradeDialog = ({ open, onClose, isPro = false }: Props) => {
               }}
               error={!!inviteError}
               helperText={inviteError}
+              disabled={isActivating}
               onKeyDown={(e) => {
-                if (e.key === 'Enter') handleActivatePro();
+                if (e.key === 'Enter' && !isActivating) handleActivatePro();
               }}
               sx={{
                 '& .MuiOutlinedInput-root': {
@@ -371,7 +386,7 @@ const ProUpgradeDialog = ({ open, onClose, isPro = false }: Props) => {
             <Button
               variant="contained"
               onClick={handleActivatePro}
-              disabled={!inviteCode.trim()}
+              disabled={!inviteCode.trim() || isActivating}
               sx={{
                 minWidth: 72,
                 whiteSpace: 'nowrap',
@@ -384,7 +399,7 @@ const ProUpgradeDialog = ({ open, onClose, isPro = false }: Props) => {
                 },
               }}
             >
-              激活
+              {isActivating ? <CircularProgress size={20} color="inherit" /> : '激活'}
             </Button>
           </Box>
         </Collapse>

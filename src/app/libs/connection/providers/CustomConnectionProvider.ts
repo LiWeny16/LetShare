@@ -1,6 +1,7 @@
 ﻿import { IConnectionProvider, ConnectionConfig } from "./IConnectionProvider";
 import { validateRoomName } from "../../tools/tools";
 import settingsStore from "../../mobx/mobx";
+import { getProToken } from "../proUpgrade";
 
 export class CustomConnectionProvider implements IConnectionProvider {
   private ws: WebSocket | null = null;
@@ -29,7 +30,11 @@ export class CustomConnectionProvider implements IConnectionProvider {
       }
 
       const serverUrl = settingsStore.get("customServerUrl");
-      const url = `${serverUrl}?token=${authToken}&userId=${this.config.uniqId}`;
+      let url = `${serverUrl}?token=${authToken}&userId=${this.config.uniqId}`;
+      const proToken = getProToken();
+      if (proToken) {
+        url += `&pro_token=${encodeURIComponent(proToken)}`;
+      }
 
       this.ws = new WebSocket(url);
       this.ws.binaryType = "arraybuffer";

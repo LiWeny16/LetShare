@@ -51,7 +51,6 @@ import { observer } from "mobx-react-lite";
 import settingsStore from "@App/libs/mobx/mobx";
 import { isApp } from "@App/libs/capacitor/user";
 import { Trans, useTranslation } from "react-i18next";
-import { getProCookie } from "@App/libs/connection/proUpgrade";
 // import VideoPanel from "@Com/VideoPannel/VideoPannel";
 // import VideoPanel from "@Com/VideoPannel/VideoPannel";
 
@@ -462,15 +461,6 @@ const Share = observer(() => {
 
     // 初始化聊天集成
     ChatIntegration.init();
-
-    // 设置管理员密码请求回调(使用MUI对话框)
-    const sft = realTimeColab.getServerFileTransfer();
-    if (sft) {
-      sft.setAdminPasswordRequestCallback(async (_fileSize: number) => {
-        return getProCookie();
-      });
-
-    }
 
     return () => {
       realTimeColab.disconnect();
