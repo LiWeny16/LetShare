@@ -102,15 +102,29 @@ export default defineConfig({
         // 设置运行时缓存策略
         runtimeCaching: [
           {
-            // Navigation: NetworkFirst — always get fresh HTML, fall back to cache
-            urlPattern: ({request}: {request: Request}) => request.mode === 'navigate',
+            // version.json — sentinel: 客户端和 SW 通过它检测是否有新版本部署
+            // 永远 NetworkFirst，不缓存，确保每次都能检测到版本变化
+            urlPattern: /\/version\.json$/,
             handler: 'NetworkFirst',
             options: {
-              cacheName: 'html-cache-v1',
+              cacheName: 'version-sentinel',
               networkTimeoutSeconds: 3,
               expiration: {
+                maxEntries: 1,
+                maxAgeSeconds: 0 // 不缓存
+              },
+            },
+          },
+          {
+            // Navigation (HTML): StaleWhileRevalidate — 缓存瞬间返回，后台静默更新
+            // 缓存期 365 天，因为 version.json 哨兵会在版本变化时触发刷新
+            urlPattern: ({request}: {request: Request}) => request.mode === 'navigate',
+            handler: 'StaleWhileRevalidate',
+            options: {
+              cacheName: 'html-cache-v3',
+              expiration: {
                 maxEntries: 10,
-                maxAgeSeconds: 60 * 60 // 1 hour
+                maxAgeSeconds: 60 * 60 * 24 * 365 // 365天
               },
             },
           },
@@ -119,10 +133,10 @@ export default defineConfig({
             urlPattern: /^https:\/\/.*/i,
             handler: 'StaleWhileRevalidate',
             options: {
-              cacheName: 'external-cache-v13',
+              cacheName: 'external-cache-v15',
               expiration: {
                 maxEntries: 200,
-                maxAgeSeconds: 60 * 60 * 24 * 7 // 7天
+                maxAgeSeconds: 60 * 60 * 24 * 365 // 365天
               },
               cacheableResponse: {
                 statuses: [0, 200]

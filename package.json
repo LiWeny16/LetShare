@@ -1,13 +1,15 @@
 {
   "name": "letshare",
   "private": true,
-  "version": "3.4.2",
+  "version": "3.5.0",
   "type": "module",
   "scripts": {
     "d": "vite",
     "dev": "vite",
+    "prebuild": "node scripts/cleanup-old-chunks.cjs",
     "b": "tsc && vite build",
-    "build": "tsc && vite build && node scripts/fix-dotfiles.cjs",
+    "build": "tsc && vite build && node scripts/fix-dotfiles.cjs && node scripts/generate-version-json.cjs",
+    "clean": "node scripts/cleanup-old-chunks.cjs",
     "app-create": "npx cap add android",
     "app": "tsc && vite build && npx cap sync android",
     "app-start": "npx cap open android",

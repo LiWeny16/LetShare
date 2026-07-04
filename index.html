@@ -299,7 +299,7 @@
       <div class="icon">!</div>
       <div class="brand">LetShare</div>
       <div class="msg">Loading failed. Check your network connection and try again.</div>
-      <button onclick="location.reload()">Reload</button>
+      <button onclick="(function(){var s=navigator.serviceWorker;s.getRegistrations().then(function(r){return Promise.all(r.map(function(x){return x.unregister()}))}).then(function(){if('caches' in window){return caches.keys().then(function(k){return Promise.all(k.map(function(y){return caches.delete(y)}))})}}).finally(function(){location.reload()})})()">Reload</button>
     </div>
   </div>
 
@@ -345,7 +345,7 @@
   <script>
     // SW 自愈：检测旧 SW 导致的 dot-prefix 资源加载失败，自动注销并重载
     if ("serviceWorker" in navigator && location.protocol === "https:") {
-      var swPoisonPattern = /\.(pnpm-vendor|common-vendor|ably-vendor|react-vendor|mobx-vendor|mui-vendor|emotion-vendor|jszip-vendor|index-)/;
+      var swPoisonPattern = /(?:\/|\.)(?:pnpm-vendor|common-vendor|ably-vendor|react-vendor|mobx-vendor|mui-vendor|emotion-vendor|jszip-vendor|index-)/;
       window.addEventListener("error", function(e) {
         var target = e.target;
         if (!target || !target.tagName) return;
@@ -369,32 +369,131 @@
   </script>
 
   <script>
+    // SW 注册 + 版本哨兵机制
+    // version.json 每次发布更新 → 检测到版本变化 → 强制 SW 更新 → reload
+    // 无版本变化时，所有缓存 365 天有效，秒开
     if ("serviceWorker" in navigator && location.protocol === "https:") {
-      window.addEventListener("load", function() {
+      (function() {
+        var SW_URL = "./sw.js";
+        var POLL_MS = 30 * 1000;
+        var VERSION_CHECK_MS = 200; // 200ms 后立刻检查版本
         var hadController = Boolean(navigator.serviceWorker.controller);
         var refreshing = false;
+        var currentVersion = null;
+
+        // ── 版本哨兵：检测 server 上是否有新版本 ──────────────
+
+        function fetchRemoteVersion() {
+          return fetch("./version.json", { cache: "no-cache" })
+            .then(function(r) { return r.ok ? r.json() : null; })
+            .catch(function() { return null; });
+        }
+
+        function checkVersionAndReload() {
+          fetchRemoteVersion().then(function(remote) {
+            if (!remote || !remote.v) return;
+
+            var stored = null;
+            try {
+              stored = localStorage.getItem("letshare-version");
+            } catch(e) {}
+
+            if (!stored) {
+              // 首次访问，记录当前版本
+              try { localStorage.setItem("letshare-version", remote.v); } catch(e) {}
+              currentVersion = remote.v;
+              return;
+            }
+
+            if (stored !== remote.v) {
+              // 版本变了！强制 SW 更新 + 刷新
+              console.log("[SW] Version changed: " + stored + " → " + remote.v);
+              try { localStorage.setItem("letshare-version", remote.v); } catch(e) {}
+              currentVersion = remote.v;
+
+              // 注销旧 SW，清缓存，刷新
+              navigator.serviceWorker.getRegistrations().then(function(regs) {
+                return Promise.all(regs.map(function(r) { return r.unregister(); }));
+              }).then(function() {
+                if ("caches" in window) {
+                  return caches.keys().then(function(keys) {
+                    return Promise.all(keys.map(function(k) { return caches.delete(k); }));
+                  });
+                }
+              }).finally(function() {
+                location.reload();
+              });
+            } else {
+              currentVersion = remote.v;
+            }
+          });
+        }
+
+        // 首次检查：等 SW 和页面加载完成后延迟执行
+        setTimeout(checkVersionAndReload, VERSION_CHECK_MS);
+
+        // ── SW controllerchange → 新 SW 激活自动刷新 ──────────
 
         navigator.serviceWorker.addEventListener("controllerchange", function() {
-          if (!hadController) {
-            hadController = true;
-            return;
-          }
+          if (!hadController) { hadController = true; return; }
           if (refreshing) return;
           refreshing = true;
+          console.log("[SW] New version activated, reloading…");
           location.reload();
         });
 
-        navigator.serviceWorker.register("./sw.js", { updateViaCache: "none" })
-          .then(function(registration) {
-            var checkForUpdate = function() {
-              registration.update().catch(function() {});
-            };
+        // ── SW 注册 + 轮询 ─────────────────────────────────────
 
-            checkForUpdate();
-            setInterval(checkForUpdate, 60 * 1000);
-          })
-          .catch(function() {});
-      });
+        function registerAndPoll() {
+          navigator.serviceWorker.register(SW_URL, { updateViaCache: "none" })
+            .then(function(registration) {
+              // 立刻检查更新
+              registration.update().catch(function() {});
+
+              // 定期轮询
+              setInterval(function() {
+                registration.update().catch(function() {});
+              }, POLL_MS);
+
+              // updatefound → 新 SW 正在安装，确保 skipWaiting
+              registration.addEventListener("updatefound", function() {
+                var newWorker = registration.installing;
+                if (!newWorker) return;
+                newWorker.addEventListener("statechange", function() {
+                  if (newWorker.state === "installed" && navigator.serviceWorker.controller) {
+                    console.log("[SW] New version ready, activating…");
+                    newWorker.postMessage({ type: "SKIP_WAITING" });
+                  }
+                });
+              });
+            })
+            .catch(function(err) {
+              console.warn("[SW] Registration failed:", err);
+            });
+        }
+
+        window.addEventListener("load", registerAndPoll);
+
+        // ── 页面可见性变化 → 检查版本 + SW更新 ────────────────
+
+        document.addEventListener("visibilitychange", function() {
+          if (document.hidden) return;
+          // 切回标签页 → 检查版本哨兵 + 触发 SW update
+          checkVersionAndReload();
+          navigator.serviceWorker.getRegistration().then(function(reg) {
+            if (reg) reg.update().catch(function() {});
+          });
+        });
+
+        // ── 网络恢复 → 立即检查 ────────────────────────────────
+
+        window.addEventListener("online", function() {
+          checkVersionAndReload();
+          navigator.serviceWorker.getRegistration().then(function(reg) {
+            if (reg) reg.update().catch(function() {});
+          });
+        });
+      })();
     }
   </script>
 
