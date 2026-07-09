@@ -358,13 +358,30 @@ class ChatHistoryManager {
 
       const msg = history.messages[idx];
 
-      // If it's a file message, also delete the blob
+      // If it's a file message, delete the blob in a separate operation.
+      // fake-indexeddb (used in CI) auto-commits the readwrite transaction when
+      // an await to another IndexedDB transaction fires, causing TransactionInactiveError.
+      // So we finish the store transaction first, then delete the blob.
       if (msg.type === 'file' || msg.type === 'image') {
-        const FileBlobStore = (await import('./FileBlobStore')).default;
         const fileKey = msg.fileMetadata.fileKey;
+
+        history.messages.splice(idx, 1);
+        history.lastMessageTime = history.messages.length > 0
+          ? history.messages[history.messages.length - 1].timestamp
+          : history.lastMessageTime;
+
+        await new Promise<void>((resolve, reject) => {
+          const putRequest = store.put(history);
+          putRequest.onsuccess = () => resolve();
+          putRequest.onerror = () => reject(putRequest.error);
+        });
+
         if (fileKey) {
+          const FileBlobStore = (await import('./FileBlobStore')).default;
           await FileBlobStore.deleteFile(fileKey);
         }
+        console.log(`[CHAT DB] Deleted message ${messageId}`);
+        return { success: true };
       }
 
       history.messages.splice(idx, 1);
