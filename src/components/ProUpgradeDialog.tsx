@@ -74,7 +74,7 @@ const ProUpgradeDialog = ({ open, onClose, isPro = false }: Props) => {
       setInviteError('');
       setShowActivate(false);
       onClose();
-      alertUseMUI('PRO 已激活！50MB+ 服务器中转已解锁', 3000, { kind: 'success' });
+      alertUseMUI('PRO 已激活！50MB+ 服务器中转已解锁(上限 3GB)', 3000, { kind: 'success' });
     } catch (err: any) {
       setInviteError(err.message || '激活失败');
       clearProCookie();
@@ -184,7 +184,7 @@ const ProUpgradeDialog = ({ open, onClose, isPro = false }: Props) => {
               P2P 直连传输（不限大小）
             </Typography>
             <Typography variant="caption" color="text.secondary" sx={{ lineHeight: 1.7 }}>
-              服务器中转（≤50MB）
+              服务器中转（≤3GB PRO / ≤50MB 免费）
             </Typography>
           </Box>
           {isPro && (
@@ -289,7 +289,7 @@ const ProUpgradeDialog = ({ open, onClose, isPro = false }: Props) => {
               P2P 直连传输（不限大小）
             </Typography>
             <Typography variant="caption" sx={{ lineHeight: 1.7, color: 'text.primary' }}>
-              服务器中转（不限大小）
+              服务器中转（上限 3GB）
             </Typography>
             <Typography variant="caption" sx={{ lineHeight: 1.7, color: 'text.primary' }}>
               优先技术支持

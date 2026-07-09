@@ -11,7 +11,7 @@ export function showProUpgradeDialog(): Promise<boolean> {
 
 export const PRO_COOKIE_KEY = "letshare_admin_pass";
 export const PRO_INVITE_CODE = "bigonion";
-export const PRO_SIZE_LIMIT = 50 * 1024 * 1024; // 50MB
+export const PRO_SIZE_LIMIT = 50 * 1024 * 1024; // 50MB 非PRO限制(仅服务器中转)
 
 export const PRO_TOKEN_KEY = "letshare_pro_token";
 

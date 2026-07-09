@@ -1,5 +1,5 @@
 export const TRANSFER_FRAME_HEADER_SIZE = 256;
-export const MAX_SAFE_TRANSFER_CHUNKS = 50_000;
+export const MAX_SAFE_TRANSFER_CHUNKS = 10_000_000 // P2P 无限制;
 
 export type DeviceType = "apple" | "android" | "desktop";
 
@@ -641,15 +641,16 @@ export function getSafeTransferConfig(
 }
 
 export function getSafeReceiveSizeLimit(deviceType: DeviceType): number {
+ // P2P 传输无文件大小限制
  if (deviceType === "apple") {
-  return 64 * 1024 * 1024;
+  return Infinity;
  }
 
  if (deviceType === "android") {
-  return 200 * 1024 * 1024;
+  return Infinity;
  }
 
- return 3 * 1024 * 1024 * 1024;
+ return Infinity;
 }
 
 export function normalizeTransferMetadata(
@@ -734,15 +735,16 @@ export function normalizeTransferMetadata(
 }
 
 export function getSafeBrowserDownloadLimit(deviceType: DeviceType): number {
+ // P2P 传输无限制 — 浏览器下载不限大小
  if (deviceType === "apple") {
-  return 64 * 1024 * 1024;
+  return Infinity;
  }
 
  if (deviceType === "android") {
-  return 200 * 1024 * 1024;
+  return Infinity;
  }
 
- return 500 * 1024 * 1024;
+ return Infinity;
 }
 
 export function canDownloadFileInBrowser(
@@ -769,23 +771,24 @@ export function getSafeReceivedFileCacheLimit(deviceType: DeviceType): {
  maxBytes: number;
  maxFiles: number;
 } {
+ // P2P 传输无限制 — 已接收文件缓存不限
  if (deviceType === "apple") {
   return {
-   maxBytes: 96 * 1024 * 1024,
-   maxFiles: 60,
+   maxBytes: Infinity, // P2P 无限制
+   maxFiles: Number.MAX_SAFE_INTEGER, // P2P 无限制
   };
  }
 
  if (deviceType === "android") {
   return {
-   maxBytes: 250 * 1024 * 1024,
-   maxFiles: 160,
+   maxBytes: Infinity, // P2P 无限制
+   maxFiles: Number.MAX_SAFE_INTEGER, // P2P 无限制
   };
  }
 
  return {
-  maxBytes: 3500 * 1024 * 1024, // 3.5GB — 单文件 3GB + 余量
-  maxFiles: 1000,
+  maxBytes: Infinity, // P2P 无限制
+  maxFiles: Number.MAX_SAFE_INTEGER, // P2P 无限制
  };
 }
 
@@ -832,23 +835,24 @@ export function getSafeZipBundleLimit(deviceType: DeviceType): {
  maxBytes: number;
  maxFiles: number;
 } {
+ // P2P 传输无限制 — ZIP 打包不限
  if (deviceType === "apple") {
   return {
-   maxBytes: 32 * 1024 * 1024,
-   maxFiles: 30,
+   maxBytes: Infinity, // P2P 无限制
+   maxFiles: Number.MAX_SAFE_INTEGER, // P2P 无限制
   };
  }
 
  if (deviceType === "android") {
   return {
-   maxBytes: 100 * 1024 * 1024,
-   maxFiles: 120,
+   maxBytes: Infinity, // P2P 无限制
+   maxFiles: Number.MAX_SAFE_INTEGER, // P2P 无限制
   };
  }
 
  return {
-  maxBytes: 500 * 1024 * 1024,
-  maxFiles: 500,
+  maxBytes: Infinity, // P2P 无限制
+  maxFiles: Number.MAX_SAFE_INTEGER, // P2P 无限制
  };
 }
 
@@ -895,23 +899,24 @@ export function getSafeImageThumbnailLimit(deviceType: DeviceType): {
  maxBytes: number;
  maxThumbnails: number;
 } {
+ // P2P 传输无限制 — 图片预览不限
  if (deviceType === "apple") {
   return {
-   maxBytes: 6 * 1024 * 1024,
-   maxThumbnails: 30,
+   maxBytes: Infinity, // P2P 无限制
+   maxThumbnails: Number.MAX_SAFE_INTEGER,
   };
  }
 
  if (deviceType === "android") {
   return {
-   maxBytes: 16 * 1024 * 1024,
-   maxThumbnails: 80,
+   maxBytes: Infinity, // P2P 无限制
+   maxThumbnails: Number.MAX_SAFE_INTEGER,
   };
  }
 
  return {
-  maxBytes: 100 * 1024 * 1024,
-  maxThumbnails: 300,
+  maxBytes: Infinity, // P2P 无限制
+  maxThumbnails: Number.MAX_SAFE_INTEGER,
  };
 }
 
