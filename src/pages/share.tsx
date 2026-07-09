@@ -650,7 +650,8 @@ const Share = observer(() => {
                   const input = document.getElementById("multi-file-input") as HTMLInputElement;
                   if (input) {
                     input.value = "";
-                    input.click();
+                    // setTimeout 避免 MUI 内部事件链阻塞 Chrome 弹出文件对话框
+                    setTimeout(() => input.click(), 0);
                   }
                 }}
               >
@@ -681,7 +682,8 @@ const Share = observer(() => {
                   const input = document.getElementById("image-input") as HTMLInputElement;
                   if (input) {
                     input.value = "";
-                    input.click();
+                    // setTimeout 避免 MUI 内部事件链阻塞 Chrome 弹出文件对话框
+                    setTimeout(() => input.click(), 0);
                   }
                 }}
               >

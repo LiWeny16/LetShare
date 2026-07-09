@@ -506,7 +506,8 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ open, onClose, targetUserId, targ
                                     <IconButton
                                         onClick={(e) => {
                                             blurTrigger(e);
-                                            fileInputRef.current?.click();
+                                            // setTimeout 避免 MUI 内部事件链阻塞 Chrome 弹出文件对话框
+                                            setTimeout(() => fileInputRef.current?.click(), 0);
                                         }}
                                         size="small"
                                     >
