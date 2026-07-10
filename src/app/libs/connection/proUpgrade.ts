@@ -56,8 +56,10 @@ export function clearProCookie() {
 	clearProToken();
 }
 
+const API_BASE = import.meta.env.DEV ? "" : "https://ecs.letshare.fun";
+
 export async function activatePro(userId: string, inviteCode: string): Promise<{ token: string; expires_at: string }> {
-	const resp = await fetch("/api/pro/activate", {
+	const resp = await fetch(`${API_BASE}/api/pro/activate`, {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify({ user_id: userId, invite_code: inviteCode }),
