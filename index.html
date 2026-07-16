@@ -505,6 +505,7 @@
       var ROOT = document.getElementById('root');
       var loadingStartedAt = performance.now();
       var minLoadingMs = 900;
+      var APP_BOOT_TIMEOUT_MS = 20000;
       var hidden = false;
 
       function hideLoading() {
@@ -522,13 +523,28 @@
         }, delay);
       }
 
-      // 超时检测：8 秒后仍未挂载 → 显示错误
-      var timeout = setTimeout(function() {
+      function showError() {
         if (ROOT && ROOT.children.length === 0) {
           if (LOADING) LOADING.classList.add('hide');
           if (ERROR) ERROR.classList.add('show');
         }
-      }, 8000);
+      }
+
+      window.addEventListener('error', function(e) {
+        var target = e.target;
+        if (!target || !target.tagName) return;
+
+        var tagName = target.tagName.toUpperCase();
+        var src = target.src || target.href || "";
+        var isCriticalAsset =
+          (tagName === "SCRIPT" || tagName === "LINK") &&
+          /\.(?:js|css)(?:\?|$)/.test(src);
+
+        if (isCriticalAsset) showError();
+      }, true);
+
+      // 冷启动首次下载大 bundle 时可能超过 8 秒；只在更长时间仍未挂载时兜底。
+      var timeout = setTimeout(showError, APP_BOOT_TIMEOUT_MS);
 
       // 监听 React 挂载成功 → 隐藏骨架屏
       var observer = new MutationObserver(function() {

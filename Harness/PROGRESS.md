@@ -4,13 +4,14 @@ Global task index. Load at session start to see what is active and what was done
 
 ## Active Task
 
-`pro-public-relay-auth-sync` — Verified. Fixed PRO/public-relay auth sync, activation persistence, and sender transport selection bugs.
+`sw-first-load-version-sync` — Investigating first-load fallback and version sentinel confusion after PRO relay PR push.
 
 ## Task Index
 
 | ID | Goal | Phase | Closed |
 |----|------|-------|--------|
 | `pro-public-relay-auth-sync` | Fix PRO/public relay authorization sync and sender channel selection behavior | Verified | |
+| `sw-first-load-version-sync` | Reduce cold first-load false error UI and clarify version/build artifact behavior | Investigating | |
 
 ## Cross-Task Decisions
 

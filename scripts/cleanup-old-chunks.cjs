@@ -32,18 +32,13 @@ function extractRefs(html) {
   return refs;
 }
 
-/**
- * Extract the "prefix" from a hashed filename.
- *   prefix-HASH.ext  (e.g. "pnpm-vendor" + "hcBMNS7i" + "js")
- * Returns null if the filename doesn't match the hashed pattern.
- */
-function extractPrefix(filename) {
-  // Strip .gz suffix first if present
-  const isGz = filename.endsWith('.gz');
-  const base = isGz ? filename.slice(0, -3) : filename;
-  // Match: NAME-HASH.ext  where HASH is alphanumeric (6+ chars) after the LAST dash
-  const m = base.match(/^(.+)-([A-Za-z0-9_]{6,})\.([^.]+)$/);
-  return m ? { prefix: m[1], hash: m[2], ext: m[3], isGz } : null;
+function stripGzipSuffix(filename) {
+  return filename.endsWith('.gz') ? filename.slice(0, -3) : filename;
+}
+
+function isSingleVersionChunk(filename, prefix) {
+  const base = stripGzipSuffix(filename);
+  return base.startsWith(`${prefix}-`) && base.endsWith('.js');
 }
 
 // Single-version prefixes: each build produces exactly one file per prefix,
@@ -77,10 +72,13 @@ function main() {
 
   // ── Delete unreferenced single-version chunks ──────────────────────
   for (const filename of allFiles) {
-    const info = extractPrefix(filename);
-    if (!info) continue;
-    if (!singleVersionPrefixes.includes(info.prefix)) continue;
-    if (refs.has(filename)) continue; // referenced → keep
+    const matchesSingleVersion = singleVersionPrefixes.some(prefix =>
+      isSingleVersionChunk(filename, prefix)
+    );
+    if (!matchesSingleVersion) continue;
+
+    const referenceName = stripGzipSuffix(filename);
+    if (refs.has(referenceName)) continue; // referenced → keep
 
     // Unreferenced → delete
     const dir = rootCssFiles.includes(filename) ? docsDir : staticDir;

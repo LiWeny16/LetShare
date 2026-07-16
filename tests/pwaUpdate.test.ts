@@ -10,10 +10,18 @@ const dotfileFixScript = readFileSync(join(process.cwd(), "scripts", "fix-dotfil
 test("service worker registration actively checks for updates and reloads controlled tabs", () => {
   assert.match(indexHtml, /updateViaCache:\s*"none"/);
   assert.match(indexHtml, /registration\.update\(\)/);
-  assert.match(indexHtml, /setInterval\(checkForUpdate,\s*60 \* 1000\)/);
+  assert.match(indexHtml, /var POLL_MS = 30 \* 1000/);
+  assert.match(indexHtml, /setInterval\(function\(\) \{\s*registration\.update\(\)\.catch\(function\(\) \{\}\);\s*\}, POLL_MS\)/);
   assert.match(indexHtml, /navigator\.serviceWorker\.addEventListener\("controllerchange"/);
   assert.match(indexHtml, /hadController/);
   assert.match(indexHtml, /location\.reload\(\)/);
+});
+
+test("first-load fallback allows cold bundle startup before showing the error screen", () => {
+  assert.match(indexHtml, /var APP_BOOT_TIMEOUT_MS = 20000/);
+  assert.match(indexHtml, /setTimeout\(showError, APP_BOOT_TIMEOUT_MS\)/);
+  assert.match(indexHtml, /tagName === "SCRIPT" \|\| tagName === "LINK"/);
+  assert.match(indexHtml, /isCriticalAsset\) showError\(\)/);
 });
 
 test("production http traffic is upgraded before the app boots", () => {
@@ -47,4 +55,11 @@ test("build keeps old hashed assets for CDN and service worker overlap", () => {
 test("dotfile fixer rewrites retained legacy chunk references", () => {
   assert.doesNotMatch(dotfileFixScript, /dotFiles\.length === 0[\s\S]*process\.exit\(0\)/);
   assert.match(dotfileFixScript, /rewriteLegacyDotReferences/);
+});
+
+test("stale chunk cleanup handles Vite hashes that contain hyphens", () => {
+  const cleanupScript = readFileSync(join(process.cwd(), "scripts", "cleanup-old-chunks.cjs"), "utf8");
+  assert.match(cleanupScript, /function isSingleVersionChunk\(filename, prefix\)/);
+  assert.ok(cleanupScript.includes("base.startsWith(`${prefix}-`) && base.endsWith('.js')"));
+  assert.match(cleanupScript, /const referenceName = stripGzipSuffix\(filename\)/);
 });
