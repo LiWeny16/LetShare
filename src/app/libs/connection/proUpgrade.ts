@@ -41,7 +41,7 @@ export function getProCookie(): string | null {
 }
 
 export function isPro(): boolean {
-	return getProCookie() === PRO_INVITE_CODE || getProToken() !== null;
+	return getProToken() !== null;
 }
 
 export function setProCookie(value: string, days: number) {

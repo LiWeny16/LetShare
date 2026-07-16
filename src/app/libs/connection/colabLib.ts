@@ -17,9 +17,9 @@ import { UserKeyInfo } from "../security/SimpleE2EEncryption";
 import mitt from 'mitt';
 import { ServerFileTransfer } from "./ServerFileTransfer";
 import {
+	getProToken,
 	isPro,
 	showProUpgradeDialog,
-	clearProCookie,
 	PRO_SIZE_LIMIT,
 } from "./proUpgrade";
 import {
@@ -229,6 +229,7 @@ export class RealTimeColab {
  private readonly P2P_RECEIVE_TIMEOUT_MS = 30_000;
  private receivedFilesVersion = 0;
  private transferStatusClearTimeout: ReturnType<typeof setTimeout> | null = null;
+ private lastConnectedProToken: string | null = null;
 
  public setFileTransferProgress: React.Dispatch<
   React.SetStateAction<number | null>
@@ -453,6 +454,10 @@ export class RealTimeColab {
   const success = await this.connectionManager.connect(roomId!);
   if (success) {
    settingsStore.updateUnrmb("isConnectedToServer", true);
+   this.lastConnectedProToken =
+    this.connectionManager.getConnectionType() === "custom"
+     ? getProToken()
+     : null;
    const myPublicKeys = this.userPublicKeys.get(this.getUniqId()!);
    this.broadcastSignal({
     type: "discover",
@@ -478,11 +483,36 @@ export class RealTimeColab {
    await new Promise(resolve => setTimeout(resolve, CONFIG.LEAVE_MESSAGE_DELAY));
   }
 
-  this.connectionManager.disconnect(soft);
+  await this.connectionManager.disconnect(soft);
+  this.lastConnectedProToken = null;
 
   // 更新连接状态
   settingsStore.updateUnrmb("isConnectedToServer", false);
   console.debug(`[DISCONNECT] Connection status updated to disconnected`);
+ }
+
+ private async syncCustomServerProAuthIfNeeded(): Promise<boolean> {
+  const currentProToken = getProToken();
+  if (!currentProToken) {
+   return false;
+  }
+
+  if (this.connectionManager.getConnectionType() !== "custom") {
+   return true;
+  }
+
+  if (
+   this.connectionManager.isConnected() &&
+   this.lastConnectedProToken === currentProToken
+  ) {
+   return true;
+  }
+
+  if (this.connectionManager.isConnected()) {
+   await this.disconnect(true, false);
+  }
+
+  return this.connectToServer();
  }
 
 
@@ -2596,6 +2626,17 @@ export class RealTimeColab {
    }
   }
 
+  if (
+   file.size > PRO_SIZE_LIMIT &&
+   this.connectionManager.getConnectionType() === "custom"
+  ) {
+   const relayAuthReady = await this.syncCustomServerProAuthIfNeeded();
+   if (!relayAuthReady) {
+    alertUseMUI(t('alert.serverConnectionFailed'), 2000, { kind: "error" });
+    return;
+   }
+  }
+
   this.setFileSendingTargetUser(id);
   this.sendingToUserId = id;
   this.isSendingFile = true;
@@ -2616,10 +2657,9 @@ export class RealTimeColab {
     this.sendingToUserId = null;
     return;
    }
-   // 非 PRO 用户超 50MB → 清除 cookie 并提示升级
+   // 仅提示，不要因为泛化错误文案清空本地 PRO 凭据。
    if (errMsg.includes("升级到 PRO")) {
-    clearProCookie();
-    alertUseMUI(errMsg, 4000, { kind: "error" });
+     alertUseMUI(errMsg, 4000, { kind: "error" });
    } else if (errMsg.includes("文件大小超过限制")) {
     // 超过 3GB 硬上限
     alertUseMUI(errMsg, 4000, { kind: "error" });
@@ -2653,11 +2693,8 @@ export class RealTimeColab {
   this.sendingToUserId = id;
   if (!channel || channel.readyState !== "open") {
    console.error(`Data channel with user ${id} is not available.`);
-   // 如果P2P不可用,尝试通过服务器转发
-   console.debug(" P2P不可用，尝试通过服务器转发文件");
-   await this.sendFileViaServer(id, file);
    this.sendingToUserId = null;
-   return;
+   throw new Error("P2P data channel is not available.");
   }
 
   const totalChunks = Math.max(1, Math.ceil(file.size / this.transferConfig.chunkSize));

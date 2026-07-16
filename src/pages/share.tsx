@@ -380,17 +380,7 @@ const Share = observer(() => {
         if (transferPriority === 'server') {
           // 用户偏好：优先公网传输
           console.log(" 用户偏好公网传输，使用服务器转发文件");
-          try {
-            await realTimeColab.sendFileViaServer(targetUserId, selectedFile);
-          } catch (serverError) {
-            // 服务器传输失败，尝试 P2P 回退
-            if (canSendFile) {
-              console.log(" 公网传输失败，回退到 P2P 传输");
-              await realTimeColab.sendFileToUser(targetUserId, selectedFile);
-            } else {
-              throw serverError;
-            }
-          }
+          await realTimeColab.sendFileViaServer(targetUserId, selectedFile);
         } else {
           // 默认：优先 P2P，不可用时自动使用服务器转发
           if (canSendFile) {

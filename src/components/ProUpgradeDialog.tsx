@@ -35,7 +35,7 @@ const ProUpgradeDialog = ({ open, onClose, isPro = false }: Props) => {
 
   // 已激活时自动从 cookie 读取邀请码填入
   React.useEffect(() => {
-    if (open && isPro) {
+    if (open) {
       const saved = getProCookie();
       if (saved) setInviteCode(saved);
     }
