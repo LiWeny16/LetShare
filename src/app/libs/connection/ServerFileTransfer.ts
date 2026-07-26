@@ -285,7 +285,7 @@ export class ServerFileTransfer {
    } else {
     // 无 transfer_id — 通用错误, 展示给用户
     this.setTransferStatus(errorMsg, "error");
-    alertUseMUI(errorMsg, 4000, { kind: "error" });
+	    alertUseMUI(errorMsg, 4000, { kind: "error", category: "transfer-status" });
    }
    return;
   }
@@ -365,8 +365,8 @@ export class ServerFileTransfer {
       reason
      );
      this.onProgressCallback?.(null);
-     this.setTransferStatus(reason, "error");
-     alertUseMUI(reason, 4000, { kind: "error" });
+	     this.setTransferStatus(reason, "error");
+	     alertUseMUI(reason, 4000, { kind: "error", category: "transfer-status" });
     }
     return;
    }
@@ -377,23 +377,10 @@ export class ServerFileTransfer {
    console.debug(`[ServerFileTransfer] Binary frame fallback to legacy metadata pairing:`, err);
   }
 
-  // 查找活跃的接收会话
-  for (const [transferId, session] of this.receivingSessions) {
-   if (session.status === "receiving") {
-    // Bug1 修复: 必须先收到元数据帧才能知道真实 chunk_index
-    if (session.pendingChunkIndex === -1) {
-     console.warn(`[ServerFileTransfer] 收到二进制帧但尚无元数据 (transfer=${transferId})`);
-     this.failReceiveSession(session, t('alert.chunkMissingMetadata'));
-     return;
-    }
-
-    this.writeChunkToSession(session, session.pendingChunkIndex, data);
-    session.pendingChunkIndex = -1;
-    return;
-   }
-  }
-
-  console.warn(`[ServerFileTransfer] 未知二进制数据 (${data.byteLength} bytes), 无匹配会话`);
+  // 传统回退：解码失败的数据帧无法匹配到正确的 transfer_id，
+  // 不应盲目写入第一个活跃 session。静默丢弃，避免多接收时数据损坏。
+  // 恢复/重传由 receive timeout 机制保障。
+  console.debug(`[ServerFileTransfer] 未知二进制数据 (${data.byteLength} bytes), 帧解码失败, 丢弃`);
  }
 
  private writeChunkToSession(
@@ -587,7 +574,7 @@ export class ServerFileTransfer {
     channel: session.roomName,
    }));
    const resendMsg = t('alert.serverResendRequestingTimeout', { attempt: session.resendAttempts, max: this.MAX_RESEND_ATTEMPTS });
-   alertUseMUI(resendMsg, 4000, { kind: "warning" });
+   alertUseMUI(resendMsg, 4000, { kind: "warning", category: "transfer-status" });
    this.setTransferStatus(resendMsg, "warning");
    return true;
   } catch (error) {
@@ -756,7 +743,7 @@ export class ServerFileTransfer {
   if (now - this.lastMalformedAlertTime < 3000) return;
   this.lastMalformedAlertTime = now;
   this.setTransferStatus(reason, "error");
-  alertUseMUI(reason, 4000, { kind: "error" });
+   alertUseMUI(reason, 4000, { kind: "error", category: "transfer-status" });
  }
 
  public handleConnectionLost(reason: string): void {
@@ -790,7 +777,7 @@ export class ServerFileTransfer {
   // 使用连接丢失专用提示（区别于畸形消息错误）
   const displayReason = reason || t('alert.serverConnectionLost');
   this.setTransferStatus(displayReason, "error");
-  alertUseMUI(displayReason, 4000, { kind: "error" });
+  // 不弹 toast — transfer error toasts 已逐条通知用户，避免重复
  }
 
  /**
@@ -1223,7 +1210,7 @@ export class ServerFileTransfer {
   this.onProgressCallback?.(null);
   // 关闭下载页面
 
-  alertUseMUI(`${t('toast.transferRejected')}: ${data.reason || t('alert.unknownReason')}`, 3000, { kind: "warning" });
+   alertUseMUI(`${t('toast.transferRejected')}: ${data.reason || t('alert.unknownReason')}`, 3000, { kind: "warning", category: "transfer-status" });
   console.debug(`[ServerFileTransfer] Transfer rejected: ${transferId}`);
  }
 
@@ -1578,7 +1565,7 @@ export class ServerFileTransfer {
 
   // 被取消方（非主动取消方）才需要提示
   if (!wasAlreadyComplete) {
-   alertUseMUI(`${t('toast.transferCancelled')}: ${data.reason || ''}`, 2000, { kind: "warning" });
+   alertUseMUI(`${t('toast.transferCancelled')}: ${data.reason || ''}`, 2000, { kind: "warning", category: "transfer-status" });
   }
   console.debug(`[ServerFileTransfer] Transfer cancelled: ${data.transfer_id}`);
  }
@@ -1608,7 +1595,7 @@ export class ServerFileTransfer {
   this.onProgressCallback?.(null);
   // 关闭下载页面
 
-  alertUseMUI(`${t('toast.transferError')}: ${data.error || ''}`, 3000, { kind: "error" });
+   alertUseMUI(`${t('toast.transferError')}: ${data.error || ''}`, 3000, { kind: "error", category: "transfer-status" });
   console.error(`[ServerFileTransfer] Transfer error: ${data.transfer_id}`, data.error);
  }
 
@@ -1662,7 +1649,7 @@ export class ServerFileTransfer {
     t('alert.fileAssemblyFailed'),
     session.roomName
    );
-   alertUseMUI(t('toast.fileAssemblyError'), 3000, { kind: "error" });
+   alertUseMUI(t('toast.fileAssemblyError'), 3000, { kind: "error", category: "transfer-status" });
   }
 
   // 清理

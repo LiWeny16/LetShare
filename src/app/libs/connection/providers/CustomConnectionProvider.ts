@@ -68,7 +68,8 @@ export class CustomConnectionProvider implements IConnectionProvider {
               this.handleBinaryMessage(buffer);
             }).catch(error => {
               console.error(" WebSocket Blob二进制数据读取失败:", error);
-              this.disconnectedCallback?.("WebSocket 二进制数据读取失败");
+              // 不要调用 disconnectedCallback — 单个 Blob 读取失败不代表 WebSocket 断开，
+              // 否则会级联触发 ServerFileTransfer.handleConnectionLost 清除所有活跃传输
             });
           } else {
             this.handleMessage(event);
@@ -96,13 +97,20 @@ export class CustomConnectionProvider implements IConnectionProvider {
     }
   }
 
-  async disconnect(): Promise<void> {
+  async disconnect(soft?: boolean): Promise<void> {
     if (this.ws) {
       // 先取消订阅
       if (this.isSubscribed && this.currentRoomId) {
         await this.unsubscribeFromRoom();
       }
-      
+
+      if (soft) {
+        // 软关闭：只取消订阅，保留 WebSocket 连接用于重连
+        this.isSubscribed = false;
+        this.currentRoomId = null;
+        return;
+      }
+
       this.ws.onclose = null;
       this.ws.close();
       this.ws = null;

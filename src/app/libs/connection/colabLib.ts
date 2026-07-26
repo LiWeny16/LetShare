@@ -426,6 +426,13 @@ export class RealTimeColab {
   // 设置信号处理器
   this.connectionManager.onSignalReceived(this.handleSignal.bind(this));
   
+  // 注册 WebSocket 断连回调, 确保 UI 状态与实际连接同步
+  this.connectionManager.onDisconnected?.((reason) => {
+   settingsStore.updateUnrmb("isConnectedToServer", false);
+   this.lastConnectedProToken = null;
+   console.warn(`[ColabLib] WebSocket 连接丢失, 已更新 UI 状态: ${reason}`);
+  });
+
   // 设置文件传输消息处理器
   if (this.connectionManager.onMessageReceived) {
    this.connectionManager.onMessageReceived((message) => {
@@ -1338,7 +1345,7 @@ export class RealTimeColab {
          reason,
         }));
        }
-       alertUseMUI(reason, 4000, { kind: "error" });
+       alertUseMUI(reason, 4000, { kind: "error", category: "transfer-status" });
        this.setFileTransferProgress(null);
        this.setFileTransferStatus(reason, "error", {
         autoClearMs: 10_000,
@@ -1356,7 +1363,7 @@ export class RealTimeColab {
          reason,
         }));
        }
-       alertUseMUI(reason, 3000, { kind: "warning" });
+       alertUseMUI(reason, 3000, { kind: "warning", category: "transfer-status" });
        this.setFileTransferStatus(reason, "warning", {
         autoClearMs: 10_000,
        });
@@ -1375,7 +1382,7 @@ export class RealTimeColab {
          reason,
         }));
        }
-       alertUseMUI(reason, 4000, { kind: "warning" });
+       alertUseMUI(reason, 4000, { kind: "warning", category: "transfer-status" });
        this.setFileTransferProgress(null);
        this.setFileTransferStatus(reason, "warning", {
         autoClearMs: 10_000,
@@ -1396,7 +1403,7 @@ export class RealTimeColab {
          reason,
         }));
        }
-       alertUseMUI(reason, 6000, { kind: "warning" });
+       alertUseMUI(reason, 6000, { kind: "warning", category: "transfer-status" });
        this.setFileTransferProgress(null);
        this.setFileTransferStatus(reason, "warning", {
         autoClearMs: 10_000,
@@ -1422,7 +1429,7 @@ export class RealTimeColab {
          reason,
         }));
        }
-       alertUseMUI(reason, 4000, { kind: "error" });
+       alertUseMUI(reason, 4000, { kind: "error", category: "transfer-status" });
        this.setFileTransferProgress(null);
        this.setFileTransferStatus(reason, "error", {
         autoClearMs: 10_000,
@@ -1474,7 +1481,7 @@ export class RealTimeColab {
        "error",
        { autoClearMs: 10_000 }
       );
-      alertUseMUI(message.reason || t("alert.transferCancelled"), 3000, { kind: "error" });
+      alertUseMUI(message.reason || t("alert.transferCancelled"), 3000, { kind: "error", category: "transfer-status" });
 
       break;
      case "file-complete":
@@ -1577,7 +1584,7 @@ export class RealTimeColab {
       this.setFileTransferStatus(reason, "error", {
        autoClearMs: 10_000,
       });
-      alertUseMUI(reason, 4000, { kind: "error" });
+      alertUseMUI(reason, 4000, { kind: "error", category: "transfer-status" });
      }
      return;
     }
@@ -1706,7 +1713,7 @@ export class RealTimeColab {
       { autoClearMs: 10_000 }
      );
     }
-    alertUseMUI(t('alert.p2pDisconnectedTransfer'), 4000, { kind: "error" });
+    alertUseMUI(t('alert.p2pDisconnectedTransfer'), 4000, { kind: "error", category: "transfer-status" });
    }
    this.receivingFiles.delete(id);
    this.clearP2PReceiveTimeout(id);
@@ -1719,7 +1726,7 @@ export class RealTimeColab {
     user.lastSeen = Date.now();
     this.userList.set(id, user);
     console.debug(` User ${id} switched to text-only mode, can continue text communication`);
-    alertUseMUI(t("alert.p2pDisconnected", { name: id.split(":")[0] }), 2000, { kind: "warning" });
+    alertUseMUI(t("alert.p2pDisconnected", { name: id.split(":")[0] }), 2000, { kind: "warning", category: "transfer-status" });
    } else {
     // 如果用户不存在，删除相关数据
     console.warn(` User ${id} does not exist in user list, cleaning up directly`);
@@ -1766,7 +1773,7 @@ export class RealTimeColab {
       { autoClearMs: 10_000 }
      );
     }
-    alertUseMUI(t('alert.p2pErrorTransfer'), 4000, { kind: "error" });
+    alertUseMUI(t('alert.p2pErrorTransfer'), 4000, { kind: "error", category: "transfer-status" });
    }
    this.receivingFiles.delete(id);
    this.clearP2PReceiveTimeout(id);
@@ -1827,13 +1834,13 @@ export class RealTimeColab {
      console.warn("P2P missing-context abort message could not be sent:", sendError);
     }
    }
-   alertUseMUI(reason, 4000, { kind: "error" });
+   alertUseMUI(reason, 4000, { kind: "error", category: "transfer-status" });
    return;
   }
 
   try {
    const resendMsg = t('alert.resendRequesting', { count: normalized.request.chunkIndexes.length, missing: normalized.request.missingCount });
-   alertUseMUI(resendMsg, 2500, { kind: "info" });
+   alertUseMUI(resendMsg, 2500, { kind: "info", category: "transfer-status" });
    this.setFileTransferStatus(resendMsg, "warning", { showPanel: false });
    await context.resendChunks(normalized.request.chunkIndexes);
   } catch (error) {
@@ -1856,7 +1863,7 @@ export class RealTimeColab {
      console.warn("P2P resend abort message could not be sent:", sendError);
     }
    }
-   alertUseMUI(reason, 4000, { kind: "error" });
+   alertUseMUI(reason, 4000, { kind: "error", category: "transfer-status" });
   }
  }
 
@@ -1894,7 +1901,7 @@ export class RealTimeColab {
       reason: t('alert.resendTimeoutReason'),
      })));
      const timeoutMsg = t('alert.resendRequestingTimeout', { attempt: fileInfo.resendAttempts, max: this.P2P_MAX_RESEND_ATTEMPTS });
-     alertUseMUI(timeoutMsg, 4000, { kind: "warning" });
+     alertUseMUI(timeoutMsg, 4000, { kind: "warning", category: "transfer-status" });
      this.setFileTransferStatus(timeoutMsg, "warning", { showPanel: false });
      this.refreshP2PReceiveTimeout(id);
      return;
@@ -1929,7 +1936,7 @@ export class RealTimeColab {
     }
    }
 
-   alertUseMUI(failureReason, 4000, { kind: "error" });
+   alertUseMUI(failureReason, 4000, { kind: "error", category: "transfer-status" });
   }, this.P2P_RECEIVE_TIMEOUT_MS);
   this.p2pReceiveTimeouts.set(id, timeoutId);
  }
@@ -2017,7 +2024,7 @@ export class RealTimeColab {
   }
 
   if (!receivingFile) {
-   alertUseMUI(reason, 4000, { kind: "error" });
+   alertUseMUI(reason, 4000, { kind: "error", category: "transfer-status" });
   }
  }
 
@@ -2068,7 +2075,7 @@ export class RealTimeColab {
   }
 
   if (!receivingFile) {
-   alertUseMUI(reason, 4000, { kind: "error" });
+   alertUseMUI(reason, 4000, { kind: "error", category: "transfer-status" });
   }
  }
 
@@ -2101,7 +2108,7 @@ export class RealTimeColab {
    }
   }
 
-  alertUseMUI(reason, 4000, { kind: "error" });
+  alertUseMUI(reason, 4000, { kind: "error", category: "transfer-status" });
  }
 
  /**
@@ -2452,7 +2459,7 @@ export class RealTimeColab {
    this.setFileTransferStatus(reason, "warning", {
     autoClearMs: 10_000,
    });
-   alertUseMUI(reason, 5000, { kind: "warning" });
+   alertUseMUI(reason, 5000, { kind: "warning", category: "transfer-status" });
   }
 
   // 服务器传输不在此处终止！
@@ -2659,12 +2666,12 @@ export class RealTimeColab {
    }
    // 仅提示，不要因为泛化错误文案清空本地 PRO 凭据。
    if (errMsg.includes("升级到 PRO")) {
-     alertUseMUI(errMsg, 4000, { kind: "error" });
+     alertUseMUI(errMsg, 4000, { kind: "error", category: "transfer-status" });
    } else if (errMsg.includes("文件大小超过限制")) {
     // 超过 3GB 硬上限
-    alertUseMUI(errMsg, 4000, { kind: "error" });
+    alertUseMUI(errMsg, 4000, { kind: "error", category: "transfer-status" });
    } else {
-    alertUseMUI(t('toast.fileTransferFailed'), 3000, { kind: "error" });
+    alertUseMUI(t('toast.fileTransferFailed'), 3000, { kind: "error", category: "transfer-status" });
    }
    this.setFileTransferProgress(null);
   } finally {
@@ -2864,7 +2871,7 @@ export class RealTimeColab {
     message = err instanceof TransferTimeoutError && err.message.includes("receiver")
      ? t('alert.receiverNoAck')
      : t('alert.p2pTransferInterrupted');
-    alertUseMUI(message, 4000, { kind: "error" });
+    alertUseMUI(message, 4000, { kind: "error", category: "transfer-status" });
    }
    this.aborted = true;
    this.setFileTransferProgress(null);
