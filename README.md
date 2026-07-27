@@ -1,256 +1,181 @@
+# LetShare
 
-# 🚀 LetShare - Lightning-Fast Secure File Sharing
+Browser-first cross-device sharing for files, images, clipboard text, and short messages.
 
-> **Zero Registration | End-to-End Encrypted | Instant P2P Transfer | Cross-Platform**
+[English](./README.md) | [简体中文](./README.zh-CN.md)
 
-[![🌐 Live Demo](https://img.shields.io/badge/🌐_Live_Demo-Try_Now-blue?style=for-the-badge)](https://letshare.fun)
-[![🔐 Security](https://img.shields.io/badge/🔐_Security-E2E_Encrypted-green?style=for-the-badge)](#security)
-[![📱 Platform](https://img.shields.io/badge/📱_Platform-Web_|_Android_|_iOS-orange?style=for-the-badge)](#cross-platform)
+- Production: [letshare.fun](https://letshare.fun)
+- Android: [Google Play](https://play.google.com/store/apps/details?id=fun.letshare.app)
 
-[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)  
-[![Built with Vite](https://img.shields.io/badge/built%20with-vite-646cff)](https://vitejs.dev)  
-[![WebRTC](https://img.shields.io/badge/WebRTC-P2P-ff6b6b)](https://webrtc.org)
+![LetShare desktop preview](documents/googleplay/pc-images/green.png)
 
-**[🇨🇳 中文版](./documents/README-CN.md)**
+## Why LetShare
 
----
+Moving files between your own devices is still more annoying than it should be.
 
-## 🎯 Why LetShare?
+- AirDrop is excellent inside the Apple ecosystem, but it does not cover iPhone to Android, Android to PC, or other mixed-device workflows.
+- Cloud drives and chat apps add upload time, login friction, storage management, link cleanup, and often leave a third-party copy behind.
+- LAN sharing tools often require an app install, the same Wi-Fi network, or manual IP and port setup.
+- Pure WebRTC transfer is fast when it connects, but NAT, mobile networks, corporate firewalls, and browser tab suspension can break direct P2P.
+- Large files need predictable behavior: users should know whether the sender is using direct P2P or the public relay.
 
-**❌ Traditional file sharing pain points:**
-- Upload to cloud servers → Privacy risks & slow speeds
-- Registration required → Friction and data collection  
-- Platform limitations → iPhone ↔ Android struggles
-- File size restrictions → Can't share what you need
+LetShare focuses on the missing middle: open a room in the browser, connect another device by QR code or link, then choose the transfer route that fits the current network.
 
-**✅ LetShare solves it all:**
-- 🚀 **Direct P2P transfer** - Your network speed = transfer speed
-- 🔐 **Military-grade encryption** - Even we can't see your files
-- 📱 **Universal compatibility** - Any device, any platform
-- ⚡ **Instant connection** - Scan QR code, start sharing
+## Features
 
----
+| Area | What it does |
+| --- | --- |
+| Cross-device sharing | Share files, images, clipboard text, and chat-style file messages between devices. |
+| Sender-controlled route | Choose direct P2P when it works, or public relay when the current network needs it. |
+| Browser-first use | Works in modern desktop and mobile browsers, with PWA support. |
+| Android build | The web app can be packaged through Capacitor for Android. |
+| Relay limits | Free public relay transfers are capped at 50 MB. PRO relay transfers can exceed 50 MB up to the configured 3 GB ceiling. |
+| Local persistence | Chat file messages and received file metadata use browser storage where supported. |
 
-## ✨ Core Features
+## Transfer Modes
 
-### 🔐 **Enterprise-Grade Security**
-- **End-to-End Encryption**: ECDH + AES-256-GCM
-- **Digital Signatures**: ECDSA verification prevents tampering
-- **Anti-MITM Protection**: Public key signature validation
-- **Zero Server Storage**: Files never touch our servers
+| Mode | Best for | Route | Limits and notes |
+| --- | --- | --- | --- |
+| P2P WebRTC | Nearby devices, same LAN, or networks where direct peer connection succeeds | Browser to browser through WebRTC DataChannel | No LetShare relay file-size gate. Practical limits come from browser memory, device storage, and network stability. |
+| Public relay | Networks where P2P fails, cross-network transfer, or sender-selected server route | Sender to LetShare WebSocket relay to receiver | Free relay transfers are capped at 50 MB. PRO relay transfers can exceed 50 MB up to 3 GB. |
+| Ably/global signaling | Room discovery and signaling where the default global path works best | Signaling only | Ably is not the binary file relay path. Large public-relay transfer requires the Custom WebSocket provider. |
 
-### ⚡ **Lightning Performance**
-- **WebRTC P2P**: Direct device-to-device connection
-- **No Upload Delays**: Skip the cloud, transfer directly
-- **Unlimited File Size**: Only limited by your storage
-- **Real-time Progress**: Live transfer monitoring
+Relay transfers are forwarded during the active session. LetShare is not a cloud-drive product and should not be treated as durable file storage.
 
-### 🌍 **Universal Compatibility**
-- **Web Browser**: Chrome, Firefox, Safari, Edge
-- **Mobile Native**: Android app via Capacitor
-- **Cross-Platform**: Windows ↔ Mac ↔ Linux ↔ Mobile
-- **PWA Support**: Install as native app
+## Typical Workflow
 
-### 🎯 **Zero Friction Experience**
-- **No Registration**: Open and use immediately
-- **QR Code Pairing**: Scan to connect instantly
-- **Drag & Drop**: Intuitive file sharing
-- **Multi-language**: English, 中文, Bahasa, Indonesia
+1. Open [letshare.fun](https://letshare.fun) on the sending device.
+2. Open the same room on the receiving device by QR code or link.
+3. Choose the route on the sender side: P2P for direct transfer, or public relay when the network needs it.
+4. Send text, images, or files and watch transfer progress in the browser.
 
----
+## Privacy and Security Boundaries
 
-## 🎬 See It In Action
+LetShare reduces unnecessary cloud upload and account friction, but the trust boundary depends on the selected route.
 
-![LetShare Demo](documents/googleplay/pc-images/green.png)
+- P2P transfer sends file data directly between browsers after signaling.
+- Public relay transfer forwards chunks through the LetShare WebSocket server during the active transfer.
+- The relay service enforces the free/PRO size gate from server-side authorization, not just from UI state.
+- The app uses browser crypto and signed peer messaging primitives in its connection layer.
+- Files are not intended to be retained by the relay as a storage service.
 
-**🔥 30-Second Workflow:**
-1. Open LetShare on both devices
-2. Scan QR code to connect
-3. Drag files or paste text
-4. Watch encrypted transfer in real-time
+Do not treat public relay transfer as the same privacy model as pure P2P. If you need the strictest path, use P2P when it connects.
 
----
+## Supported Platforms
 
-## 🏗️ Technical Architecture
+| Platform | Status |
+| --- | --- |
+| Chrome, Edge, Firefox, Safari | Supported on current modern versions |
+| iOS/iPadOS | Supported through the browser/PWA path |
+| Android | Supported through browser/PWA and Capacitor Android app |
+| Windows, macOS, Linux | Supported through modern desktop browsers |
 
-```mermaid
-graph TB
-    A[Device A] -->|ECDH Key Exchange| B[Device B]
-    A -->|AES-256-GCM Encrypted Data| B
-    A -->|WebRTC P2P Channel| B
-    
-    C[Signaling Server] -.->|Connection Setup Only| A
-    C -.->|No File Access| B
-    
-    subgraph "Security Layer"
-        D[Digital Signature]
-        E[Timestamp Validation]
-        F[Replay Attack Prevention]
-    end
-```
+The UI includes English, Simplified Chinese, Bahasa Melayu, and Indonesian translations.
 
-**🔧 Tech Stack Highlights:**
-- **Frontend**: React 18 + TypeScript + Vite
-- **P2P**: WebRTC DataChannels
-- **Encryption**: Web Crypto API (ECDH/ECDSA/AES-GCM)
-- **UI**: Material-UI (MUI) 5
-- **State**: MobX for reactive updates
-- **Mobile**: Capacitor for native apps
-- **I18n**: react-i18next with auto-detection
+## Tech Stack
 
----
+| Area | Stack |
+| --- | --- |
+| Frontend | React 18, TypeScript, Vite |
+| UI/state | Material UI, MobX |
+| P2P | WebRTC DataChannels |
+| Signaling/relay | Ably provider and custom Go WebSocket server |
+| PWA | vite-plugin-pwa |
+| Mobile | Capacitor Android |
+| Backend | Go 1.21, Gin, Gorilla WebSocket |
 
-## 🚀 Quick Start
+## Local Development
 
-### 🌐 **Try Online (Recommended)**
-```bash
-👉 Visit: https://letshare.fun
-```
-No installation needed - works instantly in any modern browser!
-
-### 💻 **Local Development**
-```bash
-# Clone the repository
-git clone https://github.com/LiWeny16/LetShare.git
-cd LetShare
-
-# Install dependencies
-yarn install
-
-# Start development server
-yarn dev
-
-# Build for production
-yarn build
-```
-
-### 📱 **Build Android App**
-```bash
-# Setup Capacitor
-yarn app-create
-
-# Build and sync
-yarn app
-
-# Open in Android Studio
-yarn app-start
-```
-
----
-
-## 🔐 Security Features {#security}
-
-### **Encryption Pipeline**
-1. **Key Generation**: ECDH P-256 key pairs per user
-2. **Key Exchange**: Signed public key distribution
-3. **Shared Secret**: ECDH-derived AES-256 keys
-4. **Message Encryption**: AES-256-GCM with authentication
-5. **Integrity**: ECDSA signatures prevent tampering
-
-### **Attack Protection**
-- ✅ **Man-in-the-Middle**: Public key signature validation
-- ✅ **Replay Attacks**: Timestamp + nonce verification  
-- ✅ **Data Tampering**: Cryptographic authentication
-- ✅ **Eavesdropping**: End-to-end encryption
-
----
-
-## 📊 Comparison Matrix
-
-| Feature | LetShare | AirDrop | WeTransfer | Google Drive |
-|---------|----------|---------|------------|--------------|
-| **Cross-Platform** | ✅ Universal | ❌ Apple Only | ✅ Web | ✅ Web |
-| **Privacy** | ✅ E2E Encrypted | ✅ Local | ❌ Server Access | ❌ Server Scan |
-| **Speed** | ✅ P2P Direct | ✅ Local | ❌ Upload/Download | ❌ Rate Limited |
-| **File Size** | ✅ Unlimited* | ❌ Limited | ❌ 2GB Max | ❌ 15GB Quota |
-| **Registration** | ✅ None | ✅ None | ❌ Required | ❌ Required |
-| **Offline** | ✅ LAN Works | ✅ Local | ❌ Internet Only | ❌ Internet Only |
-
-*Limited by device storage and network stability
-
----
-
-## 🌍 Supported Platforms 
-
-### **Web Browsers**
-- ✅ Chrome 88+ (Recommended)
-- ✅ Firefox 84+
-- ✅ Safari 14+
-- ✅ Edge 88+
-
-### **Mobile Platforms**
-- ✅ Android 7.0+ (Native app)
-- ✅ iOS 14+ (PWA)
-- ✅ Any mobile browser
-
-### **Desktop OS**
-- ✅ Windows 10+
-- ✅ macOS 10.15+
-- ✅ Linux (Any distribution)
-
----
-
-## 🛠️ Development Scripts
+This repository uses `pnpm`.
 
 ```bash
-yarn dev
-yarn build       
+pnpm install
+pnpm dev
 ```
 
----
+Frontend commands:
 
-## 🤝 Contributing
+| Command | Purpose |
+| --- | --- |
+| `pnpm dev` | Start the Vite development server |
+| `pnpm test` | Run the TypeScript test suite under `tests/*.test.ts` |
+| `pnpm test:unit` | Run focused file-message unit tests |
+| `pnpm test:e2e` | Run focused file-message end-to-end tests |
+| `pnpm build` | Type-check, build to `docs/`, fix dotfiles, and generate `version.json` |
+| `pnpm preview` | Preview the production build locally |
 
-We welcome contributions! Here's how you can help:
+Backend commands:
 
-### **🐛 Found a Bug?**
-- Open an [issue](https://github.com/LiWeny16/LetShare/issues) with reproduction steps
+```bash
+cd server
+go mod download
+go test ./internal/... -count=1
+go run ./cmd/server
+```
 
-### **💡 Have Ideas?**
-- Check our [roadmap](https://github.com/LiWeny16/LetShare/projects) 
-- Suggest features in [discussions](https://github.com/LiWeny16/LetShare/discussions)
+Local CI helper:
 
-### **🚀 Want to Contribute Code?**
-1. Fork the repository
-2. Create your feature branch: `git checkout -b feature/amazing-feature`
-3. Commit changes: `git commit -m 'Add amazing feature'`
-4. Push to branch: `git push origin feature/amazing-feature`
-5. Open a Pull Request
+```bash
+node scripts/ci-local.cjs --frontend
+node scripts/ci-local.cjs --backend
+```
 
----
+The custom WebSocket server provides room coordination, signaling, and server-relayed file transfer. Production relay limits are configured on the backend; the current public relay model is free up to 50 MB and PRO up to 3 GB.
 
-## 📝 License
+## Android Build
 
-This project is licensed under the **MIT License** - see the [LICENSE](LICENSE) file for details.
+```bash
+pnpm app-create
+pnpm app
+pnpm app-start
+```
 
----
+`pnpm app-create` adds the Android platform, `pnpm app` builds and syncs the web app into Capacitor, and `pnpm app-start` opens the project in Android Studio.
 
-## ⭐ Support This Project
+## Project Structure
 
-If LetShare helps you, please consider:
+| Path | Purpose |
+| --- | --- |
+| `src/` | React application, connection providers, chat/file-transfer UI, state, and i18n |
+| `server/` | Go WebSocket backend and relay service |
+| `tests/` | Node/tsx tests for file messaging and storage behavior |
+| `docs/` | GitHub Pages production build output |
+| `documents/` | Store assets, screenshots, and supporting documents |
+| `scripts/` | Build, cleanup, version, CI, and deployment helper scripts |
+| `android/` | Capacitor Android project |
+| `Harness/` | Agent workflow scaffold, task history, and project notes |
 
-- ⭐ **Star this repository** to show your support
-- 🐛 **Report bugs** to help us improve
-- 💡 **Share ideas** for new features
-- 🔄 **Share with friends** who need secure file sharing
-- ☕ **[Buy us a coffee](https://ko-fi.com/bigonion)** to fuel development
+## Deployment Notes
 
----
+| Surface | Notes |
+| --- | --- |
+| Frontend | Vite builds into `docs/`, which is used for GitHub Pages. |
+| CDN | The public site is served through CDN in front of GitHub Pages. |
+| Backend | The custom WebSocket backend is deployed separately from the static frontend. |
+| Versioning | For app or service-worker changes, keep `package.json`, `src/app/libs/mobx/mobx.ts`, the service worker cache name in `vite.config.ts`, and generated `docs/version.json` in sync. |
 
-## 🔗 Links
+## Known Constraints
 
-- 🌐 **Live Demo**: [letshare.fun](https://letshare.fun)
-- 📱 **Android App**: [Google Play Store](https://play.google.com/store/apps/details?id=fun.letshare.app)
-- 📧 **Contact**: [hello@letshare.fun](mailto:hello@letshare.fun)
-<!-- - 🐦 **Twitter**: [@LetShareApp](https://twitter.com/LetShareApp) -->
+- P2P success depends on NAT traversal, browser support, and network policy.
+- Public relay transfer requires the Custom WebSocket provider; Ably is signaling only.
+- Free public relay transfers above 50 MB are rejected by the backend.
+- PRO authorization for relay transfer is evaluated by server-side token state.
+- Very large browser transfers can still be constrained by memory, storage, tab suspension, and mobile OS behavior.
+- The repository currently does not include a root `LICENSE` file. The backend folder contains [server/LICENSE](./server/LICENSE).
 
----
+## Contributing
 
-<div align="center">
+Bug reports and focused pull requests are welcome. Please include reproduction steps for transfer bugs, especially:
 
-**Built with ❤️ by developers who believe in privacy and simplicity**
+- selected route: P2P or public relay;
+- provider mode: auto, Ably, or Custom WebSocket;
+- file size;
+- browser and operating system;
+- whether the sender had PRO active for relay transfers above 50 MB.
 
-[⬆ Back to Top](#-letshare---lightning-fast-secure-file-sharing)
+## Links
 
-</div>
-
+- Production site: [https://letshare.fun](https://letshare.fun)
+- Android app: [Google Play](https://play.google.com/store/apps/details?id=fun.letshare.app)
+- Issues: [GitHub Issues](https://github.com/LiWeny16/LetShare/issues)
+- Contact: [hello@letshare.fun](mailto:hello@letshare.fun)

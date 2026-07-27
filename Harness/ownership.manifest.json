@@ -1,0 +1,878 @@
+{
+  "schemaVersion": 1,
+  "generator": "0.8.17",
+  "source": "https://raw.githubusercontent.com/LiWeny16/create-harness-vibe-coding/main/templates/common/",
+  "generated": "2026-07-26T09:26:35.146Z",
+  "preserve": [
+    "Harness/PROGRESS.md",
+    "Harness/tasks/**",
+    "Harness/memory/**",
+    "Harness/research/PRD.md",
+    "Harness/research/research-results.md",
+    "Harness/architecture.md",
+    "Harness/project/architecture.md",
+    "README.md",
+    "package.json",
+    "package-lock.json",
+    ".gitignore"
+  ],
+  "merge": [
+    "CLAUDE.md",
+    "AGENTS.md",
+    "MEMORY.md",
+    "Harness/MEMORY.md",
+    "Harness/README.md",
+    "Harness/settings.json"
+  ],
+  "bootstrapOnly": [],
+  "moves": [
+    {
+      "from": "Harness/architecture.md",
+      "to": "Harness/project/architecture.md",
+      "deleteOldIfChecksumMatches": true,
+      "preserveOldIfModified": true
+    },
+    {
+      "from": "Harness/ACCEPTANCE_PROTOCOL.md",
+      "to": "Harness/specs/protocols/ACCEPTANCE_PROTOCOL.md",
+      "deleteOldIfChecksumMatches": true,
+      "preserveOldIfModified": true
+    },
+    {
+      "from": "Harness/AGENT_ISOLATION.md",
+      "to": "Harness/specs/protocols/AGENT_ISOLATION.md",
+      "deleteOldIfChecksumMatches": true,
+      "preserveOldIfModified": true
+    },
+    {
+      "from": "Harness/DEBUG_PROTOCOL.md",
+      "to": "Harness/specs/protocols/DEBUG_PROTOCOL.md",
+      "deleteOldIfChecksumMatches": true,
+      "preserveOldIfModified": true
+    },
+    {
+      "from": "Harness/HARNESS_BRIDGE.md",
+      "to": "Harness/specs/protocols/HARNESS_BRIDGE.md",
+      "deleteOldIfChecksumMatches": true,
+      "preserveOldIfModified": true
+    },
+    {
+      "from": "Harness/MEMORY_PROTOCOL.md",
+      "to": "Harness/specs/protocols/MEMORY_PROTOCOL.md",
+      "deleteOldIfChecksumMatches": true,
+      "preserveOldIfModified": true
+    },
+    {
+      "from": "Harness/TASK_ARCHIVE.md",
+      "to": "Harness/specs/protocols/TASK_ARCHIVE.md",
+      "deleteOldIfChecksumMatches": true,
+      "preserveOldIfModified": true
+    },
+    {
+      "from": "Harness/TDD-GUIDE.md",
+      "to": "Harness/specs/protocols/TDD-GUIDE.md",
+      "deleteOldIfChecksumMatches": true,
+      "preserveOldIfModified": true
+    },
+    {
+      "from": "Harness/agent-workflow.md",
+      "to": "Harness/specs/runtime/agent-workflow.md",
+      "deleteOldIfChecksumMatches": true,
+      "preserveOldIfModified": true
+    },
+    {
+      "from": "Harness/context-loading.md",
+      "to": "Harness/specs/runtime/context-loading.md",
+      "deleteOldIfChecksumMatches": true,
+      "preserveOldIfModified": true
+    },
+    {
+      "from": "Harness/dispatch.md",
+      "to": "Harness/specs/runtime/dispatch.md",
+      "deleteOldIfChecksumMatches": true,
+      "preserveOldIfModified": true
+    },
+    {
+      "from": "Harness/subagents.md",
+      "to": "Harness/specs/runtime/subagents.md",
+      "deleteOldIfChecksumMatches": true,
+      "preserveOldIfModified": true
+    },
+    {
+      "from": "Harness/ECC-GUIDE.md",
+      "to": "Harness/specs/guides/ECC-GUIDE.md",
+      "deleteOldIfChecksumMatches": true,
+      "preserveOldIfModified": true
+    },
+    {
+      "from": "Harness/SETUP.md",
+      "to": "Harness/specs/guides/SETUP.md",
+      "deleteOldIfChecksumMatches": true,
+      "preserveOldIfModified": true
+    },
+    {
+      "from": "Harness/extension.md",
+      "to": "Harness/specs/guides/extension.md",
+      "deleteOldIfChecksumMatches": true,
+      "preserveOldIfModified": true
+    },
+    {
+      "from": "Harness/lifecycle.md",
+      "to": "Harness/specs/guides/lifecycle.md",
+      "deleteOldIfChecksumMatches": true,
+      "preserveOldIfModified": true
+    },
+    {
+      "from": "Harness/WF-AUTO-ANGLES.md",
+      "to": "Harness/specs/workflows/WF-AUTO-ANGLES.md",
+      "deleteOldIfChecksumMatches": true,
+      "preserveOldIfModified": true
+    },
+    {
+      "from": "Harness/WF-AUTO-SPARK.md",
+      "to": "Harness/specs/workflows/WF-AUTO-SPARK.md",
+      "deleteOldIfChecksumMatches": true,
+      "preserveOldIfModified": true
+    },
+    {
+      "from": "Harness/WF-AUTO.md",
+      "to": "Harness/specs/workflows/WF-AUTO.md",
+      "deleteOldIfChecksumMatches": true,
+      "preserveOldIfModified": true
+    },
+    {
+      "from": "Harness/WF-KERNEL.md",
+      "to": "Harness/specs/workflows/WF-KERNEL.md",
+      "deleteOldIfChecksumMatches": true,
+      "preserveOldIfModified": true
+    },
+    {
+      "from": "Harness/WF-MAX.md",
+      "to": "Harness/specs/workflows/WF-MAX.md",
+      "deleteOldIfChecksumMatches": true,
+      "preserveOldIfModified": true
+    },
+    {
+      "from": "Harness/WF-STATE.md",
+      "to": "Harness/specs/workflows/WF-STATE.md",
+      "deleteOldIfChecksumMatches": true,
+      "preserveOldIfModified": true
+    },
+    {
+      "from": "Harness/WF.md",
+      "to": "Harness/specs/workflows/WF.md",
+      "deleteOldIfChecksumMatches": true,
+      "preserveOldIfModified": true
+    }
+  ],
+  "frameworkOwned": [
+    {
+      "path": ".agents/skills/subagent-orchestrator/SKILL.md",
+      "kind": "skill",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".agents/skills/tdd/SKILL.md",
+      "kind": "skill",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".agents/skills/wf-agents-docs/SKILL.md",
+      "kind": "skill",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".agents/skills/wf-auto-spark/SKILL.md",
+      "kind": "skill",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".agents/skills/wf-auto/SKILL.md",
+      "kind": "skill",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".agents/skills/wf-browser/SKILL.md",
+      "kind": "skill",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".agents/skills/wf-help/SKILL.md",
+      "kind": "skill",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".agents/skills/wf-learn/SKILL.md",
+      "kind": "skill",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".agents/skills/wf-max/SKILL.md",
+      "kind": "skill",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".agents/skills/wf-readme/SKILL.md",
+      "kind": "skill",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".agents/skills/wf-remove/SKILL.md",
+      "kind": "skill",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".agents/skills/wf-review/SKILL.md",
+      "kind": "skill",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".agents/skills/wf-update/SKILL.md",
+      "kind": "skill",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".agents/skills/wf/SKILL.md",
+      "kind": "skill",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".claude/agents/architect-manager.md",
+      "kind": "agent",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".claude/agents/architect.md",
+      "kind": "agent",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".claude/agents/codebase-explorer.md",
+      "kind": "agent",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".claude/agents/context-master.md",
+      "kind": "agent",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".claude/agents/debugger.md",
+      "kind": "agent",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".claude/agents/docs-researcher.md",
+      "kind": "agent",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".claude/agents/explore-manager.md",
+      "kind": "agent",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".claude/agents/implement-manager.md",
+      "kind": "agent",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".claude/agents/implementer.md",
+      "kind": "agent",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".claude/agents/memory-master.md",
+      "kind": "agent",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".claude/agents/planner.md",
+      "kind": "agent",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".claude/agents/reflector.md",
+      "kind": "agent",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".claude/agents/researcher.md",
+      "kind": "agent",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".claude/agents/review-manager.md",
+      "kind": "agent",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".claude/agents/reviewer.md",
+      "kind": "agent",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".claude/agents/task-scribe.md",
+      "kind": "agent",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".claude/agents/tdd-guide.md",
+      "kind": "agent",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".claude/agents/test-writer.md",
+      "kind": "agent",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".claude/agents/verifier.md",
+      "kind": "agent",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".claude/commands/wf-auto-spark.md",
+      "kind": "command",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".claude/commands/wf-auto.md",
+      "kind": "command",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".claude/commands/wf-browser.md",
+      "kind": "command",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".claude/commands/wf-help.md",
+      "kind": "command",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".claude/commands/wf-learn.md",
+      "kind": "command",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".claude/commands/wf-max.md",
+      "kind": "command",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".claude/commands/wf-readme.md",
+      "kind": "command",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".claude/commands/wf-remove.md",
+      "kind": "command",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".claude/commands/wf-review.md",
+      "kind": "command",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".claude/commands/wf-update.md",
+      "kind": "command",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".claude/commands/wf.md",
+      "kind": "command",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".claude/rules/ecc/common.md",
+      "kind": "config",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".claude/settings.json",
+      "kind": "config",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".claude/skills/subagent-orchestrator/SKILL.md",
+      "kind": "skill",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".claude/skills/tdd/SKILL.md",
+      "kind": "skill",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".claude/skills/wf-agents-docs/SKILL.md",
+      "kind": "skill",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".claude/skills/wf-auto-spark/SKILL.md",
+      "kind": "skill",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".claude/skills/wf-auto/SKILL.md",
+      "kind": "skill",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".claude/skills/wf-browser/SKILL.md",
+      "kind": "skill",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".claude/skills/wf-help/SKILL.md",
+      "kind": "skill",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".claude/skills/wf-learn/SKILL.md",
+      "kind": "skill",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".claude/skills/wf-max/SKILL.md",
+      "kind": "skill",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".claude/skills/wf-readme/SKILL.md",
+      "kind": "skill",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".claude/skills/wf-remove/SKILL.md",
+      "kind": "skill",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".claude/skills/wf-review/SKILL.md",
+      "kind": "skill",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".claude/skills/wf-update/SKILL.md",
+      "kind": "skill",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".claude/skills/wf/SKILL.md",
+      "kind": "skill",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".codex/config.toml",
+      "kind": "config",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".codex/hooks.json",
+      "kind": "config",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".opencode/agents/architect-manager.md",
+      "kind": "agent",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".opencode/agents/architect.md",
+      "kind": "agent",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".opencode/agents/codebase-explorer.md",
+      "kind": "agent",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".opencode/agents/context-master.md",
+      "kind": "agent",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".opencode/agents/debugger.md",
+      "kind": "agent",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".opencode/agents/docs-researcher.md",
+      "kind": "agent",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".opencode/agents/explore-manager.md",
+      "kind": "agent",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".opencode/agents/implement-manager.md",
+      "kind": "agent",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".opencode/agents/implementer.md",
+      "kind": "agent",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".opencode/agents/memory-master.md",
+      "kind": "agent",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".opencode/agents/planner.md",
+      "kind": "agent",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".opencode/agents/reflector.md",
+      "kind": "agent",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".opencode/agents/researcher.md",
+      "kind": "agent",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".opencode/agents/review-manager.md",
+      "kind": "agent",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".opencode/agents/reviewer.md",
+      "kind": "agent",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".opencode/agents/task-scribe.md",
+      "kind": "agent",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".opencode/agents/tdd-guide.md",
+      "kind": "agent",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".opencode/agents/test-writer.md",
+      "kind": "agent",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".opencode/agents/verifier.md",
+      "kind": "agent",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".opencode/commands/wf-auto-spark.md",
+      "kind": "command",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".opencode/commands/wf-auto.md",
+      "kind": "command",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".opencode/commands/wf-browser.md",
+      "kind": "command",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".opencode/commands/wf-help.md",
+      "kind": "command",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".opencode/commands/wf-learn.md",
+      "kind": "command",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".opencode/commands/wf-max.md",
+      "kind": "command",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".opencode/commands/wf-readme.md",
+      "kind": "command",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".opencode/commands/wf-remove.md",
+      "kind": "command",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".opencode/commands/wf-review.md",
+      "kind": "command",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".opencode/commands/wf-update.md",
+      "kind": "command",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".opencode/commands/wf.md",
+      "kind": "command",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".opencode/plugins/harness-wf-status.mjs",
+      "kind": "config",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/ownership.manifest.json",
+      "kind": "config",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/research/README.md",
+      "kind": "config",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/scripts/archive-tasks.mjs",
+      "kind": "script",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/scripts/context-budget.mjs",
+      "kind": "script",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/scripts/l2-cache-telemetry.mjs",
+      "kind": "script",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/scripts/scan-clean.mjs",
+      "kind": "script",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/scripts/task-state.mjs",
+      "kind": "script",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/scripts/validate-harness.mjs",
+      "kind": "script",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/scripts/wf-auto-update-prompt.mjs",
+      "kind": "script",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/scripts/wf-remove.mjs",
+      "kind": "script",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/scripts/wf-update-check.mjs",
+      "kind": "script",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/specs/guides/ECC-GUIDE.md",
+      "kind": "doc",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/specs/guides/SETUP.md",
+      "kind": "doc",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/specs/guides/extension.md",
+      "kind": "doc",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/specs/guides/lifecycle.md",
+      "kind": "doc",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/specs/protocols/ACCEPTANCE_PROTOCOL.md",
+      "kind": "doc",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/specs/protocols/AGENT_ISOLATION.md",
+      "kind": "doc",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/specs/protocols/DEBUG_PROTOCOL.md",
+      "kind": "doc",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/specs/protocols/HARNESS_BRIDGE.md",
+      "kind": "doc",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/specs/protocols/MEMORY_PROTOCOL.md",
+      "kind": "doc",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/specs/protocols/TASK_ARCHIVE.md",
+      "kind": "doc",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/specs/protocols/TDD-GUIDE.md",
+      "kind": "doc",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/specs/runtime/agent-workflow.md",
+      "kind": "doc",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/specs/runtime/context-loading.md",
+      "kind": "doc",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/specs/runtime/dispatch.md",
+      "kind": "doc",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/specs/runtime/subagents.md",
+      "kind": "doc",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/specs/workflows/WF-AUTO-ANGLES.md",
+      "kind": "doc",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/specs/workflows/WF-AUTO-SPARK.md",
+      "kind": "doc",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/specs/workflows/WF-AUTO.md",
+      "kind": "doc",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/specs/workflows/WF-KERNEL.md",
+      "kind": "doc",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/specs/workflows/WF-MAX.md",
+      "kind": "doc",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/specs/workflows/WF-STATE.md",
+      "kind": "doc",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/specs/workflows/WF.md",
+      "kind": "doc",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/templates/ACCEPTANCE.template.md",
+      "kind": "config",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/templates/API_CONTRACT.template.md",
+      "kind": "config",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/templates/PLAYWRIGHT_SPEC.template.ts",
+      "kind": "config",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/templates/PRD.template.md",
+      "kind": "config",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/templates/TEST_PLAN.template.md",
+      "kind": "config",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/templates/UI_CONTRACT.template.md",
+      "kind": "config",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/templates/VALIDATION_REPORT.template.md",
+      "kind": "config",
+      "overwrite": "safe"
+    },
+    {
+      "path": "opencode.json",
+      "kind": "config",
+      "overwrite": "safe"
+    }
+  ],
+  "optionalOwned": [
+    {
+      "option": "github-pr-review",
+      "paths": [
+        ".agents/skills/github-pr-review/SKILL.md",
+        ".claude/skills/github-pr-review/SKILL.md",
+        "Harness/workflows/github-pr-review.md"
+      ],
+      "overwrite": "safe-if-installed"
+    },
+    {
+      "option": "python-backend",
+      "paths": [
+        ".agents/skills/python-backend/SKILL.md",
+        ".claude/skills/python-backend/SKILL.md",
+        "Harness/workflows/python-backend.md"
+      ],
+      "overwrite": "safe-if-installed"
+    },
+    {
+      "option": "ts-react-frontend",
+      "paths": [
+        ".agents/skills/ts-react-frontend/SKILL.md",
+        ".claude/skills/ts-react-frontend/SKILL.md",
+        "Harness/workflows/ts-react-frontend.md"
+      ],
+      "overwrite": "safe-if-installed"
+    },
+    {
+      "option": "ui-ux-review",
+      "paths": [
+        ".agents/skills/ui-ux-review/SKILL.md",
+        ".claude/skills/ui-ux-review/SKILL.md",
+        "Harness/workflows/ui-ux-review.md"
+      ],
+      "overwrite": "safe-if-installed"
+    }
+  ]
+}

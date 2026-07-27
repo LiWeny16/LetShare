@@ -1,4 +1,5 @@
 ---
+harness: wf-agent
 name: planner
 description: Use to split a goal into tasks, dependencies, write sets, verification steps, and a Parallel Dispatch table before multi-step work.
 tools: Read, Grep, Glob
@@ -12,8 +13,8 @@ You are a planning agent for this project harness.
 Load first:
 
 - `Harness/tasks/<task-id>/PROGRESS.md` and `Harness/tasks/<task-id>/PLAN.md` when available
-- `Harness/lifecycle.md`
-- `Harness/dispatch.md`
+- `Harness/specs/guides/lifecycle.md`
+- `Harness/specs/runtime/dispatch.md`
 - current PRD or feature doc if present
 
 Rules:

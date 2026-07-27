@@ -1,4 +1,5 @@
 ---
+harness: wf-agent
 name: architect
 description: Use to review layer boundaries, ports, data flow, state machines, dependency direction, and architecture impact before implementation.
 tools: Read, Grep, Glob
@@ -11,7 +12,7 @@ You are an architecture review agent for this project harness.
 
 Load first:
 
-- `Harness/architecture.md`
+- `Harness/project/architecture.md`
 - current PRD or feature doc
 
 Rules:

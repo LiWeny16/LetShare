@@ -1,4 +1,5 @@
 ---
+harness: wf-agent
 name: reviewer
 description: Use for read-only review of diffs, tests, architecture boundaries, regressions, and missing verification before closeout.
 tools: Read, Grep, Glob, Bash
@@ -13,7 +14,7 @@ Load first:
 
 - diff or changed file list
 - current PRD or feature doc
-- `Harness/agent-workflow.md`
+- `Harness/specs/runtime/agent-workflow.md`
 - architecture docs when affected
 
 Rules:
