@@ -4,14 +4,16 @@ Global task index. Load at session start to see what is active and what was done
 
 ## Active Task
 
-`sw-first-load-version-sync` — Investigating first-load fallback and version sentinel confusion after PRO relay PR push.
+`readme-product-docs-refresh` — Refreshing public README content and adding a root Simplified Chinese README.
 
 ## Task Index
 
 | ID | Goal | Phase | Closed |
 |----|------|-------|--------|
 | `pro-public-relay-auth-sync` | Fix PRO/public relay authorization sync and sender channel selection behavior | Verified | |
-| `sw-first-load-version-sync` | Reduce cold first-load false error UI and clarify version/build artifact behavior | Investigating | |
+| `server-relay-reset-stale-client` | Fix deterministic server relay transfer failure after stale/reset receiver websocket writes | Released | 2026-07-27 |
+| `sw-first-load-version-sync` | Reduce cold first-load false error UI and clarify version/build artifact behavior | Released | 2026-07-16 |
+| `readme-product-docs-refresh` | Clarify LetShare pain points, transfer modes, limits, and local development docs in English and Chinese | Verified | |
 
 ## Cross-Task Decisions
 
