@@ -1,0 +1,95 @@
+{
+  "schemaVersion": 1,
+  "taskId": "task-review-relay-resume",
+  "status": "complete",
+  "mode": "wf",
+  "tier": "WF-Full",
+  "phase": "closed",
+  "gate": "REVIEW-GATE",
+  "updatedAt": "2026-07-27T15:18:59.3486704+08:00",
+  "activeQuestion": null,
+  "nextAction": "Open a follow-up implementation task for Phase 0 hotfix tests/fix.",
+  "acceptance": [
+    "AC-001",
+    "AC-002",
+    "AC-003"
+  ],
+  "queues": {
+    "ready": [
+      
+    ],
+    "running": [],
+    "blocked": [],
+    "done": [
+      "planner",
+      "task-scribe",
+      "frontend-codebase-explorer",
+      "backend-codebase-explorer",
+      "test-writer",
+      "architect",
+      "reviewer",
+      "verifier",
+      "reflector"
+    ]
+  },
+  "dispatchLedger": [
+    {
+      "role": "planner",
+      "status": "DONE",
+      "result": "WF-Full review-only architecture pass selected."
+    },
+    {
+      "role": "task-scribe",
+      "status": "DONE",
+      "result": "Task capsule created."
+    },
+    {
+      "role": "frontend-codebase-explorer",
+      "status": "DONE",
+      "result": "Frontend transfer state is volatile and disconnect maps to error/cancel."
+    },
+    {
+      "role": "backend-codebase-explorer",
+      "status": "DONE",
+      "result": "Backend relay has in-memory sessions and no durable chunk ledger."
+    },
+    {
+      "role": "test-writer",
+      "status": "DONE",
+      "result": "Existing tests cover tactical reliability but not reconnect resume."
+    },
+    {
+      "role": "architect",
+      "status": "DONE",
+      "result": "Recommend server-coordinated resumable relay job with temporary chunk spool."
+    },
+    {
+      "role": "reviewer",
+      "status": "DONE",
+      "result": "PASS for review-only task; Phase 0 hotfix should precede full resume."
+    },
+    {
+      "role": "verifier",
+      "status": "DONE",
+      "result": "Focused Go tests passed; frontend source-inspection test file has existing drift."
+    },
+    {
+      "role": "reflector",
+      "status": "DONE",
+      "result": "PASS; implementation should start with RED tests."
+    }
+  ],
+  "decisions": [
+    "No production source edits in the initial architecture review pass.",
+    "Adopt server-owned resumable relay jobs with temporary chunk spooling as the target architecture.",
+    "Run a Phase 0 hotfix first to prevent stale socket cleanup from terminalizing active transfers when a newer same-user socket exists."
+  ],
+  "risks": [
+    "Browser File objects are not durable across refresh without OPFS/IndexedDB copy or user reselection.",
+    "Server-side relay spool needs TTL, quota, auth, and cleanup design.",
+    "Current ConnectionManager disconnect callback is single-slot and can lose transfer cleanup handling."
+  ],
+  "artifacts": [
+    "Harness/tasks/task-review-relay-resume/RELAY_RESUME_REVIEW.md"
+  ]
+}

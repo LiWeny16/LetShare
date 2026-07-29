@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "taskId": "task-implement-rich-file-previews",
+  "status": "active",
+  "mode": "wf",
+  "tier": "WF-Standard",
+  "phase": "verified",
+  "gate": "VERIFICATION-GATE",
+  "updatedAt": "2026-07-29T08:00:00+08:00",
+  "activeQuestion": null,
+  "nextAction": "Manual browser verification of PDF, MP4/WebM, .md, and multiple selected files at mobile/desktop widths. Then dispatch haiku reviewer.",
+  "acceptance": ["AC1", "AC2", "AC3", "AC4"],
+  "queues": {
+    "ready": ["review"],
+    "running": [],
+    "blocked": [],
+    "done": ["source-exploration", "planning", "implement-a-filepreviewdialog", "implement-b-selectedfilestrip", "implement-c-filebubble-chatpanel", "implement-d-download", "implement-e-share", "test-writer", "typecheck", "lint", "existing-tests", "new-tests", "build"]
+  },
+  "decisions": [
+    "FilePreviewDialog accepts File not fileKey — decouples from FileBlobStore, works for both ChatPanel and Download",
+    "Separate nonImagePreview state in Download to preserve existing image preview system untouched",
+    "onPreview as optional prop on FileBubble for non-breaking interface",
+    "SelectedFileStrip as standalone component for share page import",
+    "Source-pattern tests follow existing project test conventions"
+  ],
+  "risks": [
+    "PDF blob URL iframe may be blocked in some browsers — has download fallback button",
+    "Manual browser verification not yet done for real PDF/MP4/WebM/.md files"
+  ],
+  "artifacts": [
+    "src/components/FilePreviewDialog.tsx",
+    "src/components/SelectedFileStrip.tsx",
+    "src/components/Chat/FileBubble.tsx",
+    "src/components/Chat/ChatPanel.tsx",
+    "src/components/Download.tsx",
+    "src/pages/share.tsx",
+    "tests/filePreview.test.ts",
+    "src/app/libs/i18n/translation.ts"
+  ]
+}

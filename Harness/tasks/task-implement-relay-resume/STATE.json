@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "taskId": "task-implement-relay-resume",
+  "status": "active",
+  "mode": "wf",
+  "tier": "WF-Full",
+  "phase": "verifying",
+  "gate": "VERIFICATION-GATE",
+  "updatedAt": "2026-07-27T16:11:00+08:00",
+  "activeQuestion": null,
+  "nextAction": "Review status/diffs and report verification evidence plus remaining direct-to-disk follow-up.",
+  "acceptance": ["AC-001", "AC-002", "AC-003", "AC-004", "AC-005"],
+  "queues": {
+    "ready": [],
+    "running": [],
+    "blocked": [],
+    "done": ["planner", "task-scribe", "model-handler-exploration", "server-ledger-tests", "server-ledger-implementation", "server-spool-replay", "client-protocol-surface", "build-verification"]
+  },
+  "decisions": [
+    "Implement resumability foundation first: authoritative server chunk ledger and resume-state query.",
+    "Use relay spool replay for receiver resend before falling back to sender-side resend.",
+    "Full browser direct-to-disk remains a separate UI/storage slice."
+  ],
+  "risks": [
+    "Server chunk spool can increase disk usage and needs quota/TTL cleanup beyond session timeout cleanup.",
+    "Client reconnect currently clears local transfer sessions, so page-refresh or full reconnect UX recovery still needs File System Access/OPFS state persistence."
+  ],
+  "artifacts": [
+    "server/internal/model/message.go",
+    "server/internal/service/file_transfer.go",
+    "server/internal/handler/websocket.go",
+    "src/app/libs/connection/ServerFileTransfer.ts",
+    "tests/serverRelayResumeProtocol.test.ts"
+  ]
+}

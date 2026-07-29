@@ -1,0 +1,10 @@
+{
+  "checkedAt": "2026-07-29T02:12:41.342Z",
+  "noticedAt": null,
+  "update": {
+    "status": "up-to-date",
+    "version": "0.8.17",
+    "remote": "0.8.17",
+    "sourceBase": "npm:create-harness-vibe-coding@0.8.17/templates/common/"
+  }
+}

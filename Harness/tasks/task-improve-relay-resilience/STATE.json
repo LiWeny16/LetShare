@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "taskId": "task-improve-relay-resilience",
+  "status": "complete",
+  "mode": "wf",
+  "tier": "WF-Full",
+  "phase": "verified_phase0",
+  "gate": "ACCEPTANCE-GATE",
+  "updatedAt": "2026-07-27T15:57:00+08:00",
+  "activeQuestion": null,
+  "nextAction": "Open follow-up for full relay spool resume and P2P direct-to-disk receive.",
+  "acceptance": ["AC-001", "AC-002", "AC-003", "AC-004", "AC-005"],
+  "queues": {
+    "ready": [],
+    "running": [],
+    "blocked": [],
+    "done": ["planner", "task-scribe", "backend-hotfix", "logger-retention", "large-file-research", "frontend-guard-fix", "verifier", "reflector"]
+  },
+  "decisions": [
+    "First implementation slice targets deterministic relay failure under stale closed websocket cleanup.",
+    "Large-file P2P support requires a direct-to-disk receive path instead of full-file in-memory Blob assembly.",
+    "Current task closes as Phase 0 only; full resume requires a server chunk spool protocol."
+  ],
+  "risks": [
+    "Full resumable relay with server chunk spooling needs broader protocol changes.",
+    "Browser direct-to-disk APIs differ across desktop, Android, and iOS."
+  ],
+  "artifacts": [
+    "Harness/tasks/task-improve-relay-resilience/LARGE_FILE_AND_RESUMABLE_RELAY_ARCHITECTURE.md"
+  ]
+}
