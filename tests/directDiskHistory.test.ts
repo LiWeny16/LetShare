@@ -58,7 +58,7 @@ test("chat file messages can intentionally omit IndexedDB fileKey", () => {
 test("file bubble explains direct-to-disk history cannot be downloaded from browser storage", () => {
   assert.match(fileBubbleSource, /isDirectSavedWithoutBrowserCopy/);
   assert.match(fileBubbleSource, /chat\.fileSavedToDiskNoHistory/);
-  assert.match(fileBubbleSource, /isCompleted && isReceived && fileKey/);
+  assert.match(fileBubbleSource, /isCompleted && fileKey/);
 });
 
 test("direct-to-disk image messages render as file bubbles when no browser blob exists", () => {

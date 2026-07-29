@@ -21,6 +21,7 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ErrorIcon from '@mui/icons-material/Error';
 import DownloadIcon from '@mui/icons-material/Download';
 import RefreshIcon from '@mui/icons-material/Refresh';
+import VisibilityIcon from '@mui/icons-material/Visibility';
 import { useTranslation } from 'react-i18next';
 import { FileChatMessage, formatFileSize } from '@App/libs/chat/ChatHistoryManager';
 
@@ -28,7 +29,12 @@ interface FileBubbleProps {
     message: FileChatMessage;
     isMyMessage: boolean;
     onDownload?: (fileKey: string) => void;
+    onPreview?: (fileKey: string) => void;
     onRetry?: (messageId: string) => void;
+}
+
+function isPreviewable(category: string): boolean {
+    return ['video', 'pdf', 'document', 'code'].includes(category);
 }
 
 function getFileIcon(fileCategory: string, fileName: string): React.ReactNode {
@@ -76,7 +82,7 @@ function formatTimestamp(timestamp: number): string {
     return `${month}/${day} ${hours}:${minutes}`;
 }
 
-const FileBubble: React.FC<FileBubbleProps> = ({ message, isMyMessage, onDownload, onRetry }) => {
+const FileBubble: React.FC<FileBubbleProps> = ({ message, isMyMessage, onDownload, onPreview, onRetry }) => {
     const theme = useTheme();
     const { t } = useTranslation();
     const { fileMetadata } = message;
@@ -195,7 +201,40 @@ const FileBubble: React.FC<FileBubbleProps> = ({ message, isMyMessage, onDownloa
                             </Typography>
                         )}
 
-                        {isCompleted && isReceived && fileKey && (
+                        {isCompleted && fileKey && isPreviewable(fileCategory) && (
+                            <Button
+                                size="small"
+                                variant="outlined"
+                                startIcon={<VisibilityIcon />}
+                                onClick={() => onPreview?.(fileKey)}
+                                sx={{
+                                    color: isMyMessage
+                                        ? 'rgba(255, 255, 255, 0.9)'
+                                        : theme.palette.primary.main,
+                                    borderColor: isMyMessage
+                                        ? 'rgba(255, 255, 255, 0.4)'
+                                        : theme.palette.primary.main,
+                                    textTransform: 'none',
+                                    fontSize: '0.75rem',
+                                    px: 1.5,
+                                    py: 0.5,
+                                    minWidth: 'auto',
+                                    borderRadius: 2,
+                                    '&:hover': {
+                                        borderColor: isMyMessage
+                                            ? 'rgba(255, 255, 255, 0.7)'
+                                            : theme.palette.primary.dark,
+                                        backgroundColor: isMyMessage
+                                            ? 'rgba(255, 255, 255, 0.1)'
+                                            : 'rgba(0, 0, 0, 0.04)',
+                                    },
+                                }}
+                            >
+                                {t('chat.filePreview')}
+                            </Button>
+                        )}
+
+                        {isCompleted && fileKey && (
                             <Button
                                 size="small"
                                 variant="contained"

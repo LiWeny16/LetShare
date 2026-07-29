@@ -24,6 +24,9 @@ class ChatIntegration {
     public emitter = mitt<ChatIntegrationEvents>(); // 实例化事件发射器
     private activeUpload: { userId: string; messageId: string } | null = null;
     private lastProgressEmitMs: number = 0;
+    // Session-scoped cache: sent files live here so sender can preview during the session
+    // without eagerly reading the whole file into IndexedDB (expensive for large video/PDF).
+    private sentFileCache: Map<string, File> = new Map();
 
     private constructor() {
         // 注入UserIdProvider到ChatHistoryManager
@@ -323,7 +326,13 @@ class ChatIntegration {
             const currentUserId = realTimeColab.getUniqId() || 'unknown';
             const targetUserName = targetUserId.split(':')[0] || 'Unknown User';
 
-            // 1. Create placeholder file message (uploading, 0%)
+            // Keep File in a session-scoped cache so the sender can preview during this session
+            // without eagerly arrayBuffer-ing large video/PDF into IndexedDB.
+            const now = Date.now();
+            const fileKey = `${targetUserId}_${now}_${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+            this.sentFileCache.set(fileKey, file);
+
+            // 1. Create placeholder file message (uploading, 0%) with the fileKey
             const result = await ChatHistoryManager.addFileMessage(
                 targetUserId,
                 targetUserName,
@@ -331,6 +340,7 @@ class ChatIntegration {
                 { name: file.name, size: file.size, type: file.type },
                 'uploading',
                 0,
+                fileKey,
             );
 
             if (!result.success || !result.messageId) {
@@ -353,7 +363,7 @@ class ChatIntegration {
             // 4. After transfer completes, the 'file-sent' event will update the message
             //    (handled by handleFileSent above)
 
-            console.log(`[CHAT INTEGRATION] File message created and transfer started: ${file.name} (${messageId})`);
+            console.log(`[CHAT INTEGRATION] File message created and transfer started: ${file.name} (${messageId}, ${fileKey})`);
             return { messageId };
         } catch (error) {
             const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -391,6 +401,11 @@ class ChatIntegration {
             console.error('[CHAT INTEGRATION] Failed to delete chat history:', error);
             return { success: false, error: errorMessage };
         }
+    }
+
+    /** Get a sent file from the session cache (for sender-side preview without IndexedDB persistence). */
+    public getSentFile(fileKey: string): File | undefined {
+        return this.sentFileCache.get(fileKey);
     }
 
     /** Delete a single message (and its file blob if applicable). */

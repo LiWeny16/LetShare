@@ -34,6 +34,7 @@ import { buttonStyleNormal } from "../pages/share";
 import React from "react";
 import ChatIntegration from "@App/libs/chat/ChatIntegration";
 import FileBlobStore from "@App/libs/chat/FileBlobStore";
+import { categorizeFile } from "@App/libs/chat/ChatHistoryManager";
 import alertUseMUI from "@App/libs/tools/alert";
 import realTimeColab from "@App/libs/connection/colabLib";
 import { isApp } from "@App/libs/capacitor/user";
@@ -48,6 +49,7 @@ import {
   scheduleObjectUrlRevoke,
 } from "@App/libs/connection/transferReliability";
 import { getDeviceType } from "@App/libs/tools/tools";
+import FilePreviewDialog from './FilePreviewDialog';
 
 // 图片扩展名列表（小写）
 const IMAGE_EXTS = ["png", "jpg", "jpeg", "gif", "bmp", "webp", "svg"];
@@ -161,6 +163,12 @@ export default function DownloadDrawerSlide({
   const [previewFile, setPreviewFile] = React.useState<File | null>(null);
   const [pendingBrowserDownload, setPendingBrowserDownload] = React.useState<PendingBrowserDownload | null>(null);
   const [browserDownloadNotice, setBrowserDownloadNotice] = React.useState<string | null>(null);
+  const [nonImagePreview, setNonImagePreview] = React.useState<{
+    file: File;
+    fileName: string;
+    mimeType: string;
+    fileCategory: string;
+  } | null>(null);
 
   // Refs 用于组件卸载清理时获取最新值，避免闭包过期
   const previewUrlRef = React.useRef(previewUrl);
@@ -545,6 +553,16 @@ export default function DownloadDrawerSlide({
     setPreviewUrl(null);
     setPreviewFile(null);
   };
+
+  const openNonImagePreview = React.useCallback((file: File) => {
+    const category = categorizeFile(file.name, file.type);
+    setNonImagePreview({
+      file,
+      fileName: file.name,
+      mimeType: file.type,
+      fileCategory: category,
+    });
+  }, []);
 
   const clearReceivedFiles = () => {
     closePreview();
@@ -1357,7 +1375,12 @@ export default function DownloadDrawerSlide({
                                         if (isImg) {
                                           openPreview(file);
                                         } else {
-                                          downloadFile(file);
+                                          const cat = categorizeFile(file.name, file.type);
+                                          if (['video', 'pdf', 'document', 'code'].includes(cat)) {
+                                            openNonImagePreview(file);
+                                          } else {
+                                            downloadFile(file);
+                                          }
                                         }
                                       }}
                                     >
@@ -1578,6 +1601,17 @@ export default function DownloadDrawerSlide({
           )}
         </DialogContent>
       </Dialog>
+
+      {nonImagePreview && (
+        <FilePreviewDialog
+          file={nonImagePreview.file}
+          fileName={nonImagePreview.fileName}
+          mimeType={nonImagePreview.mimeType}
+          fileCategory={nonImagePreview.fileCategory}
+          open={!!nonImagePreview}
+          onClose={() => setNonImagePreview(null)}
+        />
+      )}
     </>
   );
 }

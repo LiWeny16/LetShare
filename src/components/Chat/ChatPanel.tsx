@@ -22,6 +22,7 @@ import ChatIntegration from '@App/libs/chat/ChatIntegration';
 import realTimeColab from '@App/libs/connection/colabLib';
 import FileBubble from './FileBubble';
 import ImageBubble from './ImageBubble';
+import FilePreviewDialog from '../FilePreviewDialog';
 import type { FileChatMessage } from '@App/libs/chat/ChatHistoryManager';
 
 interface ChatPanelProps {
@@ -41,6 +42,13 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ open, onClose, targetUserId, targ
     const [inputValue, setInputValue] = useState('');
     const [chatHistory, setChatHistory] = useState<ChatHistory | null>(null);
     const [emojiAnchor, setEmojiAnchor] = useState<HTMLElement | null>(null);
+    const [previewState, setPreviewState] = useState<{
+        file: File;
+        fileName: string;
+        mimeType: string;
+        fileCategory: string;
+    } | null>(null);
+    const [previewOpen, setPreviewOpen] = useState(false);
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -192,6 +200,33 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ open, onClose, targetUserId, targ
         }
     };
 
+    const handleFileBubblePreview = useCallback(async (fileKey: string) => {
+        try {
+            // 1. Try session cache first (sent files live here — avoids expensive IndexedDB arrayBuffer for large video/PDF)
+            let file: File | null | undefined = ChatIntegration.getSentFile(fileKey);
+            if (!file) {
+                // 2. Fallback to IndexedDB (received files are stored there on arrival)
+                const FileBlobStore = (await import('@App/libs/chat/FileBlobStore')).default;
+                file = await FileBlobStore.getFile(fileKey);
+            }
+            if (file) {
+                const msg = chatHistory?.messages.find(
+                    (m): m is FileChatMessage =>
+                        m.type === 'file' && (m as FileChatMessage).fileMetadata?.fileKey === fileKey
+                );
+                setPreviewState({
+                    file,
+                    fileName: file.name,
+                    mimeType: file.type || msg?.fileMetadata?.mimeType || 'application/octet-stream',
+                    fileCategory: msg?.fileMetadata?.fileCategory || 'other',
+                });
+                setPreviewOpen(true);
+            }
+        } catch (err) {
+            console.warn('Failed to load file for preview:', err);
+        }
+    }, [chatHistory]);
+
     const handleDeleteHistory = async () => {
         // 使用浏览器原生确认对话框
         const isConfirmed = window.confirm(
@@ -276,6 +311,7 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ open, onClose, targetUserId, targ
                     message={fileMsg}
                     isMyMessage={isMyMessage}
                     onDownload={handleFileBubbleDownload}
+                    onPreview={handleFileBubblePreview}
                     onRetry={handleFileBubbleRetry}
                 />
             );
@@ -579,6 +615,20 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ open, onClose, targetUserId, targ
                     </Grid>
                 </Box>
             </Popover>
+
+            {previewState && (
+                <FilePreviewDialog
+                    file={previewState.file}
+                    fileName={previewState.fileName}
+                    mimeType={previewState.mimeType}
+                    fileCategory={previewState.fileCategory}
+                    open={previewOpen}
+                    onClose={() => {
+                        setPreviewOpen(false);
+                        setPreviewState(null);
+                    }}
+                />
+            )}
         </>
     );
 };

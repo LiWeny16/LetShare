@@ -24,6 +24,7 @@ import {
   Chip,
   IconButton,
   Tooltip,
+  Paper,
 } from "@mui/material";
 import realTimeColab, { UserInfo, UserStatus } from "@App/libs/connection/colabLib";
 import FileIcon from "@mui/icons-material/Description";
@@ -37,6 +38,7 @@ import { Footer } from "../components/Footer";
 import EditableUserId from "../components/UserId";
 import DownloadDrawer from "../components/Download";
 import ChatPanel from "../components/Chat/ChatPanel";
+import SelectedFileStrip from '../components/SelectedFileStrip';
 import ChatIntegration from "@App/libs/chat/ChatIntegration";
 import AppleIcon from "@mui/icons-material/Apple";
 import PhonelinkRingIcon from "@mui/icons-material/PhonelinkRing";
@@ -102,6 +104,7 @@ const Share = observer(() => {
   const [selectedButton, setSelectedButton] = useState<"file" | "text" | "clip" | "image" | "video">("clip");
 
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [selectedText, setSelectedText] = useState<string | null>(null);
   const [textInputDialogOpen, setTextInputDialogOpen] = useState(false);
   const [textInput, setTextInput] = useState("");
@@ -110,8 +113,10 @@ const Share = observer(() => {
   const [isDraggingOver, setIsDraggingOver] = React.useState(false);
   const [fileSendingTargetUser, setFileSendingTargetUser] = React.useState("");
 
-  // 发送侧图片预览：懒加载 object URL，选择变化或卸载时 revoke
-  const [senderPreviewUrl, setSenderPreviewUrl] = React.useState<string | null>(null);
+  const clearSelectedFiles = () => {
+    setSelectedFiles([]);
+    setSelectedFile(null);
+  };
 
 
 
@@ -343,12 +348,15 @@ const Share = observer(() => {
   const handleMultiFileSelect = async (event: React.ChangeEvent<HTMLInputElement>, isImg: boolean | undefined) => {
     const files = event.target.files;
     if (!files || files.length === 0) return;
+    const fileList = Array.from(files);
     // 单文件不需要压缩
     if (isImg) {
       setSelectedButton("image");
     } else {
       setSelectedButton("file");
     }
+    // Always keep original file list for display
+    setSelectedFiles(fileList);
     if (files.length === 1) {
       const file = event.target.files?.[0] || null;
       if (file) {
@@ -490,6 +498,7 @@ const Share = observer(() => {
           const file = item.getAsFile();
           if (file) {
             setSelectedFile(file);
+            setSelectedFiles([file]);
             setSelectedButton("file");
             return;
           }
@@ -510,20 +519,6 @@ const Share = observer(() => {
     };
 
   }, [textInputDialogOpen, openDialog]);
-  // 发送侧图片预览：当 selectedFile 是图片时生成预览 URL，否则清理
-  useEffect(() => {
-    const isImg = selectedFile && /\.(png|jpe?g|gif|bmp|webp|svg)$/i.test(selectedFile.name);
-    if (selectedButton === "image" && isImg && selectedFile) {
-      const url = URL.createObjectURL(selectedFile);
-      setSenderPreviewUrl(url);
-      return () => {
-        URL.revokeObjectURL(url);
-        setSenderPreviewUrl(null);
-      };
-    } else {
-      setSenderPreviewUrl(null);
-    }
-  }, [selectedFile, selectedButton]);
 
   const handleAcceptMessage = () => {
     try {
@@ -645,7 +640,7 @@ const Share = observer(() => {
 
             <Badge
               color="primary"
-              badgeContent={selectedButton === "file" ? 1 : 0}
+              badgeContent={selectedButton === "file" && selectedFiles.length > 0 ? selectedFiles.length : 0}
               overlap="circular"
               sx={badgeStyle}
             >
@@ -677,7 +672,7 @@ const Share = observer(() => {
             />
             <Badge
               color="primary"
-              badgeContent={selectedButton === "image" ? 1 : 0}
+              badgeContent={selectedButton === "image" && selectedFiles.length > 0 ? selectedFiles.length : 0}
               overlap="circular"
               sx={badgeStyle}
             >
@@ -759,42 +754,38 @@ const Share = observer(() => {
             </Badge>
           </Box>
 
-          {/* 发送侧图片预览缩略图（仅当选择了图片时显示） */}
-          {senderPreviewUrl && selectedButton === "image" && (
+          {/* 选中文件紧凑单行展示（所有类型统一 chip/icon/name，超出 +N） */}
+          {selectedFiles.length > 0 && (
             <Box
               sx={{
                 mt: 1.5,
-                display: "flex",
-                alignItems: "center",
-                gap: 1.5,
                 px: 1,
-                py: 0.5,
-                borderRadius: 2,
-                border: `1px solid ${theme.palette.divider}`,
-                backgroundColor: theme.palette.action.hover,
-                overflow: "hidden",
+                maxWidth: '100%',
               }}
             >
-              <Box
-                component="img"
-                src={senderPreviewUrl}
-                alt={selectedFile?.name ?? "preview"}
-                sx={{
-                  width: 48,
-                  height: 48,
-                  objectFit: "cover",
-                  borderRadius: 1,
-                  flexShrink: 0,
+              <SelectedFileStrip
+                files={selectedFiles}
+                onRemove={(index) => {
+                  const next = selectedFiles.filter((_, i) => i !== index);
+                  if (next.length === 0) {
+                    clearSelectedFiles();
+                  } else {
+                    setSelectedFiles(next);
+                    // If the removed file was the single-file payload, rebuild zip
+                    if (next.length > 1) {
+                      import('jszip').then(({ default: JSZip }) => {
+                        const zip = new JSZip();
+                        next.forEach(f => zip.file(f.name, f));
+                        zip.generateAsync({ type: 'blob' }).then(content => {
+                          setSelectedFile(new File([content], `LetShare_${Date.now()}.zip`, { type: 'application/zip' }));
+                        });
+                      });
+                    } else {
+                      setSelectedFile(next[0]);
+                    }
+                  }
                 }}
               />
-              <Typography
-                variant="body2"
-                noWrap
-                color="text.secondary"
-                sx={{ flex: 1, minWidth: 0 }}
-              >
-                {selectedFile?.name}
-              </Typography>
             </Box>
           )}
 
@@ -995,47 +986,80 @@ const Share = observer(() => {
 
 
       <Dialog
-        open={openDialog} onClose={() => {
+        open={openDialog}
+        onClose={() => {
           setOpenDialog(false)
           setTimeout(() => {
             setMsgFromSharing(null)
-            // setFileFromSharing(null)
           }, 300)
-        }}>
-        <DialogTitle><AutoAwesomeIcon sx={{ mr: 0.5, verticalAlign: 'middle', fontSize: '1.1em' }} />{t('dialog.newShare')}</DialogTitle>
-        <DialogContent sx={{ width: { sx: 200, sm: 300, md: 400, lg: 400, } }} >
-          <DialogContentText>{t('dialog.incomingMessage')}</DialogContentText>
+        }}
+        BackdropProps={{
+          sx: {
+            backdropFilter: 'blur(12px)',
+            WebkitBackdropFilter: 'blur(12px)',
+            backgroundColor: 'rgba(0,0,0,0.24)',
+          },
+        }}
+        PaperProps={{
+          sx: {
+            borderRadius: '20px',
+            boxShadow: '0 12px 48px rgba(0,0,0,0.14), 0 4px 16px rgba(0,0,0,0.06)',
+            overflow: 'hidden',
+          },
+        }}
+      >
+        <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1, pt: 2.5, pb: 0, px: 3, fontSize: '1.1rem', fontWeight: 590, letterSpacing: '-0.02em' }}>
+          <AutoAwesomeIcon sx={{ mr: 0.5, verticalAlign: 'middle', fontSize: '1.1em', color: 'primary.main', opacity: 0.8 }} />{t('dialog.newShare')}
+        </DialogTitle>
+        <DialogContent sx={{ width: { xs: 260, sm: 320, md: 380, lg: 380 }, px: 3, pt: 2 }}>
+          <DialogContentText sx={{ fontSize: '0.85rem', mb: 1.5, color: 'text.secondary' }}>{t('dialog.incomingMessage')}</DialogContentText>
           {msgFromSharing && (
             <TextField
               value={msgFromSharing ?? ""}
               multiline
               fullWidth
+              variant="filled"
               InputProps={{
                 readOnly: true,
-              }}
-              variant="outlined"
-              sx={{
-                border: "none",
-                maxHeight: 300,
-                overflowY: "auto",
-                borderRadius: 1,
-                mt: 1,
-                fontSize: { xs: "14px", sm: "15px" },
-                "& .MuiInputBase-input": {
-                  whiteSpace: "pre-wrap",
+                disableUnderline: true,
+                sx: {
+                  borderRadius: '14px',
+                  fontSize: '0.9rem',
+                  lineHeight: 1.55,
+                  letterSpacing: '-0.01em',
+                  bgcolor: (t: any) => t.palette.mode === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)',
+                  '& .MuiInputBase-input': {
+                    whiteSpace: 'pre-wrap',
+                    py: 1.5,
+                    px: 1.5,
+                  },
                 },
               }}
+              sx={{
+                maxHeight: 280,
+                overflowY: 'auto',
+              }}
             />
-
           )}
         </DialogContent>
-        <DialogActions>
-          <Button onClick={() => {
-            setOpenDialog(false);
-            setMsgFromSharing(null)
-            // setFileFromSharing(null)
-          }} color="secondary">{t('button.reject')}</Button>
-          <Button onClick={handleAcceptMessage} color="primary" autoFocus>{t('button.accept')}</Button>
+        <DialogActions sx={{ px: 3, pb: 2.5, gap: 1.5 }}>
+          <Button
+            onClick={() => {
+              setOpenDialog(false);
+              setMsgFromSharing(null)
+            }}
+            sx={{ color: 'text.secondary', fontWeight: 520, fontSize: '0.875rem', letterSpacing: '-0.01em', borderRadius: '12px', px: 2, textTransform: 'none' }}
+          >
+            {t('button.reject')}
+          </Button>
+          <Button
+            onClick={handleAcceptMessage}
+            variant="contained"
+            autoFocus
+            sx={{ fontWeight: 590, fontSize: '0.875rem', letterSpacing: '-0.01em', borderRadius: '12px', px: 3, textTransform: 'none', boxShadow: (t: any) => `0 2px 8px ${t.palette.primary.main}30` }}
+          >
+            {t('button.accept')}
+          </Button>
         </DialogActions>
       </Dialog>
 
@@ -1043,62 +1067,183 @@ const Share = observer(() => {
         open={textInputDialogOpen}
         onClose={() => setTextInputDialogOpen(false)}
         fullWidth
-        maxWidth="sm"
-        PaperProps={{
+        maxWidth="xs"
+        BackdropProps={{
           sx: {
-            borderRadius: 2,
-            maxWidth: 500,
-            mx: { xs: 1, sm: "auto" },
+            backdropFilter: 'blur(12px)',
+            WebkitBackdropFilter: 'blur(12px)',
+            backgroundColor: 'rgba(0,0,0,0.24)',
           },
         }}
+        PaperProps={{
+          sx: {
+            borderRadius: '20px',
+            boxShadow: '0 12px 48px rgba(0,0,0,0.14), 0 4px 16px rgba(0,0,0,0.06)',
+            overflow: 'hidden',
+          },
+        }}
+        transitionDuration={{ appear: 280, enter: 280, exit: 200 }}
       >
-        <Box sx={{ padding: "20px" }}>
-          <DialogActions
+        <DialogTitle
+          sx={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 1,
+            pt: 2.5,
+            pb: 0,
+            px: 3,
+            fontSize: '1.1rem',
+            fontWeight: 590,
+            letterSpacing: '-0.02em',
+          }}
+        >
+          <TextIcon fontSize="small" sx={{ color: 'primary.main', opacity: 0.8 }} />
+          {t('dialog.inputText')}
+        </DialogTitle>
+        <DialogContent sx={{ px: 3, pt: 2, pb: selectedText ? 1 : 2 }}>
+          <TextField
+            autoFocus
+            value={textInput}
+            onChange={(e) => setTextInput(e.target.value)}
+            multiline
+            rows={4}
+            fullWidth
+            variant="filled"
+            placeholder={`${t('placeholder.inputText')}...`}
+            InputProps={{
+              disableUnderline: true,
+              sx: {
+                borderRadius: '14px',
+                fontSize: '0.9375rem',
+                lineHeight: 1.55,
+                letterSpacing: '-0.01em',
+                bgcolor: (t: any) => t.palette.mode === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
+                px: 1,
+                '&:hover': { bgcolor: (t: any) => t.palette.mode === 'dark' ? 'rgba(255,255,255,0.09)' : 'rgba(0,0,0,0.06)' },
+                '&.Mui-focused': {
+                  bgcolor: (t: any) => t.palette.mode === 'dark' ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.9)',
+                  boxShadow: (t: any) => `0 0 0 3px ${t.palette.primary.main}18`,
+                },
+              },
+            }}
+          />
+          {selectedText && (
+            <Paper
+              variant="outlined"
+              sx={{
+                mt: 2,
+                p: 2,
+                display: 'flex',
+                alignItems: 'flex-start',
+                gap: 1.5,
+                borderRadius: '14px',
+                borderColor: 'divider',
+                bgcolor: (t: any) => t.palette.mode === 'dark'
+                  ? 'rgba(255,255,255,0.04)'
+                  : 'rgba(0,0,0,0.025)',
+                backdropFilter: 'blur(8px)',
+                WebkitBackdropFilter: 'blur(8px)',
+              }}
+            >
+              <Box sx={{ flex: 1, minWidth: 0 }}>
+                <Typography
+                  variant="caption"
+                  sx={{
+                    mb: 0.5,
+                    display: 'block',
+                    fontSize: '0.7rem',
+                    fontWeight: 590,
+                    letterSpacing: '0.04em',
+                    textTransform: 'uppercase',
+                    color: 'text.secondary',
+                    opacity: 0.7,
+                  }}
+                >
+                  {t('dialog.currentText', 'Current selected text')}
+                </Typography>
+                <Typography
+                  variant="body2"
+                  sx={{
+                    whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-word',
+                    maxHeight: 120,
+                    overflowY: 'auto',
+                    fontSize: '0.875rem',
+                    lineHeight: 1.55,
+                    letterSpacing: '-0.01em',
+                    color: 'text.primary',
+                  }}
+                >
+                  {selectedText}
+                </Typography>
+              </Box>
+              <IconButton
+                size="small"
+                onClick={() => {
+                  writeClipboard(selectedText).then(() => {
+                    alertUseMUI(t('toast.copiedToClipboard'), 1500, { kind: "success" });
+                  });
+                }}
+                sx={{
+                  flexShrink: 0,
+                  borderRadius: '10px',
+                  color: 'text.secondary',
+                  '&:hover': { bgcolor: (t: any) => t.palette.action.hover, color: 'text.primary' },
+                }}
+              >
+                <ClipboardIcon fontSize="small" />
+              </IconButton>
+            </Paper>
+          )}
+        </DialogContent>
+        <DialogActions
+          sx={{
+            px: 3,
+            pb: 2.5,
+            pt: selectedText ? 0 : 1,
+            gap: 1.5,
+          }}
+        >
+          <Button
+            onClick={() => setTextInputDialogOpen(false)}
             sx={{
-
-              justifyContent: "space-between",
+              color: 'text.secondary',
+              fontWeight: 520,
+              fontSize: '0.875rem',
+              letterSpacing: '-0.01em',
+              borderRadius: '12px',
+              px: 2,
+              textTransform: 'none',
+              '&:hover': { bgcolor: (t: any) => t.palette.action.hover, color: 'text.primary' },
             }}
           >
-            <Typography variant="h6" sx={{ flexGrow: 1 }}>
-              {t('dialog.inputText')}
-            </Typography>
-            <Button onClick={() => setTextInputDialogOpen(false)} color="secondary">
-              {t('button.cancel')}
-            </Button>
-            <Button
-              onClick={() => {
-                if (textInput) {
-                  setSelectedText(textInput);
-                  setSelectedButton("text");
-                } else {
-                  alertUseMUI(t('toast.emptyInput'), 1000, { kind: "info" })
-                }
+            {t('button.cancel')}
+          </Button>
+          <Button
+            onClick={() => {
+              if (textInput.trim()) {
+                clearSelectedFiles();
+                setSelectedText(textInput.trim());
+                setSelectedButton("text");
                 setTextInputDialogOpen(false);
-              }}
-              color="primary"
-              variant="contained"
-            >
-              {t('button.confirm')}
-            </Button>
-          </DialogActions>
-          <DialogContent>
-            <TextField
-              autoFocus={true}
-              value={textInput}
-              onChange={(e) => setTextInput(e.target.value)}
-              multiline
-              rows={5}
-              fullWidth
-              variant="outlined"
-              placeholder={`${t('placeholder.inputText')}...`}
-              sx={{
-
-                px: 0,
-                fontSize: { xs: "14px", sm: "16px" },
-              }}
-            />
-          </DialogContent>
-        </Box>
+              } else {
+                alertUseMUI(t('toast.emptyInput'), 1000, { kind: "info" })
+              }
+            }}
+            variant="contained"
+            sx={{
+              fontWeight: 590,
+              fontSize: '0.875rem',
+              letterSpacing: '-0.01em',
+              borderRadius: '12px',
+              px: 3,
+              textTransform: 'none',
+              boxShadow: (t: any) => `0 2px 8px ${t.palette.primary.main}30`,
+            }}
+          >
+            {t('button.confirm')}
+          </Button>
+        </DialogActions>
       </Dialog>
 
       <DownloadDrawer
