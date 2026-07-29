@@ -1,0 +1,7 @@
+interface:
+  display_name: "Visible Browser CDP Debug"
+  short_description: "Run real Edge and Chrome CDP browser E2E checks"
+  default_prompt: "Use $visible-browser-cdp-debug to verify a local relay transfer flow in visible Edge and Chrome."
+
+policy:
+  allow_implicit_invocation: true
