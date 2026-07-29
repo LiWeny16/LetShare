@@ -7,6 +7,19 @@ Browser-first cross-device sharing for files, images, clipboard text, and short 
 - Production: [letshare.fun](https://letshare.fun)
 - Android: [Google Play](https://play.google.com/store/apps/details?id=fun.letshare.app)
 
+## Current Stable Release
+
+`v3.5.6` is the current stable release, published on July 29, 2026.
+
+This release includes the transfer reliability update: 10-minute background server retention, relay resume hardening, direct-to-disk receive improvements, PWA asset cleanup fixes, and corrected P2P fallback status to avoid showing a disconnect toast before the initial DataChannel connection has ever opened.
+
+Release baseline:
+
+| Surface | Reference |
+| --- | --- |
+| Frontend | `0126bee` |
+| Backend | `ec8ef1c` |
+
 ![LetShare desktop preview](documents/googleplay/pc-images/green.png)
 
 ## Why LetShare
