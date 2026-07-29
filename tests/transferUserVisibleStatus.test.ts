@@ -149,6 +149,29 @@ test("P2P channel close publishes a persistent retry status for active transfers
   assert.match(body, /autoClearMs:\s*10_000/);
 });
 
+test("initial unopened P2P channel close does not show disconnected toast", () => {
+  const setupBody = extractMethodBody(colabLibSource, "public setupDataChannel");
+  assert.match(setupBody, /let hasOpened = false/);
+  assert.match(setupBody, /channel\.onopen = \(\) => \{\s*hasOpened = true/);
+
+  const closeStart = colabLibSource.indexOf("channel.onclose = () =>");
+  assert.notEqual(closeStart, -1, "P2P channel close handler should exist");
+
+  const closeEnd = colabLibSource.indexOf("channel.onerror = () =>", closeStart);
+  assert.notEqual(closeEnd, -1, "P2P channel close handler should end before error handler");
+
+  const body = colabLibSource.slice(closeStart, closeEnd);
+  const guardIndex = body.indexOf("if (hadOpenDataChannel)");
+  const toastIndex = body.indexOf('alertUseMUI(t("alert.p2pDisconnected"');
+
+  assert.notEqual(guardIndex, -1, "disconnected toast should be guarded by opened-channel state");
+  assert.notEqual(toastIndex, -1, "P2P disconnected toast should still exist");
+  assert.ok(
+    guardIndex < toastIndex,
+    "initial handshake cleanup must not show the disconnected toast before DataChannel opens"
+  );
+});
+
 test("P2P channel error cleanup publishes a persistent retry status for active transfers", () => {
   const body = extractMethodBody(colabLibSource, "private cleanupDataChannel");
 

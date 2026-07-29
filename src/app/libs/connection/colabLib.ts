@@ -1399,7 +1399,9 @@ export class RealTimeColab {
  public setupDataChannel(channel: RTCDataChannel, id: string): void {
   channel.binaryType = "arraybuffer"; // 设置数据通道为二进制模式
   this.dataChannels.set(id, channel);
+  let hasOpened = false;
   channel.onopen = () => {
+   hasOpened = true;
    settingsStore.update("isNewUser", false);
    const timeoutId = this.connectionTimeouts.get(id);
    if (timeoutId) {
@@ -1873,6 +1875,7 @@ export class RealTimeColab {
  
   channel.onclose = () => {
    console.warn(` DataChannel closed for ${id}, setting user to text-only status`);
+   const hadOpenDataChannel = hasOpened;
    const transferId = this.p2pSendingTransferIds.get(id);
    const failureImpact = getP2PChannelFailureImpact({
     sendingTransferId: transferId,
@@ -1919,7 +1922,9 @@ export class RealTimeColab {
     user.lastSeen = Date.now();
     this.userList.set(id, user);
     console.debug(` User ${id} switched to text-only mode, can continue text communication`);
-    alertUseMUI(t("alert.p2pDisconnected", { name: id.split(":")[0] }), 2000, { kind: "warning", category: "transfer-status" });
+    if (hadOpenDataChannel) {
+     alertUseMUI(t("alert.p2pDisconnected", { name: id.split(":")[0] }), 2000, { kind: "warning", category: "transfer-status" });
+    }
    } else {
     // 如果用户不存在，删除相关数据
     console.warn(` User ${id} does not exist in user list, cleaning up directly`);
