@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   TRANSFER_FRAME_HEADER_SIZE,
+  DirectFileWriteSink,
   TransferTimeoutError,
   TransferAckTracker,
   TransferReceiveBuffer,
@@ -20,6 +21,7 @@ import {
   decodeTransferFrame,
   encodeTransferFrame,
   extractTransferIdFromFrameSafely,
+  getEffectiveDataChannelChunkSize,
   getSafeReceiveSizeLimit,
   getSafeTransferConfig,
   getP2PChannelFailureImpact,
@@ -41,6 +43,7 @@ import {
   withTransferTimeout,
   waitForBufferedAmountBelow,
   shouldStopTransfersForPageLifecycle,
+  writeTransferFrameToDirectFileSink,
   writeTransferFrameToReceiveBuffer,
 } from "../src/app/libs/connection/transferReliability.ts";
 
@@ -377,6 +380,45 @@ test("waits for channel backpressure and fails instead of hanging forever", asyn
   );
 });
 
+test("buffer backpressure can wake on data channel bufferedamountlow", async () => {
+  let bufferedAmount = 1024;
+  let lowListener: (() => void) | null = null;
+  let removeCount = 0;
+  const lowEventTarget = {
+    bufferedAmountLowThreshold: 0,
+    addEventListener(type: "bufferedamountlow", listener: () => void) {
+      assert.equal(type, "bufferedamountlow");
+      lowListener = listener;
+    },
+    removeEventListener(type: "bufferedamountlow", listener: () => void) {
+      assert.equal(type, "bufferedamountlow");
+      if (lowListener === listener) {
+        lowListener = null;
+      }
+      removeCount++;
+    },
+  };
+
+  const wait = waitForBufferedAmountBelow({
+    getBufferedAmount: () => bufferedAmount,
+    isOpen: () => true,
+    threshold: 64,
+    intervalMs: 100,
+    timeoutMs: 1_000,
+    lowEventTarget,
+    sleep: async () => new Promise<void>(() => undefined),
+  });
+
+  await Promise.resolve();
+  assert.equal(lowEventTarget.bufferedAmountLowThreshold, 64);
+  assert.equal(typeof lowListener, "function");
+
+  bufferedAmount = 32;
+  lowListener?.();
+  await wait;
+  assert.equal(removeCount, 1);
+});
+
 test("transfer operations time out instead of waiting forever", async () => {
   const scheduled: Array<{ fn: () => void; delay: number }> = [];
   const cleared: unknown[] = [];
@@ -480,10 +522,49 @@ test("apple transfer config uses smaller chunks and lower concurrency", () => {
   assert.deepEqual(getSafeTransferConfig("apple"), {
     chunkSize: 32 * 1024,
     maxConcurrentReads: 2,
-    bufferThreshold: 64 * 1024,
+    bufferThreshold: 256 * 1024,
   });
 
-  assert.equal(getSafeTransferConfig("desktop").maxConcurrentReads, 6);
+  assert.deepEqual(getSafeTransferConfig("desktop"), {
+    chunkSize: 256 * 1024,
+    maxConcurrentReads: 12,
+    bufferThreshold: 4 * 1024 * 1024,
+  });
+});
+
+test("data channel chunk size respects maxMessageSize after frame overhead", () => {
+  assert.equal(
+    getEffectiveDataChannelChunkSize({
+      desiredChunkSize: 256 * 1024,
+      maxMessageSize: 256 * 1024,
+    }),
+    256 * 1024 - TRANSFER_FRAME_HEADER_SIZE
+  );
+
+  assert.equal(
+    getEffectiveDataChannelChunkSize({
+      desiredChunkSize: 256 * 1024,
+      maxMessageSize: undefined,
+    }),
+    256 * 1024
+  );
+
+  assert.equal(
+    getEffectiveDataChannelChunkSize({
+      desiredChunkSize: 256 * 1024,
+      maxMessageSize: undefined,
+      fallbackChunkSize: 64 * 1024,
+    }),
+    64 * 1024
+  );
+
+  assert.equal(
+    getEffectiveDataChannelChunkSize({
+      desiredChunkSize: 256 * 1024,
+      maxMessageSize: 0,
+    }),
+    256 * 1024
+  );
 });
 
 test("apple receive limit avoids large in-memory allocations", () => {
@@ -1315,6 +1396,130 @@ test("framed chunks assemble a large transfer out of order", () => {
 
   assert.equal(receiveBuffer.completed, true);
   assert.deepEqual(receiveBuffer.bytes(), source);
+});
+
+test("direct file sink writes framed chunks by byte offset without retaining a full file buffer", async () => {
+  const chunkSize = 4;
+  const fileSize = 10;
+  const totalChunks = 3;
+  const writes: Array<{ position: number; data: number[] }> = [];
+  let closed = false;
+  const sink = new DirectFileWriteSink({
+    fileSize,
+    totalChunks,
+    chunkSize,
+    writable: {
+      async write(entry) {
+        assert.equal(typeof entry, "object");
+        assert.notEqual(entry, null);
+        assert.equal("type" in entry, true);
+        if (typeof entry !== "object" || entry === null || !("data" in entry)) {
+          throw new Error("expected positioned write");
+        }
+        const position = "position" in entry && typeof entry.position === "number"
+          ? entry.position
+          : -1;
+        const data = entry.data instanceof ArrayBuffer
+          ? new Uint8Array(entry.data)
+          : ArrayBuffer.isView(entry.data)
+            ? new Uint8Array(entry.data.buffer, entry.data.byteOffset, entry.data.byteLength)
+            : new Uint8Array();
+        writes.push({ position, data: Array.from(data) });
+      },
+      async close() {
+        closed = true;
+      },
+    },
+  });
+
+  const makeFrame = (index: number, values: number[]) =>
+    encodeTransferFrame(
+      {
+        transfer_id: "direct-transfer",
+        chunk_index: index,
+        chunk_size: values.length,
+        total_chunks: totalChunks,
+      },
+      new Uint8Array(values).buffer
+    );
+
+  assert.deepEqual(sink.getMissingChunkIndexes(), [0, 1, 2]);
+
+  assert.equal(
+    (await writeTransferFrameToDirectFileSink(sink, "direct-transfer", makeFrame(2, [8, 9]))).result.completed,
+    false
+  );
+  assert.deepEqual(sink.getMissingChunkIndexes(), [0, 1]);
+
+  await writeTransferFrameToDirectFileSink(sink, "direct-transfer", makeFrame(0, [0, 1, 2, 3]));
+  const duplicate = await writeTransferFrameToDirectFileSink(sink, "direct-transfer", makeFrame(0, [0, 1, 2, 3]));
+  assert.equal(duplicate.result.accepted, false);
+
+  const completed = await writeTransferFrameToDirectFileSink(sink, "direct-transfer", makeFrame(1, [4, 5, 6, 7]));
+  assert.equal(completed.result.completed, true);
+  assert.equal(sink.completed, true);
+  assert.equal("bytes" in sink, false);
+  assert.deepEqual(writes, [
+    { position: 8, data: [8, 9] },
+    { position: 0, data: [0, 1, 2, 3] },
+    { position: 4, data: [4, 5, 6, 7] },
+  ]);
+
+  await sink.close();
+  assert.equal(closed, true);
+});
+
+test("direct file sink rejects stale transfer ids without writing to disk", async () => {
+  let writeCount = 0;
+  const sink = new DirectFileWriteSink({
+    fileSize: 4,
+    totalChunks: 2,
+    chunkSize: 2,
+    writable: {
+      async write() {
+        writeCount++;
+      },
+      async close() {},
+    },
+  });
+
+  const staleFrame = encodeTransferFrame(
+    {
+      transfer_id: "old-transfer",
+      chunk_index: 0,
+      chunk_size: 2,
+      total_chunks: 2,
+    },
+    new Uint8Array([9, 9]).buffer
+  );
+
+  await assert.rejects(
+    () => writeTransferFrameToDirectFileSink(sink, "new-transfer", staleFrame),
+    /transfer id mismatch/
+  );
+  assert.equal(writeCount, 0);
+  assert.deepEqual(sink.getMissingChunkIndexes(), [0, 1]);
+});
+
+test("direct file sink times out stalled positioned writes", async () => {
+  const sink = new DirectFileWriteSink({
+    fileSize: 2,
+    totalChunks: 1,
+    chunkSize: 2,
+    writeTimeoutMs: 5,
+    writable: {
+      async write() {
+        return new Promise<void>(() => undefined);
+      },
+      async close() {},
+    },
+  });
+
+  await assert.rejects(
+    () => sink.writeChunk(0, new Uint8Array([1, 2]).buffer),
+    /direct file write timed out/
+  );
+  assert.equal(sink.receivedCount, 0);
 });
 
 test("framed chunks reject stale transfer ids without touching the receive buffer", () => {

@@ -84,6 +84,11 @@ class ChatIntegration {
             await this.handleFileReceived(from, fileName, fileSize, file);
         });
 
+        realTimeColab.emitter.on('file-saved-to-disk', async ({ from, fileName, fileSize }) => {
+            console.log(`[CHAT INTEGRATION] Event 'file-saved-to-disk' from ${from}: ${fileName}`);
+            await this.handleFileSavedToDisk(from, fileName, fileSize);
+        });
+
         // ── File transfer progress ──
         realTimeColab.emitter.on('file-progress', async ({ to, progress }) => {
             await this.handleFileProgress(to, progress);
@@ -265,6 +270,38 @@ class ChatIntegration {
     }
 
     // ── Public API ──
+
+    /** Handle direct-to-disk receive: keep visible history without storing a blob. */
+    private async handleFileSavedToDisk(
+        fromUserId: string,
+        fileName: string,
+        fileSize: number,
+    ): Promise<void> {
+        if (fromUserId === realTimeColab.getUniqId()) return;
+
+        try {
+            const userName = fromUserId.split(':')[0] || 'Unknown User';
+            const mimeType = this.guessMimeType(fileName);
+            const result = await ChatHistoryManager.addFileMessage(
+                fromUserId,
+                userName,
+                fromUserId,
+                { name: fileName, size: fileSize, type: mimeType },
+                'completed',
+                100,
+                null,
+            );
+
+            if (result.success) {
+                this.emitter.emit('history-updated', { userId: fromUserId });
+                console.log(`[CHAT INTEGRATION] Direct-to-disk file recorded without IndexedDB blob: ${fileName}`);
+            } else {
+                console.error(`[CHAT INTEGRATION] Failed to record direct-to-disk file: ${result.error}`);
+            }
+        } catch (error) {
+            console.error('[CHAT INTEGRATION] Failed to handle direct-to-disk file:', error);
+        }
+    }
 
     /** Send a text message. */
     public async sendMessage(targetUserId: string, message: string): Promise<void> {

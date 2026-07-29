@@ -182,9 +182,26 @@ test("P2P file metadata rejection reasons remain visible", () => {
 
   assertBranchPublishesReasonStatus(branch, "alert.metadataInvalid", statusPattern);
   assertBranchPublishesReasonStatus(branch, "alert.alreadyReceiving", statusPattern);
-  assertBranchPublishesReasonStatus(branch, "alert.fileTooLarge", statusPattern);
-  assertBranchPublishesReasonStatus(branch, "this.getReceivedCacheLimitMessage", statusPattern);
+  assert.match(branch, /this\.queueDirectDiskReceive\(id,\s*channel,\s*normalizedMeta\)/);
+  assert.match(
+    branch,
+    /const cacheLimitMessage = this\.getReceivedCacheLimitMessage\(cacheGuard\);[\s\S]*this\.queueDirectDiskReceive\(id,\s*channel,\s*normalizedMeta,\s*cacheLimitMessage\)/,
+    "P2P cache overflow should route to direct-to-disk with the visible cache limit reason"
+  );
   assertBranchPublishesReasonStatus(branch, "alert.insufficientMemory", statusPattern);
+
+  const directSaveBody = extractMethodBody(colabLibSource, "private queueDirectDiskReceive");
+  assert.match(directSaveBody, /const fullMessage = cacheLimitMessage/);
+  assert.match(directSaveBody, /this\.setFileTransferStatus\(\s*fullMessage,\s*"warning"[\s\S]*showPanel:\s*true/);
+});
+
+test("P2P direct-to-disk fallback rejection remains visible", () => {
+  const body = extractMethodBody(colabLibSource, "private queueDirectDiskReceive");
+  const statusPattern = /this\.setFileTransferStatus\(\s*reason,\s*"warning"[\s\S]*autoClearMs:\s*10_000/;
+
+  assertBranchPublishesReasonStatus(body, "alert.fileTooLarge", statusPattern, "return;");
+  assert.match(body, /alert\.directSaveRequired/);
+  assert.match(body, /showPanel:\s*true/);
 });
 
 test("server relay incoming request rejection reasons remain visible", () => {
@@ -193,5 +210,15 @@ test("server relay incoming request rejection reasons remain visible", () => {
 
   assertBranchPublishesReasonStatus(body, "alert.metadataInvalid", statusPattern, "return;");
   assertBranchPublishesReasonStatus(body, "alert.fileTooLarge", statusPattern, "return;");
-  assertBranchPublishesReasonStatus(body, "this.getReceivedCacheLimitMessage", statusPattern, "return;");
+  const cacheBranchStart = body.indexOf("this.getReceivedCacheLimitMessage");
+  assert.notEqual(cacheBranchStart, -1, "server cache overflow branch should exist");
+  const cacheBranchEnd = body.indexOf("return;", cacheBranchStart);
+  assert.notEqual(cacheBranchEnd, -1, "server unsupported direct-save branch should return");
+  const cacheBranch = body.slice(cacheBranchStart, cacheBranchEnd);
+  assert.match(cacheBranch, /const fullReason = `\$\{reason\} \$\{t\('alert\.directSaveUnsupported'\)\}`/);
+  assert.match(cacheBranch, /this\.setTransferStatus\(\s*fullReason,\s*"warning"/);
+
+  const directSaveBody = extractMethodBody(serverFileTransferSource, "private queueDirectDiskReceive");
+  assert.match(directSaveBody, /const fullMessage = cacheLimitMessage/);
+  assert.match(directSaveBody, /this\.setTransferStatus\(\s*fullMessage,\s*"warning"/);
 });

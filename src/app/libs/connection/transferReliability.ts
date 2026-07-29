@@ -16,6 +16,23 @@ export interface TransferConfig {
  bufferThreshold: number;
 }
 
+export interface DataChannelChunkSizeCandidate {
+ desiredChunkSize: number;
+ maxMessageSize?: number | null;
+ frameHeaderSize?: number;
+ fallbackChunkSize?: number;
+}
+
+export interface BufferedAmountLowEventTarget {
+ bufferedAmountLowThreshold: number;
+ addEventListener(
+  type: "bufferedamountlow",
+  listener: () => void,
+  options?: { once?: boolean }
+ ): void;
+ removeEventListener(type: "bufferedamountlow", listener: () => void): void;
+}
+
 export interface TransferMetadataCandidate {
  fileName: unknown;
  fileSize: unknown;
@@ -43,6 +60,22 @@ export interface ReceiveBufferWriteResult {
  completed: boolean;
  receivedCount: number;
  receivedSize: number;
+}
+
+export type DirectFileWritableData = ArrayBuffer | ArrayBufferView | Blob | string;
+
+export interface FileSystemWritableFileStreamLike {
+ write(
+  data:
+   | DirectFileWritableData
+   | {
+     type: "write";
+     position?: number;
+     data: DirectFileWritableData;
+    }
+ ): Promise<void>;
+ close(): Promise<void>;
+ abort?(reason?: unknown): Promise<void>;
 }
 
 export interface ZipBundleCandidate {
@@ -621,7 +654,7 @@ export function getSafeTransferConfig(
   return {
    chunkSize: 32 * 1024,
    maxConcurrentReads: 2,
-   bufferThreshold: 64 * 1024,
+   bufferThreshold: 256 * 1024,
   };
  }
 
@@ -629,28 +662,65 @@ export function getSafeTransferConfig(
   return {
    chunkSize: 32 * 1024,
    maxConcurrentReads: 4,
-   bufferThreshold: 96 * 1024,
+   bufferThreshold: 512 * 1024,
   };
  }
 
  return {
-  chunkSize: 64 * 1024,
-  maxConcurrentReads: 6,
-  bufferThreshold: 256 * 1024,
+  chunkSize: 256 * 1024,
+  maxConcurrentReads: 12,
+  bufferThreshold: 4 * 1024 * 1024,
  };
 }
 
+export function getEffectiveDataChannelChunkSize(
+ candidate: DataChannelChunkSizeCandidate
+): number {
+ const frameHeaderSize = candidate.frameHeaderSize ?? TRANSFER_FRAME_HEADER_SIZE;
+ const fallbackChunkSize = candidate.fallbackChunkSize ?? candidate.desiredChunkSize;
+
+ if (
+  !Number.isSafeInteger(candidate.desiredChunkSize) ||
+  candidate.desiredChunkSize <= 0
+ ) {
+  throw new Error("desiredChunkSize must be a positive integer");
+ }
+
+ const desiredChunkSize = candidate.desiredChunkSize;
+ const maxMessageSize = candidate.maxMessageSize;
+ if (
+  maxMessageSize === undefined ||
+  maxMessageSize === null ||
+  !Number.isFinite(maxMessageSize) ||
+  maxMessageSize < 0
+ ) {
+  return Math.min(desiredChunkSize, fallbackChunkSize);
+ }
+
+ if (maxMessageSize === 0) {
+  return desiredChunkSize;
+ }
+
+ const payloadLimit = Math.floor(maxMessageSize - frameHeaderSize);
+ if (payloadLimit <= 0) {
+  throw new Error("data channel maxMessageSize is too small for transfer frame header");
+ }
+
+ return Math.min(desiredChunkSize, payloadLimit);
+}
+
 export function getSafeReceiveSizeLimit(deviceType: DeviceType): number {
- // P2P 传输无文件大小限制
+ // This is the safe limit for the current in-memory receive buffer path.
+ // Larger P2P files need a direct-to-disk sink, not a larger Uint8Array.
  if (deviceType === "apple") {
-  return Infinity;
+  return 64 * 1024 * 1024;
  }
 
  if (deviceType === "android") {
-  return Infinity;
+  return 200 * 1024 * 1024;
  }
 
- return Infinity;
+ return 3 * 1024 * 1024 * 1024;
 }
 
 export function normalizeTransferMetadata(
@@ -735,16 +805,16 @@ export function normalizeTransferMetadata(
 }
 
 export function getSafeBrowserDownloadLimit(deviceType: DeviceType): number {
- // P2P 传输无限制 — 浏览器下载不限大小
+ // Browser Blob/ObjectURL downloads still need memory-safe caps.
  if (deviceType === "apple") {
-  return Infinity;
+  return 64 * 1024 * 1024;
  }
 
  if (deviceType === "android") {
-  return Infinity;
+  return 200 * 1024 * 1024;
  }
 
- return Infinity;
+ return 3 * 1024 * 1024 * 1024;
 }
 
 export function canDownloadFileInBrowser(
@@ -771,24 +841,23 @@ export function getSafeReceivedFileCacheLimit(deviceType: DeviceType): {
  maxBytes: number;
  maxFiles: number;
 } {
- // P2P 传输无限制 — 已接收文件缓存不限
  if (deviceType === "apple") {
   return {
-   maxBytes: Infinity, // P2P 无限制
-   maxFiles: Number.MAX_SAFE_INTEGER, // P2P 无限制
+   maxBytes: 96 * 1024 * 1024,
+   maxFiles: 60,
   };
  }
 
  if (deviceType === "android") {
   return {
-   maxBytes: Infinity, // P2P 无限制
-   maxFiles: Number.MAX_SAFE_INTEGER, // P2P 无限制
+   maxBytes: 300 * 1024 * 1024,
+   maxFiles: 120,
   };
  }
 
  return {
-  maxBytes: Infinity, // P2P 无限制
-  maxFiles: Number.MAX_SAFE_INTEGER, // P2P 无限制
+  maxBytes: 3 * 1024 * 1024 * 1024,
+  maxFiles: 300,
  };
 }
 
@@ -835,24 +904,23 @@ export function getSafeZipBundleLimit(deviceType: DeviceType): {
  maxBytes: number;
  maxFiles: number;
 } {
- // P2P 传输无限制 — ZIP 打包不限
  if (deviceType === "apple") {
   return {
-   maxBytes: Infinity, // P2P 无限制
-   maxFiles: Number.MAX_SAFE_INTEGER, // P2P 无限制
+   maxBytes: 32 * 1024 * 1024,
+   maxFiles: 30,
   };
  }
 
  if (deviceType === "android") {
   return {
-   maxBytes: Infinity, // P2P 无限制
-   maxFiles: Number.MAX_SAFE_INTEGER, // P2P 无限制
+   maxBytes: 120 * 1024 * 1024,
+   maxFiles: 80,
   };
  }
 
  return {
-  maxBytes: Infinity, // P2P 无限制
-  maxFiles: Number.MAX_SAFE_INTEGER, // P2P 无限制
+  maxBytes: 2 * 1024 * 1024 * 1024,
+  maxFiles: 500,
  };
 }
 
@@ -899,24 +967,23 @@ export function getSafeImageThumbnailLimit(deviceType: DeviceType): {
  maxBytes: number;
  maxThumbnails: number;
 } {
- // P2P 传输无限制 — 图片预览不限
  if (deviceType === "apple") {
   return {
-   maxBytes: Infinity, // P2P 无限制
-   maxThumbnails: Number.MAX_SAFE_INTEGER,
+   maxBytes: 6 * 1024 * 1024,
+   maxThumbnails: 30,
   };
  }
 
  if (deviceType === "android") {
   return {
-   maxBytes: Infinity, // P2P 无限制
-   maxThumbnails: Number.MAX_SAFE_INTEGER,
+   maxBytes: 12 * 1024 * 1024,
+   maxThumbnails: 80,
   };
  }
 
  return {
-  maxBytes: Infinity, // P2P 无限制
-  maxThumbnails: Number.MAX_SAFE_INTEGER,
+  maxBytes: 100 * 1024 * 1024,
+  maxThumbnails: 200,
  };
 }
 
@@ -1376,8 +1443,8 @@ export function withTransferTimeout<T>(
   clearTimer?: (id: unknown) => void;
  }
 ): Promise<T> {
- const setTimer = options.setTimer ?? window.setTimeout.bind(window);
- const clearTimer = options.clearTimer ?? ((id) => window.clearTimeout(id as number));
+ const setTimer = options.setTimer ?? globalThis.setTimeout.bind(globalThis);
+ const clearTimer = options.clearTimer ?? ((id) => globalThis.clearTimeout(id as ReturnType<typeof setTimeout>));
 
  return new Promise<T>((resolve, reject) => {
   let settled = false;
@@ -1410,6 +1477,7 @@ export async function waitForBufferedAmountBelow(options: {
  threshold: number;
  timeoutMs: number;
  intervalMs: number;
+ lowEventTarget?: BufferedAmountLowEventTarget;
  now?: () => number;
  sleep?: (ms: number) => Promise<void>;
 }): Promise<void> {
@@ -1418,6 +1486,31 @@ export async function waitForBufferedAmountBelow(options: {
   options.sleep ??
   ((ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms)));
  const deadline = now() + options.timeoutMs;
+ const lowEventTarget = options.lowEventTarget;
+
+ if (lowEventTarget) {
+  lowEventTarget.bufferedAmountLowThreshold = Math.max(0, options.threshold);
+ }
+
+ const waitForNextCheck = async (): Promise<void> => {
+  if (!lowEventTarget) {
+   await sleep(options.intervalMs);
+   return;
+  }
+
+  await new Promise<void>((resolve) => {
+   let settled = false;
+   const settle = () => {
+    if (settled) return;
+    settled = true;
+    lowEventTarget.removeEventListener("bufferedamountlow", settle);
+    resolve();
+   };
+
+   lowEventTarget.addEventListener("bufferedamountlow", settle, { once: true });
+   sleep(options.intervalMs).then(settle, settle);
+  });
+ };
 
  while (options.getBufferedAmount() > options.threshold) {
   if (!options.isOpen()) {
@@ -1426,7 +1519,7 @@ export async function waitForBufferedAmountBelow(options: {
   if (now() >= deadline) {
    throw new TransferTimeoutError("transfer channel buffer did not drain in time");
   }
-  await sleep(options.intervalMs);
+  await waitForNextCheck();
  }
 }
 
@@ -1541,6 +1634,189 @@ export class TransferReceiveBuffer {
  }
 }
 
+export class DirectFileWriteSink {
+ private receivedIndexes = new Set<number>();
+ private receivedByteCount = 0;
+ private closed = false;
+ private options: {
+  fileSize: number;
+  totalChunks: number;
+  chunkSize: number;
+  writable: FileSystemWritableFileStreamLike;
+  writeTimeoutMs: number;
+  closeTimeoutMs: number;
+ };
+
+ constructor(options: {
+  fileSize: number;
+  totalChunks: number;
+  chunkSize: number;
+  writable: FileSystemWritableFileStreamLike;
+  writeTimeoutMs?: number;
+  closeTimeoutMs?: number;
+ }) {
+  if (!Number.isInteger(options.fileSize) || options.fileSize < 0) {
+   throw new Error("fileSize must be a non-negative integer");
+  }
+  if (!Number.isInteger(options.totalChunks) || options.totalChunks <= 0) {
+   throw new Error("totalChunks must be a positive integer");
+  }
+  if (!Number.isInteger(options.chunkSize) || options.chunkSize <= 0) {
+   throw new Error("chunkSize must be a positive integer");
+  }
+
+  this.options = {
+   ...options,
+   writeTimeoutMs: options.writeTimeoutMs ?? 30_000,
+   closeTimeoutMs: options.closeTimeoutMs ?? 30_000,
+  };
+ }
+
+ async writeChunk(index: number, data: ArrayBuffer | ArrayBufferView): Promise<ReceiveBufferWriteResult> {
+  if (this.closed) {
+   throw new Error("direct file sink is closed");
+  }
+  if (!Number.isInteger(index) || index < 0 || index >= this.options.totalChunks) {
+   throw new Error("chunk index out of range");
+  }
+
+  if (this.receivedIndexes.has(index)) {
+   return this.result(false);
+  }
+
+  const bytes = data instanceof ArrayBuffer
+   ? new Uint8Array(data)
+   : new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+  const offset = index * this.options.chunkSize;
+  const expectedSize = index === this.options.totalChunks - 1
+   ? this.options.fileSize - offset
+   : this.options.chunkSize;
+
+  if (offset + bytes.byteLength > this.options.fileSize) {
+   throw new Error("chunk exceeds direct file sink");
+  }
+
+  if (bytes.byteLength !== expectedSize) {
+   throw new Error("chunk size mismatch");
+  }
+
+  await withTransferTimeout(
+   this.options.writable.write({
+    type: "write",
+    position: offset,
+    data: bytes,
+   }),
+   {
+    timeoutMs: this.options.writeTimeoutMs,
+    timeoutMessage: "direct file write timed out",
+   }
+  );
+  this.receivedIndexes.add(index);
+  this.receivedByteCount += bytes.byteLength;
+
+  return this.result(true);
+ }
+
+ async close(): Promise<void> {
+  if (this.closed) {
+   return;
+  }
+  await withTransferTimeout(
+   this.options.writable.close(),
+   {
+    timeoutMs: this.options.closeTimeoutMs,
+    timeoutMessage: "direct file close timed out",
+   }
+  );
+  this.closed = true;
+ }
+
+ async abort(reason?: unknown): Promise<void> {
+  if (this.closed) {
+   return;
+  }
+  if (this.options.writable.abort) {
+   try {
+    await withTransferTimeout(
+     this.options.writable.abort(reason),
+     {
+      timeoutMs: this.options.closeTimeoutMs,
+      timeoutMessage: "direct file abort timed out",
+     }
+    );
+    this.closed = true;
+    return;
+   } catch (error) {
+    try {
+     await withTransferTimeout(
+      this.options.writable.close(),
+      {
+       timeoutMs: this.options.closeTimeoutMs,
+       timeoutMessage: "direct file close timed out",
+      }
+     );
+    } finally {
+     this.closed = true;
+    }
+    throw error;
+   }
+  }
+  await withTransferTimeout(
+   this.options.writable.close(),
+   {
+    timeoutMs: this.options.closeTimeoutMs,
+    timeoutMessage: "direct file close timed out",
+   }
+  );
+  this.closed = true;
+ }
+
+ get receivedCount(): number {
+  return this.receivedIndexes.size;
+ }
+
+ get receivedSize(): number {
+  return this.receivedByteCount;
+ }
+
+ get completed(): boolean {
+  return this.receivedIndexes.size === this.options.totalChunks;
+ }
+
+ get missingCount(): number {
+  return this.options.totalChunks - this.receivedIndexes.size;
+ }
+
+ get totalChunks(): number {
+  return this.options.totalChunks;
+ }
+
+ getMissingChunkIndexes(limit = this.options.totalChunks): number[] {
+  const missing: number[] = [];
+  const safeLimit = Math.max(0, Math.min(limit, this.options.totalChunks));
+
+  for (let index = 0; index < this.options.totalChunks; index++) {
+   if (!this.receivedIndexes.has(index)) {
+    missing.push(index);
+    if (missing.length >= safeLimit) {
+     break;
+    }
+   }
+  }
+
+  return missing;
+ }
+
+ private result(accepted: boolean): ReceiveBufferWriteResult {
+  return {
+   accepted,
+   completed: this.completed,
+   receivedCount: this.receivedCount,
+   receivedSize: this.receivedSize,
+  };
+ }
+}
+
 export function writeTransferFrameToReceiveBuffer(
  receiveBuffer: TransferReceiveBuffer,
  expectedTransferId: string,
@@ -1561,6 +1837,29 @@ export function writeTransferFrameToReceiveBuffer(
  return {
   meta,
   result: receiveBuffer.writeChunk(meta.chunk_index, payload),
+ };
+}
+
+export async function writeTransferFrameToDirectFileSink(
+ directSink: DirectFileWriteSink,
+ expectedTransferId: string,
+ frame: ArrayBuffer
+): Promise<{
+ meta: TransferChunkMeta;
+ result: ReceiveBufferWriteResult;
+}> {
+ const { meta, payload } = decodeTransferFrame(frame);
+
+ if (meta.transfer_id !== expectedTransferId) {
+  throw new Error("transfer id mismatch");
+ }
+ if (meta.total_chunks !== directSink.totalChunks) {
+  throw new Error("transfer total_chunks mismatch");
+ }
+
+ return {
+  meta,
+  result: await directSink.writeChunk(meta.chunk_index, payload),
  };
 }
 

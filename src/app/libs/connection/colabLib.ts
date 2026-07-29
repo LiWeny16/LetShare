@@ -15,7 +15,10 @@ import { ConnectionManager } from "./providers/ConnectionManager";
 import { SecureMessageWrapper } from "../security/SecureMessageWrapper";
 import { UserKeyInfo } from "../security/SimpleE2EEncryption";
 import mitt from 'mitt';
-import { ServerFileTransfer } from "./ServerFileTransfer";
+import {
+ ServerFileTransfer,
+ type ServerDirectSaveRequest,
+} from "./ServerFileTransfer";
 import {
 	getProToken,
 	isPro,
@@ -23,6 +26,8 @@ import {
 	PRO_SIZE_LIMIT,
 } from "./proUpgrade";
 import {
+ DirectFileWriteSink,
+ type FileSystemWritableFileStreamLike,
  type ReceiveBufferWriteResult,
  TransferAckTracker,
  TransferReceiveBuffer,
@@ -35,6 +40,7 @@ import {
  confirmCompletionBeforePostProcessing,
  encodeTransferFrame,
  extractTransferIdFromFrameSafely,
+ getEffectiveDataChannelChunkSize,
  getP2PChannelFailureImpact,
  getResendRecoveryFailureMessage,
  getSafeReceiveSizeLimit,
@@ -49,6 +55,7 @@ import {
  shouldReportTransferIssueOnce,
  waitForBufferedAmountBelow,
  withTransferTimeout,
+ writeTransferFrameToDirectFileSink,
  writeTransferFrameToReceiveBuffer,
 } from "./transferReliability";
 // import { VideoManager } from "../video/video";
@@ -61,7 +68,7 @@ const CONFIG = {
  CONNECT_ATTEMPT_COOLDOWN: 4000,   // 连接尝试冷却时间
  HEARTBEAT_INTERVAL: 3000,      // 心跳间隔
  PEER_RESET_COOLDOWN: 5000,     // 对等连接重置冷却时间
- BACKGROUND_TIMEOUT: 30000,     // 后台超时时间
+ BACKGROUND_TIMEOUT: 10 * 60 * 1000,     // 后台超时时间
  RETRY_SEND_DELAY: 100,       // 重试发送延迟
  LEAVE_MESSAGE_DELAY: 200,      // 离开消息延迟
  DISCOVER_REPLY_DELAY: 500,     // discover回复延迟
@@ -75,12 +82,29 @@ function formatSize(bytes: number): string {
  return `${bytes} B`;
 }
 
+type FileSystemFileHandleLike = {
+ createWritable: () => Promise<FileSystemWritableFileStreamLike>;
+};
+
+type ShowSaveFilePickerLike = (options?: {
+ suggestedName?: string;
+}) => Promise<FileSystemFileHandleLike>;
+
+type P2PNormalizedFileMeta = {
+ fileName: string;
+ fileSize: number;
+ chunkSize: number;
+ totalChunks: number;
+ transferId?: string;
+};
+
 // 创建一个类型安全的事件发射器类型
 type ColabEvents = {
  'message-sent': { to: string; message: string };
  'message-received': { from: string; message: string };
  'file-sent': { to: string; fileName: string; fileSize: number; transferId?: string };
  'file-received': { from: string; fileName: string; fileSize: number; file: File };
+ 'file-saved-to-disk': { from: string; fileName: string; fileSize: number };
  'file-progress': { to: string; progress: number };
 };
 
@@ -111,14 +135,48 @@ interface P2PReceivingFile {
  receivedChunkCount: number;
  chunkSize: number;
  transferId?: string;
- receiveBuffer: TransferReceiveBuffer;
+ storageMode: "memory" | "direct-to-disk";
+ receiveBuffer?: TransferReceiveBuffer;
+ directSink?: DirectFileWriteSink;
  resendAttempts: number;
+}
+
+export interface P2PDirectSaveRequest {
+ transport: "p2p";
+ peerId: string;
+ transferId: string;
+ fileName: string;
+ fileSize: number;
+ totalChunks: number;
+ chunkSize: number;
+}
+
+export type DirectSaveRequest = P2PDirectSaveRequest | ServerDirectSaveRequest;
+
+export interface P2PDirectSavedFileRecord {
+ name: string;
+ size: number;
+ fromUserId: string;
+ completedAt: number;
 }
 
 interface P2PSendContext {
  transferId: string;
  totalChunks: number;
  resendChunks: (chunkIndexes: number[]) => Promise<void>;
+}
+
+export interface ActiveOutgoingFileTransferStats {
+ transferId: string;
+ fileName: string;
+ fileSize: number;
+ targetUserId: string;
+ transport: "p2p" | "server";
+ bytesTransferred: number;
+ bytesPerSecond: number;
+ startedAt: number;
+ updatedAt: number;
+ status: "waiting" | "transferring" | "awaiting-confirmation";
 }
 
 type TransferStatusKind = "info" | "warning" | "error" | "success";
@@ -190,6 +248,9 @@ export class RealTimeColab {
  public receivingFiles: Map<string, P2PReceivingFile> = new Map();
  public receivedFiles: Map<string, File> = new Map();
  public sentFiles: Map<string, { name: string; size: number; toUserId: string; completedAt: number }> = new Map();
+ public directSavedFiles: Map<string, P2PDirectSavedFileRecord> = new Map();
+ public pendingDirectSaveRequest: DirectSaveRequest | null = null;
+ public activeOutgoingFileTransfer: ActiveOutgoingFileTransferStats | null = null;
 
  private lastPingTimes: Map<string, number> = new Map();
  private lastPongTimes: Map<string, number> = new Map();
@@ -201,6 +262,7 @@ export class RealTimeColab {
  private p2pSendingTransferIds = new Map<string, string>();
  private p2pSendContexts = new Map<string, P2PSendContext>();
  private p2pUnknownTransferIssueKeys = new Set<string>();
+ private pendingDirectSaveRequests = new Map<string, P2PDirectSaveRequest>();
  private p2pAckTracker = new TransferAckTracker();
  private timeoutHandles = new Set();
  private connectionQueue = new Map<string, boolean>();
@@ -227,6 +289,7 @@ export class RealTimeColab {
  private readonly P2P_RESEND_CHUNK_LIMIT = 256;
  private readonly P2P_MAX_RESEND_ATTEMPTS = 3;
  private readonly P2P_RECEIVE_TIMEOUT_MS = 30_000;
+ private readonly P2P_READY_TIMEOUT_MS = 5 * 60_000;
  private receivedFilesVersion = 0;
  private transferStatusClearTimeout: ReturnType<typeof setTimeout> | null = null;
  private lastConnectedProToken: string | null = null;
@@ -285,15 +348,72 @@ export class RealTimeColab {
      message: null,
      kind: "info",
      updatedAt: Date.now(),
-    };
-    this.transferStatusClearTimeout = null;
-    if (
-     this.getActiveFileTransferCount() === 0 &&
-     this.receivedFiles.size === 0
-    ) {
-    }
-   }, options.autoClearMs);
+     };
+     this.transferStatusClearTimeout = null;
+    }, options.autoClearMs);
   }
+ }
+
+ private startActiveOutgoingFileTransfer(options: {
+  transferId: string;
+  fileName: string;
+  fileSize: number;
+  targetUserId: string;
+  transport: "p2p" | "server";
+ }): void {
+  const now = Date.now();
+  this.activeOutgoingFileTransfer = {
+   transferId: options.transferId,
+   fileName: options.fileName,
+   fileSize: options.fileSize,
+   targetUserId: options.targetUserId,
+   transport: options.transport,
+   bytesTransferred: 0,
+   bytesPerSecond: 0,
+   startedAt: now,
+   updatedAt: now,
+   status: "waiting",
+  };
+ }
+
+ private updateActiveOutgoingFileTransfer(options: {
+  transferId: string;
+  bytesTransferred?: number;
+  status?: ActiveOutgoingFileTransferStats["status"];
+ }): void {
+  const current = this.activeOutgoingFileTransfer;
+  if (!current || current.transferId !== options.transferId) {
+   return;
+  }
+
+  const now = Date.now();
+  const nextBytes = Math.max(
+   current.bytesTransferred,
+   Math.min(options.bytesTransferred ?? current.bytesTransferred, current.fileSize)
+  );
+  const elapsedMs = Math.max(1, now - current.updatedAt);
+  const deltaBytes = Math.max(0, nextBytes - current.bytesTransferred);
+  const bytesPerSecond = deltaBytes > 0
+   ? (deltaBytes * 1000) / elapsedMs
+   : current.bytesPerSecond;
+
+  this.activeOutgoingFileTransfer = {
+   ...current,
+   bytesTransferred: nextBytes,
+   bytesPerSecond,
+   updatedAt: now,
+   status: options.status ?? current.status,
+  };
+ }
+
+ private clearActiveOutgoingFileTransfer(transferId?: string): void {
+  if (!transferId || this.activeOutgoingFileTransfer?.transferId === transferId) {
+   this.activeOutgoingFileTransfer = null;
+  }
+ }
+
+ public getActiveOutgoingFileTransferStats(): ActiveOutgoingFileTransferStats | null {
+  return this.activeOutgoingFileTransfer;
  }
 
  /**
@@ -320,6 +440,14 @@ export class RealTimeColab {
    this.serverFileTransfer.setProgressCallback((progress) => {
     this.setFileTransferProgress(progress);
     if (progress !== null && this.sendingToUserId) {
+     const activeTransfer = this.activeOutgoingFileTransfer;
+     if (activeTransfer?.transport === "server") {
+      this.updateActiveOutgoingFileTransfer({
+       transferId: activeTransfer.transferId,
+       bytesTransferred: Math.floor(activeTransfer.fileSize * Math.min(progress, 99) / 100),
+       status: progress >= 99 ? "awaiting-confirmation" : "transferring",
+      });
+     }
      this.emitter.emit('file-progress', { to: this.sendingToUserId, progress });
     }
    });
@@ -327,6 +455,21 @@ export class RealTimeColab {
    this.serverFileTransfer.setFileReceivedCallback((file, fromUserId) => {
     console.debug(`[ColabLib] File received from ${fromUserId}:`, file.name);
     this.handleReceivedFile(file, fromUserId);
+   });
+
+   this.serverFileTransfer.setFileSavedToDiskCallback((fileName, fileSize, fromUserId) => {
+    const fullKey = `${fromUserId}::${fileName}::${Date.now()}`;
+    this.directSavedFiles.set(fullKey, {
+     name: fileName,
+     size: fileSize,
+     fromUserId,
+     completedAt: Date.now(),
+    });
+    this.emitter.emit('file-saved-to-disk', {
+     from: fromUserId,
+     fileName,
+     fileSize,
+    });
    });
 
    // 设置下载页面状态回调
@@ -1372,21 +1515,7 @@ export class RealTimeColab {
 
       const receiveLimit = getSafeReceiveSizeLimit(getDeviceType());
       if (normalizedMeta.fileSize > receiveLimit) {
-       const limitMB = (receiveLimit / 1024 / 1024).toFixed(0);
-       const reason = t('alert.fileTooLarge', { limit: limitMB });
-       console.warn(`[P2P FILE] ${reason}`);
-       if (channel.readyState === "open") {
-        channel.send(JSON.stringify({
-         type: "abort",
-         transferId: message.transferId,
-         reason,
-        }));
-       }
-       alertUseMUI(reason, 4000, { kind: "warning", category: "transfer-status" });
-       this.setFileTransferProgress(null);
-       this.setFileTransferStatus(reason, "warning", {
-        autoClearMs: 10_000,
-       });
+       this.queueDirectDiskReceive(id, channel, normalizedMeta);
        break;
       }
       const cacheGuard = canRetainReceivedFiles(
@@ -1394,20 +1523,9 @@ export class RealTimeColab {
        getDeviceType()
       );
       if (!cacheGuard.allowed) {
-       const reason = this.getReceivedCacheLimitMessage(cacheGuard);
-       console.warn(`[P2P FILE] ${reason}`);
-       if (channel.readyState === "open") {
-        channel.send(JSON.stringify({
-         type: "abort",
-         transferId: message.transferId,
-         reason,
-        }));
-       }
-       alertUseMUI(reason, 6000, { kind: "warning", category: "transfer-status" });
-       this.setFileTransferProgress(null);
-       this.setFileTransferStatus(reason, "warning", {
-        autoClearMs: 10_000,
-       });
+       const cacheLimitMessage = this.getReceivedCacheLimitMessage(cacheGuard);
+       console.warn(`[P2P FILE] ${cacheLimitMessage}`);
+       this.queueDirectDiskReceive(id, channel, normalizedMeta, cacheLimitMessage);
        break;
       }
       // 初始化新的接收状态
@@ -1442,6 +1560,7 @@ export class RealTimeColab {
        totalChunks,
        chunkSize: normalizedMeta.chunkSize,
        transferId: normalizedMeta.transferId,
+       storageMode: "memory",
        receiveBuffer,
        receivedSize: 0,
        receivedChunkCount: 0,
@@ -1450,8 +1569,9 @@ export class RealTimeColab {
       if (normalizedMeta.transferId) {
        this.p2pUnknownTransferIssueKeys.delete(normalizedMeta.transferId);
       }
-      this.setFileTransferStatus("正在接收文件", "info", { showPanel: false });
+      this.setFileTransferStatus(t('alert.receivingFile'), "info", { showPanel: false });
       this.refreshP2PReceiveTimeout(id);
+      this.sendP2PFileReady(channel, normalizedMeta.transferId);
 
       realTimeColab.fileMetaInfo.name = normalizedMeta.fileName;
       this.setDownloadPageState(true);
@@ -1473,7 +1593,8 @@ export class RealTimeColab {
        this.p2pSendingTransferIds.delete(id);
        this.p2pSendContexts.delete(id);
       }
-      this.receivingFiles.delete(id);
+      this.removeReceivingFile(id, message.reason || t("alert.transferCancelled"));
+      this.clearPendingDirectSaveRequest(id);
       this.clearP2PReceiveTimeout(id);
       this.setFileTransferProgress(null);
       this.setFileTransferStatus(
@@ -1485,6 +1606,11 @@ export class RealTimeColab {
 
       break;
      case "file-complete":
+      if (message.transferId) {
+       this.p2pAckTracker.acknowledge(message.transferId);
+      }
+      break;
+     case "file-ready":
       if (message.transferId) {
        this.p2pAckTracker.acknowledge(message.transferId);
       }
@@ -1589,21 +1715,36 @@ export class RealTimeColab {
      return;
     }
 
-    let writeResult;
+    let writeResult: ReceiveBufferWriteResult;
     try {
      if (fileInfo.transferId) {
-      writeResult = writeTransferFrameToReceiveBuffer(
-       fileInfo.receiveBuffer,
-       fileInfo.transferId,
-       buffer
-      ).result;
+      if (fileInfo.storageMode === "direct-to-disk") {
+       if (!fileInfo.directSink) {
+        throw new Error("direct file sink not available");
+       }
+       writeResult = (await writeTransferFrameToDirectFileSink(
+        fileInfo.directSink,
+        fileInfo.transferId,
+        buffer
+       )).result;
+      } else {
+       if (!fileInfo.receiveBuffer) {
+        throw new Error("receive buffer not available");
+       }
+       writeResult = writeTransferFrameToReceiveBuffer(
+        fileInfo.receiveBuffer,
+        fileInfo.transferId,
+        buffer
+       ).result;
+      }
      } else {
       throw new Error("legacy transfer has no transferId");
      }
     } catch (err) {
      const canTryLegacyFrame =
-      !(err instanceof Error) ||
-      !/transfer id mismatch|transfer total_chunks mismatch|chunk size mismatch|chunk index out of range|chunk exceeds receive buffer/.test(err.message);
+      fileInfo.storageMode === "memory" &&
+      (!(err instanceof Error) ||
+       !/transfer id mismatch|transfer total_chunks mismatch|chunk size mismatch|chunk index out of range|chunk exceeds receive buffer/.test(err.message));
 
      if (canTryLegacyFrame) {
       try {
@@ -1631,6 +1772,56 @@ export class RealTimeColab {
     if (writeResult.completed) {
      this.clearP2PReceiveTimeout(id);
      const completedTransferId = fileInfo.transferId;
+     if (fileInfo.storageMode === "direct-to-disk") {
+      if (!fileInfo.directSink) {
+       this.abortP2PReceive(id, channel, completedTransferId, t('alert.bufferNotAvailable'));
+       return;
+      }
+      try {
+       await fileInfo.directSink.close();
+      } catch (error) {
+       this.abortP2PReceive(id, channel, completedTransferId, t('alert.directSaveFailed'), error);
+       return;
+      }
+
+      const fullKey = `${id}::${fileInfo.name}::${Date.now()}`;
+      this.directSavedFiles.set(fullKey, {
+       name: fileInfo.name,
+       size: fileInfo.size,
+       fromUserId: id,
+       completedAt: Date.now(),
+      });
+      this.emitter.emit('file-saved-to-disk', {
+       from: id,
+       fileName: fileInfo.name,
+       fileSize: fileInfo.size,
+      });
+      this.receivingFiles.delete(id);
+      this.setFileTransferProgress(null);
+      this.setFileTransferStatus(t('alert.directSaveComplete', { name: fileInfo.name }), "success", {
+       autoClearMs: CONFIG.TRANSFER_COMPLETE_DELAY,
+       showPanel: false,
+      });
+      if (completedTransferId && channel.readyState === "open") {
+       try {
+        channel.send(JSON.stringify({
+         type: "file-complete",
+         transferId: completedTransferId,
+        }));
+       } catch (error) {
+        console.warn("P2P completion confirmation could not be sent:", error);
+       }
+      }
+      alertUseMUI(t('alert.directSaveComplete', { name: fileInfo.name }), 3000, {
+       kind: "success",
+       category: "transfer-status",
+      });
+      return;
+     }
+     if (!fileInfo.receiveBuffer) {
+      this.abortP2PReceive(id, channel, completedTransferId, t('alert.bufferNotAvailable'));
+      return;
+     }
      const file = createCompletedTransferFile({
       bytes: fileInfo.receiveBuffer.bytes(),
       fileName: fileInfo.name,
@@ -1692,9 +1883,10 @@ export class RealTimeColab {
      transferId,
      new TransferTimeoutError("P2P data channel closed before receiver confirmation")
     );
-    this.p2pSendingTransferIds.delete(id);
-    this.p2pSendContexts.delete(id);
-    this.p2pUnknownTransferIssueKeys.delete(transferId);
+   this.p2pSendingTransferIds.delete(id);
+   this.p2pSendContexts.delete(id);
+   this.p2pUnknownTransferIssueKeys.delete(transferId);
+   this.clearActiveOutgoingFileTransfer(transferId);
    }
    this.p2pSendContexts.delete(id);
    this.p2pUnknownTransferIssueKeys.delete(`${id}:unknown-binary-frame`);
@@ -1715,7 +1907,8 @@ export class RealTimeColab {
     }
     alertUseMUI(t('alert.p2pDisconnectedTransfer'), 4000, { kind: "error", category: "transfer-status" });
    }
-   this.receivingFiles.delete(id);
+   this.removeReceivingFile(id, t('alert.p2pDisconnectedTransfer'));
+   this.clearPendingDirectSaveRequest(id);
    this.clearP2PReceiveTimeout(id);
    this.clearCache(id);
 
@@ -1753,9 +1946,10 @@ export class RealTimeColab {
      transferId,
      new TransferTimeoutError("P2P data channel error before receiver confirmation")
     );
-    this.p2pSendingTransferIds.delete(id);
-    this.p2pSendContexts.delete(id);
-    this.p2pUnknownTransferIssueKeys.delete(transferId);
+   this.p2pSendingTransferIds.delete(id);
+   this.p2pSendContexts.delete(id);
+   this.p2pUnknownTransferIssueKeys.delete(transferId);
+   this.clearActiveOutgoingFileTransfer(transferId);
    }
    this.p2pSendContexts.delete(id);
    this.p2pUnknownTransferIssueKeys.delete(`${id}:unknown-binary-frame`);
@@ -1775,7 +1969,8 @@ export class RealTimeColab {
     }
     alertUseMUI(t('alert.p2pErrorTransfer'), 4000, { kind: "error", category: "transfer-status" });
    }
-   this.receivingFiles.delete(id);
+   this.removeReceivingFile(id, t('alert.p2pErrorTransfer'));
+   this.clearPendingDirectSaveRequest(id);
    this.clearP2PReceiveTimeout(id);
    // 强制关闭通道（触发 onclose）
    channel.close();
@@ -1876,8 +2071,17 @@ export class RealTimeColab {
    }
 
    const channel = this.dataChannels.get(id);
-   const missingChunks = fileInfo.receiveBuffer.getMissingChunkIndexes(this.P2P_RESEND_CHUNK_LIMIT);
-   const missingCount = fileInfo.receiveBuffer.missingCount;
+   const receiveTracker = this.getP2PReceiveTracker(fileInfo);
+   if (!receiveTracker) {
+    const reason = t('alert.bufferNotAvailable');
+    this.removeReceivingFile(id, reason);
+    this.setFileTransferProgress(null);
+    this.setFileTransferStatus(reason, "error", { autoClearMs: 10_000 });
+    alertUseMUI(reason, 4000, { kind: "error", category: "transfer-status" });
+    return;
+   }
+   const missingChunks = receiveTracker.getMissingChunkIndexes(this.P2P_RESEND_CHUNK_LIMIT);
+   const missingCount = receiveTracker.missingCount;
    const recoveryGuard = canRecoverMissingChunksWithResend({
     missingCount,
     maxChunkIndexesPerRequest: this.P2P_RESEND_CHUNK_LIMIT,
@@ -1910,8 +2114,6 @@ export class RealTimeColab {
     }
    }
 
-   this.receivingFiles.delete(id);
-   this.setFileTransferProgress(null);
    const failureReason = recoveryGuard.allowed
     ? t('alert.resendRecoveryFailed')
     : getResendRecoveryFailureMessage({
@@ -1920,6 +2122,8 @@ export class RealTimeColab {
       maxResendAttempts: this.P2P_MAX_RESEND_ATTEMPTS,
       resendAttemptsUsed: fileInfo.resendAttempts,
      }) ?? t('alert.resendRecoveryImpossible');
+   this.removeReceivingFile(id, failureReason);
+   this.setFileTransferProgress(null);
    this.setFileTransferStatus(failureReason, "error", {
     autoClearMs: 10_000,
    });
@@ -1949,6 +2153,257 @@ export class RealTimeColab {
   }
  }
 
+ private getShowSaveFilePicker(): ShowSaveFilePickerLike | null {
+  if (typeof window === "undefined") {
+   return null;
+  }
+
+  const candidate = (window as unknown as {
+   showSaveFilePicker?: ShowSaveFilePickerLike;
+  }).showSaveFilePicker;
+
+  return typeof candidate === "function" ? candidate.bind(window) : null;
+ }
+
+ private canUseDirectFileSave(): boolean {
+  return getDeviceType() === "desktop" && this.getShowSaveFilePicker() !== null;
+ }
+
+ private getSafeSuggestedFileName(fileName: string): string {
+  const safeName = fileName.replace(/[\\/:*?"<>|]/g, "_").trim();
+  return safeName ? safeName.slice(0, 240) : "received_file";
+ }
+
+ private setPendingDirectSaveRequest(request: P2PDirectSaveRequest): void {
+  this.pendingDirectSaveRequests.set(request.peerId, request);
+  this.pendingDirectSaveRequest = request;
+ }
+
+ private clearPendingDirectSaveRequest(peerId?: string): void {
+  if (peerId) {
+   this.pendingDirectSaveRequests.delete(peerId);
+   if (this.pendingDirectSaveRequest?.peerId === peerId) {
+    this.pendingDirectSaveRequest =
+     this.pendingDirectSaveRequests.values().next().value ?? null;
+   }
+   return;
+  }
+
+  this.pendingDirectSaveRequests.clear();
+  this.pendingDirectSaveRequest = null;
+ }
+
+ public getPendingDirectSaveRequest(): DirectSaveRequest | null {
+  return (
+   this.pendingDirectSaveRequests.values().next().value ??
+   this.serverFileTransfer?.getPendingDirectSaveRequest() ??
+   null
+  );
+ }
+
+ private queueDirectDiskReceive(
+  id: string,
+  channel: RTCDataChannel,
+  metadata: P2PNormalizedFileMeta,
+  cacheLimitMessage?: string
+ ): void {
+  if (!metadata.transferId || !this.canUseDirectFileSave()) {
+   const receiveLimit = getSafeReceiveSizeLimit(getDeviceType());
+   const limitMB = (receiveLimit / 1024 / 1024).toFixed(0);
+   const reason = cacheLimitMessage ?? t('alert.fileTooLarge', { limit: limitMB });
+   if (channel.readyState === "open") {
+    channel.send(JSON.stringify({
+     type: "abort",
+     transferId: metadata.transferId,
+     reason,
+    }));
+   }
+   alertUseMUI(reason, 4000, { kind: "warning", category: "transfer-status" });
+   this.setFileTransferProgress(null);
+   this.setFileTransferStatus(reason, "warning", {
+    autoClearMs: 10_000,
+   });
+   return;
+  }
+
+  const request: P2PDirectSaveRequest = {
+   transport: "p2p",
+   peerId: id,
+   transferId: metadata.transferId,
+   fileName: metadata.fileName,
+   fileSize: metadata.fileSize,
+   totalChunks: metadata.totalChunks,
+   chunkSize: metadata.chunkSize,
+  };
+  this.setPendingDirectSaveRequest(request);
+  this.p2pUnknownTransferIssueKeys.delete(metadata.transferId);
+  this.fileMetaInfo.name = metadata.fileName;
+  this.setDownloadPageState(true);
+  const message = t('alert.directSaveRequired', {
+   name: metadata.fileName,
+   size: formatSize(metadata.fileSize),
+  });
+  const historyNotice = t('alert.directSaveNoBrowserHistory');
+  const fullMessage = cacheLimitMessage
+   ? `${cacheLimitMessage} ${message} ${historyNotice}`
+   : `${message} ${historyNotice}`;
+  this.setFileTransferProgress(null);
+  this.setFileTransferStatus(fullMessage, "warning", { showPanel: true });
+  alertUseMUI(fullMessage, 9000, { kind: "warning", category: "transfer-status" });
+ }
+
+ private sendP2PFileReady(channel: RTCDataChannel, transferId?: string): void {
+  if (!transferId || channel.readyState !== "open") {
+   return;
+  }
+
+  channel.send(JSON.stringify({
+   type: "file-ready",
+   transferId,
+  }));
+ }
+
+ public async acceptPendingDirectDiskReceive(peerId?: string, transport?: DirectSaveRequest["transport"]): Promise<void> {
+  if (transport === "server") {
+   await this.serverFileTransfer?.acceptPendingDirectDiskReceive(peerId);
+   return;
+  }
+
+  if (!transport) {
+   const currentRequest = this.getPendingDirectSaveRequest();
+   if (currentRequest?.transport === "server") {
+    await this.serverFileTransfer?.acceptPendingDirectDiskReceive(currentRequest.transferId);
+    return;
+   }
+  }
+
+  const request = peerId
+   ? this.pendingDirectSaveRequests.get(peerId)
+   : this.pendingDirectSaveRequest;
+
+  if (!request || request.transport !== "p2p") {
+   return;
+  }
+
+  const channel = this.dataChannels.get(request.peerId);
+  if (this.receivingFiles.has(request.peerId)) {
+   const reason = t('alert.alreadyReceiving');
+   this.clearPendingDirectSaveRequest(request.peerId);
+   throw new Error(reason);
+  }
+  if (!channel || channel.readyState !== "open") {
+   const reason = t('alert.p2pDisconnectedTransfer');
+   this.clearPendingDirectSaveRequest(request.peerId);
+   this.setFileTransferStatus(reason, "error", { autoClearMs: 10_000 });
+   throw new Error(reason);
+  }
+
+  const showSaveFilePicker = this.getShowSaveFilePicker();
+  if (!showSaveFilePicker) {
+   const reason = t('alert.directSaveUnsupported');
+   this.clearPendingDirectSaveRequest(request.peerId);
+   channel.send(JSON.stringify({
+    type: "abort",
+    transferId: request.transferId,
+    reason,
+   }));
+   this.setFileTransferStatus(reason, "warning", { autoClearMs: 10_000 });
+   throw new Error(reason);
+  }
+
+  try {
+   this.setFileTransferStatus(t('alert.directSavePreparing'), "info", { showPanel: true });
+   const handle = await showSaveFilePicker({
+    suggestedName: this.getSafeSuggestedFileName(request.fileName),
+   });
+   const writable = await handle.createWritable();
+   const directSink = new DirectFileWriteSink({
+    fileSize: request.fileSize,
+    totalChunks: request.totalChunks,
+    chunkSize: request.chunkSize,
+    writable,
+   });
+
+   this.receivingFiles.set(request.peerId, {
+    name: request.fileName,
+    size: request.fileSize,
+    totalChunks: request.totalChunks,
+    chunkSize: request.chunkSize,
+    transferId: request.transferId,
+    storageMode: "direct-to-disk",
+    directSink,
+    receivedSize: 0,
+    receivedChunkCount: 0,
+    resendAttempts: 0,
+   });
+   this.clearPendingDirectSaveRequest(request.peerId);
+   this.p2pUnknownTransferIssueKeys.delete(request.transferId);
+   this.fileMetaInfo.name = request.fileName;
+   this.setDownloadPageState(true);
+   this.setFileTransferProgress(0);
+   this.setFileTransferStatus(t('alert.receivingFile'), "info", { showPanel: false });
+   this.refreshP2PReceiveTimeout(request.peerId);
+   this.sendP2PFileReady(channel, request.transferId);
+   alertUseMUI(t('alert.directSaveReady', { name: request.fileName }), 3000, {
+    kind: "success",
+    category: "transfer-status",
+   });
+  } catch (error) {
+   const abortedByPicker =
+    typeof DOMException !== "undefined" &&
+    error instanceof DOMException &&
+    error.name === "AbortError";
+   const reason = abortedByPicker
+    ? t('alert.userCancelReceive')
+    : t('alert.directSaveFailed');
+   this.removeReceivingFile(request.peerId, reason);
+   this.clearPendingDirectSaveRequest(request.peerId);
+   if (channel.readyState === "open") {
+    try {
+     channel.send(JSON.stringify({
+      type: "abort",
+      transferId: request.transferId,
+      reason,
+     }));
+    } catch (sendError) {
+     console.warn("P2P direct-save abort message could not be sent:", sendError);
+    }
+   }
+   this.setFileTransferProgress(null);
+   this.setFileTransferStatus(reason, abortedByPicker ? "warning" : "error", {
+    autoClearMs: 10_000,
+   });
+   alertUseMUI(reason, 4000, {
+    kind: abortedByPicker ? "warning" : "error",
+    category: "transfer-status",
+   });
+   throw error;
+  }
+ }
+
+ private getP2PReceiveTracker(fileInfo: P2PReceivingFile): Pick<
+  DirectFileWriteSink,
+  "getMissingChunkIndexes" | "missingCount"
+ > | null {
+  return fileInfo.directSink ?? fileInfo.receiveBuffer ?? null;
+ }
+
+ private removeReceivingFile(id: string, reason?: unknown): void {
+  const fileInfo = this.receivingFiles.get(id);
+  if (fileInfo?.directSink) {
+   void fileInfo.directSink.abort(reason).catch((error) => {
+    console.warn("P2P direct file sink abort failed:", error);
+   });
+  }
+  this.receivingFiles.delete(id);
+ }
+
+ private clearReceivingFiles(reason?: unknown): void {
+  for (const id of Array.from(this.receivingFiles.keys())) {
+   this.removeReceivingFile(id, reason);
+  }
+ }
+
  private writeLegacyP2PChunk(
   fileInfo: P2PReceivingFile,
   buffer: ArrayBuffer
@@ -1966,6 +2421,10 @@ export class RealTimeColab {
    throw new Error(
     `legacy chunk length mismatch: expected ${chunkLength}, got ${buffer.byteLength - headerSize}`
    );
+  }
+
+  if (!fileInfo.receiveBuffer) {
+   throw new Error("receive buffer not available");
   }
 
   return fileInfo.receiveBuffer.writeChunk(
@@ -2008,8 +2467,6 @@ export class RealTimeColab {
   this.aborted = true;
   this.isSendingFile = false;
   this.setFileTransferProgress(null);
-  if (this.receivingFiles.size === 0) {
-  }
 
   if (channel.readyState === "open") {
    try {
@@ -2059,8 +2516,6 @@ export class RealTimeColab {
   this.aborted = true;
   this.isSendingFile = false;
   this.setFileTransferProgress(null);
-  if (this.receivingFiles.size === 0) {
-  }
 
   if (channel.readyState === "open") {
    try {
@@ -2086,12 +2541,11 @@ export class RealTimeColab {
   reason: string,
   error?: unknown
  ): void {
-  console.error(`[P2P FILE] ${reason}:`, error);
-  this.clearP2PReceiveTimeout(id);
-  this.receivingFiles.delete(id);
+ console.error(`[P2P FILE] ${reason}:`, error);
+ this.clearP2PReceiveTimeout(id);
+ this.removeReceivingFile(id, reason);
+ this.clearPendingDirectSaveRequest(id);
   this.setFileTransferProgress(null);
-  if (this.receivingFiles.size === 0 && !this.isSendingFile) {
-  }
   this.setFileTransferStatus(reason, "error", {
    autoClearMs: 10_000,
   });
@@ -2336,6 +2790,7 @@ export class RealTimeColab {
   }
   this.p2pSendingTransferIds.clear();
   this.p2pSendContexts.clear();
+  this.clearActiveOutgoingFileTransfer();
 
   if (this.timeoutHandles) {
    for (const id of this.timeoutHandles) {
@@ -2365,16 +2820,17 @@ export class RealTimeColab {
   }
 
   this.clearP2PReceiveTimeout(id);
-  this.receivingFiles.delete(id);
+  this.removeReceivingFile(id, reason);
+  this.clearPendingDirectSaveRequest(id);
   this.setFileTransferProgress(null);
-  if (this.receivingFiles.size === 0 && !this.isSendingFile) {
-  }
  }
 
  private getReceivedFileCacheCandidates(incomingSize?: number): Array<{ size: number }> {
   const candidates = [
    ...Array.from(this.receivedFiles.values()).map((file) => ({ size: file.size })),
-   ...Array.from(this.receivingFiles.values()).map((file) => ({ size: file.size })),
+   ...Array.from(this.receivingFiles.values())
+    .filter((file) => file.storageMode !== "direct-to-disk")
+    .map((file) => ({ size: file.size })),
   ];
 
   if (typeof incomingSize === "number") {
@@ -2385,17 +2841,23 @@ export class RealTimeColab {
  }
 
  private getReceivedCacheLimitMessage(guard: {
-  totalBytes: number;
-  totalFiles: number;
-  maxBytes: number;
-  maxFiles: number;
+ totalBytes: number;
+ totalFiles: number;
+ maxBytes: number;
+ maxFiles: number;
  }): string {
-  return `当前浏览器已缓存 ${guard.totalFiles} 个文件 / ${formatSize(guard.totalBytes)}。为避免内存崩溃，当前设备安全缓存上限为 ${guard.maxFiles} 个 / ${formatSize(guard.maxBytes)}，请先下载并清空已接收文件后重试。`;
+  return t('alert.cacheLimitExceeded', {
+   totalFiles: guard.totalFiles,
+   totalMB: (guard.totalBytes / 1024 / 1024).toFixed(1),
+   maxFiles: guard.maxFiles,
+   maxMB: (guard.maxBytes / 1024 / 1024).toFixed(0),
+  });
  }
 
  public clearReceivedFiles(): void {
   this.receivedFilesVersion += 1;
   this.receivedFiles.clear();
+  this.directSavedFiles.clear();
    this.sentFiles.clear();
  }
 
@@ -2403,7 +2865,15 @@ export class RealTimeColab {
   return (
    this.p2pSendingTransferIds.size +
    this.receivingFiles.size +
+   this.pendingDirectSaveRequests.size +
    (this.serverFileTransfer?.getActiveTransferCount() ?? 0)
+  );
+ }
+
+ private hasPendingDirectSaveRequest(): boolean {
+  return (
+   this.pendingDirectSaveRequests.size > 0 ||
+   this.serverFileTransfer?.getPendingDirectSaveRequest() !== null
   );
  }
 
@@ -2451,7 +2921,8 @@ export class RealTimeColab {
    }
    this.clearP2PReceiveTimeout(id);
   }
-  this.receivingFiles.clear();
+  this.clearReceivingFiles(reason);
+  this.clearPendingDirectSaveRequest();
 
   // P2P 传输清理 UI
   if (p2pActiveCount > 0) {
@@ -2648,6 +3119,14 @@ export class RealTimeColab {
   this.sendingToUserId = id;
   this.isSendingFile = true;
   this.setDownloadPageState(true);
+  const syntheticTransferId = `server_${Date.now()}_${this.generateUUID()}`;
+  this.startActiveOutgoingFileTransfer({
+   transferId: syntheticTransferId,
+   fileName: file.name,
+   fileSize: file.size,
+   targetUserId: id,
+   transport: "server",
+  });
 
   try {
    await this.serverFileTransfer.sendFileViaServer(id, file, roomId);
@@ -2675,6 +3154,7 @@ export class RealTimeColab {
    }
    this.setFileTransferProgress(null);
   } finally {
+   this.clearActiveOutgoingFileTransfer(syntheticTransferId);
    this.sendingToUserId = null;
    this.isSendingFile = false;
   }
@@ -2704,15 +3184,32 @@ export class RealTimeColab {
    throw new Error("P2P data channel is not available.");
   }
 
-  const totalChunks = Math.max(1, Math.ceil(file.size / this.transferConfig.chunkSize));
-  const maxConcurrentReads = this.transferConfig.maxConcurrentReads;
+  const peer = RealTimeColab.peers.get(id);
+  const chunkSize = getEffectiveDataChannelChunkSize({
+   desiredChunkSize: this.transferConfig.chunkSize,
+   maxMessageSize: peer?.sctp?.maxMessageSize,
+  });
+  const transferConfig = {
+   ...this.transferConfig,
+   chunkSize,
+  };
+  const totalChunks = Math.max(1, Math.ceil(file.size / transferConfig.chunkSize));
+  const maxConcurrentReads = transferConfig.maxConcurrentReads;
   const transferId = `p2p_${Date.now()}_${this.generateUUID()}`;
   let chunksSent = 0;
+  let bytesSent = 0;
   let currentIndex = 0;
   // 解锁
   this.aborted = false;
   this.isSendingFile = true;
   this.p2pSendingTransferIds.set(id, transferId);
+  this.startActiveOutgoingFileTransfer({
+   transferId,
+   fileName: file.name,
+   fileSize: file.size,
+   targetUserId: id,
+   transport: "p2p",
+  });
   this.setDownloadPageState(true);
   this.setFileTransferProgress(0);
   this.setFileTransferStatus(t('alert.p2pSendingFile'), "info", { showPanel: false });
@@ -2732,29 +3229,29 @@ export class RealTimeColab {
    name: file.name,
    size: file.size,
    totalChunks,
-   chunkSize: this.transferConfig.chunkSize,
+   chunkSize: transferConfig.chunkSize,
   };
+  console.debug("[P2P FILE] transfer config", {
+   transferId,
+   chunkSize: transferConfig.chunkSize,
+   maxConcurrentReads: transferConfig.maxConcurrentReads,
+   bufferThreshold: transferConfig.bufferThreshold,
+   maxMessageSize: peer?.sctp?.maxMessageSize,
+  });
 
   const readChunk = (index: number): Promise<ArrayBuffer> => {
    const readOperation = new Promise<ArrayBuffer>((resolve, reject) => {
     if (!isCurrentTransfer()) return reject(new Error("Reading aborted"));
 
-    const offset = index * this.transferConfig.chunkSize;
+    const offset = index * transferConfig.chunkSize;
     const slice = file.slice(
      offset,
-     offset + this.transferConfig.chunkSize
+     offset + transferConfig.chunkSize
     );
-    const reader = new FileReader();
-    reader.onload = () => {
+    slice.arrayBuffer().then((result) => {
      if (!isCurrentTransfer()) return reject(new Error("Reading aborted"));
-     if (reader.result instanceof ArrayBuffer) {
-      resolve(reader.result);
-     } else {
-      reject(new Error("Reading result is not ArrayBuffer"));
-     }
-    };
-    reader.onerror = (err) => reject(err);
-    reader.readAsArrayBuffer(slice);
+     resolve(result);
+    }, reject);
    });
 
    return withTransferTimeout(readOperation, {
@@ -2786,9 +3283,10 @@ export class RealTimeColab {
    await waitForBufferedAmountBelow({
     getBufferedAmount: () => channel.bufferedAmount,
     isOpen: () => channel.readyState === "open",
-    threshold: this.transferConfig.bufferThreshold,
+    threshold: transferConfig.bufferThreshold,
     intervalMs: CONFIG.RETRY_SEND_DELAY,
     timeoutMs: 15_000,
+    lowEventTarget: channel,
    });
 
    if (!isCurrentTransfer()) return;
@@ -2799,6 +3297,12 @@ export class RealTimeColab {
    channel.send(bufferWithHeader);
    if (countProgress) {
     chunksSent++;
+    bytesSent = Math.min(file.size, bytesSent + chunkBuffer.byteLength);
+    this.updateActiveOutgoingFileTransfer({
+     transferId,
+     bytesTransferred: bytesSent,
+     status: "transferring",
+    });
     const progress = Math.min((chunksSent / totalChunks) * 100, 99);
     this.setFileTransferProgress(progress);
     this.emitter.emit('file-progress', { to: id, progress });
@@ -2825,6 +3329,16 @@ export class RealTimeColab {
   try {
    channel.send(JSON.stringify(metaMessage));
    console.debug(" File metadata sent:", metaMessage);
+   this.setFileTransferStatus(t('alert.waitingReceiverReady'), "info", { showPanel: false });
+   await this.p2pAckTracker.waitForAck(
+    transferId,
+    this.P2P_READY_TIMEOUT_MS
+   );
+   if (!isCurrentTransfer()) {
+    console.warn(" File sending aborted before receiver became ready");
+    return;
+   }
+   this.setFileTransferStatus(t('alert.p2pSendingFile'), "info", { showPanel: false });
 
    await Promise.all(Array.from({ length: maxConcurrentReads }, () => worker()));
    if (!isCurrentTransfer()) {
@@ -2832,6 +3346,11 @@ export class RealTimeColab {
     return;
    }
    this.setFileTransferProgress(99);
+   this.updateActiveOutgoingFileTransfer({
+    transferId,
+    bytesTransferred: file.size,
+    status: "awaiting-confirmation",
+   });
    await this.p2pAckTracker.waitForAck(
     transferId,
     getTransferCompletionAckTimeoutMs({
@@ -2885,10 +3404,11 @@ export class RealTimeColab {
     this.p2pSendContexts.delete(id);
    }
    if (stillOwnsTransfer()) {
-    this.p2pAckTracker.cancel(transferId);
-    this.p2pSendingTransferIds.delete(id);
-    this.isSendingFile = false;
+   this.p2pAckTracker.cancel(transferId);
+   this.p2pSendingTransferIds.delete(id);
+   this.isSendingFile = false;
    }
+   this.clearActiveOutgoingFileTransfer(transferId);
   }
 
   // this.abortedMap.delete(id); // 清理状态
@@ -2949,6 +3469,10 @@ export class RealTimeColab {
     ablyTimeoutHandle = setTimeout(() => {
      const now = Date.now();
      const backgroundDurationMs = backgroundStartTime ? now - backgroundStartTime : 0;
+     if (this.hasPendingDirectSaveRequest()) {
+      console.debug("[Visibility] Direct-to-disk save request pending, keeping connection alive");
+      return;
+     }
      const activeTransferCount = this.getActiveFileTransferCount();
      if (shouldStopTransfersForPageLifecycle({
       backgroundDurationMs,

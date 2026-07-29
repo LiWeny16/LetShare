@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
     Box,
     Typography,
@@ -50,7 +50,7 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ open, onClose, targetUserId, targ
     };
 
     // 加载聊天历史的函数
-    const loadChatHistory = async () => {
+    const loadChatHistory = useCallback(async () => {
         try {
             console.log(`[CHAT PANEL] Loading chat history for ${targetUserId}`);
             const history = await ChatHistoryManager.getChatHistory(targetUserId);
@@ -66,7 +66,7 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ open, onClose, targetUserId, targ
         } catch (error) {
             console.error('[CHAT PANEL] Failed to load chat history:', error);
         }
-    };
+    }, [targetUserId]);
 
     useEffect(() => {
         if (open) {
@@ -90,7 +90,7 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ open, onClose, targetUserId, targ
                 realTimeColab.setActiveChatUserId(null);
             }
         };
-    }, [open, targetUserId]);
+    }, [open, targetUserId, loadChatHistory]);
 
     // 监听聊天历史更新事件，替代轮询机制
     useEffect(() => {
@@ -112,7 +112,7 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ open, onClose, targetUserId, targ
             ChatIntegration.emitter.off('history-updated', handleHistoryUpdate);
             console.log(`[CHAT PANEL] Unsubscribed from history-updated events for ${targetUserId}`);
         };
-    }, [open, targetUserId]);
+    }, [open, targetUserId, loadChatHistory]);
 
     useEffect(() => {
         // 滚动到底部，当聊天历史更新时
@@ -249,7 +249,7 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ open, onClose, targetUserId, targ
                     setTimeout(() => URL.revokeObjectURL(url), 60000);
                 }
             };
-            const handleFileBubbleRetry = async (_messageId: string) => {
+            const handleFileBubbleRetry = async () => {
                 // For received files, retry downloading from storage
                 if (!isMyMessage && fileMsg.fileMetadata.fileKey) {
                     await handleFileBubbleDownload(fileMsg.fileMetadata.fileKey);
@@ -259,7 +259,7 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ open, onClose, targetUserId, targ
                 console.warn('[CHAT PANEL] Retry requested for sent file, but original file not available.');
             };
 
-            if (message.type === 'image') {
+            if (message.type === 'image' && fileMsg.fileMetadata.fileKey) {
                 return (
                     <ImageBubble
                         key={message.id}

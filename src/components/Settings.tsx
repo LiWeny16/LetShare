@@ -65,10 +65,6 @@ const SettingsPage = () => {
     settingsStore.update(key, value);
   };
 
-  const handleSave = () => {
-    handleClose()
-  };
-
   const handleServerModeChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const newMode = event.target.value as 'auto' | 'ably' | 'custom';
     const currentMode = settingsStore.get('serverMode');
@@ -146,7 +142,7 @@ const SettingsPage = () => {
   };
 
 
-  const handleClose = async () => {
+  const handleClose = React.useCallback(async () => {
     const currentRoomId = settingsStore.get("roomId");
 
     if (originalRoomIdRef.current !== currentRoomId) {
@@ -156,14 +152,19 @@ const SettingsPage = () => {
       originalRoomIdRef.current = currentRoomId
     }
     const roomId = settingsStore.get("roomId");
-    let validation = validateRoomName(roomId)
+    const validation = validateRoomName(roomId)
     if (validation.isValid) {
       settingsStore.updateUnrmb("settingsPageState", false)
     }
     else {
       alertUseMUI(validation.message, 2000, { kind: "error" });
     }
-  }
+  }, [t]);
+
+  const handleSave = React.useCallback(() => {
+    void handleClose();
+  }, [handleClose]);
+
   React.useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Enter" && settingsStore.getUnrmb("settingsPageState")) {
@@ -177,7 +178,7 @@ const SettingsPage = () => {
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, []);
+  }, [handleSave]);
 
   return (
     <>
@@ -409,4 +410,6 @@ const SettingsPage = () => {
   );
 };
 
-export default observer(SettingsPage);
+const ObservedSettingsPage = observer(SettingsPage);
+
+export default ObservedSettingsPage;

@@ -173,6 +173,7 @@ class ChatHistoryManager {
     senderId: string,
     _type?: 'text' | 'file' | 'image'
   ): Promise<{ success: boolean; error?: string }> {
+    void _type;
     try {
       const db = await this.ensureDB();
       const transaction = db.transaction([this.storeName], 'readwrite');
@@ -240,7 +241,7 @@ class ChatHistoryManager {
     file: { name: string; size: number; type: string },
     transferStatus: FileTransferStatus = 'uploading',
     transferProgress: number = 0,
-    overrideFileKey?: string,
+    overrideFileKey?: string | null,
   ): Promise<{ success: boolean; error?: string; messageId?: string }> {
     try {
       const db = await this.ensureDB();
@@ -261,7 +262,9 @@ class ChatHistoryManager {
       const now = Date.now();
       const isImage = file.type.startsWith('image/');
       const messageId = `msg_${now}_${Math.random().toString(36).substr(2, 9)}`;
-      const fileKey = overrideFileKey || `${otherUserId}_${now}_${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+      const fileKey = overrideFileKey === null
+        ? undefined
+        : overrideFileKey || `${otherUserId}_${now}_${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
 
       const message: FileChatMessage = {
         id: messageId,
@@ -278,7 +281,7 @@ class ChatHistoryManager {
           fileCategory: categorizeFile(file.name, file.type),
           transferStatus,
           transferProgress,
-          fileKey,
+          ...(fileKey ? { fileKey } : {}),
         },
       };
 
@@ -605,4 +608,4 @@ class ChatHistoryManager {
   }
 }
 
-export default ChatHistoryManager.getInstance(); 
+export default ChatHistoryManager.getInstance();

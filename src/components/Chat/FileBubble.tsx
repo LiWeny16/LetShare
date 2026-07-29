@@ -98,6 +98,7 @@ const FileBubble: React.FC<FileBubbleProps> = ({ message, isMyMessage, onDownloa
     const isCompleted = transferStatus === 'completed';
     const isFailed = transferStatus === 'failed';
     const isReceived = !isMyMessage;
+    const isDirectSavedWithoutBrowserCopy = isCompleted && isReceived && !fileKey;
 
     const handleDownload = () => {
         if (onDownload && fileKey) {
@@ -224,6 +225,16 @@ const FileBubble: React.FC<FileBubbleProps> = ({ message, isMyMessage, onDownloa
                             </Button>
                         )}
 
+                        {isDirectSavedWithoutBrowserCopy && (
+                            <Typography
+                                variant="caption"
+                                fontWeight={600}
+                                sx={{ color: secondaryColor, whiteSpace: 'nowrap' }}
+                            >
+                                {t('chat.fileSavedToDisk')}
+                            </Typography>
+                        )}
+
                         {isCompleted && isMyMessage && (
                             <Box
                                 sx={{
@@ -258,6 +269,19 @@ const FileBubble: React.FC<FileBubbleProps> = ({ message, isMyMessage, onDownloa
                         )}
                     </Box>
                 </Box>
+
+                {isDirectSavedWithoutBrowserCopy && (
+                    <Typography
+                        variant="caption"
+                        sx={{
+                            display: 'block',
+                            mt: 1,
+                            color: secondaryColor,
+                        }}
+                    >
+                        {t('chat.fileSavedToDiskNoHistory')}
+                    </Typography>
+                )}
 
                 {/* Progress bar for in-progress transfers */}
                 {isInProgress && (

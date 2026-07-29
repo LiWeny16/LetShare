@@ -40,9 +40,9 @@ export class PeerManager {
 
   peer.onicecandidate = (event) => {
    if (event.candidate) {
-    let staticIp = settingsStore.getUnrmb("staticIp");
+    const staticIp = settingsStore.getUnrmb("staticIp");
     iceBuffer.push(event.candidate);
-    let cand = event.candidate;
+    const cand = event.candidate;
     const candidateStr = cand.candidate;
     const parts = candidateStr.split(" ");
     const ip = parts[4];

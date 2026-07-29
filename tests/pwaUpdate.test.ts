@@ -61,5 +61,9 @@ test("stale chunk cleanup handles Vite hashes that contain hyphens", () => {
   const cleanupScript = readFileSync(join(process.cwd(), "scripts", "cleanup-old-chunks.cjs"), "utf8");
   assert.match(cleanupScript, /function isSingleVersionChunk\(filename, prefix\)/);
   assert.ok(cleanupScript.includes("base.startsWith(`${prefix}-`) && base.endsWith('.js')"));
+  assert.match(cleanupScript, /'AblyConnectionProvider'/);
+  assert.match(cleanupScript, /function isRootEntryCss\(filename\)/);
+  assert.match(cleanupScript, /function readGitBlobIfExists\(repoPath\)/);
+  assert.match(cleanupScript, /HEAD:\$\{repoPath\}/);
   assert.match(cleanupScript, /const referenceName = stripGzipSuffix\(filename\)/);
 });

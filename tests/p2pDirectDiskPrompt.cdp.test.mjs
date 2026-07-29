@@ -1,35 +1,31 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { accessSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { accessSync, mkdtempSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const AUTH_TOKEN =
   "98d9a399675116e5256e9082c192bc06eb6434937af99f201252e9424c7a5652";
-const PORT_BASE = 20_000 + Math.floor(Math.random() * 20_000);
+const PORT_BASE = 26_000 + Math.floor(Math.random() * 20_000);
 const SERVER_PORT = PORT_BASE;
 const FRONTEND_PORT = PORT_BASE + 1;
 const RECEIVER_DEBUG_PORT = PORT_BASE + 2;
 const SENDER_DEBUG_PORT = PORT_BASE + 3;
-const ROOM_ID = process.env.ROOM_ID || `cdp${Date.now().toString(36).slice(-8)}`;
+const ROOM_ID = process.env.ROOM_ID || "123";
 const APP_URL = `http://127.0.0.1:${FRONTEND_PORT}/`;
 const SERVER_WS_URL = `ws://127.0.0.1:${SERVER_PORT}/ws`;
-const TEST_FILE_NAME = "cdp-public-relay.txt";
-const TEST_FILE_CONTENT =
-  "server relay transfer should complete in browser e2e\n" + "x".repeat(180 * 1024);
+const TEST_FILE_NAME = "p2p-direct-disk-over-threshold.bin";
+const LARGE_FILE_SIZE = 3 * 1024 * 1024 * 1024 + 1024;
 
 test(
-  "custom-server public relay transfers a file between two real browser pages",
+  "Edge receiver shows direct-to-disk save request for oversized P2P file from Chrome",
   { timeout: 120_000 },
   async (t) => {
-    if (typeof WebSocket !== "function") {
-      throw new Error("Node global WebSocket is required for this CDP test");
-    }
-
-    const tempRoot = mkdtempSync(join(tmpdir(), "letshare-cdp-"));
+    const tempRoot = mkdtempSync(join(tmpdir(), "letshare-p2p-direct-disk-"));
     const filePath = join(tempRoot, TEST_FILE_NAME);
-    writeFileSync(filePath, TEST_FILE_CONTENT);
+    writeFileSync(filePath, "");
+    truncateSync(filePath, LARGE_FILE_SIZE);
 
     const server = spawnManaged(t, "go", ["run", "./cmd/server"], {
       cwd: join(process.cwd(), "server"),
@@ -55,15 +51,13 @@ test(
     await waitForHttp(`http://127.0.0.1:${SERVER_PORT}/health`, 30_000);
     await waitForHttp(APP_URL, 30_000);
 
-    const receiverBrowserPath = findBrowserExecutable(process.env.RECEIVER_BROWSER || "any");
-    const senderBrowserPath = findBrowserExecutable(process.env.SENDER_BROWSER || "any");
     const receiverBrowser = spawnManaged(
       t,
-      receiverBrowserPath,
+      findBrowserExecutable("edge"),
       [
         "--headless=new",
         `--remote-debugging-port=${RECEIVER_DEBUG_PORT}`,
-        `--user-data-dir=${join(tempRoot, "receiver-profile")}`,
+        `--user-data-dir=${join(tempRoot, "edge-receiver-profile")}`,
         "--disable-gpu",
         "--disable-dev-shm-usage",
         "--no-first-run",
@@ -74,11 +68,11 @@ test(
     );
     const senderBrowser = spawnManaged(
       t,
-      senderBrowserPath,
+      findBrowserExecutable("chrome"),
       [
         "--headless=new",
         `--remote-debugging-port=${SENDER_DEBUG_PORT}`,
-        `--user-data-dir=${join(tempRoot, "sender-profile")}`,
+        `--user-data-dir=${join(tempRoot, "chrome-sender-profile")}`,
         "--disable-gpu",
         "--disable-dev-shm-usage",
         "--no-first-run",
@@ -95,13 +89,15 @@ test(
 
     const receiver = await openPage({
       debugPort: RECEIVER_DEBUG_PORT,
-      userId: "receiver",
-      uniqId: "receiver:e2e",
+      userId: "edge-receiver",
+      uniqId: "edge-receiver:p2p-disk",
+      transferPriority: "p2p",
     });
     const sender = await openPage({
       debugPort: SENDER_DEBUG_PORT,
-      userId: "sender",
-      uniqId: "sender:e2e",
+      userId: "chrome-sender",
+      uniqId: "chrome-sender:p2p-disk",
+      transferPriority: "p2p",
     });
 
     t.after(async () => {
@@ -109,8 +105,10 @@ test(
       await Promise.allSettled([
         killProcess(senderBrowser.child),
         killProcess(receiverBrowser.child),
+        killProcess(server.child),
+        killProcess(frontend.child),
       ]);
-      await removeTempRoot(tempRoot);
+      rmSync(tempRoot, { recursive: true, force: true });
     });
 
     await Promise.all([
@@ -119,20 +117,25 @@ test(
     ]);
 
     await Promise.all([
-      waitForE2EHook(receiver, "receiver page"),
-      waitForE2EHook(sender, "sender page"),
+      waitForE2EHook(receiver, "Edge receiver"),
+      waitForE2EHook(sender, "Chrome sender"),
     ]);
+
+    const receiverPickerSupport = await receiver.evaluate(
+      `typeof window.showSaveFilePicker === "function"`
+    );
+    assert.equal(receiverPickerSupport, true, "Edge receiver must expose showSaveFilePicker");
 
     await Promise.all([
       waitForState(
         receiver,
         (state) => state.isConnectedToServer === true,
-        "receiver did not connect to custom server"
+        "Edge receiver did not connect to local relay"
       ),
       waitForState(
         sender,
         (state) => state.isConnectedToServer === true,
-        "sender did not connect to custom server"
+        "Chrome sender did not connect to local relay"
       ),
     ]);
 
@@ -143,103 +146,50 @@ test(
 
     await waitForState(
       sender,
-      (state) => state.users.some((user) => user.uniqId === "receiver:e2e"),
-      "sender did not discover receiver"
+      (state) => state.users.some((user) => user.uniqId === "edge-receiver:p2p-disk"),
+      "Chrome sender did not discover Edge receiver"
     );
     await waitForState(
       receiver,
-      (state) => state.users.some((user) => user.uniqId === "sender:e2e"),
-      "receiver did not discover sender"
+      (state) => state.users.some((user) => user.uniqId === "chrome-sender:p2p-disk"),
+      "Edge receiver did not discover Chrome sender"
+    );
+
+    await waitForState(
+      sender,
+      (state) =>
+        state.users.some(
+          (user) =>
+            user.uniqId === "edge-receiver:p2p-disk" &&
+            user.status === "connected"
+        ),
+      () => `P2P data channel did not connect; server=${JSON.stringify(server.output.slice(-60))}`
     );
 
     await setFileInputFiles(sender, "#multi-file-input", [filePath]);
     await waitForState(
       sender,
       (state) => state.selectedFileName === TEST_FILE_NAME,
-      "sender did not select test file"
+      "Chrome sender did not select the oversized sparse file"
     );
 
-    await sender.click(`[data-testid="connected-user"][data-user-id="receiver:e2e"]`);
-
-    await Promise.all([
-      waitForHistory(
-        sender,
-        (history) => history.dom.some((entry) => entry.sendVisible === true),
-        "sender upload progress UI did not render"
-      ),
-      waitForHistory(
-        receiver,
-        (history) => history.dom.some((entry) => entry.receiveVisible === true),
-        "receiver download progress UI did not render"
-      ),
-    ]);
-
-    await waitForFrame(
-      sender,
-      (frame) =>
-        frame.direction === "received" &&
-        frame.payloadData.includes('"type":"file:transfer:accept"'),
-      () => `sender did not receive transfer accept; server=${JSON.stringify(server.output.slice(-80))}`
-    );
+    await sender.click(`[data-testid="connected-user"][data-user-id="edge-receiver:p2p-disk"]`);
 
     const receiverState = await waitForState(
       receiver,
       (state) =>
-        state.receivedFiles.some(
-        (file) => file.name === TEST_FILE_NAME && file.size === TEST_FILE_CONTENT.length
-        ),
-      "receiver did not receive public relay file"
+        state.pendingDirectSaveRequest?.fileName === TEST_FILE_NAME &&
+        state.pendingDirectSaveRequest?.fileSize === LARGE_FILE_SIZE,
+      "Edge receiver did not show direct-to-disk save request for oversized P2P file"
     );
 
-    const senderState = await waitForState(
-      sender,
-      (state) =>
-        state.sentFiles.some(
-        (file) => file.name === TEST_FILE_NAME && file.toUserId === "receiver:e2e"
-        ),
-      "sender did not record sent file"
+    assert.equal(receiverState.pendingDirectSaveRequest.peerId, "chrome-sender:p2p-disk");
+    assert.equal(
+      await receiver.evaluate(`document.querySelector('[data-testid="direct-disk-save-request"]') !== null`),
+      true
     );
-
-    assert.equal(receiverState.fileTransferStatus.kind, "success");
-    assert.match(receiverState.fileTransferStatus.message ?? "", /complete/i);
-    assert.equal(senderState.fileTransferStatus.kind, "success");
-    assert.match(senderState.fileTransferStatus.message ?? "", /complete/i);
-    assert.equal(senderState.selectedButton, "file");
-
-    const senderHistory = await sender.evaluate(`window.__LET_SHARE_E2E__.getHistory()`);
-    const receiverHistory = await receiver.evaluate(`window.__LET_SHARE_E2E__.getHistory()`);
-    assert.ok(
-      senderHistory.progress.some((entry) => entry.outgoing === true && entry.value >= 0),
-      "sender should record outgoing upload progress"
-    );
-    assert.ok(
-      senderHistory.progress.some((entry) => entry.outgoing === true && entry.value >= 99),
-      "sender upload progress should reach confirmation/completion"
-    );
-    assert.ok(
-      receiverHistory.progress.some((entry) => entry.outgoing === false && entry.value >= 0),
-      "receiver should record incoming download progress"
-    );
-    assert.ok(
-      receiverHistory.progress.some((entry) => entry.outgoing === false && entry.value >= 99),
-      "receiver download progress should reach completion"
-    );
-    assert.ok(
-      senderHistory.statuses.some((entry) => entry.kind === "success" && /complete/i.test(entry.message)),
-      "sender should show final success status"
-    );
-    assert.ok(
-      receiverHistory.statuses.some((entry) => entry.kind === "success" && /complete/i.test(entry.message)),
-      "receiver should show final success status"
-    );
-
-    const badConsole = [...sender.consoleMessages, ...receiver.consoleMessages].filter(
-      (entry) =>
-        /missing chunks|chunkWithoutTransfer|receive session|接收会话不存在|缺失分片/i.test(
-          entry.text
-        )
-    );
-    assert.deepEqual(badConsole, []);
+    assert.deepEqual(receiverState.receivedFiles, []);
+    assert.deepEqual(receiverState.directSavedFiles, []);
   }
 );
 
@@ -330,13 +280,14 @@ function findBrowserExecutable(kind) {
 
   for (const candidate of candidates) {
     try {
-      return requireFsAccess(candidate);
+      accessSync(candidate);
+      return candidate;
     } catch {
       // keep looking
     }
   }
 
-  throw new Error("No Chrome/Edge executable found for CDP e2e test");
+  throw new Error(`No ${kind} executable found for CDP e2e test`);
 }
 
 function getBrowserCandidates(kind) {
@@ -369,12 +320,7 @@ function getBrowserCandidates(kind) {
   return [...chromeCandidates, ...edgeCandidates];
 }
 
-function requireFsAccess(path) {
-  accessSync(path);
-  return path;
-}
-
-async function openPage({ debugPort, userId, uniqId }) {
+async function openPage({ debugPort, userId, uniqId, transferPriority }) {
   const response = await fetch(
     `http://127.0.0.1:${debugPort}/json/new?${encodeURIComponent("about:blank")}`,
     { method: "PUT" }
@@ -388,12 +334,12 @@ async function openPage({ debugPort, userId, uniqId }) {
   await page.send("DOM.enable");
   await page.send("Network.enable");
   await page.send("Page.addScriptToEvaluateOnNewDocument", {
-    source: buildInitScript({ userId, uniqId }),
+    source: buildInitScript({ userId, uniqId, transferPriority }),
   });
   return page;
 }
 
-function buildInitScript({ userId, uniqId }) {
+function buildInitScript({ userId, uniqId, transferPriority }) {
   const settings = {
     roomId: ROOM_ID,
     userTheme: "light",
@@ -402,14 +348,13 @@ function buildInitScript({ userId, uniqId }) {
     customServerUrl: SERVER_WS_URL,
     authToken: AUTH_TOKEN,
     ablyKey: "",
-    version: "3.3.0",
+    transferPriority,
+    version: "3.5.6",
     isNewUser: false,
   };
 
   return `
     (() => {
-      Object.defineProperty(window, "RTCPeerConnection", { value: undefined, configurable: true });
-      Object.defineProperty(window, "webkitRTCPeerConnection", { value: undefined, configurable: true });
       localStorage.setItem("user_settings", ${JSON.stringify(JSON.stringify(settings))});
       localStorage.setItem("memorableState", ${JSON.stringify(
         JSON.stringify({ memorable: { userId, uniqId } })
@@ -574,30 +519,6 @@ async function waitForState(page, predicate, label) {
   );
 }
 
-async function waitForHistory(page, predicate, label) {
-  return poll(
-    async () => page.evaluate(`window.__LET_SHARE_E2E__?.getHistory()`),
-    (history) => history && predicate(history),
-    30_000,
-    () =>
-      `${messageText(label)}; console=${JSON.stringify(
-        page.consoleMessages.slice(-30)
-      )}; ws=${JSON.stringify(page.webSocketFrames.slice(-30))}`
-  );
-}
-
-async function waitForFrame(page, predicate, label) {
-  return poll(
-    async () => page.webSocketFrames,
-    (frames) => frames.some(predicate),
-    30_000,
-    () =>
-      `${messageText(label)}; console=${JSON.stringify(
-        page.consoleMessages.slice(-30)
-      )}; ws=${JSON.stringify(page.webSocketFrames.slice(-30))}`
-  );
-}
-
 async function poll(read, predicate, timeoutMs, message) {
   const start = Date.now();
   let lastValue;
@@ -615,18 +536,4 @@ function messageText(message) {
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function removeTempRoot(path) {
-  for (let attempt = 0; attempt < 20; attempt++) {
-    try {
-      rmSync(path, { recursive: true, force: true });
-      return;
-    } catch (error) {
-      if (attempt === 19) {
-        return;
-      }
-      await delay(500);
-    }
-  }
 }

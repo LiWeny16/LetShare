@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components */
 import React, { useEffect, useRef, useState } from "react";
 import ReactDOM from "react-dom";
 import mitt from "mitt";

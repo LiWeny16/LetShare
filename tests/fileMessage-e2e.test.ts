@@ -15,16 +15,10 @@ import "./setup-browser-globals";
 let ChatHistoryManager: any;
 let FileBlobStore: any;
 let makeFileKey: any;
-let categorizeFile: any;
-let formatFileSize: any;
-let isFileMessage: any;
 
 async function setup() {
   const chatHM = await import("../src/app/libs/chat/ChatHistoryManager");
   ChatHistoryManager = chatHM.default;
-  categorizeFile = chatHM.categorizeFile;
-  formatFileSize = chatHM.formatFileSize;
-  isFileMessage = chatHM.isFileMessage;
   const fbs = await import("../src/app/libs/chat/FileBlobStore");
   FileBlobStore = fbs.default;
   // static method
@@ -351,6 +345,18 @@ test("E2E: error handling and edge cases", async (t) => {
     const history = await ChatHistoryManager.getChatHistory("keyUser");
     const msg = history.messages.find((m: any) => m.id === messageId);
     assert.equal(msg.fileMetadata.fileKey, customKey, "fileKey should match the override");
+  });
+
+  await t.test("addFileMessage with null fileKey records direct-to-disk history without blob link", async () => {
+    const { messageId } = await ChatHistoryManager.addFileMessage(
+      "diskUser", "DiskUser", "diskUser",
+      { name: "huge-video.mp4", size: 10 * 1024 * 1024 * 1024, type: "video/mp4" },
+      "completed", 100, null,
+    );
+    const history = await ChatHistoryManager.getChatHistory("diskUser");
+    const msg = history.messages.find((m: any) => m.id === messageId);
+    assert.equal(msg.fileMetadata.fileName, "huge-video.mp4");
+    assert.equal("fileKey" in msg.fileMetadata, false);
   });
 
   await t.test("deleteFilesByUser with zero files returns success", async () => {

@@ -107,6 +107,13 @@ function formatSize(bytes: number): string {
   return `${bytes} B`;
 }
 
+function formatTransferSpeed(bytesPerSecond: number): string {
+  if (!Number.isFinite(bytesPerSecond) || bytesPerSecond <= 0) {
+    return "0 B/s";
+  }
+  return `${formatSize(bytesPerSecond)}/s`;
+}
+
 type PendingBrowserDownload = {
   url: string;
   fileName: string;
@@ -167,8 +174,11 @@ export default function DownloadDrawerSlide({
   // 提前声明（effect 依赖需要用到）
   const receivingMap = realTimeColab.receivingFiles as Map<string, any>;
   const receivedMap = realTimeColab.receivedFiles as Map<string, File>;
+  const directSavedMap = realTimeColab.directSavedFiles as Map<string, { name: string; size: number; fromUserId: string; completedAt: number }>;
+  const pendingDirectSaveRequest = realTimeColab.getPendingDirectSaveRequest();
   const receivingList = Array.from(receivingMap.entries());
   const receivedList = Array.from(receivedMap.entries());
+  const directSavedList = Array.from(directSavedMap.entries());
 
   // 按用户分组接收到的文件
   const groupedByUser = React.useMemo(() => {
@@ -305,7 +315,6 @@ export default function DownloadDrawerSlide({
     })();
 
     return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleSlideExited = () => {
@@ -386,6 +395,22 @@ export default function DownloadDrawerSlide({
     realTimeColab.abortFileTransferToUser?.();
     setProgress(0);
     if (receivingMap.size === 0) setVisible(false);
+  };
+
+  const handleAcceptDirectSave = async (request: typeof pendingDirectSaveRequest) => {
+    if (!request) {
+      return;
+    }
+    try {
+      await realTimeColab.acceptPendingDirectDiskReceive(
+        request.transport === "server" ? request.transferId : request.peerId,
+        request.transport,
+      );
+      forceUpdate();
+    } catch (error) {
+      console.warn("[Download] direct-to-disk receive was not started:", error);
+      forceUpdate();
+    }
   };
 
 
@@ -640,6 +665,7 @@ export default function DownloadDrawerSlide({
 
   const transferStatus = realTimeColab.fileTransferStatus;
   const statusMessage = transferStatus.message;
+  const outgoingStats = realTimeColab.getActiveOutgoingFileTransferStats();
   const showSendingProgress = progress !== null && realTimeColab.hasActiveOutgoingFileTransfer();
   const showServerReceivingProgress =
     progress !== null &&
@@ -650,8 +676,10 @@ export default function DownloadDrawerSlide({
   const hasContent =
     showSendingProgress ||
     showServerReceivingProgress ||
+    !!pendingDirectSaveRequest ||
     receivingList.length > 0 ||
     receivedList.length > 0 ||
+    directSavedList.length > 0 ||
     sentCount > 0 ||
     !!pendingBrowserDownload ||
     !!browserDownloadNotice ||
@@ -735,6 +763,46 @@ export default function DownloadDrawerSlide({
                   >
                     {statusMessage}
                   </Alert>
+                )}
+
+                {pendingDirectSaveRequest && (
+                  <Box
+                    data-testid="direct-disk-save-request"
+                    sx={{
+                      display: "flex",
+                      alignItems: { xs: "stretch", sm: "center" },
+                      flexDirection: { xs: "column", sm: "row" },
+                      gap: 1,
+                      px: 1.25,
+                      py: 1,
+                      borderRadius: 1,
+                      border: `1px solid ${theme.palette.divider}`,
+                    }}
+                  >
+                    <Box sx={{ flex: 1, minWidth: 0 }}>
+                      <Typography variant="body2" noWrap>
+                        {pendingDirectSaveRequest.fileName}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        {formatSize(pendingDirectSaveRequest.fileSize)}
+                      </Typography>
+                    </Box>
+                    <Button
+                      variant="contained"
+                      size="small"
+                      startIcon={<DownloadIcon />}
+                      onClick={() => {
+                        void handleAcceptDirectSave(pendingDirectSaveRequest);
+                      }}
+                      sx={{
+                        alignSelf: { xs: "flex-start", sm: "center" },
+                        whiteSpace: "nowrap",
+                        ...buttonStyleNormal,
+                      }}
+                    >
+                      {t("button.saveToDisk")}
+                    </Button>
+                  </Box>
                 )}
 
                 {(browserDownloadNotice || pendingBrowserDownload) && (
@@ -824,6 +892,17 @@ export default function DownloadDrawerSlide({
                             ? t("transfer.awaitingConfirmation")
                             : `${(progress ?? 0).toFixed(1)}%`}
                         </Typography>
+                        {outgoingStats && (
+                          <Typography
+                            variant="caption"
+                            color="text.secondary"
+                            sx={{ display: "block", mt: 0.25 }}
+                          >
+                            {formatSize(outgoingStats.bytesTransferred)} / {formatSize(outgoingStats.fileSize)}
+                            {" · "}
+                            {formatTransferSpeed(outgoingStats.bytesPerSecond)}
+                          </Typography>
+                        )}
                         <LinearProgress
                           variant="determinate"
                           value={progress ?? 0}
@@ -1011,7 +1090,7 @@ export default function DownloadDrawerSlide({
                               {info.name}
                             </Typography>
                             <Typography variant="caption" color="text.secondary">
-                              {(info.size / 1024).toFixed(1)} KB
+                              {formatSize(info.size)}
                             </Typography>
                           </Box>
                         ))}
@@ -1019,6 +1098,48 @@ export default function DownloadDrawerSlide({
                     </Box>
                   );
                 })()}
+
+                {directSavedList.length > 0 && (
+                  <Box>
+                    <Typography variant="subtitle2" sx={{ mt: 2, mb: 1 }}>
+                      <DownloadIcon sx={{ mr: 0.5, verticalAlign: 'middle', fontSize: '1.1em' }} />
+                      {t('transfer.savedToDiskFiles')}
+                    </Typography>
+                    <Alert severity="info" sx={{ py: 0, mb: 1, "& .MuiAlert-message": { py: 0.25 } }}>
+                      {t('transfer.directSavedNoBrowserHistory')}
+                    </Alert>
+                    <Box sx={{ display: "flex", flexDirection: "column", gap: 0.5 }}>
+                      {directSavedList.map(([key, info]) => (
+                        <Box
+                          key={key}
+                          sx={{
+                            display: "grid",
+                            gridTemplateColumns: "auto minmax(0, 1fr) auto",
+                            alignItems: "center",
+                            gap: 1,
+                            px: 1.5,
+                            py: 0.75,
+                            borderRadius: 1,
+                            bgcolor: theme.palette.action.hover,
+                          }}
+                        >
+                          <InsertDriveFile sx={{ color: theme.palette.text.secondary, fontSize: '1.2rem' }} />
+                          <Box sx={{ minWidth: 0 }}>
+                            <Typography variant="body2" noWrap>
+                              {info.name}
+                            </Typography>
+                            <Typography variant="caption" color="text.secondary">
+                              {info.fromUserId.split(":")[0]}
+                            </Typography>
+                          </Box>
+                          <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: "nowrap" }}>
+                            {formatSize(info.size)}
+                          </Typography>
+                        </Box>
+                      ))}
+                    </Box>
+                  </Box>
+                )}
 
                 {/* 已接收文件展示 - 按用户分组 */}
                 {receivedList.length > 0 && (

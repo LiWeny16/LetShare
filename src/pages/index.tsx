@@ -1,17 +1,16 @@
-import "../style/index.css" // 导入你的CSS文件
+import "../style/index.css"
 
-// import Home from "./home"
-// import Chat from "../pages/chat"
 import Share from "../pages/share"
-import { HashRouter, Routes, Route } from "react-router-dom" // 导入正确的组件和函数
 import PayNowComponent from "./paynow"
+import { HashRouter, Navigate, Route, Routes } from "react-router-dom"
 
 export default function Index() {
  return (
   <HashRouter>
    <Routes>
     <Route path="/" element={<Share />} />
-    <Route path="/paynow" element={<PayNowComponent />}></Route>
+    <Route path="/paynow" element={<PayNowComponent />} />
+    <Route path="*" element={<Navigate to="/" replace />} />
    </Routes>
   </HashRouter>
  )

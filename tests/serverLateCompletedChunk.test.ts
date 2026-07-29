@@ -9,8 +9,13 @@ const source = readFileSync(
 );
 
 function extractMethodBody(sourceText: string, methodName: string): string {
-  const methodIndex = sourceText.indexOf(methodName);
-  assert.notEqual(methodIndex, -1, `method ${methodName} should exist`);
+  const bareMethodName = methodName.trim().split(/\s+/).at(-1) ?? methodName;
+  const escapedMethodName = bareMethodName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const methodMatch = new RegExp(
+    String.raw`(?:public|private|protected)\s+(?:async\s+)?${escapedMethodName}\s*\(`
+  ).exec(sourceText);
+  assert.notEqual(methodMatch, null, `method ${methodName} should exist`);
+  const methodIndex = methodMatch!.index;
 
   const parenStart = sourceText.indexOf("(", methodIndex);
   assert.notEqual(parenStart, -1, `method ${methodName} should have params`);
@@ -74,7 +79,7 @@ test("server relay ignores late binary chunks for an already completed transfer"
 });
 
 test("server relay receive completion publishes the same persistent success status as P2P", () => {
-  const body = extractMethodBody(source, "private finalizeReceivedFile");
+  const body = extractMethodBody(source, "finalizeReceivedFile");
   const successAlertIndex = body.indexOf("toast.fileReceived");
   const statusIndex = body.indexOf("this.setTransferStatus(t('alert.fileReceivedComplete'), \"success\")");
 

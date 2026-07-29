@@ -17,7 +17,7 @@ export const PRO_TOKEN_KEY = "letshare_pro_token";
 
 export function getProToken(): string | null {
 	const match = document.cookie.match(
-		new RegExp(`(?:^|; )${PRO_TOKEN_KEY.replace(/([.$?*|{}()\[\]\\/+^])/g, "\\$1")}=([^;]*)`)
+		new RegExp(`(?:^|; )${PRO_TOKEN_KEY.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}=([^;]*)`)
 	);
 	return match ? decodeURIComponent(match[1]) : null;
 }
@@ -35,7 +35,7 @@ export function clearProToken() {
 
 export function getProCookie(): string | null {
 	const match = document.cookie.match(
-		new RegExp(`(?:^|; )${PRO_COOKIE_KEY.replace(/([.$?*|{}()\[\]\\/+^])/g, "\\$1")}=([^;]*)`)
+		new RegExp(`(?:^|; )${PRO_COOKIE_KEY.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}=([^;]*)`)
 	);
 	return match ? decodeURIComponent(match[1]) : null;
 }

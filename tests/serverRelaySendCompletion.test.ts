@@ -17,8 +17,13 @@ const serverModelSource = readFileSync(
 );
 
 function extractMethodBody(name: string): string {
-  const start = source.indexOf(name);
-  assert.notEqual(start, -1, `${name} should exist`);
+  const methodName = name.trim().split(/\s+/).at(-1) ?? name;
+  const escapedMethodName = methodName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = new RegExp(
+    String.raw`(?:public|private|protected)\s+(?:async\s+)?${escapedMethodName}\s*\(`
+  ).exec(source);
+  assert.notEqual(match, null, `${name} should exist`);
+  const start = match!.index;
   const signatureMatch = /\)\s*(?::[^{]+)?\{/.exec(source.slice(start));
   assert.notEqual(signatureMatch, null, `${name} should have a method signature`);
   const braceStart =
@@ -40,8 +45,14 @@ test("server relay send promise resolves only after receiver completion ack", ()
 
   const sendBody = extractMethodBody("public async sendFileViaServer");
   assert.match(sendBody, /const waiterPromise = new Promise<void>\(\(resolve,\s*reject\) =>/);
-  assert.match(sendBody, /this\.sendCompletionWaiters\.set\(transferId,\s*\{\s*resolve,\s*reject:\s*wrappedReject\s*\}\)/);
+  assert.match(sendBody, /this\.sendCompletionWaiters\.set\(transferId,\s*\{\s*resolve,\s*reject\s*\}\)/);
   assert.match(sendBody, /return waiterPromise/);
+
+  const resolveBody = extractMethodBody("private resolveSendCompletion");
+  assert.match(resolveBody, /this\.sendCompletionWaiters\.delete\(transferId\)/);
+  const rejectBody = extractMethodBody("private rejectSendCompletion");
+  assert.match(rejectBody, /this\.sendCompletionWaiters\.delete\(transferId\)/);
+  assert.match(rejectBody, /waiter\.reject\(this\.toError\(reason\)\)/);
 
   const startBody = extractMethodBody("private async startSending");
   const ackIndex = startBody.indexOf("this.completionAcks.waitForAck");
@@ -60,7 +71,7 @@ test("server relay send promise rejects on request timeout, rejection, cancel, e
 });
 
 test("server relay receiver finalizes only after server transfer end", () => {
-  const writeBody = extractMethodBody("private writeChunkToSession");
+  const writeBody = extractMethodBody("writeChunkToSession");
   assert.doesNotMatch(writeBody, /finalizeReceivedFile/);
   assert.match(writeBody, /this\.refreshReceiveTimeout\(session\.transferId\)/);
 
@@ -88,7 +99,7 @@ test("server relay sender uses receiver ACK flow control before advancing", () =
 });
 
 test("server relay receiver sends ACKs after writing chunks", () => {
-  const writeBody = extractMethodBody("private writeChunkToSession");
+  const writeBody = extractMethodBody("writeChunkToSession");
   assert.match(writeBody, /this\.maybeSendReceiverAck\(session,\s*chunkIndex\)/);
 
   const ackBody = extractMethodBody("private maybeSendReceiverAck");
@@ -110,7 +121,7 @@ test("server relay request-stage errors include transfer id so sender can leave 
   assert.notEqual(requestHandlerIndex, -1, "handleFileTransferRequest should exist");
   const body = serverWebSocketSource.slice(requestHandlerIndex, serverWebSocketSource.indexOf("// handleFileTransferAccept", requestHandlerIndex));
 
-  assert.match(body, /CreateTransferSession\(&request\)/);
+  assert.match(body, /CreateTransferSession\(&request,\s*isPro\)/);
   assert.match(
     body,
     /if err != nil \{[\s\S]*h\.sendFileTransferError\(client,\s*400,\s*err\.Error\(\),\s*request\.TransferID\)/,

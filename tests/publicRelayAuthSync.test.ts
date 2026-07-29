@@ -59,5 +59,5 @@ test("generic upgrade-required relay errors do not clear stored PRO credentials"
 
   const branch = colabLibSource.slice(upgradeBranchStart, upgradeBranchEnd);
   assert.doesNotMatch(branch, /clearProCookie\(/);
-  assert.match(branch, /alertUseMUI\(errMsg,\s*4000,\s*\{ kind: "error" \}\)/);
+  assert.match(branch, /alertUseMUI\(errMsg,\s*4000,\s*\{ kind: "error"(?:,\s*category:\s*"transfer-status")? \}\)/);
 });

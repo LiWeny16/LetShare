@@ -32,14 +32,14 @@ const Footer = observer(() => {
   const region = getRegionParam();
   const shareUrl = `https://letshare.fun/?room=${encodeURIComponent(roomId)}${region ? `&region=${region}` : ''}`;
   const githubUrl = 'https://github.com/LiWeny16/LetShare';
-  const [qrMode, _setQrMode] = useState<"share" | "connect">("share");
+  const [qrMode] = useState<"share" | "connect">("share");
   const [qrSignal] = useState(() => new QRCodeSignalChannel(realTimeColab));
 
   useEffect(() => {
     if (qrMode === "connect") {
       qrSignal.generateOfferQr("你要连接的用户id");
     }
-  }, [qrMode]);
+  }, [qrMode, qrSignal]);
 
   return (
     <>

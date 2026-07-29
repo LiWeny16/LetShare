@@ -1,4 +1,4 @@
-async function testSTUNServers(stunServers: any) {
+export async function testSTUNServers(stunServers: any) {
   for (const stunServer of stunServers) {
     try {
       console.log(`Testing STUN server: ${stunServer}`);
@@ -33,7 +33,6 @@ async function testSTUNServers(stunServers: any) {
 }
 
 // 测试 STUN 服务器列表
-const stunList = [
+export const stunList = [
   "sip1.lakedestiny.cordiaip.com",
 ];
-

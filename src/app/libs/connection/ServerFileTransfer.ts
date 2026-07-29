@@ -7,6 +7,8 @@ import { ConnectionManager } from "./providers/ConnectionManager";
 import alertUseMUI from "../tools/alert";
 import i18n from "../i18n/i18n";
 import {
+ DirectFileWriteSink,
+ type FileSystemWritableFileStreamLike,
  TransferAckTracker,
  TransferTimeoutError,
  canRecoverMissingChunksWithResend,
@@ -35,6 +37,21 @@ import { getDeviceType } from "../tools/tools";
 
 const t = i18n.t;
 
+function formatSize(bytes: number): string {
+ if (bytes >= 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+ if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+ if (bytes >= 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+ return `${bytes} B`;
+}
+
+type FileSystemFileHandleLike = {
+ createWritable: () => Promise<FileSystemWritableFileStreamLike>;
+};
+
+type ShowSaveFilePickerLike = (options?: {
+ suggestedName?: string;
+}) => Promise<FileSystemFileHandleLike>;
+
 // 文件传输消息类型
 export const FILE_TRANSFER_MESSAGE_TYPES = {
  REQUEST: "file:transfer:request",
@@ -46,6 +63,8 @@ export const FILE_TRANSFER_MESSAGE_TYPES = {
  COMPLETE: "file:transfer:complete",
  ACK: "file:transfer:ack",
  RESEND: "file:transfer:resend",
+ RESUME_QUERY: "file:transfer:resume-query",
+ RESUME_STATE: "file:transfer:resume-state",
  CANCEL: "file:transfer:cancel",
  ERROR: "file:transfer:error",
  PROGRESS: "file:transfer:progress",
@@ -88,6 +107,23 @@ export interface FileTransferAck {
  bytes_received: number;
 }
 
+export interface FileTransferResumeState {
+ transfer_id: string;
+ status: string;
+ role?: "sender" | "receiver";
+ room_name?: string;
+ file_name?: string;
+ file_size: number;
+ chunk_size: number;
+ total_chunks: number;
+ received_chunks: number[];
+ missing_chunks: number[];
+ received_count: number;
+ missing_count: number;
+ bytes_received: number;
+ updated_at: number;
+}
+
 interface TransferSession {
  transferId: string;
  file: File;
@@ -125,6 +161,20 @@ interface ReceiveSession {
  fromUserId: string;
  roomName: string;
  status: "pending" | "receiving" | "completed" | "cancelled" | "error";
+ storageMode: "browser-cache" | "direct-to-disk";
+ directSink: DirectFileWriteSink | null;
+ writeChain: Promise<void>;
+ directSaveReason?: string;
+}
+
+export interface ServerDirectSaveRequest {
+ transport: "server";
+ peerId: string;
+ transferId: string;
+ fileName: string;
+ fileSize: number;
+ totalChunks: number;
+ chunkSize: number;
 }
 
 type TransferStatusKind = "info" | "warning" | "error" | "success";
@@ -164,6 +214,9 @@ export class ServerFileTransfer {
  private onFileMetaInfoChange: ((name: string) => void) | null = null;
  private onTransferStatusChange: ((message: string | null, kind: TransferStatusKind) => void) | null = null;
  private receivedFileCacheCandidatesCallback: (() => Array<{ size: number }>) | null = null;
+ private onFileSavedToDiskCallback: ((fileName: string, fileSize: number, fromUserId: string) => void) | null = null;
+ private pendingDirectSaveRequests = new Map<string, ServerDirectSaveRequest>();
+ private pendingDirectSaveRequest: ServerDirectSaveRequest | null = null;
 
  constructor(connectionManager: ConnectionManager) {
   this.connectionManager = connectionManager;
@@ -210,8 +263,65 @@ export class ServerFileTransfer {
   this.receivedFileCacheCandidatesCallback = callback;
  }
 
+ public setFileSavedToDiskCallback(callback: (fileName: string, fileSize: number, fromUserId: string) => void) {
+  this.onFileSavedToDiskCallback = callback;
+ }
+
+ public getPendingDirectSaveRequest(): ServerDirectSaveRequest | null {
+  return this.pendingDirectSaveRequest;
+ }
+
+ public requestResumeState(transferId: string, roomName?: string): void {
+  if (!transferId) return;
+  this.connectionManager.send({
+   type: FILE_TRANSFER_MESSAGE_TYPES.RESUME_QUERY,
+   ...(roomName ? { channel: roomName } : {}),
+   data: { transfer_id: transferId },
+  });
+ }
+
  private setTransferStatus(message: string | null, kind: TransferStatusKind = "info") {
   this.onTransferStatusChange?.(message, kind);
+ }
+
+ private getShowSaveFilePicker(): ShowSaveFilePickerLike | null {
+  if (typeof window === "undefined") {
+   return null;
+  }
+
+  const candidate = (window as unknown as {
+   showSaveFilePicker?: ShowSaveFilePickerLike;
+  }).showSaveFilePicker;
+
+  return typeof candidate === "function" ? candidate.bind(window) : null;
+ }
+
+ private canUseDirectFileSave(): boolean {
+  return getDeviceType() === "desktop" && this.getShowSaveFilePicker() !== null;
+ }
+
+ private getSafeSuggestedFileName(fileName: string): string {
+  const safeName = fileName.replace(/[\\/:*?"<>|]/g, "_").trim();
+  return safeName ? safeName.slice(0, 240) : "received_file";
+ }
+
+ private setPendingDirectSaveRequest(request: ServerDirectSaveRequest): void {
+  this.pendingDirectSaveRequests.set(request.transferId, request);
+  this.pendingDirectSaveRequest = request;
+ }
+
+ private clearPendingDirectSaveRequest(transferId?: string): void {
+  if (transferId) {
+   this.pendingDirectSaveRequests.delete(transferId);
+   if (this.pendingDirectSaveRequest?.transferId === transferId) {
+    this.pendingDirectSaveRequest =
+     this.pendingDirectSaveRequests.values().next().value ?? null;
+   }
+   return;
+  }
+
+  this.pendingDirectSaveRequests.clear();
+  this.pendingDirectSaveRequest = null;
  }
 
  private toError(reason: unknown): Error {
@@ -283,9 +393,9 @@ export class ServerFileTransfer {
      this.failReceiveSession(receivingSession, errorMsg, FILE_TRANSFER_MESSAGE_TYPES.ERROR);
     }
    } else {
-    // 无 transfer_id — 通用错误, 展示给用户
-    this.setTransferStatus(errorMsg, "error");
-	    alertUseMUI(errorMsg, 4000, { kind: "error", category: "transfer-status" });
+   // 无 transfer_id — 通用错误, 展示给用户
+   this.setTransferStatus(errorMsg, "error");
+   alertUseMUI(errorMsg, 4000, { kind: "error", category: "transfer-status" });
    }
    return;
   }
@@ -327,6 +437,9 @@ export class ServerFileTransfer {
     case FILE_TRANSFER_MESSAGE_TYPES.RESEND:
      await this.handleTransferResend(payload);
      break;
+    case FILE_TRANSFER_MESSAGE_TYPES.RESUME_STATE:
+     this.handleTransferResumeState(payload);
+     break;
     case FILE_TRANSFER_MESSAGE_TYPES.CANCEL:
      this.handleTransferCancel(payload);
      break;
@@ -365,13 +478,20 @@ export class ServerFileTransfer {
       reason
      );
      this.onProgressCallback?.(null);
-	     this.setTransferStatus(reason, "error");
-	     alertUseMUI(reason, 4000, { kind: "error", category: "transfer-status" });
+     this.setTransferStatus(reason, "error");
+     alertUseMUI(reason, 4000, { kind: "error", category: "transfer-status" });
     }
     return;
    }
    this.unknownBinaryTransferIssueKeys.delete(meta.transfer_id);
-   this.writeChunkToSession(session, meta.chunk_index, payload);
+   session.writeChain = session.writeChain
+    .then(() => this.writeChunkToSession(session, meta.chunk_index, payload))
+    .catch((error) => {
+     if (session.status === "receiving") {
+      console.error(`[ServerFileTransfer] 写入分片失败: ${meta.transfer_id}`, error);
+      this.failReceiveSession(session, t('alert.unexpectedChunk'));
+     }
+    });
    return;
   } catch (err) {
    console.debug(`[ServerFileTransfer] Binary frame fallback to legacy metadata pairing:`, err);
@@ -383,18 +503,25 @@ export class ServerFileTransfer {
   console.debug(`[ServerFileTransfer] 未知二进制数据 (${data.byteLength} bytes), 帧解码失败, 丢弃`);
  }
 
- private writeChunkToSession(
+ private async writeChunkToSession(
   session: ReceiveSession,
   chunkIndex: number,
   data: ArrayBuffer | ArrayBufferView
- ) {
+ ): Promise<void> {
+  if (session.status !== "receiving") {
+   return;
+  }
+
   if (chunkIndex < 0 || chunkIndex >= session.totalChunks) {
    console.warn(`[ServerFileTransfer] chunk index 越界: ${chunkIndex}/${session.totalChunks}`);
    this.failReceiveSession(session, t('alert.chunkInvalid'));
    return;
   }
 
-  if (!session.buffer && !session.receivedChunks) {
+  const hasWriteTarget = session.storageMode === "direct-to-disk"
+   ? session.directSink !== null
+   : session.buffer !== null || session.receivedChunks !== null;
+  if (!hasWriteTarget) {
    console.warn(`[ServerFileTransfer] 无可用写入目标 (transfer=${session.transferId})`);
    this.failReceiveSession(session, t('alert.bufferNotAvailable'));
    return;
@@ -417,8 +544,17 @@ export class ServerFileTransfer {
    return;
   }
 
-  // 双模式写入：优先 buffer（快），降级到 chunks（省内存）
-  if (session.buffer) {
+  // 双模式写入：浏览器缓存优先 buffer（快），超限文件直接写入用户选择的磁盘文件。
+  if (session.storageMode === "direct-to-disk") {
+   if (!session.directSink) {
+    this.failReceiveSession(session, t('alert.bufferNotAvailable'));
+    return;
+   }
+   const writeResult = await session.directSink.writeChunk(chunkIndex, bytes);
+   if (!writeResult.accepted) {
+    return;
+   }
+  } else if (session.buffer) {
    const offset = chunkIndex * session.chunkSize;
    if (offset + bytes.byteLength > session.buffer.byteLength) {
     console.error(`[ServerFileTransfer] Buffer overflow!`);
@@ -483,24 +619,35 @@ export class ServerFileTransfer {
 
  private refreshReceiveTimeout(transferId: string) {
   this.clearReceiveTimeout(transferId);
-  const timeoutId = setTimeout(() => {
+ const timeoutId = setTimeout(() => {
    const session = this.receivingSessions.get(transferId);
    if (!session || session.status !== "receiving") {
     return;
    }
 
-   // 已收齐全部 chunk → 直接组装，不等 END
-   if (session.receivedCount === session.totalChunks) {
-    this.finalizeReceivedFile(session);
-    return;
-   }
+   void session.writeChain.then(() => {
+    if (session.status !== "receiving") {
+     return;
+    }
 
-   if (this.requestMissingServerChunks(session, t('alert.serverResendTimeoutReason'))) {
-    this.refreshReceiveTimeout(transferId);
-    return;
-   }
+    // 已收齐全部 chunk → 直接组装，不等 END
+    if (session.receivedCount === session.totalChunks) {
+     void this.finalizeReceivedFile(session);
+     return;
+    }
 
-   this.failReceiveSession(session, this.getResendRecoveryFailureMessage(session));
+    if (this.requestMissingServerChunks(session, t('alert.serverResendTimeoutReason'))) {
+     this.refreshReceiveTimeout(transferId);
+     return;
+    }
+
+    this.failReceiveSession(session, this.getResendRecoveryFailureMessage(session));
+   }).catch((error) => {
+    if (session.status === "receiving") {
+     console.error(`[ServerFileTransfer] 写入链异常: ${transferId}`, error);
+     this.failReceiveSession(session, t('alert.unexpectedChunk'));
+    }
+   });
   }, this.RECEIVE_TIMEOUT_MS);
   this.receiveTimeouts.set(transferId, timeoutId);
  }
@@ -626,9 +773,16 @@ export class ServerFileTransfer {
   messageType: string = FILE_TRANSFER_MESSAGE_TYPES.CANCEL
  ): void {
   session.status = "error";
+  if (session.directSink) {
+   void session.directSink.abort(reason).catch((error) => {
+    console.warn(`[ServerFileTransfer] direct file sink abort failed: ${session.transferId}`, error);
+   });
+  }
+  session.directSink = null;
   session.buffer = null;
-   session.receivedChunks = [];
+  session.receivedChunks = [];
   this.receivingSessions.delete(session.transferId);
+  this.clearPendingDirectSaveRequest(session.transferId);
   this.clearReceiveTimeout(session.transferId);
   this.onProgressCallback?.(null);
   this.setTransferStatus(reason, "error");
@@ -643,9 +797,11 @@ export class ServerFileTransfer {
  private getReceivedFileCacheCandidates(incomingSize: number): Array<{ size: number }> {
   return [
    ...(this.receivedFileCacheCandidatesCallback?.() ?? []),
-   ...Array.from(this.receivingSessions.values()).map((session) => ({
-    size: session.fileSize,
-   })),
+   ...Array.from(this.receivingSessions.values())
+    .filter((session) => session.storageMode === "browser-cache")
+    .map((session) => ({
+     size: session.fileSize,
+    })),
    { size: incomingSize },
   ];
  }
@@ -653,12 +809,15 @@ export class ServerFileTransfer {
  private getReceivedCacheLimitMessage(guard: {
   totalBytes: number;
   totalFiles: number;
-  maxBytes: number;
-  maxFiles: number;
+ maxBytes: number;
+ maxFiles: number;
  }): string {
-  const totalMB = (guard.totalBytes / 1024 / 1024).toFixed(1);
-  const maxMB = (guard.maxBytes / 1024 / 1024).toFixed(0);
-  return t('alert.cacheLimitExceeded', { totalFiles: guard.totalFiles, totalMB, maxFiles: guard.maxFiles, maxMB });
+  return t('alert.cacheLimitExceeded', {
+   totalFiles: guard.totalFiles,
+   totalMB: (guard.totalBytes / 1024 / 1024).toFixed(1),
+   maxFiles: guard.maxFiles,
+   maxMB: (guard.maxBytes / 1024 / 1024).toFixed(0),
+  });
  }
 
  private handleMalformedTransferMessage(
@@ -760,6 +919,12 @@ export class ServerFileTransfer {
 
   for (const session of this.receivingSessions.values()) {
    session.status = "error";
+   if (session.directSink) {
+    void session.directSink.abort(reason).catch((error) => {
+     console.warn(`[ServerFileTransfer] direct file sink abort failed: ${session.transferId}`, error);
+    });
+   }
+   session.directSink = null;
    session.buffer = null;
    session.receivedChunks = [];
   }
@@ -768,6 +933,7 @@ export class ServerFileTransfer {
   }
 
   this.receivingSessions.clear();
+  this.clearPendingDirectSaveRequest();
   this.sendingSessions.clear();
   this.unknownBinaryTransferIssueKeys.clear();
   this.clearAllTimeouts();
@@ -950,9 +1116,12 @@ export class ServerFileTransfer {
   if (!cacheGuard.allowed) {
    const reason = this.getReceivedCacheLimitMessage(cacheGuard);
    console.warn(`[ServerFileTransfer] ${reason}`);
-   this.setTransferStatus(reason, "warning");
-   this.rejectIncomingRequest(request, reason);
-   return;
+   if (!this.canUseDirectFileSave()) {
+    const fullReason = `${reason} ${t('alert.directSaveUnsupported')}`;
+    this.setTransferStatus(fullReason, "warning");
+    this.rejectIncomingRequest(request, fullReason);
+    return;
+   }
   }
 
   // Bug2 修复: 不在此处预分配缓冲区, 延迟到用户真正接受后再分配
@@ -974,9 +1143,18 @@ export class ServerFileTransfer {
    fromUserId: request.from_user_id,
    roomName: request.room_name,
    status: "pending",
+   storageMode: cacheGuard.allowed ? "browser-cache" : "direct-to-disk",
+   directSink: null,
+   writeChain: Promise.resolve(),
+   directSaveReason: cacheGuard.allowed ? undefined : this.getReceivedCacheLimitMessage(cacheGuard),
   };
   this.receivingSessions.set(request.transfer_id, session);
   this.unknownBinaryTransferIssueKeys.delete(request.transfer_id);
+
+  if (session.storageMode === "direct-to-disk") {
+   this.queueDirectDiskReceive(session, session.directSaveReason);
+   return;
+  }
 
   const userAccepts = await this.showAcceptDialog(request);
 
@@ -985,6 +1163,33 @@ export class ServerFileTransfer {
   } else {
    this.rejectTransfer(request.transfer_id, request.from_user_id, "用户拒绝");
   }
+ }
+
+ private queueDirectDiskReceive(session: ReceiveSession, cacheLimitMessage?: string): void {
+  const request: ServerDirectSaveRequest = {
+   transport: "server",
+   peerId: session.fromUserId,
+   transferId: session.transferId,
+   fileName: session.fileName,
+   fileSize: session.fileSize,
+   totalChunks: session.totalChunks,
+   chunkSize: session.chunkSize,
+  };
+  this.setPendingDirectSaveRequest(request);
+  this.onFileMetaInfoChange?.(session.fileName);
+  this.onDownloadPageStateChange?.(true);
+  this.onProgressCallback?.(null);
+
+  const message = t('alert.directSaveRequired', {
+   name: session.fileName,
+   size: formatSize(session.fileSize),
+  });
+  const historyNotice = t('alert.directSaveNoBrowserHistory');
+  const fullMessage = cacheLimitMessage
+   ? `${cacheLimitMessage} ${message} ${historyNotice}`
+   : `${message} ${historyNotice}`;
+  this.setTransferStatus(fullMessage, "warning");
+  alertUseMUI(fullMessage, 9000, { kind: "warning", category: "transfer-status" });
  }
 
  /**
@@ -1020,6 +1225,79 @@ export class ServerFileTransfer {
  /**
   * 接受文件传输 — 在此处分配缓冲区, 确保用户确认后才占用内存
   */
+ public async acceptPendingDirectDiskReceive(transferId?: string): Promise<void> {
+  const request = transferId
+   ? this.pendingDirectSaveRequests.get(transferId)
+   : this.pendingDirectSaveRequest;
+
+  if (!request) {
+   return;
+  }
+
+  const session = this.receivingSessions.get(request.transferId);
+  if (!session || session.status !== "pending") {
+   this.clearPendingDirectSaveRequest(request.transferId);
+   throw new Error(t('alert.chunkWithoutTransfer'));
+  }
+
+  const showSaveFilePicker = this.getShowSaveFilePicker();
+  if (!showSaveFilePicker) {
+   const reason = t('alert.directSaveUnsupported');
+   this.clearPendingDirectSaveRequest(request.transferId);
+   this.rejectTransfer(request.transferId, request.peerId, reason);
+   this.setTransferStatus(reason, "warning");
+   throw new Error(reason);
+  }
+
+  try {
+   this.setTransferStatus(t('alert.directSavePreparing'), "info");
+   const handle = await showSaveFilePicker({
+    suggestedName: this.getSafeSuggestedFileName(request.fileName),
+   });
+   const writable = await handle.createWritable();
+   session.directSink = new DirectFileWriteSink({
+    fileSize: request.fileSize,
+    totalChunks: request.totalChunks,
+    chunkSize: request.chunkSize,
+    writable,
+   });
+   session.storageMode = "direct-to-disk";
+   this.clearPendingDirectSaveRequest(request.transferId);
+   this.acceptTransfer(request.transferId, request.peerId);
+   if (!this.receivingSessions.has(request.transferId)) {
+    return;
+   }
+   alertUseMUI(t('alert.directSaveReady', { name: request.fileName }), 3000, {
+    kind: "success",
+    category: "transfer-status",
+   });
+  } catch (error) {
+   const abortedByPicker =
+    typeof DOMException !== "undefined" &&
+    error instanceof DOMException &&
+    error.name === "AbortError";
+   const reason = abortedByPicker
+    ? t('alert.userCancelReceive')
+    : t('alert.directSaveFailed');
+
+   if (session.directSink) {
+    void session.directSink.abort(reason).catch((abortError) => {
+     console.warn(`[ServerFileTransfer] direct file sink abort failed: ${session.transferId}`, abortError);
+    });
+    session.directSink = null;
+   }
+   this.clearPendingDirectSaveRequest(request.transferId);
+   this.rejectTransfer(request.transferId, request.peerId, reason);
+   this.onProgressCallback?.(null);
+   this.setTransferStatus(reason, abortedByPicker ? "warning" : "error");
+   alertUseMUI(reason, 4000, {
+    kind: abortedByPicker ? "warning" : "error",
+    category: "transfer-status",
+   });
+   throw error;
+  }
+ }
+
  private acceptTransfer(transferId: string, toUserId: string) {
   const session = this.receivingSessions.get(transferId);
   if (!session) {
@@ -1027,25 +1305,36 @@ export class ServerFileTransfer {
    return;
   }
 
-  // 混合策略: ≤100MB 用缓冲区(快), >100MB 用分块收集(省内存)
-  const CHUNK_MODE_THRESHOLD = 100 * 1024 * 1024; // 100MB
-  if (session.fileSize <= CHUNK_MODE_THRESHOLD) {
-   try {
-    session.buffer = new Uint8Array(session.fileSize);
-   } catch (e) {
-    if (e instanceof RangeError) {
-     // 小文件分配失败，降级到 chunks 模式
-     console.warn(`[ServerFileTransfer] buffer 分配失败，降级到 chunks 模式 (${(session.fileSize / 1024 / 1024).toFixed(1)} MB)`);
-     session.buffer = null;
+  if (session.storageMode === "direct-to-disk") {
+   if (!session.directSink) {
+    const reason = t('alert.directSaveFailed');
+    this.rejectTransfer(transferId, toUserId, reason);
+    this.setTransferStatus(reason, "error");
+    return;
+   }
+   session.buffer = null;
    session.receivedChunks = [];
-    } else {
-     throw e;
+  } else {
+   // 混合策略: ≤100MB 用缓冲区(快), >100MB 用分块收集(省内存)
+   const CHUNK_MODE_THRESHOLD = 100 * 1024 * 1024; // 100MB
+   if (session.fileSize <= CHUNK_MODE_THRESHOLD) {
+    try {
+     session.buffer = new Uint8Array(session.fileSize);
+    } catch (e) {
+     if (e instanceof RangeError) {
+      // 小文件分配失败，降级到 chunks 模式
+      console.warn(`[ServerFileTransfer] buffer 分配失败，降级到 chunks 模式 (${(session.fileSize / 1024 / 1024).toFixed(1)} MB)`);
+      session.buffer = null;
+      session.receivedChunks = [];
+     } else {
+      throw e;
+     }
     }
    }
-  }
-  // 大文件或降级：用 receivedChunks 数组增量收集
-  if (!session.buffer) {
-   session.receivedChunks = [];
+   // 大文件或降级：用 receivedChunks 数组增量收集
+   if (!session.buffer) {
+    session.receivedChunks = [];
+   }
   }
 
   session.status = "receiving";
@@ -1403,21 +1692,31 @@ export class ServerFileTransfer {
   */
  private handleTransferEnd(data: { transfer_id: string }) {
   if (this.completedTransferIds.has(data.transfer_id)) { return; } // 传输已完成，忽略迟到 end
-  const receiveSession = this.receivingSessions.get(data.transfer_id);
-  if (receiveSession) {
-   if (receiveSession.receivedCount !== receiveSession.totalChunks) {
-    const missingCount = this.getMissingChunkCount(receiveSession);
-    if (this.requestMissingServerChunks(receiveSession, t('alert.resendTimeoutReason'))) {
-     this.refreshReceiveTimeout(receiveSession.transferId);
-     console.warn(`[ServerFileTransfer] Receive ended with missing chunks, requested resend: missing=${missingCount} transfer=${receiveSession.transferId}`);
+ const receiveSession = this.receivingSessions.get(data.transfer_id);
+ if (receiveSession) {
+   void receiveSession.writeChain.then(() => {
+    if (receiveSession.status !== "receiving") {
      return;
     }
-    this.failReceiveSession(receiveSession, this.getResendRecoveryFailureMessage(receiveSession));
-    console.warn(`[ServerFileTransfer] Receive ended with missing chunks: ${receiveSession.receivedCount}/${receiveSession.totalChunks}`);
-   } else {
-    this.finalizeReceivedFile(receiveSession);
-    console.debug(`[ServerFileTransfer] Receive completed: ${data.transfer_id}`);
-   }
+    if (receiveSession.receivedCount !== receiveSession.totalChunks) {
+     const missingCount = this.getMissingChunkCount(receiveSession);
+     if (this.requestMissingServerChunks(receiveSession, t('alert.resendTimeoutReason'))) {
+      this.refreshReceiveTimeout(receiveSession.transferId);
+      console.warn(`[ServerFileTransfer] Receive ended with missing chunks, requested resend: missing=${missingCount} transfer=${receiveSession.transferId}`);
+      return;
+     }
+     this.failReceiveSession(receiveSession, this.getResendRecoveryFailureMessage(receiveSession));
+     console.warn(`[ServerFileTransfer] Receive ended with missing chunks: ${receiveSession.receivedCount}/${receiveSession.totalChunks}`);
+    } else {
+     void this.finalizeReceivedFile(receiveSession);
+     console.debug(`[ServerFileTransfer] Receive completed: ${data.transfer_id}`);
+    }
+   }).catch((error) => {
+    if (receiveSession.status === "receiving") {
+     console.error(`[ServerFileTransfer] 写入链异常: ${data.transfer_id}`, error);
+     this.failReceiveSession(receiveSession, t('alert.unexpectedChunk'));
+    }
+   });
   }
  }
 
@@ -1451,6 +1750,30 @@ export class ServerFileTransfer {
   this.onProgressCallback?.(progress);
   console.debug(
    `[ServerFileTransfer] Receiver ACK ${session.ackedChunks}/${session.totalChunks} transfer=${session.transferId}`
+  );
+ }
+
+ private handleTransferResumeState(data: FileTransferResumeState) {
+  const transferId = data.transfer_id;
+  if (!transferId) return;
+
+  const sendingSession = this.sendingSessions.get(transferId);
+  if (sendingSession?.flowControl) {
+   const serverAcceptedChunks = Math.max(
+    0,
+    Math.min(data.received_count || 0, sendingSession.totalChunks)
+   );
+   sendingSession.ackedChunks = Math.max(sendingSession.ackedChunks, serverAcceptedChunks);
+   const progress = Math.min((sendingSession.ackedChunks / sendingSession.totalChunks) * 100, 99);
+   this.onProgressCallback?.(progress);
+  }
+
+  if (data.status === "interrupted") {
+   this.setTransferStatus(t('alert.transferInterrupted'), "warning");
+  }
+
+  console.debug(
+   `[ServerFileTransfer] Relay resume state transfer=${transferId} status=${data.status} received=${data.received_count}/${data.total_chunks} missing=${data.missing_count}`
   );
  }
 
@@ -1541,6 +1864,12 @@ export class ServerFileTransfer {
   }
   if (receivingSession) {
    receivingSession.status = "cancelled";
+   if (receivingSession.directSink) {
+    void receivingSession.directSink.abort(data.reason).catch((error) => {
+     console.warn(`[ServerFileTransfer] direct file sink abort failed: ${receivingSession.transferId}`, error);
+    });
+   }
+   receivingSession.directSink = null;
    receivingSession.buffer = null;
    receivingSession.receivedChunks = [];
   }
@@ -1554,6 +1883,7 @@ export class ServerFileTransfer {
   }
   this.sendingSessions.delete(data.transfer_id);
   this.receivingSessions.delete(data.transfer_id);
+  this.clearPendingDirectSaveRequest(data.transfer_id);
   if (this.currentSendingTransferId === data.transfer_id) {
    this.currentSendingTransferId = null;
   }
@@ -1576,6 +1906,7 @@ export class ServerFileTransfer {
  private handleTransferError(data: { transfer_id: string; error?: string }) {
   if (this.completedTransferIds.has(data.transfer_id)) { return; } // 传输已完成，忽略迟到 error
   const sendingSession = this.sendingSessions.get(data.transfer_id);
+  const receivingSession = this.receivingSessions.get(data.transfer_id);
   if (sendingSession && sendingSession.status !== "pending") {
    this.completionAcks.reject(
     data.transfer_id,
@@ -1584,8 +1915,14 @@ export class ServerFileTransfer {
   } else {
    this.completionAcks.cancel(data.transfer_id);
   }
+  if (receivingSession?.directSink) {
+   void receivingSession.directSink.abort(data.error).catch((error) => {
+    console.warn(`[ServerFileTransfer] direct file sink abort failed: ${receivingSession.transferId}`, error);
+   });
+  }
   this.sendingSessions.delete(data.transfer_id);
   this.receivingSessions.delete(data.transfer_id);
+  this.clearPendingDirectSaveRequest(data.transfer_id);
   if (this.currentSendingTransferId === data.transfer_id) {
    this.currentSendingTransferId = null;
   }
@@ -1611,38 +1948,60 @@ export class ServerFileTransfer {
  /**
   * 直接基于预分配缓冲区创建文件 — 单次拷贝, 无额外内存
   */
- private finalizeReceivedFile(session: ReceiveSession) {
+ private async finalizeReceivedFile(session: ReceiveSession): Promise<void> {
   const startTime = performance.now();
   console.debug(`[ServerFileTransfer] Finalizing: ${session.fileName} (${(session.fileSize / 1024 / 1024).toFixed(1)}MB)`);
   let completed = false;
 
   try {
-   let file: File;
-   if (session.receivedChunks && session.receivedChunks.length > 0) {
-    // 大文件 chunks 模式：Blob 组装
-    const blob = new Blob(session.receivedChunks as BlobPart[], { type: session.fileType || "application/octet-stream" });
-    file = new File([blob], session.fileName, { type: session.fileType || "application/octet-stream", lastModified: Date.now() });
-   } else if (session.buffer) {
-    // 小文件 buffer 模式：直接创建 File
-    file = createCompletedTransferFile({
-     bytes: session.buffer,
-     fileName: session.fileName,
-     fileType: session.fileType,
-     createFile: (parts: BlobPart[], fileName: string, options?: FilePropertyBag) => new File(parts, fileName, options),
-    });
-   } else {
-    throw new Error("无数据可组装文件");
+   if (session.status === "completed") {
+    return;
    }
+   session.status = "completed";
 
-   const elapsed = (performance.now() - startTime).toFixed(0);
-   console.debug(`[ServerFileTransfer] File ready in ${elapsed}ms: ${file.name} (${file.size} bytes)`);
+   if (session.storageMode === "direct-to-disk") {
+    if (!session.directSink) {
+     throw new Error("direct file sink not available");
+    }
+    await session.directSink.close();
+    const elapsed = (performance.now() - startTime).toFixed(0);
+    console.debug(`[ServerFileTransfer] Direct file saved in ${elapsed}ms: ${session.fileName} (${session.fileSize} bytes)`);
 
-   this.onFileReceivedCallback?.(file, session.fromUserId);
+    this.onFileSavedToDiskCallback?.(session.fileName, session.fileSize, session.fromUserId);
+   } else {
+    let file: File;
+    if (session.receivedChunks && session.receivedChunks.length > 0) {
+    // 大文件 chunks 模式：Blob 组装
+     const blob = new Blob(session.receivedChunks as BlobPart[], { type: session.fileType || "application/octet-stream" });
+     file = new File([blob], session.fileName, { type: session.fileType || "application/octet-stream", lastModified: Date.now() });
+    } else if (session.buffer) {
+    // 小文件 buffer 模式：直接创建 File
+     file = createCompletedTransferFile({
+      bytes: session.buffer,
+      fileName: session.fileName,
+      fileType: session.fileType,
+      createFile: (parts: BlobPart[], fileName: string, options?: FilePropertyBag) => new File(parts, fileName, options),
+     });
+    } else {
+     throw new Error("无数据可组装文件");
+    }
+
+    const elapsed = (performance.now() - startTime).toFixed(0);
+    console.debug(`[ServerFileTransfer] File ready in ${elapsed}ms: ${file.name} (${file.size} bytes)`);
+
+    this.onFileReceivedCallback?.(file, session.fromUserId);
+   }
    this.sendTransferCompleteMessage(session.transferId, session.roomName);
    this.completedTransferIds.add(session.transferId);
    completed = true;
   } catch (err) {
    console.error(`[ServerFileTransfer] Finalize failed:`, err);
+   session.status = "error";
+   if (session.directSink) {
+    void session.directSink.abort(err).catch((abortError) => {
+     console.warn(`[ServerFileTransfer] direct file sink abort failed: ${session.transferId}`, abortError);
+    });
+   }
    this.sendTransferControlMessage(
     FILE_TRANSFER_MESSAGE_TYPES.CANCEL,
     session.transferId,
@@ -1653,9 +2012,11 @@ export class ServerFileTransfer {
   }
 
   // 清理
+  session.directSink = null;
   session.buffer = null;
-	  session.receivedChunks = [];
+  session.receivedChunks = [];
   this.receivingSessions.delete(session.transferId);
+  this.clearPendingDirectSaveRequest(session.transferId);
   this.clearReceiveTimeout(session.transferId);
 
   setTimeout(() => {
@@ -1703,6 +2064,12 @@ export class ServerFileTransfer {
    }
    const reason = t('alert.userCancelReceive');
    session.status = "cancelled";
+   if (session.directSink) {
+    void session.directSink.abort(reason).catch((error) => {
+     console.warn(`[ServerFileTransfer] direct file sink abort failed: ${session.transferId}`, error);
+    });
+   }
+   session.directSink = null;
    session.buffer = null;
    session.receivedChunks = [];
    this.sendTransferControlMessage(
@@ -1712,6 +2079,7 @@ export class ServerFileTransfer {
     session.roomName
    );
    this.receivingSessions.delete(session.transferId);
+   this.clearPendingDirectSaveRequest(session.transferId);
    this.clearReceiveTimeout(session.transferId);
    cancelled = true;
   }

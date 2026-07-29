@@ -93,8 +93,6 @@ export default defineConfig({
         globIgnores: [
           '**/index.html',
           '**/landing.html',
-          '**/*landing*.js',
-          '**/*landing*.css',
           '**/*gsap*.js',
           '**/*gsap*.js.gz',
           '**/modulepreload-polyfill-*.js',
@@ -133,7 +131,7 @@ export default defineConfig({
             urlPattern: /^https:\/\/.*/i,
             handler: 'StaleWhileRevalidate',
             options: {
-              cacheName: 'external-cache-v18',
+              cacheName: 'external-cache-v21',
               expiration: {
                 maxEntries: 200,
                 maxAgeSeconds: 60 * 60 * 24 * 365 // 365天

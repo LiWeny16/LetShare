@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components */
 import React, { useEffect, useRef, useState } from "react";
 // const url = "ws://192.168.1.13:9000";
 import Dialog from "@mui/material/Dialog";
@@ -232,6 +233,23 @@ const Share = observer(() => {
           key,
           ...file,
         })),
+        pendingDirectSaveRequest: realTimeColab.getPendingDirectSaveRequest(),
+        directSavedFiles: Array.from(realTimeColab.directSavedFiles.entries()).map(([key, file]) => ({
+          key,
+          ...file,
+        })),
+        directReceivingFiles: Array.from(
+          (((realTimeColab as any).receivingFiles ?? new Map()).entries()) as Iterable<[string, any]>
+        )
+          .filter(([, fileInfo]: [string, any]) => fileInfo?.storageMode === "direct-to-disk")
+          .map(([peerId, fileInfo]: [string, any]) => ({
+            peerId,
+            name: fileInfo.name,
+            size: fileInfo.size,
+            receivedSize: fileInfo.receivedSize,
+            receivedChunkCount: fileInfo.receivedChunkCount,
+            totalChunks: fileInfo.totalChunks,
+          })),
         fileTransferStatus: realTimeColab.fileTransferStatus,
         selectedButton,
         selectedFileName: selectedFile?.name ?? null,
@@ -1199,7 +1217,7 @@ const ThemedShare = observer(() => {
         });
       });
     }
-  }, [settingsStore.get("userTheme")]);
+  }, [theme, resolvedThemeKey]);
 
 
 

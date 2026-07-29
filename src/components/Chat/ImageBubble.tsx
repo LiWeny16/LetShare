@@ -45,7 +45,6 @@ function formatTimestamp(timestamp: number): string {
 const ImageBubble: React.FC<ImageBubbleProps> = ({
   message,
   isMyMessage,
-  onDownload: _onDownload,
   onRetry,
   thumbnailUrl,
 }) => {

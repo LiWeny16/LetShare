@@ -36,6 +36,19 @@ test("send progress panel is only shown for an active outgoing transfer", () => 
   assert.doesNotMatch(downloadSource, /\{progress !== null && \(/);
 });
 
+test("send progress panel shows transfer speed and human-readable sent file sizes", () => {
+  assert.match(downloadSource, /function formatTransferSpeed\(bytesPerSecond: number\): string/);
+  assert.match(downloadSource, /\{formatTransferSpeed\(outgoingStats\.bytesPerSecond\)\}/);
+  assert.match(downloadSource, /\{formatSize\(outgoingStats\.bytesTransferred\)\} \/ \{formatSize\(outgoingStats\.fileSize\)\}/);
+  assert.match(downloadSource, /\{formatSize\(info\.size\)\}/);
+  assert.doesNotMatch(downloadSource, /\(info\.size \/ 1024\)\.toFixed\(1\)\} KB/);
+});
+
+test("direct-to-disk files explain that browser download history is not retained", () => {
+  assert.match(downloadSource, /directSavedNoBrowserHistory/);
+  assert.match(downloadSource, /directSavedList\.length > 0/);
+});
+
 test("download drawer has a centered floating height toggle", () => {
   assert.match(downloadSource, /KeyboardArrowDownIcon/);
   assert.match(downloadSource, /KeyboardArrowUpIcon/);

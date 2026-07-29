@@ -571,13 +571,14 @@ test("transfer error does not fire both toast and status bar update simultaneous
   const statusArgs = failBody.slice(statusIdx, failBody.indexOf(";", statusIdx));
   assert.match(statusArgs, /reason/, "setTransferStatus should use reason parameter");
 
-  // handleConnectionLost — should have exactly one alertUseMUI (no duplication)
+  // handleConnectionLost uses the persistent status bar only; transfer error
+  // toasts are emitted by individual transfer-error handlers when needed.
   const connLostBody = extractMethodBody(source, "public handleConnectionLost");
   const connStatusCount = (connLostBody.match(/this\.setTransferStatus/g) ?? []).length;
   const connAlertCount = (connLostBody.match(/alertUseMUI/g) ?? []).length;
 
-  assert.equal(connAlertCount, 1,
-    "handleConnectionLost should fire alertUseMUI exactly once (no duplicate toast)");
+  assert.equal(connAlertCount, 0,
+    "handleConnectionLost should not fire a duplicate toast");
   assert.ok(connStatusCount <= 2,
     "handleConnectionLost setTransferStatus calls should be reasonable");
 

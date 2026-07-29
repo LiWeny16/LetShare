@@ -8,7 +8,7 @@ import TranslateIcon from "@mui/icons-material/Translate";
 import { styled } from "@mui/material/styles";
 
 // 自定义样式组件
-const StyledCard = styled(Card)(({ }) => ({
+const StyledCard = styled(Card)(() => ({
  maxWidth: 345,
  borderRadius: "20px",
  background: "linear-gradient(145deg, #ffffff, #f0f0f0)",
@@ -51,7 +51,7 @@ const IconContainer = styled("div")({
  },
 });
 
-const StyledButton = styled(Button)(({ }) => ({
+const StyledButton = styled(Button)(() => ({
  borderRadius: "20px",
  fontWeight: "bold",
  transition: "all 0.3s ease",
