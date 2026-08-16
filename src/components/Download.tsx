@@ -564,7 +564,7 @@ export default function DownloadDrawerSlide({
     });
   }, []);
 
-  const clearReceivedFiles = () => {
+  const clearReceivedFiles = async () => {
     closePreview();
     replacePendingBrowserDownload(null);
     setBrowserDownloadNotice(null);
@@ -572,8 +572,18 @@ export default function DownloadDrawerSlide({
     setThumbnails(new Map());
     thumbnailKeysRef.current.clear();
     setSelectedFiles(new Set());
+    setPersistentFileCount(0);
     forceUpdate();
     alertUseMUI("已清空接收列表并释放浏览器缓存", 2000, { kind: "success" });
+
+    try {
+        const fileMessages = await ChatIntegration.getAllFileMessages();
+        for (const { message, userId } of fileMessages) {
+            await ChatIntegration.deleteMessage(userId, message.id);
+        }
+    } catch (err) {
+        console.warn('[Download] Failed to clear persisted files from IndexedDB:', err);
+    }
   };
 
   // —— 批量选择与用户分组操作 ——
@@ -600,21 +610,22 @@ export default function DownloadDrawerSlide({
     });
   };
 
-  const deleteSelectedFiles = () => {
+  const deleteSelectedFiles = async () => {
     if (selectedFiles.size === 0) return;
     if (!window.confirm(`确定要删除选中的 ${selectedFiles.size} 个文件吗？`)) return;
 
-    // 如果正在预览的文件被删除，先关闭预览
+    const keysToDelete = new Set(selectedFiles);
+
     if (previewUrlRef.current) {
       const previewKey = Array.from(realTimeColab.receivedFiles.entries()).find(
         ([, f]) => f === previewFile
       )?.[0];
-      if (previewKey && selectedFiles.has(previewKey)) {
+      if (previewKey && keysToDelete.has(previewKey)) {
         closePreview();
       }
     }
 
-    selectedFiles.forEach((key) => {
+    keysToDelete.forEach((key) => {
       realTimeColab.receivedFiles.delete(key);
       if (thumbnailsRef.current.has(key)) {
         const dataUrl = thumbnailsRef.current.get(key)!;
@@ -625,19 +636,35 @@ export default function DownloadDrawerSlide({
 
     setThumbnails((prev) => {
       const next = new Map(prev);
-      selectedFiles.forEach((key) => next.delete(key));
+      keysToDelete.forEach((key) => next.delete(key));
       return next;
     });
     setSelectedFiles(new Set());
     forceUpdate();
+
+    try {
+        const fileMessages = await ChatIntegration.getAllFileMessages();
+        const msgByKey = new Map<string, { message: any; userId: string }>();
+        for (const entry of fileMessages) {
+            const mapKey = `${entry.userId}::${entry.message.fileMetadata.fileName}`;
+            msgByKey.set(mapKey, entry);
+        }
+        for (const key of keysToDelete) {
+            const entry = msgByKey.get(key);
+            if (entry) {
+                await ChatIntegration.deleteMessage(entry.userId, entry.message.id);
+            }
+        }
+    } catch (err) {
+        console.warn('[Download] Failed to delete persisted files from IndexedDB:', err);
+    }
   };
 
-  const deleteUserFiles = (userId: string) => {
+  const deleteUserFiles = async (userId: string) => {
     const group = groupedByUser.get(userId);
     if (!group) return;
     if (!window.confirm(`确定要删除 ${group.userName} 的全部 ${group.files.length} 个文件吗？`)) return;
 
-    // 如果正在预览的文件属于该用户，先关闭预览
     if (previewUrlRef.current) {
       const previewKey = Array.from(realTimeColab.receivedFiles.entries()).find(
         ([, f]) => f === previewFile
@@ -670,6 +697,12 @@ export default function DownloadDrawerSlide({
       return next;
     });
     forceUpdate();
+
+    try {
+        await ChatIntegration.deleteChatHistory(userId);
+    } catch (err) {
+        console.warn('[Download] Failed to delete persisted files from IndexedDB:', err);
+    }
   };
 
   const toggleUserExpand = (userId: string) => {

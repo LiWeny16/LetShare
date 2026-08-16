@@ -239,7 +239,7 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ open, onClose, targetUserId, targ
 
         try {
             console.log(`[CHAT PANEL] Deleting chat history for ${targetUserId}`);
-            const result = await ChatHistoryManager.deleteChatHistory(targetUserId);
+            const result = await ChatIntegration.deleteChatHistory(targetUserId);
             if (result.success) {
                 setChatHistory(null);
                 onClose();
