@@ -24,6 +24,16 @@ If the version matches → all caches valid, app loads instantly.
 | `html-cache-v3` | StaleWhileRevalidate | 365 days | Sentinel triggers refresh on version change |
 | `external-cache-v15` | StaleWhileRevalidate | 365 days | Same — sentinel invalidates when needed |
 
+## Version String Sync Checklist
+
+When bumping the LetShare version (e.g. 3.5.7 → 3.5.8), update ALL of these:
+
+1. **`package.json`** → `"version"` field
+2. **`src/app/libs/mobx/mobx.ts`** → `DEFAULT_SETTINGS.version` (hardcoded string, shown in Footer)
+3. **Commit, push, tag** → `git tag v{version}` + `gh release create`
+
+Do NOT skip #2 — it is not derived from package.json at runtime. The Footer reads `settingsStore.get("version")` which defaults to this hardcoded value.
+
 ## When to Bump Cache Names
 
 Only bump `html-cache-v{N}` or `external-cache-v{N}` when the **caching strategy** changes (not the content).
