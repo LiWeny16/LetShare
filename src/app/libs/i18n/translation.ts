@@ -58,7 +58,9 @@ const sharedMalayTranslation = {
             clipboardReadFailed: "Gagal membaca papan klip, sila semak kebenaran atau tampal secara manual.",
             clipboardWriteUnsupported: "Persekitaran tidak menyokong penulisan papan klip",
             clipboardWriteFailed: "Penyalinan gagal, sila salin teks secara manual.",
-            serverTransferMode: "Ditukar ke mod pemindahan pelayan"
+            serverTransferMode: "Ditukar ke mod pemindahan pelayan",
+            droppedSending: "Memulakan penghantaran {{count}} fail kepada {{name}}...",
+            emptyFileNotAllowed: "Fail kosong / folder kosong tidak dibenarkan untuk dihantar"
         },
         // download
         transfer: {
@@ -151,6 +153,10 @@ const sharedMalayTranslation = {
             deleteSelected: "Padam Dipilih",
             selectAll: "Pilih Semua",
             deleteAllFrom: 'Padam semua dari {{name}}',
+            deleteFile: "Padam fail ini",
+            deleteFolder: "Padam folder ini",
+            downloadFolder: "Muat turun keseluruhan folder",
+            cancelSelection: "Batal pilihan",
             confirmDeleteFiles: 'Padam {{count}} fail? Ini tidak boleh dibuat asal.',
             noReceivedFiles: "Tiada fail diterima",
             totalStorage: "Storan: {{size}}",
@@ -323,7 +329,9 @@ export const resources = {
                 clipboardReadFailed: "Failed to read clipboard, please check permissions or paste manually.",
                 clipboardWriteUnsupported: "Clipboard write not supported in this environment",
                 clipboardWriteFailed: "Copy failed, please copy text manually.",
-                serverTransferMode: "Switched to server relay mode"
+                serverTransferMode: "Switched to server relay mode",
+                droppedSending: "Sending {{count}} file(s) to {{name}}...",
+                emptyFileNotAllowed: "Empty files / empty folders are not allowed to be sent"
             },
             // Download.tsx
             transfer: {
@@ -416,6 +424,10 @@ export const resources = {
                 deleteSelected: "Delete Selected",
                 selectAll: "Select All",
                 deleteAllFrom: 'Delete all from {{name}}',
+                deleteFile: "Delete this file",
+                deleteFolder: "Delete this folder",
+                downloadFolder: "Download whole folder",
+                cancelSelection: "Cancel selection",
                 confirmDeleteFiles: 'Delete {{count}} file(s)? This cannot be undone.',
                 noReceivedFiles: "No received files",
                 totalStorage: "Storage: {{size}}",
@@ -586,7 +598,9 @@ export const resources = {
                 clipboardReadFailed: "读取剪贴板内容失败，请检查权限或手动粘贴。",
                 clipboardWriteUnsupported: "当前环境不支持复制到剪贴板",
                 clipboardWriteFailed: "复制失败，请手动复制文本。",
-                serverTransferMode: "已切换到服务器中转模式"
+                serverTransferMode: "已切换到服务器中转模式",
+                droppedSending: "开始发送 {{count}} 个文件给 {{name}}...",
+                emptyFileNotAllowed: "不允许空文件传输：空文件/空文件夹已被跳过"
             },
             // Download
             transfer: {
@@ -680,6 +694,10 @@ export const resources = {
                 deleteSelected: "删除选中",
                 selectAll: "全选",
                 deleteAllFrom: '删除来自 {{name}} 的所有文件',
+                deleteFile: "删除该文件",
+                deleteFolder: "删除整个文件夹",
+                downloadFolder: "下载整个文件夹",
+                cancelSelection: "取消选择",
                 confirmDeleteFiles: '确定删除 {{count}} 个文件吗？此操作无法撤销。',
                 noReceivedFiles: "暂无接收的文件",
                 totalStorage: "存储: {{size}}",

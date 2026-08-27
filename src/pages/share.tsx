@@ -54,6 +54,8 @@ import { observer } from "mobx-react-lite";
 import settingsStore from "@App/libs/mobx/mobx";
 import { isApp } from "@App/libs/capacitor/user";
 import { Trans, useTranslation } from "react-i18next";
+import { CallManager } from "@App/libs/call/callManager";
+import { CallButton, IncomingCallBanner, ActiveCallPanel, type CallMedia, type IncomingCallInfo } from "../components/call/CallBar";
 // import VideoPanel from "@Com/VideoPannel/VideoPannel";
 // import VideoPanel from "@Com/VideoPannel/VideoPannel";
 
@@ -112,10 +114,353 @@ const Share = observer(() => {
   const [downloadPageState, setDwnloadPageState] = useState(false);
   const [isDraggingOver, setIsDraggingOver] = React.useState(false);
   const [fileSendingTargetUser, setFileSendingTargetUser] = React.useState("");
+  // 拖拽即传：悬停的用户卡片 + 待发区 chip 拖拽的原始文件
+  const [dragOverUserId, setDragOverUserId] = React.useState<string | null>(null);
+  const chipDragPayloadRef = React.useRef<File[] | null>(null);
+
+  // ── 通话（语音/视频）状态与 CallManager 集成 — 纯增量，不影响现有功能 ──
+  const [incomingCall, setIncomingCall] = React.useState<IncomingCallInfo | null>(null);
+  const [activeCall, setActiveCall] = React.useState<{
+    callId: string;
+    peerId: string;
+    peerName: string;
+    isVideo: boolean;
+    remoteStream: MediaStream | null;
+    localStream: MediaStream | null;
+    transport: "p2p" | "public" | null;
+    state: string;
+    muted: boolean;
+    videoEnabled: boolean;
+  } | null>(null);
+  const callManagerRef = React.useRef<CallManager | null>(null);
+  const activeCallRef = React.useRef<typeof activeCall>(null);
+  React.useEffect(() => { activeCallRef.current = activeCall; }, [activeCall]);
 
   const clearSelectedFiles = () => {
     setSelectedFiles([]);
     setSelectedFile(null);
+  };
+
+  const buildZipFile = async (files: File[]): Promise<File> => {
+    const { default: JSZip } = await import("jszip");
+    const zip = new JSZip();
+    files.forEach(f => zip.file(f.name, f));
+    const content = await zip.generateAsync({ type: "blob" });
+    return new File([content], `LetShare_${Date.now()}.zip`, { type: "application/zip" });
+  };
+
+  // ── 通话：CallManager 初始化（一次） ─────────────────────────────
+  React.useEffect(() => {
+    if (callManagerRef.current) return;
+    const manager = new CallManager(
+      {
+        broadcast: (signal: object) => realTimeColab.broadcastSignal(signal as never),
+        getSelfId: () => realTimeColab.getUniqId(),
+        connection: realTimeColab.getConnectionManager(),
+      },
+      {
+        onIncoming: (info) => {
+          const peer = connectedUsersRef.current.find((u) => u.uniqId === info.from);
+          setIncomingCall({
+            callId: info.callId,
+            from: info.from,
+            fromName: peer?.name || info.from.split(":")[0],
+            media: info.media,
+          });
+        },
+        onCallState: (peerId, state) => {
+          const cur = activeCallRef.current;
+          if (cur && cur.peerId === peerId) {
+            setActiveCall({ ...cur, state });
+          }
+        },
+        onRemoteStream: (peerId, stream, kind) => {
+          const cur = activeCallRef.current;
+          if (cur && cur.peerId === peerId) {
+            setActiveCall({ ...cur, remoteStream: kind === "video" ? stream : (cur.remoteStream ?? stream) });
+          }
+        },
+        onLocalStream: (peerId, stream) => {
+          const cur = activeCallRef.current;
+          if (cur && cur.peerId === peerId) {
+            setActiveCall({ ...cur, localStream: stream });
+          }
+        },
+        onTransportChange: (peerId, transport) => {
+          const cur = activeCallRef.current;
+          if (cur && cur.peerId === peerId) {
+            setActiveCall({ ...cur, transport });
+          }
+        },
+        onCallEnded: (peerId) => {
+          const cur = activeCallRef.current;
+          if (cur && cur.peerId === peerId) setActiveCall(null);
+          setIncomingCall((prev) => (prev && prev.from === peerId ? null : prev));
+        },
+      },
+    );
+    callManagerRef.current = manager;
+    realTimeColab.registerCallSignalHandler((from, data) => manager.handleSignal(from, data));
+    return () => {
+      manager.leaveRoom();
+      callManagerRef.current = null;
+    };
+  }, []);
+
+  const connectedUsersRef = React.useRef<ConnectedUser[]>([]);
+  React.useEffect(() => { connectedUsersRef.current = connectedUsers; }, [connectedUsers]);
+
+  const startCall = React.useCallback(async (peerId: string, media: CallMedia) => {
+    const manager = callManagerRef.current;
+    if (!manager) return;
+    if (manager.isInCall(peerId)) {
+      alertUseMUI(t("call.alreadyInCall", "该用户已在通话中"), 2000, { kind: "info" });
+      return;
+    }
+    try {
+      // 视频通话：先试音频+视频，摄像头不可用时降级为纯语音
+      let stream: MediaStream;
+      let videoEnabled = media === "video";
+      if (media === "video") {
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            audio: true,
+            video: { width: { ideal: 1280 }, height: { ideal: 720 } },
+          });
+        } catch {
+          // 摄像头不可用 → 降级纯语音
+          stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+          videoEnabled = false;
+        }
+      } else {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      }
+      const callId = await manager.startCall(peerId, videoEnabled ? "audio+video" : "audio", stream);
+      const peer = connectedUsersRef.current.find((u) => u.uniqId === peerId);
+      setActiveCall({
+        callId,
+        peerId,
+        peerName: peer?.name || peerId.split(":")[0],
+        isVideo: videoEnabled,
+        remoteStream: null,
+        localStream: stream,
+        transport: "p2p",
+        state: "connecting",
+        muted: false,
+        videoEnabled,
+      });
+    } catch (err) {
+      console.error("通话启动失败:", err);
+      alertUseMUI(t("call.startFailed", "无法启动通话（请检查摄像头/麦克风权限）"), 3000, { kind: "error" });
+    }
+  }, [t]);
+
+  const acceptIncoming = React.useCallback(async () => {
+    const manager = callManagerRef.current;
+    const incoming = incomingCall;
+    if (!manager || !incoming) return;
+    try {
+      // 视频来电：先试音频+视频，摄像头不可用时降级为纯语音接听
+      let stream: MediaStream;
+      let videoEnabled = incoming.media !== "audio";
+      if (videoEnabled) {
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            audio: true,
+            video: { width: { ideal: 1280 }, height: { ideal: 720 } },
+          });
+        } catch {
+          stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+          videoEnabled = false;
+        }
+      } else {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      }
+      await manager.acceptCall(incoming.callId, stream);
+      setActiveCall({
+        callId: incoming.callId,
+        peerId: incoming.from,
+        peerName: incoming.fromName,
+        isVideo: videoEnabled,
+        remoteStream: null,
+        localStream: stream,
+        transport: "p2p",
+        state: "connecting",
+        muted: false,
+        videoEnabled,
+      });
+      setIncomingCall(null);
+    } catch (err) {
+      console.error("接听失败:", err);
+      manager.declineCall(incoming.callId, "declined");
+      setIncomingCall(null);
+      alertUseMUI(t("call.startFailed", "无法启动通话（请检查摄像头/麦克风权限）"), 3000, { kind: "error" });
+    }
+  }, [incomingCall, t]);
+
+  const declineIncoming = React.useCallback(() => {
+    const manager = callManagerRef.current;
+    if (!manager || !incomingCall) return;
+    manager.declineCall(incomingCall.callId, "declined");
+    setIncomingCall(null);
+  }, [incomingCall]);
+
+  const hangupActive = React.useCallback(() => {
+    const manager = callManagerRef.current;
+    const cur = activeCallRef.current;
+    if (!manager || !cur) return;
+    manager.hangup(cur.callId);
+    setActiveCall(null);
+  }, []);
+
+  const toggleMute = React.useCallback(() => {
+    const manager = callManagerRef.current;
+    const cur = activeCallRef.current;
+    if (!manager || !cur) return;
+    const next = !cur.muted;
+    manager.setMuted(cur.callId, next);
+    setActiveCall({ ...cur, muted: next });
+  }, []);
+
+  const toggleVideo = React.useCallback(() => {
+    const manager = callManagerRef.current;
+    const cur = activeCallRef.current;
+    if (!manager || !cur) return;
+    const next = !cur.videoEnabled;
+    manager.setVideoEnabled(cur.callId, next);
+    setActiveCall({ ...cur, videoEnabled: next });
+  }, []);
+
+  // ── 文件夹拖拽处理：目录 → ZIP 打包，空文件/空文件夹一律拒绝 ──
+  // 文件夹打包的 ZIP 命名带文件夹名（LetShare_<ts>_<文件夹名>.zip），
+  // 接收端据此保留 ZIP 本体并解出内部文件（可整包下载，也可选择其中文件下载）。
+
+  interface DirEntryFile {
+    file: File;
+    relPath: string;
+  }
+
+  // 递归遍历一个目录，收集所有文件及其相对路径（含子目录层级）
+  const collectDirFiles = async (entry: FileSystemEntry, relativeDir: string, out: DirEntryFile[]): Promise<void> => {
+    if (entry.isFile) {
+      const file = await new Promise<File | null>((resolve) => {
+        (entry as FileSystemFileEntry).file(resolve, () => resolve(null));
+      });
+      if (file) out.push({ file, relPath: relativeDir ? `${relativeDir}/${file.name}` : file.name });
+      return;
+    }
+    if (!entry.isDirectory) return;
+    const reader = (entry as FileSystemDirectoryEntry).createReader();
+    const nextRelativeDir = relativeDir ? `${relativeDir}/${entry.name}` : entry.name;
+    for (;;) {
+      const batch = await new Promise<FileSystemEntry[]>((resolve) => {
+        reader.readEntries(resolve, () => resolve([]));
+      });
+      if (batch.length === 0) break; // 必须循环读取，直到空批次才结束
+      for (const child of batch) {
+        await collectDirFiles(child, nextRelativeDir, out);
+      }
+    }
+  };
+
+  /**
+   * 将 DataTransfer 解析为可传输的文件列表：
+   * - 拖入文件夹 → 打包为 LetShare_<ts>_<文件夹名>.zip（保留目录结构）
+   * - 0 字节的空文件 / 空文件夹 → 拒绝并提示（不允许空文件传输）
+   * 返回 null 表示没有可传输内容（已提示）。
+   */
+  const dropDataToTransferables = async (dt: DataTransfer): Promise<File[] | null> => {
+    const entries: FileSystemEntry[] = [];
+    const items = dt.items;
+    if (items) {
+      for (const item of Array.from(items)) {
+        const entry = (item as unknown as { webkitGetAsEntry?: () => FileSystemEntry | null }).webkitGetAsEntry?.();
+        if (entry) entries.push(entry);
+      }
+    }
+    if (entries.length === 0) {
+      // 不支持目录遍历的浏览器（如 Firefox）：退回 dataTransfer.files，过滤空文件
+      const raw = Array.from(dt.files ?? []).filter(f => f.size > 0);
+      if (raw.length === 0) {
+        alertUseMUI(t('toast.emptyFileNotAllowed'), 2500, { kind: "warning" });
+        return null;
+      }
+      return raw;
+    }
+
+    const transferables: File[] = [];
+    let rejected = 0;
+    for (const entry of entries) {
+      if (entry.isDirectory) {
+        const collected: DirEntryFile[] = [];
+        await collectDirFiles(entry, "", collected);
+        if (collected.length === 0) {
+          rejected++;
+          continue; // 空文件夹不允许传输
+        }
+        const { default: JSZip } = await import("jszip");
+        const zip = new JSZip();
+        collected.forEach(({ file, relPath }) => zip.file(relPath, file));
+        const content = await zip.generateAsync({ type: "blob" });
+        transferables.push(new File([content], `LetShare_${Date.now()}_${entry.name}.zip`, { type: "application/zip" }));
+      } else if (entry.isFile) {
+        const file = await new Promise<File | null>((resolve) => {
+          (entry as FileSystemFileEntry).file(resolve, () => resolve(null));
+        });
+        if (!file || file.size === 0) {
+          rejected++;
+          continue; // 空文件不允许传输
+        }
+        transferables.push(file);
+      }
+    }
+    if (rejected > 0) {
+      alertUseMUI(t('toast.emptyFileNotAllowed'), 2500, { kind: "warning" });
+    }
+    return transferables.length > 0 ? transferables : null;
+  };
+
+  const sendFilesToUserCard = async (targetUserId: string, files: File[]) => {
+    if (!files || files.length === 0) return;
+    const validFiles = files.filter(f => f.size > 0);
+    if (validFiles.length === 0) {
+      alertUseMUI(t('toast.emptyFileNotAllowed'), 2500, { kind: "warning" });
+      return;
+    }
+    if (validFiles.length !== files.length) {
+      alertUseMUI(t('toast.emptyFileNotAllowed'), 2500, { kind: "warning" });
+    }
+    if (realTimeColab.hasActiveOutgoingFileTransfer()) {
+      alertUseMUI(t('toast.taskInProgress'), 2000, { kind: "info" });
+      setDwnloadPageState(true);
+      return;
+    }
+    let fileToSend: File;
+    try {
+      fileToSend = validFiles.length === 1 ? validFiles[0] : await buildZipFile(validFiles);
+    } catch {
+      alertUseMUI(t('toast.zipFailed'), 2000, { kind: "error" });
+      return;
+    }
+    const transferPriority = settingsStore.get('transferPriority') as 'p2p' | 'server';
+    try {
+      if (transferPriority === 'server') {
+        await realTimeColab.sendFileViaServer(targetUserId, fileToSend);
+      } else if (realTimeColab.canSendFileToUser(targetUserId)) {
+        await realTimeColab.sendFileToUser(targetUserId, fileToSend);
+      } else {
+        alertUseMUI(t('toast.serverTransferMode'), 2000, { kind: "info" });
+        await realTimeColab.sendFileViaServer(targetUserId, fileToSend);
+      }
+      alertUseMUI(
+        t('toast.droppedSending', { name: targetUserId.split(':')[0], count: files.length }),
+        2000,
+        { kind: "success" }
+      );
+    } catch (error) {
+      console.error("拖拽发送失败：", error);
+      alertUseMUI(t('toast.fileTransferFailed'), 3000, { kind: "error" });
+    }
   };
 
 
@@ -341,14 +686,17 @@ const Share = observer(() => {
       setLoading(false);
     }
   }
-  const handleImageSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    setSelectedButton("image")
-    handleMultiFileSelect(event, true)
-  }
-  const handleMultiFileSelect = async (event: React.ChangeEvent<HTMLInputElement>, isImg: boolean | undefined) => {
-    const files = event.target.files;
-    if (!files || files.length === 0) return;
-    const fileList = Array.from(files);
+  const applyFileSelection = async (fileList: File[], isImg?: boolean) => {
+    if (!fileList || fileList.length === 0) return;
+    // 不允许空文件传输：过滤 0 字节文件
+    const files = fileList.filter(f => f.size > 0);
+    if (files.length === 0) {
+      alertUseMUI(t('toast.emptyFileNotAllowed'), 2500, { kind: "warning" });
+      return;
+    }
+    if (files.length !== fileList.length) {
+      alertUseMUI(t('toast.emptyFileNotAllowed'), 2500, { kind: "warning" });
+    }
     // 单文件不需要压缩
     if (isImg) {
       setSelectedButton("image");
@@ -356,19 +704,16 @@ const Share = observer(() => {
       setSelectedButton("file");
     }
     // Always keep original file list for display
-    setSelectedFiles(fileList);
+    setSelectedFiles(files);
     if (files.length === 1) {
-      const file = event.target.files?.[0] || null;
-      if (file) {
-        setSelectedFile(file);
-      }
-      return
+      setSelectedFile(files[0]);
+      return;
     }
     try {
       const { default: JSZip } = await import("jszip");
       const zip = new JSZip();
       // 添加所有文件到ZIP
-      Array.from(files).forEach(file => {
+      files.forEach(file => {
         zip.file(file.name, file);
       });
       // 生成ZIP文件
@@ -377,9 +722,20 @@ const Share = observer(() => {
         type: "application/zip",
       });
       setSelectedFile(zipFile);
+      realTimeColab.addTransferRecord("pasted-files", `${files.length} files`, files.map(f => f.name).join(", "));
     } catch (error) {
       alertUseMUI(t('toast.zipFailed'), 2000, { kind: "error" });
     }
+  };
+
+  const handleImageSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    setSelectedButton("image")
+    handleMultiFileSelect(event, true)
+  }
+  const handleMultiFileSelect = async (event: React.ChangeEvent<HTMLInputElement>, isImg: boolean | undefined) => {
+    const files = event.target.files;
+    if (!files || files.length === 0) return;
+    await applyFileSelection(Array.from(files), isImg);
   };
   const handleClickOtherClients = async (_e: any, targetUserId: string) => {
     try {
@@ -492,17 +848,21 @@ const Share = observer(() => {
       if (!clipboardData) return;
 
       const items = clipboardData.items;
+      const pastedFiles: File[] = [];
 
       for (const item of items) {
         if (item.kind === "file") {
           const file = item.getAsFile();
           if (file) {
-            setSelectedFile(file);
-            setSelectedFiles([file]);
-            setSelectedButton("file");
-            return;
+            pastedFiles.push(file);
           }
         }
+      }
+
+      if (pastedFiles.length > 0) {
+        event.preventDefault();
+        await applyFileSelection(pastedFiles, false);
+        return;
       }
 
       // 如果没有文件，则尝试获取文本内容
@@ -517,7 +877,7 @@ const Share = observer(() => {
     return () => {
       window.removeEventListener("paste", handlePaste);
     };
-
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [textInputDialogOpen, openDialog]);
 
   const handleAcceptMessage = () => {
@@ -545,7 +905,8 @@ const Share = observer(() => {
   const handleDragEnter = (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    setIsDraggingOver(true);
+    // 拖到用户卡片上时不显示全局遮罩（卡片有自己的高亮反馈）
+    if (!dragOverUserId) setIsDraggingOver(true);
   };
 
   const handleDragLeave = (e: React.DragEvent) => {
@@ -565,20 +926,23 @@ const Share = observer(() => {
     }
   };
 
-  const handleDrop = (e: React.DragEvent) => {
+  const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
     setIsDraggingOver(false);
+    setDragOverUserId(null);
 
-    const files = e.dataTransfer.files;
-    if (files.length > 0) {
-      const fakeEvent = {
-        target: { files }
-      } as unknown as React.ChangeEvent<HTMLInputElement>;
-
-      handleMultiFileSelect(fakeEvent, false);
+    const transferables = await dropDataToTransferables(e.dataTransfer);
+    if (transferables && transferables.length > 0) {
+      void applyFileSelection(transferables, false);
     }
   };
+
+  const hasDropFiles = (types: readonly string[]) =>
+    Array.from(types ?? []).includes("Files");
+
+  const hasChipDrag = (types: readonly string[]) =>
+    Array.from(types ?? []).includes("text/letshare-files");
 
 
 
@@ -765,6 +1129,9 @@ const Share = observer(() => {
             >
               <SelectedFileStrip
                 files={selectedFiles}
+                dragEnabled
+                onChipDragStart={(file) => { chipDragPayloadRef.current = [file]; }}
+                onChipDragEnd={() => { chipDragPayloadRef.current = null; }}
                 onRemove={(index) => {
                   const next = selectedFiles.filter((_, i) => i !== index);
                   if (next.length === 0) {
@@ -853,34 +1220,88 @@ const Share = observer(() => {
                       // 原有逻辑（文件/文本等消息）
                       handleClickOtherClients(e, user.uniqId);
                     }
-                  }}
-                  sx={{
-                    ...settingsBodyContentBoxStyle,
-                    width: "96%",
-                    textAlign: "inherit",
-                    backgroundColor: user.status === 'connected'
-                      ? 'rgba(76, 175, 80, 0.1)' // � P2P直连 — 淡绿色
-                      : isPublicNetworkStatus(user.status)
-                        ? 'rgba(33, 150, 243, 0.08)' // 公网通道 — 淡蓝色
-                        : user.status === 'connecting'
-                          ? theme.palette.action.hover
-                          : theme.palette.background.paper,
-                    opacity: user.status === 'connecting' ? 0.7 : 1,
-                    transition: 'all 0.3s ease-in-out',
-                    '&:hover': {
-                      boxShadow: user.status === 'connected' ? 2 : 1,
-                      bgcolor: user.status === 'connected'
-                        ? 'rgba(76, 175, 80, 0.15)'
-                        : isPublicNetworkStatus(user.status)
-                          ? 'rgba(33, 150, 243, 0.15)' // hover 深蓝
-                          : user.status === 'connecting'
-                            ? 'rgba(0, 0, 0, 0.12)'
-                            : 'background.default',
-                    },
-                    padding: 1.5,
-                    borderRadius: 2,
-                    display: "block", // 避免默认 inline-flex
-                  }}
+                    }}
+                    onDragOver={(e) => {
+                      const types = e.dataTransfer.types;
+                      if (hasDropFiles(types) || hasChipDrag(types)) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        e.dataTransfer.dropEffect = "copy";
+                        if (dragOverUserId !== user.uniqId) setDragOverUserId(user.uniqId);
+                      }
+                    }}
+                    onDragLeave={(e) => {
+                      if (dragOverUserId !== user.uniqId) return;
+                      const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                      if (
+                        e.clientX < rect.left ||
+                        e.clientX > rect.right ||
+                        e.clientY < rect.top ||
+                        e.clientY > rect.bottom
+                      ) {
+                        setDragOverUserId(null);
+                      }
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setDragOverUserId(null);
+                      setIsDraggingOver(false);
+                      const types = e.dataTransfer.types;
+                      if (hasDropFiles(types)) {
+                        void dropDataToTransferables(e.dataTransfer).then((transferables) => {
+                          if (transferables && transferables.length > 0) {
+                            void sendFilesToUserCard(user.uniqId, transferables);
+                          }
+                        });
+                      } else if (hasChipDrag(types) && chipDragPayloadRef.current) {
+                        const payload = chipDragPayloadRef.current;
+                        chipDragPayloadRef.current = null;
+                        void sendFilesToUserCard(user.uniqId, payload);
+                      }
+                    }}
+                    sx={{
+                      ...settingsBodyContentBoxStyle,
+                      width: "96%",
+                      textAlign: "inherit",
+                      ...(dragOverUserId === user.uniqId
+                        ? {
+                          border: `2px solid ${theme.palette.primary.main}` as string,
+                          boxShadow: `0 0 18px ${theme.palette.primary.main}59` as string,
+                          backgroundColor: `${theme.palette.primary.main}1A` as string,
+                          '&:hover': {
+                            boxShadow: `0 0 18px ${theme.palette.primary.main}59` as string,
+                            bgcolor: `${theme.palette.primary.main}1A` as string,
+                          },
+                        }
+                        : {
+                          border: "2px solid transparent" as string,
+                          backgroundColor: user.status === 'connected'
+                            ? 'rgba(76, 175, 80, 0.1)' // P2P直连 — 淡绿色
+                            : isPublicNetworkStatus(user.status)
+                              ? 'rgba(33, 150, 243, 0.08)' // 公网通道 — 淡蓝色
+                              : user.status === 'connecting'
+                                ? (theme.palette.action.hover as string)
+                                : (theme.palette.background.paper as string),
+                        }),
+                      opacity: user.status === 'connecting' ? 0.7 : 1,
+                      transition: 'all 0.2s ease-in-out',
+                      ...(dragOverUserId !== user.uniqId && {
+                        '&:hover': {
+                          boxShadow: (user.status === 'connected' ? 2 : 1) as number,
+                          bgcolor: user.status === 'connected'
+                            ? 'rgba(76, 175, 80, 0.15)'
+                            : isPublicNetworkStatus(user.status)
+                              ? 'rgba(33, 150, 243, 0.15)' // hover 深蓝
+                              : user.status === 'connecting'
+                                ? 'rgba(0, 0, 0, 0.12)'
+                                : 'background.default',
+                        },
+                      }),
+                      padding: 1.5,
+                      borderRadius: 2,
+                      display: "block", // 避免默认 inline-flex
+                    }}
                 >
                   <Box sx={{
                     display: "flex",
@@ -960,6 +1381,11 @@ const Share = observer(() => {
                         <ChatIcon sx={{ fontSize: 20 }} />
                       </IconButton>
                     </Box>
+                    {/* 通话按钮（语音/视频）— 纯增量挂点 */}
+                    <CallButton
+                      disabled={callManagerRef.current?.isInCall(user.uniqId) || callManagerRef.current?.isInCall()}
+                      onCall={(media) => { void startCall(user.uniqId, media); }}
+                    />
                   </Box>
                 </ButtonBase>
 
@@ -1261,6 +1687,31 @@ const Share = observer(() => {
           onClose={() => setChatPanelOpen(false)}
           targetUserId={chatTargetUser}
           targetUserName={chatTargetUser.split(':')[0] || 'Unknown User'}
+        />
+      )}
+
+      {/* 通话 UI — 纯增量挂点，不影响现有功能 */}
+      {incomingCall && (
+        <IncomingCallBanner
+          info={incomingCall}
+          handlers={{ onAccept: () => { void acceptIncoming(); }, onDecline: declineIncoming }}
+        />
+      )}
+      {activeCall && (
+        <ActiveCallPanel
+          open
+          peerName={activeCall.peerName}
+          isVideo={activeCall.isVideo}
+          remoteStream={activeCall.remoteStream}
+          localStream={activeCall.localStream}
+          transport={activeCall.transport}
+          state={activeCall.state}
+          muted={activeCall.muted}
+          videoEnabled={activeCall.videoEnabled}
+          onMuteToggle={toggleMute}
+          onVideoToggle={toggleVideo}
+          onHangup={hangupActive}
+          onClose={hangupActive}
         />
       )}
     </>

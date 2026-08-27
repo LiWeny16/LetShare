@@ -1,0 +1,325 @@
+/**
+ * CallBar — 通话 UI（跟随主题色，Discord 风格布局）
+ *  - CallButton: 用户卡片上的发起通话按钮（语音/视频，统一 20px 图标）
+ *  - IncomingCallBanner: 来电横幅（接听/拒绝）
+ *  - ActiveCallPanel: 通话中全屏面板（远端视频/语音头像、计时、静音、视频开关、挂断）
+ *
+ * 本组件不持有业务逻辑，所有操作经 CallManager 注入的 handlers 完成。
+ */
+import { useEffect, useRef, useState } from "react";
+import {
+  Box,
+  IconButton,
+  Paper,
+  Tooltip,
+  Typography,
+  Fade,
+  useTheme,
+  alpha,
+} from "@mui/material";
+import CallIcon from "@mui/icons-material/Call";
+import VideocamIcon from "@mui/icons-material/Videocam";
+import VideocamOffIcon from "@mui/icons-material/VideocamOff";
+import MicIcon from "@mui/icons-material/Mic";
+import MicOffIcon from "@mui/icons-material/MicOff";
+import CallEndIcon from "@mui/icons-material/CallEnd";
+import PersonIcon from "@mui/icons-material/Person";
+import { useTranslation } from "react-i18next";
+
+export type CallMedia = "audio" | "video";
+
+export type CallButtonHandlers = {
+  onCall: (media: CallMedia) => void;
+  disabled?: boolean;
+};
+
+/** 用户卡片上的发起通话按钮组（语音 + 视频），图标统一 20px。 */
+export function CallButton({ onCall, disabled }: CallButtonHandlers) {
+  const { t } = useTranslation();
+  return (
+    <Box sx={{ display: "flex", gap: 0.5 }} onClick={(e) => e.stopPropagation()}>
+      <Tooltip title={t("call.voice", "语音通话")} arrow enterDelay={250}>
+        <span>
+          <IconButton size="small" disabled={disabled} onClick={() => onCall("audio")} sx={{ opacity: 0.7, "&:hover": { opacity: 1 } }}>
+            <CallIcon sx={{ fontSize: 20 }} />
+          </IconButton>
+        </span>
+      </Tooltip>
+      <Tooltip title={t("call.video", "视频通话")} arrow enterDelay={250}>
+        <span>
+          <IconButton size="small" disabled={disabled} onClick={() => onCall("video")} sx={{ opacity: 0.7, "&:hover": { opacity: 1 } }}>
+            <VideocamIcon sx={{ fontSize: 20 }} />
+          </IconButton>
+        </span>
+      </Tooltip>
+    </Box>
+  );
+}
+
+export type IncomingCallInfo = {
+  callId: string;
+  from: string;
+  fromName: string;
+  media: "audio" | "video" | "audio+video";
+};
+
+export type IncomingCallHandlers = {
+  onAccept: () => void;
+  onDecline: () => void;
+};
+
+/** 来电横幅（顶部滑入，跟随主题）。 */
+export function IncomingCallBanner({ info, handlers }: { info: IncomingCallInfo; handlers: IncomingCallHandlers }) {
+  const { t } = useTranslation();
+  const theme = useTheme();
+  const [visible, setVisible] = useState(false);
+  useEffect(() => {
+    const id = requestAnimationFrame(() => setVisible(true));
+    return () => cancelAnimationFrame(id);
+  }, []);
+
+  const isVideo = info.media !== "audio";
+  return (
+    <Fade in={visible} timeout={250}>
+      <Paper
+        elevation={8}
+        sx={{
+          position: "fixed",
+          top: 16,
+          left: "50%",
+          transform: "translateX(-50%)",
+          zIndex: 2000,
+          display: "flex",
+          alignItems: "center",
+          gap: 2,
+          px: 3,
+          py: 1.5,
+          borderRadius: 3,
+          width: "min(92%, 480px)",
+          bgcolor: theme.palette.background.paper,
+        }}
+      >
+        <Box sx={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 0.5 }}>
+          {isVideo ? <VideocamIcon sx={{ color: theme.palette.primary.main, fontSize: 28 }} /> : <CallIcon sx={{ color: theme.palette.primary.main, fontSize: 28 }} />}
+          <Typography variant="caption" color="text.secondary">
+            {isVideo ? t("call.incomingVideo", "视频来电") : t("call.incomingVoice", "语音来电")}
+          </Typography>
+        </Box>
+        <Box sx={{ flex: 1, minWidth: 0 }}>
+          <Typography variant="subtitle2" noWrap>{info.fromName}</Typography>
+          <Typography variant="caption" color="text.secondary" noWrap>{t("call.ringing", "来电中…")}</Typography>
+        </Box>
+        <Tooltip title={t("call.accept", "接听")}>
+          <span>
+            <IconButton onClick={handlers.onAccept} sx={{ width: 48, height: 48, borderRadius: "50%", bgcolor: theme.palette.success.main, color: theme.palette.getContrastText(theme.palette.success.main), "&:hover": { bgcolor: theme.palette.success.dark } }}>
+              <CallIcon sx={{ fontSize: 24 }} />
+            </IconButton>
+          </span>
+        </Tooltip>
+        <Tooltip title={t("call.decline", "拒绝")}>
+          <span>
+            <IconButton onClick={handlers.onDecline} sx={{ width: 48, height: 48, borderRadius: "50%", bgcolor: theme.palette.error.main, color: theme.palette.getContrastText(theme.palette.error.main), "&:hover": { bgcolor: theme.palette.error.dark } }}>
+              <CallEndIcon sx={{ fontSize: 24 }} />
+            </IconButton>
+          </span>
+        </Tooltip>
+      </Paper>
+    </Fade>
+  );
+}
+
+export type ActiveCallProps = {
+  open: boolean;
+  peerName: string;
+  isVideo: boolean;
+  remoteStream: MediaStream | null;
+  localStream: MediaStream | null;
+  transport: "p2p" | "public" | null;
+  state: string;
+  muted: boolean;
+  videoEnabled: boolean;
+  onMuteToggle: () => void;
+  onVideoToggle: () => void;
+  onHangup: () => void;
+  onClose: () => void;
+};
+
+function formatDuration(ms: number): string {
+  const total = Math.floor(ms / 1000);
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
+/** 通话中全屏面板（深色底，控件跟随主题色）。 */
+export function ActiveCallPanel(props: ActiveCallProps) {
+  const { t } = useTranslation();
+  const theme = useTheme();
+  const remoteRef = useRef<HTMLVideoElement>(null);
+  const localRef = useRef<HTMLVideoElement>(null);
+  const [duration, setDuration] = useState(0);
+  const startedAtRef = useRef<number>(0);
+
+  useEffect(() => {
+    if (props.open) {
+      startedAtRef.current = Date.now();
+      setDuration(0);
+      const timer = window.setInterval(() => setDuration(Date.now() - startedAtRef.current), 1000);
+      return () => window.clearInterval(timer);
+    }
+  }, [props.open]);
+
+  useEffect(() => {
+    if (remoteRef.current && props.remoteStream) {
+      remoteRef.current.srcObject = props.remoteStream;
+    } else if (remoteRef.current) {
+      remoteRef.current.srcObject = null;
+    }
+  }, [props.remoteStream, props.open]);
+
+  useEffect(() => {
+    if (localRef.current && props.localStream) {
+      localRef.current.srcObject = props.localStream;
+    } else if (localRef.current) {
+      localRef.current.srcObject = null;
+    }
+  }, [props.localStream, props.open]);
+
+  const showVideo = props.isVideo && props.videoEnabled;
+  const controlBg = alpha(theme.palette.primary.main, 0.15);
+  const controlBgHover = alpha(theme.palette.primary.main, 0.3);
+
+  return (
+    <Box
+      sx={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 2500,
+        bgcolor: "background.default",
+        display: "flex",
+        flexDirection: "column",
+      }}
+    >
+      {/* 顶部栏：名称 + 计时 + 轨道状态 */}
+      <Box sx={{ display: "flex", alignItems: "center", gap: 1.5, px: 3, py: 2 }}>
+        <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
+          {props.peerName}
+        </Typography>
+        <Typography variant="caption" color="text.secondary" sx={{ fontVariantNumeric: "tabular-nums" }}>
+          {formatDuration(duration)}
+        </Typography>
+        {props.state === "connecting" && (
+          <Typography variant="caption" color="text.secondary">
+            {t("call.connecting", "连接中…")}
+          </Typography>
+        )}
+        <Box sx={{ flex: 1 }} />
+        {props.transport && (
+          <Typography variant="caption" sx={{ color: theme.palette.primary.main, fontWeight: 600, px: 1, py: 0.25, borderRadius: 1, border: `1px solid ${theme.palette.primary.main}` }}>
+            {props.transport === "p2p" ? t("call.p2p", "P2P 直连") : t("call.public", "公网中继")}
+          </Typography>
+        )}
+        <Tooltip title={t("call.close", "关闭")}>
+          <IconButton onClick={props.onClose} size="small">
+            <CallEndIcon sx={{ fontSize: 20 }} />
+          </IconButton>
+        </Tooltip>
+      </Box>
+
+      {/* 主区域：远端视频 / 语音头像。
+          远端 <video> 始终渲染（用 display 控制显隐），保证 remoteRef 不丢失、
+          语音↔视频切换时远端流绑定不失效（避免黑屏）。 */}
+      <Box sx={{ flex: 1, position: "relative", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
+        <video
+          ref={remoteRef}
+          autoPlay
+          playsInline
+          style={{ width: "100%", height: "100%", objectFit: "contain", display: showVideo ? "block" : "none" }}
+        />
+        {!showVideo && (
+          <Box sx={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
+            <Box sx={{ width: 120, height: 120, borderRadius: "50%", bgcolor: theme.palette.primary.main, display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <PersonIcon sx={{ fontSize: 64, color: theme.palette.getContrastText(theme.palette.primary.main) }} />
+            </Box>
+            <Typography variant="h6">{props.peerName}</Typography>
+            <Typography variant="body2" color="text.secondary">
+              {t("call.voiceOnly", "语音通话中")}
+            </Typography>
+          </Box>
+        )}
+
+        {/* 本地预览小窗（视频通话时） */}
+        <Box
+          sx={{
+            position: "absolute",
+            bottom: 20,
+            right: 20,
+            width: 140,
+            aspectRatio: "16/9",
+            borderRadius: 2,
+            border: `2px solid ${alpha(theme.palette.primary.main, 0.5)}`,
+            transform: "scaleX(-1)",
+            display: showVideo && props.localStream ? "block" : "none",
+            overflow: "hidden",
+            bgcolor: "background.paper",
+          }}
+        >
+          <video ref={localRef} autoPlay muted playsInline style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+        </Box>
+      </Box>
+
+      {/* 底部控制条：静音 / 视频开关 / 挂断（只放已有功能） */}
+      <Box sx={{ display: "flex", justifyContent: "center", alignItems: "center", gap: 3, py: 3 }}>
+        <Tooltip title={props.muted ? t("call.unmute", "取消静音") : t("call.mute", "静音")}>
+          <span>
+            <IconButton
+              onClick={props.onMuteToggle}
+              sx={{
+                width: 56, height: 56, borderRadius: "50%",
+                bgcolor: props.muted ? theme.palette.error.main : controlBg,
+                color: props.muted ? theme.palette.getContrastText(theme.palette.error.main) : theme.palette.text.primary,
+                "&:hover": { bgcolor: props.muted ? theme.palette.error.dark : controlBgHover },
+              }}
+            >
+              {props.muted ? <MicOffIcon sx={{ fontSize: 26 }} /> : <MicIcon sx={{ fontSize: 26 }} />}
+            </IconButton>
+          </span>
+        </Tooltip>
+
+        {props.isVideo && (
+          <Tooltip title={props.videoEnabled ? t("call.videoOff", "关闭视频") : t("call.videoOn", "开启视频")}>
+            <span>
+              <IconButton
+                onClick={props.onVideoToggle}
+                sx={{
+                  width: 56, height: 56, borderRadius: "50%",
+                  bgcolor: props.videoEnabled ? controlBg : theme.palette.error.main,
+                  color: props.videoEnabled ? theme.palette.text.primary : theme.palette.getContrastText(theme.palette.error.main),
+                  "&:hover": { bgcolor: props.videoEnabled ? controlBgHover : theme.palette.error.dark },
+                }}
+              >
+                {props.videoEnabled ? <VideocamOffIcon sx={{ fontSize: 26 }} /> : <VideocamIcon sx={{ fontSize: 26 }} />}
+              </IconButton>
+            </span>
+          </Tooltip>
+        )}
+
+        <Tooltip title={t("call.hangup", "挂断")}>
+          <span>
+            <IconButton
+              onClick={props.onHangup}
+              sx={{
+                width: 64, height: 64, borderRadius: "50%",
+                bgcolor: theme.palette.error.main,
+                color: theme.palette.getContrastText(theme.palette.error.main),
+                "&:hover": { bgcolor: theme.palette.error.dark },
+              }}
+            >
+              <CallEndIcon sx={{ fontSize: 30, transform: "rotate(135deg)" }} />
+            </IconButton>
+          </span>
+        </Tooltip>
+      </Box>
+    </Box>
+  );
+}

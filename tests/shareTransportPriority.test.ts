@@ -14,7 +14,10 @@ const colabLibSource = readFileSync(
 );
 
 test("server priority sends through public relay without silently falling back to P2P", () => {
-  const serverBranchStart = shareSource.indexOf("if (transferPriority === 'server') {");
+  const clickHandlerStart = shareSource.indexOf("const handleClickOtherClients");
+  assert.notEqual(clickHandlerStart, -1, "click-to-send handler should exist");
+
+  const serverBranchStart = shareSource.indexOf("if (transferPriority === 'server') {", clickHandlerStart);
   assert.notEqual(serverBranchStart, -1, "server-priority branch should exist");
 
   const serverBranchEnd = shareSource.indexOf("} else {", serverBranchStart);
@@ -26,7 +29,8 @@ test("server priority sends through public relay without silently falling back t
 });
 
 test("p2p priority still advertises explicit server fallback when direct transfer is unavailable", () => {
-  const p2pFallbackStart = shareSource.indexOf("console.log(\" P2P不可用，使用服务器转发文件\");");
+  const clickHandlerStart = shareSource.indexOf("const handleClickOtherClients");
+  const p2pFallbackStart = shareSource.indexOf("console.log(\" P2P不可用，使用服务器转发文件\");", clickHandlerStart);
   assert.notEqual(p2pFallbackStart, -1, "p2p fallback logging should exist");
 
   const p2pFallbackEnd = shareSource.indexOf("await realTimeColab.sendFileViaServer(targetUserId, selectedFile);", p2pFallbackStart);

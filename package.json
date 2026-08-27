@@ -15,7 +15,7 @@
     "app-start": "npx cap open android",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "preview": "vite preview",
-    "test": "node --import tsx --test tests/*.test.ts",
+    "test": "node scripts/run-tests.cjs",
     "test:unit": "node --import tsx --test tests/fileMessage-unit.test.ts",
     "test:db": "node --import tsx --test tests/fileBlobStore.test.ts",
     "test:e2e": "node --import tsx --test tests/fileMessage-e2e.test.ts",

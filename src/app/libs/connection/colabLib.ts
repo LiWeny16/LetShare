@@ -106,7 +106,23 @@ type ColabEvents = {
  'file-received': { from: string; fileName: string; fileSize: number; file: File };
  'file-saved-to-disk': { from: string; fileName: string; fileSize: number };
  'file-progress': { to: string; progress: number };
+ 'transfer-record': TransferRecord;
 };
+
+export type TransferRecordKind =
+ | "sent-file"
+ | "sent-text"
+ | "received-file"
+ | "saved-disk"
+ | "pasted-files";
+
+export interface TransferRecord {
+ id: string;
+ kind: TransferRecordKind;
+ label: string;
+ detail?: string;
+ at: number;
+}
 
 interface NegotiationState {
  isNegotiating: boolean; // 是否正在进行一次Offer/Answer
@@ -248,8 +264,9 @@ export class RealTimeColab {
  public receivingFiles: Map<string, P2PReceivingFile> = new Map();
  public receivedFiles: Map<string, File> = new Map();
  public sentFiles: Map<string, { name: string; size: number; toUserId: string; completedAt: number }> = new Map();
- public directSavedFiles: Map<string, P2PDirectSavedFileRecord> = new Map();
- public pendingDirectSaveRequest: DirectSaveRequest | null = null;
+  public directSavedFiles: Map<string, P2PDirectSavedFileRecord> = new Map();
+  public transferRecords: Map<string, TransferRecord> = new Map();
+  public pendingDirectSaveRequest: DirectSaveRequest | null = null;
  public activeOutgoingFileTransfer: ActiveOutgoingFileTransferStats | null = null;
 
  private lastPingTimes: Map<string, number> = new Map();
@@ -318,9 +335,39 @@ export class RealTimeColab {
  private aborted = false;
  private sendingToUserId: string | null = null;
 
- public initTransferConfig() {
-  this.transferConfig = getSafeTransferConfig(getDeviceType());
- }
+  public initTransferConfig() {
+   this.transferConfig = getSafeTransferConfig(getDeviceType());
+  }
+
+  private static readonly MAX_TRANSFER_RECORDS = 100;
+
+  public addTransferRecord(kind: TransferRecordKind, label: string, detail?: string): TransferRecord {
+   const record: TransferRecord = {
+    id: this.generateUUID(),
+    kind,
+    label,
+    detail,
+    at: Date.now(),
+   };
+   this.transferRecords.set(record.id, record);
+   const overflow = this.transferRecords.size - RealTimeColab.MAX_TRANSFER_RECORDS;
+   if (overflow > 0) {
+    const sorted = Array.from(this.transferRecords.values()).sort((a, b) => a.at - b.at);
+    for (let i = 0; i < overflow; i++) {
+     this.transferRecords.delete(sorted[i].id);
+    }
+   }
+   this.emitter.emit('transfer-record', record);
+   return record;
+  }
+
+  public removeTransferRecord(id: string): void {
+   this.transferRecords.delete(id);
+  }
+
+  public clearTransferRecords(): void {
+   this.transferRecords.clear();
+  }
 
  private setFileTransferStatus(
   message: string | null,
@@ -470,6 +517,7 @@ export class RealTimeColab {
      fileName,
      fileSize,
     });
+    this.addTransferRecord("saved-disk", fileName, `← ${fromUserId.split(":")[0]}`);
    });
 
    // 设置下载页面状态回调
@@ -853,7 +901,21 @@ export class RealTimeColab {
 
 
 
- private async handleSignal(event: MessageEvent): Promise<void> {
+  // ─── 通话（call:）信令入口 — 纯增量挂点，不影响现有分支 ───────────
+  private callSignalHandler: ((from: string, data: unknown) => void) | null = null;
+
+  /** 注册通话信令处理器（由 CallManager 初始化时调用）。 */
+  public registerCallSignalHandler(handler: (from: string, data: unknown) => void): void {
+   this.callSignalHandler = handler;
+  }
+
+  private handleCallSignal(data: any): void {
+   const fromId = data.from;
+   if (!fromId || fromId === this.getUniqId()) return;
+   this.callSignalHandler?.(fromId, data);
+  }
+
+  private async handleSignal(event: MessageEvent): Promise<void> {
   try {
    const data = JSON.parse(event.data);
    // console.debug(` 接收到信号:`, data.type, `来自:`, data.from);
@@ -883,12 +945,16 @@ export class RealTimeColab {
      // 处理加密文本消息
      await this.handleTextMessage(data);
      break;
-    case "leave":
-     this.handleUserLeave(data);
-     break;
-    default:
-     console.warn("Unknown message type", data.type);
-   }
+     case "leave":
+      this.handleUserLeave(data);
+      break;
+     default:
+      if (typeof data.type === "string" && data.type.startsWith("call:")) {
+       this.handleCallSignal(signalData);
+       break;
+      }
+      console.warn("Unknown message type", data.type);
+    }
   } catch (err) {
    console.error(" Failed to parse WebSocket message:", event.data, err);
   }
@@ -1793,6 +1859,7 @@ export class RealTimeColab {
        fromUserId: id,
        completedAt: Date.now(),
       });
+      this.addTransferRecord("saved-disk", fileInfo.name, `← ${id.split(":")[0]}`);
       this.emitter.emit('file-saved-to-disk', {
        from: id,
        fileName: fileInfo.name,
@@ -1830,10 +1897,11 @@ export class RealTimeColab {
       fileType: "application/octet-stream",
       createFile: (parts, fileName, options) => new File(parts, fileName, options),
      });
-     const fullKey = `${id}::${file.name}`;
-     this.receivedFiles.set(fullKey, file);
-     const postProcessVersion = this.receivedFilesVersion;
-     this.receivingFiles.delete(id);
+      const fullKey = `${id}::${file.name}`;
+      this.receivedFiles.set(fullKey, file);
+      this.addTransferRecord("received-file", file.name, `← ${id.split(":")[0]}`);
+      const postProcessVersion = this.receivedFilesVersion;
+      this.receivingFiles.delete(id);
      this.setFileTransferProgress(null);
      this.setFileTransferStatus(t('alert.fileReceivedComplete'), "success", {
       autoClearMs: CONFIG.TRANSFER_COMPLETE_DELAY,
@@ -2715,16 +2783,18 @@ export class RealTimeColab {
     if (wrappedMessage.type === "encrypted_text") {
      console.debug(`[SEND MSG] 发送加密P2P消息给 ${id}`);
     }
-    channel.send(JSON.stringify(wrappedMessage));
-    this.emitter.emit('message-sent', { to: id, message }); // 发出事件
-    return;
-   } catch (error) {
-    console.warn(`[SEND MSG] P2P消息加密失败，使用明文:`, error);
-    channel.send(JSON.stringify(messageObj));
-    this.emitter.emit('message-sent', { to: id, message }); // 发出事件
-    return;
+     channel.send(JSON.stringify(wrappedMessage));
+     this.emitter.emit('message-sent', { to: id, message }); // 发出事件
+     this.addTransferRecord("sent-text", message, `→ ${id.split(":")[0]}`);
+     return;
+    } catch (error) {
+     console.warn(`[SEND MSG] P2P消息加密失败，使用明文:`, error);
+     channel.send(JSON.stringify(messageObj));
+     this.emitter.emit('message-sent', { to: id, message }); // 发出事件
+     this.addTransferRecord("sent-text", message, `→ ${id.split(":")[0]}`);
+     return;
+    }
    }
-  }
 
   // 如果P2P不可用，检查用户是否为可通过信令发送消息的状态
   if (user?.status === "text-only" || user?.status === "waiting" || user?.status === "connecting") {
@@ -2754,6 +2824,7 @@ export class RealTimeColab {
     }
     console.debug(`[SEND MSG] Signal message sent successfully to ${id}`);
     this.emitter.emit('message-sent', { to: id, message }); // 发出事件
+    this.addTransferRecord("sent-text", message, `→ ${id.split(":")[0]}`);
     return;
    } catch (error) {
     console.warn(`[SEND MSG] 信令消息加密失败，使用明文:`, error);
@@ -2765,6 +2836,7 @@ export class RealTimeColab {
     });
     console.debug(`[SEND MSG] Fallback signal message sent successfully to ${id}`);
     this.emitter.emit('message-sent', { to: id, message }); // 发出事件
+    this.addTransferRecord("sent-text", message, `→ ${id.split(":")[0]}`);
     return;
    }
   }
@@ -2952,9 +3024,14 @@ export class RealTimeColab {
   return true;
  }
 
- private isLetShareZip(file: File): boolean {
+private isLetShareZip(file: File): boolean {
   return file.name.startsWith("LetShare_") && file.name.endsWith(".zip");
- }
+  }
+
+  // 文件夹打包的 ZIP（LetShare_<ts>_<文件夹名>.zip）：接收端保留 ZIP 本体以便整包下载
+  private isFolderZip(file: File): boolean {
+   return /^LetShare_\d+_.+\.zip$/i.test(file.name);
+  }
 
  private canContinueReceivedFilePostProcessing(
   expectedVersion: number,
@@ -3002,18 +3079,24 @@ export class RealTimeColab {
     return false;
    }
 
+   const keepFolderZip = this.isFolderZip(file); // 文件夹 ZIP：保留本体，提供“整包下载”
    for (const [fileName, zipEntry] of files) {
     const blob = await zipEntry.async("blob");
     if (!this.canContinueReceivedFilePostProcessing(expectedVersion, fullKey)) {
      return false;
     }
     const extractedFile = new File([blob], fileName);
-    const newKey = `${id}::${fileName}`;
+    // 文件夹 ZIP 的子文件以 `<zip名>/<路径>` 为 key，供前端按文件夹分组展示
+    const newKey = keepFolderZip ? `${id}::${file.name}/${fileName}` : `${id}::${fileName}`;
     this.receivedFiles.set(newKey, extractedFile);
    }
 
    if (this.canContinueReceivedFilePostProcessing(expectedVersion, fullKey)) {
-    this.receivedFiles.delete(fullKey);
+    if (keepFolderZip) {
+     this.receivedFiles.set(fullKey, file);
+    } else {
+     this.receivedFiles.delete(fullKey);
+    }
    }
    return true;
   } catch (err) {
@@ -3032,10 +3115,11 @@ export class RealTimeColab {
 
   await this.maybeAutoUnzipReceivedFile(file, id, fullKey, postProcessVersion);
 
-  alertUseMUI(t("alert.fileReceived", { name: id.split(":")[0] }), 2000, { kind: "success" });
-  this.setFileTransferProgress(null);
-  // Emit file-received event for ChatIntegration
-  this.emitter.emit('file-received', { from: id, fileName: file.name, fileSize: file.size, file });
+   this.addTransferRecord("received-file", file.name, `← ${id.split(":")[0]}`);
+   alertUseMUI(t("alert.fileReceived", { name: id.split(":")[0] }), 2000, { kind: "success" });
+   this.setFileTransferProgress(null);
+   // Emit file-received event for ChatIntegration
+   this.emitter.emit('file-received', { from: id, fileName: file.name, fileSize: file.size, file });
  }
  public isConnectedToUser(id: string): boolean {
   const channel = this.dataChannels.get(id);
@@ -3158,19 +3242,29 @@ export class RealTimeColab {
     alertUseMUI(t('toast.fileTransferFailed'), 3000, { kind: "error", category: "transfer-status" });
    }
    this.setFileTransferProgress(null);
-  } finally {
-   this.clearActiveOutgoingFileTransfer(syntheticTransferId);
-   this.sendingToUserId = null;
-   this.isSendingFile = false;
+   } finally {
+    if (!this.aborted && this.serverFileTransfer?.isSending() !== true) {
+     this.addTransferRecord("sent-file", file.name, `→ ${id.split(":")[0]}`);
+    }
+    this.clearActiveOutgoingFileTransfer(syntheticTransferId);
+    this.sendingToUserId = null;
+    this.isSendingFile = false;
+   }
   }
- }
 
- /**
-  * 获取 ServerFileTransfer 实例(供UI层设置回调)
-  */
- public getServerFileTransfer(): ServerFileTransfer | null {
-  return this.serverFileTransfer;
- }
+  /**
+   * 获取 ServerFileTransfer 实例(供UI层设置回调)
+   */
+  public getServerFileTransfer(): ServerFileTransfer | null {
+   return this.serverFileTransfer;
+  }
+
+  /**
+   * 获取 ConnectionManager（供通话模块复用 WebSocket 二进制通道，纯增量访问器）
+   */
+  public getConnectionManager(): ConnectionManager {
+   return this.connectionManager;
+  }
 
  /**
   * 发送文件给用户（P2P方式）
@@ -3371,8 +3465,9 @@ export class RealTimeColab {
     autoClearMs: CONFIG.TRANSFER_COMPLETE_DELAY,
     showPanel: false,
    });
-   // Emit file-sent event for ChatIntegration
-   this.emitter.emit('file-sent', { to: id, fileName: file.name, fileSize: file.size, transferId });
+    this.addTransferRecord("sent-file", file.name, `→ ${id.split(":")[0]}`);
+    // Emit file-sent event for ChatIntegration
+    this.emitter.emit('file-sent', { to: id, fileName: file.name, fileSize: file.size, transferId });
   } catch (err) {
    if (!stillOwnsTransfer()) {
     console.warn("Ignoring stale P2P transfer worker failure:", err);
