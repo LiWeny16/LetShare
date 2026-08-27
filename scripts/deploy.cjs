@@ -16,8 +16,10 @@ const path = require("path");
 
 const CONFIG = {
   remote: { host: "ecs.letshare.fun", user: "root", port: 22 },
-  serverDir: "/app/letshare-server",
-  webDir: "/app/letshare-web",
+  // 实际生产环境路径（systemd service，非 docker）
+  serverBinary: "/root/cloud/letshare-server-linux",
+  serverService: "letshare.service",
+  webDir: "/var/www/html",
 };
 
 const ROOT = path.resolve(__dirname, "..");
@@ -51,18 +53,20 @@ function buildFrontend() {
 // ─── 部署后端 ────────────────────────────────────────────
 function deployBackend(binary) {
   log("▶", "部署后端...");
-  scp(binary, `${CONFIG.serverDir}/letshare-server-linux`);
-  ssh(`cp ${CONFIG.serverDir}/letshare-server ${CONFIG.serverDir}/letshare-server.bak; cp ${CONFIG.serverDir}/letshare-server-linux ${CONFIG.serverDir}/letshare-server; chmod +x ${CONFIG.serverDir}/letshare-server; cd ${CONFIG.serverDir}; docker-compose down; docker-compose up -d`);
-  log("✓", "后端部署完成，Docker 已重启");
+  // 上传到临时路径，校验后再替换，避免 SCP 中断留下半截二进制
+  const tmp = `${CONFIG.serverBinary}.new`;
+  scp(binary, tmp);
+  ssh(`cp ${CONFIG.serverBinary} ${CONFIG.serverBinary}.bak; mv ${tmp} ${CONFIG.serverBinary}; chmod +x ${CONFIG.serverBinary}; systemctl restart ${CONFIG.serverService}`);
+  log("✓", "后端部署完成，systemd 已重启");
 }
 
-// ─── 部署前端 ────────────────────────────────────────────
+// ─── 前端（GitHub Pages）────────────────────────────────
+// 前端静态文件由 GitHub Pages 服务（letshare.fun），source = main 分支 /docs。
+// 发布流程：pnpm build 生成 docs/ → git push origin main → Pages 自动部署。
+// ECS 不服务前端（nginx 被 mask，后端守护进程只占 WebSocket 端口）。
 function deployFrontend() {
-  log("▶", "部署前端...");
-  ssh(`mkdir -p ${CONFIG.webDir}`);
-  run(`scp -r "${FRONTEND_DIST}\\*" ${CONFIG.remote.user}@${CONFIG.remote.host}:${CONFIG.webDir}/`, { stdio: "inherit" });
-  ssh("nginx -s reload 2>/dev/null && echo NGINX_OK || true");
-  log("✓", `前端部署完成 → https://${CONFIG.remote.host}/`);
+  log("▶", "前端由 GitHub Pages 服务（letshare.fun），需 git push origin main 触发部署");
+  log("ℹ", "若已 push main，Pages 会自动从 /docs 部署；此处无需 SCP 到 ECS");
 }
 
 // ─── 健康检查 ────────────────────────────────────────────
@@ -70,10 +74,12 @@ function healthCheck() {
   log("▶", "健康检查...");
   try {
     run("timeout /t 5 >nul", { stdio: "pipe" });
-    const res = run(`curl -sk -o NUL -w "%{http_code}" "https://${CONFIG.remote.host}/health"`, { stdio: "pipe" }).trim();
-    log(res === "200" ? "✓" : "⚠", `后端状态: ${res}`);
-    const web = run(`curl -sk -o NUL -w "%{http_code}" "https://${CONFIG.remote.host}/"`, { stdio: "pipe" }).trim();
-    log(web === "200" ? "✓" : "⚠", `前端状态: ${web}`);
+    // 后端 WebSocket 端点（443 返回 401 表示服务存活且要求 token，属正常）
+    const res = run(`curl -sk -o NUL -w "%{http_code}" "https://${CONFIG.remote.host}/"`, { stdio: "pipe" }).trim();
+    log((res === "200" || res === "401") ? "✓" : "⚠", `后端 WebSocket (${CONFIG.remote.host}): ${res}`);
+    // 前端走 GitHub Pages
+    const web = run(`curl -sk -o NUL -w "%{http_code}" "https://letshare.fun/version.json"`, { stdio: "pipe" }).trim();
+    log(web === "200" ? "✓" : "⚠", `前端 Pages (letshare.fun/version.json): ${web}`);
   } catch { log("⚠", "curl 不可用，跳过健康检查"); }
 }
 
