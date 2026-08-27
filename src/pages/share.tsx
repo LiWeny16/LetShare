@@ -1129,9 +1129,6 @@ const Share = observer(() => {
             >
               <SelectedFileStrip
                 files={selectedFiles}
-                dragEnabled
-                onChipDragStart={(file) => { chipDragPayloadRef.current = [file]; }}
-                onChipDragEnd={() => { chipDragPayloadRef.current = null; }}
                 onRemove={(index) => {
                   const next = selectedFiles.filter((_, i) => i !== index);
                   if (next.length === 0) {
