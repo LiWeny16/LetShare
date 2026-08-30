@@ -246,6 +246,10 @@ const Share = observer(() => {
       } else {
         stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
       }
+      console.log("[Call] startCall getUserMedia ok",
+        "tracks=", stream.getTracks().map(t => `${t.kind}:${t.readyState}`),
+        "audioTracks=", stream.getAudioTracks().map(t => ({ enabled: t.enabled, readyState: t.readyState, muted: t.muted })),
+        "media=", media);
       const callId = await manager.startCall(peerId, videoEnabled ? "audio+video" : "audio", stream);
       const peer = connectedUsersRef.current.find((u) => u.uniqId === peerId);
       setActiveCall({

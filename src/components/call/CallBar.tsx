@@ -171,6 +171,7 @@ export function ActiveCallPanel(props: ActiveCallProps) {
   }, [props.open]);
 
   useEffect(() => {
+    console.log("[CallBar] remoteStream effect", props.remoteStream ? `stream has audio=${props.remoteStream.getAudioTracks().length} video=${props.remoteStream.getVideoTracks().length}` : "null", "open=", props.open);
     if (remoteRef.current && props.remoteStream) {
       remoteRef.current.srcObject = props.remoteStream;
     } else if (remoteRef.current) {
@@ -179,6 +180,7 @@ export function ActiveCallPanel(props: ActiveCallProps) {
     // 独立 audio 元素同样绑定远端流，保证纯语音通话（video display:none）也能出声
     if (audioRef.current && props.remoteStream) {
       audioRef.current.srcObject = props.remoteStream;
+      console.log("[CallBar] audio element srcObject set, autoplay=", audioRef.current.autoplay, "audioTracks=", props.remoteStream.getAudioTracks().map(t => ({ enabled: t.enabled, readyState: t.readyState })));
     } else if (audioRef.current) {
       audioRef.current.srcObject = null;
     }

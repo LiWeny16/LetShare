@@ -115,6 +115,7 @@ export class CallSession {
   private setState(next: CallSessionState, info?: { error?: string }): void {
     if (this.ended && next !== "ended") return;
     this.state = next;
+    console.log(`[Call] session state -> ${next}${info?.error ? ` error=${info.error}` : ""} callId=${this.opts.callId}`);
     this.events.onStateChange(next, info);
   }
 
@@ -185,8 +186,10 @@ export class CallSession {
   }
 
   private bindRemoteStream(stream: MediaStream, kind: MediaKind): void {
+    console.log(`[Call] bindRemoteStream kind=${kind} tracks=${stream.getTracks().map(t => `${t.kind}:${t.readyState}`)}`);
     if (kind === "audio" && this.remoteAudioEl) {
       this.remoteAudioEl.srcObject = stream;
+      console.log("[Call] audio stream bound to remoteAudioEl, audioTracks=", stream.getAudioTracks().map(t => ({ enabled: t.enabled, muted: t.muted })));
     }
     if (kind === "video" && this.remoteVideoEl) {
       this.remoteVideoEl.srcObject = stream;
@@ -231,12 +234,14 @@ export class CallSession {
     };
     peer.ontrack = (ev) => {
       const kind: MediaKind = ev.track.kind === "video" ? "video" : "audio";
+      console.log(`[Call] ontrack kind=${kind} trackState=${ev.track.readyState} tracks=${ev.stream?.getTracks?.().map(t => t.kind)}`);
       this.bindRemoteStream(ev.stream, kind);
       if (this.state === "connecting") this.setState("active");
     };
     peer.onconnectionstatechange = () => {
       if (!this.peer) return;
       const st = this.peer.connectionState;
+      console.log(`[Call] connectionState=${st}`);
       if (st === "connected" && this.state === "connecting") {
         this.setState("active");
       } else if (["failed", "closed", "disconnected"].includes(st) && this.state !== "ended") {
