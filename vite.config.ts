@@ -22,10 +22,10 @@ export default defineConfig({
           }
           // 最小化拆分包 — 但把很小的包合并，避免请求数爆炸
           if (id.includes("node_modules")) {
-            const pkgName = id
-              .toString()
-              .split("node_modules/")[1]
-              .split("/")[0]
+            // 兼容 / 和 \ 两种路径分隔符（跨平台 id 混用）
+            const seg = id.split(/node_modules[\/\\]/);
+            const pkgName = seg[seg.length - 1]
+              .split(/[\/\\]/)[0]
               .toString()
               .replace(/^[.@]/, "") // 去掉 pnpm(.pnpm) 的 dot 前缀 / npm(@scope) 的 @ 前缀
             // 小体积包合并到 common-vendor，减少 modulepreload 请求数
@@ -73,6 +73,23 @@ export default defineConfig({
     host: "0.0.0.0",
   },
   plugins: [
+    // Vite 8 会把 @mui/icons-material 子路径解析到根目录 CJS 文件，
+    // 导致图标默认导出是 { default, __esModule } 包装对象，React 报
+    // "Element type is invalid ... got: object"（error #130）。
+    // 该包自带平行真 ESM 目录 esm/，重定向过去绕开 CJS interop。
+    {
+      name: "mui-icons-esm-redirect",
+      enforce: "pre" as const,
+      resolveId(source: string) {
+        const m = /^@mui\/icons-material\/([A-Za-z0-9_]+)$/.exec(source);
+        if (!m) return null;
+        return resolve(
+          __dirname,
+          "node_modules/@mui/icons-material/esm",
+          `${m[1]}.js`,
+        );
+      },
+    },
     react(),
     VitePWA({
       // devOptions: {
