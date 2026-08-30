@@ -157,6 +157,7 @@ export function ActiveCallPanel(props: ActiveCallProps) {
   const theme = useTheme();
   const remoteRef = useRef<HTMLVideoElement>(null);
   const localRef = useRef<HTMLVideoElement>(null);
+  const audioRef = useRef<HTMLAudioElement>(null);
   const [duration, setDuration] = useState(0);
   const startedAtRef = useRef<number>(0);
 
@@ -174,6 +175,12 @@ export function ActiveCallPanel(props: ActiveCallProps) {
       remoteRef.current.srcObject = props.remoteStream;
     } else if (remoteRef.current) {
       remoteRef.current.srcObject = null;
+    }
+    // 独立 audio 元素同样绑定远端流，保证纯语音通话（video display:none）也能出声
+    if (audioRef.current && props.remoteStream) {
+      audioRef.current.srcObject = props.remoteStream;
+    } else if (audioRef.current) {
+      audioRef.current.srcObject = null;
     }
   }, [props.remoteStream, props.open]);
 
@@ -228,8 +235,11 @@ export function ActiveCallPanel(props: ActiveCallProps) {
 
       {/* 主区域：远端视频 / 语音头像。
           远端 <video> 始终渲染（用 display 控制显隐），保证 remoteRef 不丢失、
-          语音↔视频切换时远端流绑定不失效（避免黑屏）。 */}
+          语音↔视频切换时远端流绑定不失效（避免黑屏）。
+          独立 <audio> 元素始终挂载承载远端语音 —— 纯语音通话时远端视频流
+          display:none，浏览器可能不播放隐藏 <video> 的音频，audio 兜底保证出声。 */}
       <Box sx={{ flex: 1, position: "relative", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
+        <audio ref={audioRef} autoPlay playsInline />
         <video
           ref={remoteRef}
           autoPlay

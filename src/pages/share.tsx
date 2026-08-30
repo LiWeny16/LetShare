@@ -55,6 +55,7 @@ import settingsStore from "@App/libs/mobx/mobx";
 import { isApp } from "@App/libs/capacitor/user";
 import { Trans, useTranslation } from "react-i18next";
 import { CallManager } from "@App/libs/call/callManager";
+import { startRingtone, stopRingtone } from "@App/libs/call/ringtone";
 import { CallButton, IncomingCallBanner, ActiveCallPanel, type CallMedia, type IncomingCallInfo } from "../components/call/CallBar";
 // import VideoPanel from "@Com/VideoPannel/VideoPannel";
 // import VideoPanel from "@Com/VideoPannel/VideoPannel";
@@ -135,6 +136,16 @@ const Share = observer(() => {
   const callManagerRef = React.useRef<CallManager | null>(null);
   const activeCallRef = React.useRef<typeof activeCall>(null);
   React.useEffect(() => { activeCallRef.current = activeCall; }, [activeCall]);
+
+  // 来电铃声：incomingCall 出现播放、消失（接听/拒绝/超时）停止
+  React.useEffect(() => {
+    if (incomingCall) {
+      startRingtone();
+    } else {
+      stopRingtone();
+    }
+    return () => stopRingtone();
+  }, [incomingCall]);
 
   const clearSelectedFiles = () => {
     setSelectedFiles([]);
