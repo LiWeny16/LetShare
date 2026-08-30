@@ -25,7 +25,9 @@ const sharedMalayTranslation = {
         guide: {
             title: "Panduan Pengguna:",
             step1: "1. Sambungkan kedua-dua peranti ke Wi-Fi yang <strong>sama</strong>",
-            step2: "2. ID bilik mesti <strong>sepadan</strong> di kedua-dua peranti!"
+            step2: "2. ID bilik mesti <strong>sepadan</strong> di kedua-dua peranti!",
+            step3: "3. ID bilik ialah rentetan yang anda janjikan; untuk kegunaan pertama sila:",
+            openRoomSetting: "Klik untuk tetapkan ID bilik"
         },
         dialog: {
             newShare: "Kongsi Baru",
@@ -565,7 +567,9 @@ export const resources = {
             guide: {
                 title: "使用指南：",
                 step1: "1. 两个设备连接到<strong>同一个</strong>局域网（部分公共 WiFi 不可用）",
-                step2: "2. 两个设备房间号<strong>必须相同</strong>！"
+                step2: "2. 两个设备房间号<strong>必须相同</strong>！",
+                step3: "3. 房间号是你们约定的一串字符，首次使用请先：",
+                openRoomSetting: "点此设置房间号"
             },
             dialog: {
                 newShare: "新分享",

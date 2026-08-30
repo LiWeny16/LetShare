@@ -1191,6 +1191,20 @@ const Share = observer(() => {
                 <CelebrationIcon sx={{ mr: 0.5, verticalAlign: 'middle', fontSize: '1.1em' }} />{t('guide.title')}
                 {"\n"}<Trans i18nKey="guide.step1" components={{ strong: <strong /> }} />
                 {"\n"}<Trans i18nKey="guide.step2" components={{ strong: <strong /> }} />
+                {"\n"}<Trans i18nKey="guide.step3" components={{ strong: <strong /> }} />
+                {"\n"}<Typography
+                  component="span"
+                  color="primary"
+                  sx={{
+                    textDecoration: 'underline',
+                    cursor: 'pointer',
+                    fontWeight: 600,
+                    '&:hover': { opacity: 0.75 },
+                  }}
+                  onClick={() => settingsStore.updateUnrmb("settingsPageState", true)}
+                >
+                  {t('guide.openRoomSetting')}
+                </Typography>
               </Typography></Box>
             </Box></> : <></>}
             {[...connectedUsers].sort((a, b) => {
