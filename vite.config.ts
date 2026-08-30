@@ -5,6 +5,16 @@ import { resolve } from "path"
 import { VitePWA } from 'vite-plugin-pwa'
 export default defineConfig({
   base: "./",
+  // 强制预构建这些 CJS 包：若无 optimizeDeps.include，Vite 用原生 ESM 加载
+  // 这些纯 CJS 模块会报 "does not provide an export named 'default'"（如 prop-types）。
+  // include 后 Vite 会做正确 CJS->ESM interop，生成 default export。
+  optimizeDeps: {
+    include: [
+      "prop-types",
+      "react-is",
+      "hoist-non-react-statics",
+    ],
+  },
   build: {
     target: "esnext",
     rollupOptions: {
