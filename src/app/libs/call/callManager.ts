@@ -33,6 +33,7 @@ import {
   type TrackQuality,
   type TransportDecision,
 } from "./transportPolicy";
+import { fetchTurnCredentials, type TurnIceServer } from "../connection/proUpgrade";
 
 export type CallManagerEvents = {
   /** 收到来电（等待 UI 决策 accept/decline） */
@@ -76,6 +77,16 @@ const RTC_CONFIG: RTCConfiguration = {
   rtcpMuxPolicy: "require",
 };
 
+/**
+ * 构建通话用 RTC 配置：静态 STUN + 动态短效 TURN 凭据（若已拉取）。
+ * TURN 凭据由 Go 后端按 use-auth-secret 签发，几分钟过期；前端不落明文口令。
+ * turnServers 为空时退化为纯 STUN（不影响发起通话）。
+ */
+function buildRtcConfig(turnServers: TurnIceServer[]): RTCConfiguration {
+  const iceServers: RTCIceServer[] = [...(RTC_CONFIG.iceServers ?? []), ...turnServers];
+  return { ...RTC_CONFIG, iceServers };
+}
+
 const INCOMING_TIMEOUT_MS = 30_000;
 
 /** 环境无关的 setTimeout（浏览器/Node 通用），返回可清除的句柄。 */
@@ -109,6 +120,8 @@ export class CallManager {
   private calls = new Map<string, ActiveCall>(); // callId → call
   private byPeer = new Map<string, string>(); // peerId → callId
   private policy: PolicyConfig = DEFAULT_POLICY_CONFIG;
+  /** 短效 TURN 凭据缓存（异步拉取，失败则退化为纯 STUN） */
+  private turnServers: TurnIceServer[] = [];
 
   constructor(
     private readonly deps: CallManagerDeps,
@@ -126,6 +139,15 @@ export class CallManager {
         // 非媒体帧（如文件传输帧），忽略
       }
     });
+
+    // 异步预拉 TURN 凭据：失败静默降级为纯 STUN，不阻塞通话发起。
+    void fetchTurnCredentials()
+      .then((servers) => {
+        this.turnServers = servers;
+      })
+      .catch(() => {
+        // TURN 不可用时不致命，保留纯 STUN 配置
+      });
   }
 
   setPolicy(partial: Partial<PolicyConfig>): void {
@@ -154,7 +176,7 @@ export class CallManager {
       {
         callId,
         peerId,
-        rtcConfig: RTC_CONFIG,
+        rtcConfig: buildRtcConfig(this.turnServers),
         localStream,
         wantVideo: media !== "audio",
         onIceCandidate: (candidate) => {
@@ -357,7 +379,7 @@ export class CallManager {
       {
         callId,
         peerId,
-        rtcConfig: RTC_CONFIG,
+        rtcConfig: buildRtcConfig(this.turnServers),
         wantVideo,
         onIceCandidate: (candidate) => {
           this.deps.broadcast(buildIce(callId, candidate));

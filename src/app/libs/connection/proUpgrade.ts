@@ -70,3 +70,32 @@ export async function activatePro(userId: string, inviteCode: string): Promise<{
 	}
 	return resp.json();
 }
+
+export interface TurnIceServer {
+	urls: string;
+	username: string;
+	credential: string;
+}
+
+export interface TurnCredentialsResponse {
+	ice_servers: TurnIceServer[];
+	ttl_seconds: number;
+}
+
+/**
+ * 获取短效 TURN 凭据（由 Go 后端签发，RFC 5766 use-auth-secret 模式）。
+ * 返回的 iceServers 直接并入 RTCPeerConnection 的 iceServers 配置。
+ * 后端未启用 TURN 时（404）返回空数组，调用方按无 TURN 降级处理。
+ */
+export async function fetchTurnCredentials(): Promise<TurnIceServer[]> {
+	const resp = await fetch(`${API_BASE}/api/turn-credentials`);
+	if (resp.status === 404) {
+		// TURN 服务未启用：降级为纯 STUN，不影响通话发起
+		return [];
+	}
+	if (!resp.ok) {
+		throw new Error("获取 TURN 凭据失败");
+	}
+	const data = (await resp.json()) as TurnCredentialsResponse;
+	return data.ice_servers ?? [];
+}

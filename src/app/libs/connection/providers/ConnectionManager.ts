@@ -23,7 +23,7 @@ export class ConnectionManager implements IConnectionProvider {
   private maxFailures = 1;
   private signalCallback: ((data: any) => void) | null = null;
   private messageCallback: ((message: any) => void) | null = null;
-  private binaryCallback: ((data: ArrayBuffer) => void) | null = null;
+  private binaryCallbacks: Array<(data: ArrayBuffer) => void> = [];
   private disconnectedCallback: ((reason?: string) => void) | null = null;
 
   constructor(config: ConnectionConfig) {
@@ -118,10 +118,24 @@ export class ConnectionManager implements IConnectionProvider {
   }
 
   onBinaryReceived(callback: (data: ArrayBuffer) => void): void {
-    this.binaryCallback = callback;
-    if (this.currentProvider?.onBinaryReceived) {
-      this.currentProvider.onBinaryReceived(callback);
+    // 多订阅：通话媒体帧（CallManager）与文件传输块（ServerFileTransfer）
+    // 共用同一条二进制通道，但分属两个独立消费者。这里用订阅者数组 fan-out，
+    // 每个消费者按各自帧头（"medi" 魔数 vs JSON 头）自行过滤，互不覆盖。
+    if (this.binaryCallbacks.includes(callback)) return;
+    this.binaryCallbacks.push(callback);
+    if (this.currentProvider) {
+      this.bindBinaryFanout(this.currentProvider);
     }
+  }
+
+  /** 将 fan-out 入口绑定到 provider 的二进制接收回调（provider 层为单槽）。 */
+  private bindBinaryFanout(provider: IConnectionProvider): void {
+    if (!provider.onBinaryReceived) return;
+    provider.onBinaryReceived((data: ArrayBuffer) => {
+      for (const cb of this.binaryCallbacks) {
+        cb(data);
+      }
+    });
   }
 
   getUniqId(): string {
@@ -185,8 +199,8 @@ export class ConnectionManager implements IConnectionProvider {
       if (this.messageCallback && provider.onMessageReceived) {
         provider.onMessageReceived(this.messageCallback);
       }
-      if (this.binaryCallback && provider.onBinaryReceived) {
-        provider.onBinaryReceived(this.binaryCallback);
+      if (this.binaryCallbacks.length > 0 && provider.onBinaryReceived) {
+        this.bindBinaryFanout(provider);
       }
       if (this.disconnectedCallback && provider.onDisconnected) {
         provider.onDisconnected(this.disconnectedCallback);
@@ -205,8 +219,8 @@ export class ConnectionManager implements IConnectionProvider {
         if (this.messageCallback && this.currentProvider.onMessageReceived) {
           this.currentProvider.onMessageReceived(this.messageCallback);
         }
-        if (this.binaryCallback && this.currentProvider.onBinaryReceived) {
-          this.currentProvider.onBinaryReceived(this.binaryCallback);
+        if (this.binaryCallbacks.length > 0 && this.currentProvider.onBinaryReceived) {
+          this.bindBinaryFanout(this.currentProvider);
         }
         if (this.disconnectedCallback && this.currentProvider.onDisconnected) {
           this.currentProvider.onDisconnected(this.disconnectedCallback);
