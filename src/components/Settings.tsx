@@ -16,6 +16,7 @@ import {
   RadioGroup,
   FormControlLabel,
   FormLabel,
+  CircularProgress,
   // Divider,
 } from '@mui/material';
 import { invisibleScrollerSx } from '@Style/muiStyles';
@@ -42,6 +43,8 @@ const SettingsPage = () => {
   const settings = settingsStore.getAllSettings();
   const settingsRef = React.useRef<HTMLDivElement>(null);
   const [advancedOpen, setAdvancedOpen] = React.useState(false);
+  // 保存显示的 loading 状态，防止重复点击并给出反馈
+  const [saving, setSaving] = React.useState(false);
   const languageLabel = t('settings.languageLabel');
   // 初始值只记录一次（建议放在 useEffect 或 useRef）
   const originalRoomIdRef = React.useRef(settingsStore.get("roomId"));
@@ -162,8 +165,13 @@ const SettingsPage = () => {
   }, [t]);
 
   const handleSave = React.useCallback(() => {
-    void handleClose();
-  }, [handleClose]);
+    if (saving) return; // 防重复点击
+    setSaving(true);
+    // 给 loading 动效一个短暂展示，再执行关闭
+    window.setTimeout(() => {
+      void handleClose().finally(() => setSaving(false));
+    }, 350);
+  }, [saving, handleClose]);
 
   React.useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -387,8 +395,10 @@ const SettingsPage = () => {
             variant="contained"
             size="large"
             fullWidth
+            disabled={saving}
+            startIcon={saving ? <CircularProgress size={18} color="inherit" /> : undefined}
           >
-            {t('settings.saveButton')}
+            {saving ? t('settings.saving') : t('settings.saveButton')}
           </Button>
         </Box>
       </Box>

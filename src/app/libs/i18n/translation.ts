@@ -91,6 +91,7 @@ const sharedMalayTranslation = {
                 helper: "Peranti mesti menggunakan ID bilik yang sama untuk berhubung"
             },
             saveButton: "Simpan Tetapan",
+            saving: "Menyimpan…",
             joinSuccess: "Berjaya sertai bilik",
             advanced: {
                 title: "Tetapan Lanjutan",
@@ -299,7 +300,9 @@ export const resources = {
             guide: {
                 title: "User Guide:",
                 step1: "1. Connect both devices to the <strong>same</strong> Wi-Fi",
-                step2: "2. Room IDs <strong>must match</strong> on both devices!"
+                step2: "2. Room IDs <strong>must match</strong> on both devices!",
+                step3: "3. The room ID is a string you agree on; for first use please:",
+                openRoomSetting: "Click to set room ID"
             },
             dialog: {
                 newShare: "New Share",
@@ -363,6 +366,7 @@ export const resources = {
                     helper: "Only Same RoomId Can Connect"
                 },
                 saveButton: "Save Settings",
+                saving: "Saving…",
                 joinSuccess: "Successfully joined room",
                 advanced: {
                     title: "Advanced Settings",
@@ -637,6 +641,7 @@ export const resources = {
                 },
 
                 saveButton: "保存设置",
+                saving: "保存中…",
                 joinSuccess: "成功加入房间",
                 advanced: {
                     title: "高级设置",
