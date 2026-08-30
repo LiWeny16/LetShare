@@ -144,21 +144,21 @@ const SettingsPage = () => {
 
   const handleClose = React.useCallback(async () => {
     const currentRoomId = settingsStore.get("roomId");
-
-    if (originalRoomIdRef.current !== currentRoomId) {
-      console.log(` 房间号变化: "${originalRoomIdRef.current}" → "${currentRoomId}"`);
-      await realTimeColab.handleRename()
-      alertUseMUI(`${t('settings.joinSuccess')}: "${currentRoomId}"`)
-      originalRoomIdRef.current = currentRoomId
+    // 首次用户可能尚未填写房间号：为空时允许直接关闭，不弹必填报错、不触发改名。
+    if (currentRoomId && currentRoomId.trim()) {
+      if (originalRoomIdRef.current !== currentRoomId) {
+        console.log(` 房间号变化: "${originalRoomIdRef.current}" → "${currentRoomId}"`);
+        await realTimeColab.handleRename()
+        alertUseMUI(`${t('settings.joinSuccess')}: "${currentRoomId}"`)
+        originalRoomIdRef.current = currentRoomId
+      }
+      const validation = validateRoomName(currentRoomId);
+      if (!validation.isValid) {
+        alertUseMUI(validation.message, 2000, { kind: "error" });
+        return;
+      }
     }
-    const roomId = settingsStore.get("roomId");
-    const validation = validateRoomName(roomId)
-    if (validation.isValid) {
-      settingsStore.updateUnrmb("settingsPageState", false)
-    }
-    else {
-      alertUseMUI(validation.message, 2000, { kind: "error" });
-    }
+    settingsStore.updateUnrmb("settingsPageState", false)
   }, [t]);
 
   const handleSave = React.useCallback(() => {
@@ -276,16 +276,15 @@ const SettingsPage = () => {
           </FormControl>
 
           <TextField
-            required
             label={t('settings.roomId.label')}
             fullWidth
             autoFocus={settingsStore.get("roomId") == ""}
             variant="outlined"
             value={settings.roomId || ''}
             onChange={(e) => handleChangeRoomId('roomId', e.target.value)}
-            error={!settings.roomId}
             inputProps={{ maxLength: 12 }}
-            helperText={!settings.roomId ? t('settings.roomId.required') : t('settings.roomId.helper')}
+            placeholder={!settings.roomId ? t('settings.roomId.placeholder') : ''}
+            helperText={settings.roomId ? t('settings.roomId.helper') : ''}
           />
 
           {/* 高级设置展开区域 */}

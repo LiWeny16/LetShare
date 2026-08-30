@@ -87,6 +87,7 @@ const sharedMalayTranslation = {
             roomId: {
                 label: "ID Bilik",
                 required: "ID bilik wajib diisi",
+                placeholder: "Masukkan ID bilik, cth. myroom",
                 helper: "Peranti mesti menggunakan ID bilik yang sama untuk berhubung"
             },
             saveButton: "Simpan Tetapan",
@@ -358,6 +359,7 @@ export const resources = {
                 roomId: {
                     label: "Room ID",
                     required: "Room ID is required",
+                    placeholder: "Enter a room ID, e.g. myroom",
                     helper: "Only Same RoomId Can Connect"
                 },
                 saveButton: "Save Settings",
@@ -630,8 +632,10 @@ export const resources = {
                 roomId: {
                     label: "房间号",
                     required: "房间号必填啦",
+                    placeholder: "请输入房间号，如 myroom",
                     helper: "只有同一房间号才能互相连接哦"
                 },
+
                 saveButton: "保存设置",
                 joinSuccess: "成功加入房间",
                 advanced: {
