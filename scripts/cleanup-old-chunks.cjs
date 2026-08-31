@@ -106,6 +106,7 @@ const singleVersionPrefixes = [
   'landing',
   'modulepreload-polyfill',
   'AblyConnectionProvider',
+  'rolldown-runtime',
 ];
 
 // ── main ─────────────────────────────────────────────────────────────
