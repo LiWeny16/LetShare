@@ -7,12 +7,12 @@ const DEFAULT_SETTINGS = {
   roomId: '',
   userTheme: 'light' as ThemeKey,
   userLanguage: 'en' as LanguageType,
-  serverMode: 'auto' as 'auto' | 'ably' | 'custom',
+  serverMode: 'custom' as 'ably' | 'custom',
   customServerUrl: "wss://ecs.letshare.fun/",
   authToken: "98d9a399675116e5256e9082c192bc06eb6434937af99f201252e9424c7a5652",
   ablyKey: "4TtssQ.e9OvDA:wYBGdtWQNgicbeIKNtgeV_s5XEKmfLKD_Gue5XQrWuw",
   transferPriority: 'p2p' as 'p2p' | 'server',
-  version: "3.6.3",
+  version: "3.6.4",
   isNewUser: true
 };
 export type SettingsKey = keyof typeof DEFAULT_SETTINGS;
@@ -116,6 +116,10 @@ class SettingsStore {
 
       if (isValid) {
         runInAction(() => {
+          // auto 模式已废弃（依赖 ipinfo 地区探测，国内网络下会卡）：旧值迁移为国内
+          if (parsed.serverMode === 'auto') {
+            parsed.serverMode = 'custom';
+          }
           this.settings = { ...DEFAULT_SETTINGS, ...parsed };
         });
       } else {

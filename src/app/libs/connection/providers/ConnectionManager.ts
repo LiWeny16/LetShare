@@ -1,20 +1,9 @@
 ﻿import { IConnectionProvider, ConnectionConfig } from "./IConnectionProvider";
 import { CustomConnectionProvider } from "./CustomConnectionProvider";
 import settingsStore from "../../mobx/mobx";
-import { testIp } from "../../tools/tools";
 // import { CleaningServices } from "@mui/icons-material";
 
-// 定义IP测试结果类型
-interface IpTestResult {
-  ip: string | null;
-  region: string | null;
-  country: string | null;
-  countryCode: string | null;
-  lang: string | null;
-  source: 'ipinfo' | 'ipapi' | null;
-}
-
-type ServerMode = 'auto' | 'ably' | 'custom';
+type ServerMode = 'ably' | 'custom';
 
 export class ConnectionManager implements IConnectionProvider {
   private currentProvider: IConnectionProvider | null = null;
@@ -32,15 +21,11 @@ export class ConnectionManager implements IConnectionProvider {
 
   async connect(roomId: string): Promise<boolean> {
     const serverMode = settingsStore.get("serverMode") as ServerMode;
-    
+    // auto 模式已废弃（依赖 ipinfo 地区探测，国内网络下会卡）：残留的 'auto' 旧值按国内处理
     if (serverMode === 'ably') {
       return this.connectWithProvider('ably', roomId);
-    } else if (serverMode === 'custom') {
-      return this.connectWithProvider('custom', roomId);
-    } else {
-      // auto 模式：根据地区智能选择
-      return this.connectAuto(roomId);
     }
+    return this.connectWithProvider('custom', roomId);
   }
 
   async disconnect(soft?: boolean): Promise<void> {
@@ -142,33 +127,6 @@ export class ConnectionManager implements IConnectionProvider {
     return this.currentProvider?.getUniqId?.() ?? this.config.uniqId;
   }
 
-  private async connectAuto(roomId: string): Promise<boolean> {
-    const ipResult = await testIp();
-    const isOverseas = this.isOverseasRegion(ipResult);
-    settingsStore.updateUnrmb("staticIp", ipResult.ip || "");
-    // console.debug(` 检测到IP信息:`, ipResult);
-    // console.debug(` 海外地区: ${isOverseas}`);
-    
-    // 海外优先使用 Ably，国内优先使用 Custom
-    const primaryProvider = isOverseas ? 'ably' : 'custom';
-    const fallbackProvider = isOverseas ? 'custom' : 'ably';
-    
-    // 尝试主要提供者
-    if (await this.connectWithProvider(primaryProvider, roomId)) {
-      return true;
-    }
-    
-    console.warn(` ${primaryProvider} 连接失败，尝试备用提供者 ${fallbackProvider}`);
-    
-    // 尝试备用提供者
-    if (await this.connectWithProvider(fallbackProvider, roomId)) {
-      return true;
-    }
-    
-    console.error(" 所有连接提供者都失败了");
-    return false;
-  }
-
   private async connectWithProvider(providerType: 'ably' | 'custom', roomId: string): Promise<boolean> {
     // 检查失败次数
     const failures = this.failureCount.get(providerType) || 0;
@@ -243,33 +201,6 @@ export class ConnectionManager implements IConnectionProvider {
       console.error(` ${providerType} 提供者连接异常:`, error);
       return false;
     }
-  }
-
-  private isOverseasRegion(ipResult: IpTestResult): boolean {
-    // 如果无法获取到地区信息，默认使用国内服务器
-    if (!ipResult.countryCode && !ipResult.country) {
-      console.warn(" 无法获取地区信息，默认使用国内服务器");
-      return false;
-    }
-    
-    // 中国大陆判断
-    const countryCode = ipResult.countryCode?.toUpperCase();
-    const country = ipResult.country?.toLowerCase();
-    
-    const isChinaMainland = countryCode === 'CN' || 
-                countryCode === 'CHN' ||
-                country === 'china' ||
-                country === '中国' ||
-                country?.includes('china') ||
-                country?.includes('中国');
-    
-    if (isChinaMainland) {
-      console.debug(" 检测到中国大陆，使用国内服务器");
-      return false;
-    }
-    
-    console.debug(` 检测到海外地区 (${countryCode}/${country})，使用海外服务器`);
-    return true;
   }
 
   /**

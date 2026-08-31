@@ -69,7 +69,7 @@ const SettingsPage = () => {
   };
 
   const handleServerModeChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const newMode = event.target.value as 'auto' | 'ably' | 'custom';
+    const newMode = event.target.value as 'ably' | 'custom';
     const currentMode = settingsStore.get('serverMode');
     
     // 如果模式没有改变，直接返回
@@ -96,16 +96,12 @@ const SettingsPage = () => {
       const connected = await realTimeColab.connectToServer();
       
       if (connected) {
-        const modeText = newMode === 'auto' ? t('settings.advanced.serverMode.auto') : 
-                newMode === 'ably' ? t('settings.advanced.serverMode.global') : 
-                t('settings.advanced.serverMode.china');
+        const modeText = newMode === 'ably' ? t('settings.advanced.serverMode.global') : t('settings.advanced.serverMode.china');
         alertUseMUI(`${t('settings.advanced.serverMode.switchSuccess', { mode: modeText })}`, 2000, { kind: "success" });
         // 连接成功后发送发现信号
         realTimeColab.broadcastSignal({ type: "discover", userType: getDeviceType() });
       } else {
-        const modeText = newMode === 'auto' ? t('settings.advanced.serverMode.auto') : 
-                newMode === 'ably' ? t('settings.advanced.serverMode.global') : 
-                t('settings.advanced.serverMode.china');
+        const modeText = newMode === 'ably' ? t('settings.advanced.serverMode.global') : t('settings.advanced.serverMode.china');
         alertUseMUI(`${t('settings.advanced.serverMode.switchError', { mode: modeText })}`, 2000, { kind: "error" });
       }
     } catch (error) {
@@ -310,7 +306,6 @@ const SettingsPage = () => {
                   value={settingsStore.get('serverMode')}
                   onChange={handleServerModeChange}
                 >
-                  <FormControlLabel value="auto" control={<Radio />} label={t('settings.advanced.serverMode.auto')} />
                   <FormControlLabel value="ably" control={<Radio />} label={t('settings.advanced.serverMode.global')} />
                   <FormControlLabel value="custom" control={<Radio />} label={t('settings.advanced.serverMode.china')} />
                 </RadioGroup>
