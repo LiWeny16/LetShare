@@ -4,3 +4,9 @@ packages:
 allowBuilds:
   core-js: true
   esbuild: true
+
+# MUI v7 内部依赖 react-is@19，但项目保持 React 18；
+# 必须把 react-is 钉在 18.3.1，否则 prop-types 检查在 React<=18 下运行时崩溃
+#（官方 upgrade-to-v7 指南明确要求）。直接依赖 + override 双保险。
+overrides:
+  react-is: 18.3.1

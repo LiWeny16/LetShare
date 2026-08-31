@@ -10,7 +10,7 @@ import {
     Avatar,
     Button,
     Popover,
-    Grid,
+    GridLegacy as Grid,
 } from '@mui/material';
 import SendIcon from '@mui/icons-material/Send';
 import DeleteIcon from '@mui/icons-material/Delete';
