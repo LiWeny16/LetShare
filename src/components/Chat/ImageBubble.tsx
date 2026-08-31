@@ -10,11 +10,11 @@ import {
   CircularProgress,
   useTheme,
 } from '@mui/material';
-import { X as CloseIcon } from "lucide-react";
-import { Image as ImageIcon } from "lucide-react";
-import { ImageOff as BrokenImageIcon } from "lucide-react";
-import { CircleAlert as ErrorOutlineIcon } from "lucide-react";
-import { RefreshCw as RefreshIcon } from "lucide-react";
+import CloseIcon from '@mui/icons-material/Close';
+import ImageIcon from '@mui/icons-material/Image';
+import BrokenImageIcon from '@mui/icons-material/BrokenImage';
+import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
+import RefreshIcon from '@mui/icons-material/Refresh';
 import { useTranslation } from 'react-i18next';
 import type { FileChatMessage } from '@App/libs/chat/ChatHistoryManager';
 import { formatFileSize } from '@App/libs/chat/ChatHistoryManager';
@@ -168,11 +168,14 @@ const ImageBubble: React.FC<ImageBubbleProps> = ({
             }}
           >
             <ImageIcon
-              size={48}
-              color={isMyMessage
-                ? theme.palette.primary.contrastText
-                : theme.palette.text.disabled}
-              style={{ marginBottom: 8, opacity: 0.7 }}
+              sx={{
+                fontSize: 48,
+                color: isMyMessage
+                  ? theme.palette.primary.contrastText
+                  : theme.palette.text.disabled,
+                mb: 1,
+                opacity: 0.7,
+              }}
             />
             <Typography
               variant="caption"
@@ -283,7 +286,9 @@ const ImageBubble: React.FC<ImageBubbleProps> = ({
                 minWidth: 140,
               }}
             >
-              <BrokenImageIcon size={40} color={theme.palette.text.disabled} style={{ marginBottom: 8 }} />
+              <BrokenImageIcon
+                sx={{ fontSize: 40, color: theme.palette.text.disabled, mb: 1 }}
+              />
               <Typography variant="caption" color="text.secondary">
                 {t('chat.fileFailed')}
               </Typography>
@@ -302,7 +307,9 @@ const ImageBubble: React.FC<ImageBubbleProps> = ({
               minWidth: 140,
             }}
           >
-            <ImageIcon size={48} color={theme.palette.text.disabled} style={{ marginBottom: 8 }} />
+            <ImageIcon
+              sx={{ fontSize: 48, color: theme.palette.text.disabled, mb: 1 }}
+            />
             <Typography
               variant="caption"
               color="text.secondary"
@@ -327,9 +334,13 @@ const ImageBubble: React.FC<ImageBubbleProps> = ({
               minWidth: 140,
             }}
           >
-            <BrokenImageIcon size={48} color={theme.palette.error.main} style={{ marginBottom: 8 }} />
+            <BrokenImageIcon
+              sx={{ fontSize: 48, color: theme.palette.error.main, mb: 1 }}
+            />
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 1 }}>
-              <ErrorOutlineIcon size={16} color={theme.palette.error.main} />
+              <ErrorOutlineIcon
+                sx={{ fontSize: 16, color: theme.palette.error.main }}
+              />
               <Typography variant="caption" color="error">
                 {t('chat.fileFailed')}
               </Typography>
@@ -357,7 +368,9 @@ const ImageBubble: React.FC<ImageBubbleProps> = ({
               px: 3,
             }}
           >
-            <ImageIcon size={48} color={theme.palette.text.disabled} style={{ marginBottom: 8 }} />
+            <ImageIcon
+              sx={{ fontSize: 48, color: theme.palette.text.disabled, mb: 1 }}
+            />
             <Typography variant="caption" color="text.secondary" noWrap>
               {fileName}
             </Typography>

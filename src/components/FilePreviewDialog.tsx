@@ -3,8 +3,8 @@ import {
   Dialog, DialogContent, IconButton, Typography, Box,
   CircularProgress, Button,
 } from '@mui/material';
-import { X as CloseIcon } from "lucide-react";
-import { Download as DownloadIcon } from "lucide-react";
+import CloseIcon from '@mui/icons-material/Close';
+import DownloadIcon from '@mui/icons-material/Download';
 
 interface FilePreviewDialogProps {
   file: File | null;
@@ -228,7 +228,7 @@ const FilePreviewDialog: React.FC<FilePreviewDialogProps> = ({
             '&:hover': { backgroundColor: 'rgba(0,0,0,0.6)' },
           }}
         >
-          <CloseIcon size={20} />
+          <CloseIcon fontSize="small" />
         </IconButton>
 
         {/* Title area */}

@@ -10,11 +10,10 @@ import {
   CircularProgress,
 } from '@mui/material';
 import React from 'react';
-import { useTheme } from '@mui/material/styles';
 import alertUseMUI from '@App/libs/tools/alert';
-import { Award as WorkspacePremiumIcon } from "lucide-react";
-import { BadgeCheck as VerifiedIcon } from "lucide-react";
-import { Copy as ContentCopyIcon } from "lucide-react";
+import WorkspacePremiumIcon from '@mui/icons-material/WorkspacePremium';
+import VerifiedIcon from '@mui/icons-material/Verified';
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import { setProCookie, clearProCookie, getProCookie, activatePro, setProToken } from '@App/libs/connection/proUpgrade';
 import realTimeColab from '@App/libs/connection/colabLib';
 
@@ -28,7 +27,6 @@ type Props = {
 };
 
 const ProUpgradeDialog = ({ open, onClose, isPro = false }: Props) => {
-  const theme = useTheme();
   const [inviteCode, setInviteCode] = React.useState('');
   const [inviteError, setInviteError] = React.useState('');
   const [copied, setCopied] = React.useState(false);
@@ -166,7 +164,7 @@ const ProUpgradeDialog = ({ open, onClose, isPro = false }: Props) => {
                 justifyContent: 'center',
               }}
             >
-              <WorkspacePremiumIcon size={21} color={theme.palette.text.secondary} />
+              <WorkspacePremiumIcon sx={{ color: 'text.secondary', fontSize: 21 }} />
             </Box>
             <Box>
               <Typography fontWeight={600} fontSize="0.9rem" lineHeight={1.3}>
@@ -254,7 +252,7 @@ const ProUpgradeDialog = ({ open, onClose, isPro = false }: Props) => {
                   : '0 2px 6px rgba(200,150,62,0.28)',
               }}
             >
-              <VerifiedIcon size={21} color={"#fff"} />
+              <VerifiedIcon sx={{ color: '#fff', fontSize: 21 }} />
             </Box>
             <Box>
               <Typography
@@ -351,9 +349,11 @@ const ProUpgradeDialog = ({ open, onClose, isPro = false }: Props) => {
           <Tooltip title={copied ? '已复制' : '复制邮箱'} arrow>
             <IconButton size="small" onClick={handleCopyEmail} sx={{ p: 0.5, ml: -0.5 }}>
               <ContentCopyIcon
-                size={15}
-                color={copied ? theme.palette.success.main : theme.palette.text.secondary}
-                style={{ transition: 'color 0.2s ease' }}
+                sx={{
+                  fontSize: 15,
+                  color: copied ? 'success.main' : 'text.secondary',
+                  transition: 'color 0.2s ease',
+                }}
               />
             </IconButton>
           </Tooltip>

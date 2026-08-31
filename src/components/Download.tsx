@@ -14,22 +14,22 @@ import {
   IconButton,
   Tooltip,
 } from "@mui/material";
-import { File as InsertDriveFile } from "lucide-react";
-import { FileType2 as PictureAsPdf } from "lucide-react";
-import { Image as ImageIcon } from "lucide-react";
-import { Film as Movie } from "lucide-react";
-import { FolderArchive as FolderZipIcon } from "lucide-react";
-import { Code as Code } from "lucide-react";
-import { FileText as TextSnippet } from "lucide-react";
-import { Table as TableChart } from "lucide-react";
-import { Presentation as Slideshow } from "lucide-react";
-import { AlignLeft as Subject } from "lucide-react";
-import { X as CloseIcon } from "lucide-react";
-import { Download as DownloadIcon } from "lucide-react"; // 确保导入这个
-import { Upload as UploadFileIcon } from "lucide-react";
-import { Folder as FolderIcon } from "lucide-react";
-import { ChevronDown as KeyboardArrowDownIcon } from "lucide-react";
-import { ChevronUp as KeyboardArrowUpIcon } from "lucide-react";
+import InsertDriveFile from "@mui/icons-material/InsertDriveFile";
+import PictureAsPdf from "@mui/icons-material/PictureAsPdf";
+import ImageIcon from "@mui/icons-material/Image";
+import Movie from "@mui/icons-material/Movie";
+import FolderZipIcon from "@mui/icons-material/FolderZip";
+import Code from "@mui/icons-material/Code";
+import TextSnippet from "@mui/icons-material/TextSnippet";
+import TableChart from "@mui/icons-material/TableChart";
+import Slideshow from "@mui/icons-material/Slideshow";
+import Subject from "@mui/icons-material/Subject";
+import CloseIcon from "@mui/icons-material/Close";
+import DownloadIcon from "@mui/icons-material/Download"; // 确保导入这个
+import UploadFileIcon from "@mui/icons-material/UploadFile";
+import FolderIcon from "@mui/icons-material/Folder";
+import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
+import KeyboardArrowUpIcon from "@mui/icons-material/KeyboardArrowUp";
 import { buttonStyleNormal } from "../pages/share";
 import React from "react";
 import ChatIntegration from "@App/libs/chat/ChatIntegration";
@@ -430,7 +430,7 @@ export default function DownloadDrawerSlide({
 
     // 图片
     if (["png", "jpg", "jpeg", "gif", "bmp", "webp", "svg"].includes(ext)) {
-      return <ImageIcon size={24} />;
+      return <ImageIcon fontSize="medium" />;
     }
 
     // 视频
@@ -440,7 +440,7 @@ export default function DownloadDrawerSlide({
 
     // 压缩包
     if (["zip", "rar", "7z", "tar", "gz", "xz", "bz2"].includes(ext)) {
-      return <FolderZipIcon size={24} />;
+      return <FolderZipIcon fontSize="medium" />;
     }
 
     // PDF
@@ -925,7 +925,7 @@ export default function DownloadDrawerSlide({
                   >
                     <Typography variant="body2" color="text.secondary">
                       {/* Sending file */}
-                      <><UploadFileIcon size="1.1em" style={{ marginRight: 4, verticalAlign: 'middle' }} /><Trans i18nKey="transfer.sending" values={{ name: targetUserId?.split(":")[0] ?? "未知用户" }} components={{ strong: <strong /> }} /></>
+                      <><UploadFileIcon sx={{ mr: 0.5, verticalAlign: 'middle', fontSize: '1.1em' }} /><Trans i18nKey="transfer.sending" values={{ name: targetUserId?.split(":")[0] ?? "未知用户" }} components={{ strong: <strong /> }} /></>
                     </Typography>
                     <Box
                       sx={{
@@ -992,7 +992,7 @@ export default function DownloadDrawerSlide({
                     }}
                   >
                     <Typography variant="body2" color="text.secondary">
-                      <DownloadIcon size="1.1em" style={{ marginRight: 4, verticalAlign: 'middle' }} />
+                      <DownloadIcon sx={{ mr: 0.5, verticalAlign: 'middle', fontSize: '1.1em' }} />
                       {t("toast.receivingFile")}
                     </Typography>
                     <Box
@@ -1064,7 +1064,7 @@ export default function DownloadDrawerSlide({
                     >
                       <Typography variant="body2" color="text.secondary">
                         {/* Receiving file */}
-                        <><DownloadIcon size="1.1em" style={{ marginRight: 4, verticalAlign: 'middle' }} /><Trans i18nKey="transfer.receiving"
+                        <><DownloadIcon sx={{ mr: 0.5, verticalAlign: 'middle', fontSize: '1.1em' }} /><Trans i18nKey="transfer.receiving"
                           values={{ name: userId.split(":")[0], filename: file.name }}
                           components={{ strong: <strong /> }} /></>
                       </Typography>
@@ -1119,7 +1119,7 @@ export default function DownloadDrawerSlide({
                   return (
                     <Box>
                       <Typography variant="subtitle2" sx={{ mt: 2, mb: 1 }}>
-                        <UploadFileIcon size="1.1em" style={{ marginRight: 4, verticalAlign: 'middle' }} />
+                        <UploadFileIcon sx={{ mr: 0.5, verticalAlign: 'middle', fontSize: '1.1em' }} />
                         {t('transfer.sentFiles')}
                       </Typography>
                       <Box sx={{ display: "flex", flexDirection: "column", gap: 0.5 }}>
@@ -1136,7 +1136,7 @@ export default function DownloadDrawerSlide({
                               bgcolor: theme.palette.action.hover,
                             }}
                           >
-                            <InsertDriveFile size="1.2rem" color={theme.palette.text.secondary} />
+                            <InsertDriveFile sx={{ color: theme.palette.text.secondary, fontSize: '1.2rem' }} />
                             <Typography variant="body2" sx={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                               {info.name}
                             </Typography>
@@ -1153,7 +1153,7 @@ export default function DownloadDrawerSlide({
                 {directSavedList.length > 0 && (
                   <Box>
                     <Typography variant="subtitle2" sx={{ mt: 2, mb: 1 }}>
-                      <DownloadIcon size="1.1em" style={{ marginRight: 4, verticalAlign: 'middle' }} />
+                      <DownloadIcon sx={{ mr: 0.5, verticalAlign: 'middle', fontSize: '1.1em' }} />
                       {t('transfer.savedToDiskFiles')}
                     </Typography>
                     <Alert severity="info" sx={{ py: 0, mb: 1, "& .MuiAlert-message": { py: 0.25 } }}>
@@ -1174,7 +1174,7 @@ export default function DownloadDrawerSlide({
                             bgcolor: theme.palette.action.hover,
                           }}
                         >
-                          <InsertDriveFile size="1.2rem" color={theme.palette.text.secondary} />
+                          <InsertDriveFile sx={{ color: theme.palette.text.secondary, fontSize: '1.2rem' }} />
                           <Box sx={{ minWidth: 0 }}>
                             <Typography variant="body2" noWrap>
                               {info.name}
@@ -1239,7 +1239,7 @@ export default function DownloadDrawerSlide({
                             rowGap: 0.25,
                           }}
                         >
-                          <FolderIcon size="1.1em" style={{ flexShrink: 0 }} />
+                          <FolderIcon sx={{ flexShrink: 0, fontSize: '1.1em' }} />
                           <Box component="span" sx={{ minWidth: 0, overflowWrap: "anywhere" }}>
                             {t('transfer.receivedFiles')}
                           </Box>
@@ -1334,9 +1334,9 @@ export default function DownloadDrawerSlide({
                                 sx={{ p: { xs: 0.5, sm: 1 }, flexShrink: 0 }}
                               />
                               {isExpanded ? (
-                                <KeyboardArrowUpIcon size={20} color={theme.palette.text.secondary} style={{ justifySelf: "center" }} />
+                                <KeyboardArrowUpIcon fontSize="small" sx={{ color: "text.secondary", justifySelf: "center" }} />
                               ) : (
-                                <KeyboardArrowDownIcon size={20} color={theme.palette.text.secondary} style={{ justifySelf: "center" }} />
+                                <KeyboardArrowDownIcon fontSize="small" sx={{ color: "text.secondary", justifySelf: "center" }} />
                               )}
                               <Box sx={{ minWidth: 0 }}>
                                 <Typography
@@ -1371,7 +1371,7 @@ export default function DownloadDrawerSlide({
                                   }}
                                   sx={{ color: "text.secondary", flexShrink: 0, justifySelf: "end" }}
                                 >
-                                  <CloseIcon size={20} />
+                                  <CloseIcon fontSize="small" />
                                 </IconButton>
                               </Tooltip>
                             </Box>
@@ -1483,7 +1483,7 @@ export default function DownloadDrawerSlide({
                                         aria-label={`download ${file.name}`}
                                         sx={{ color: "text.secondary", flexShrink: 0, justifySelf: "end" }}
                                       >
-                                        <DownloadIcon size={20} />
+                                        <DownloadIcon fontSize="small" />
                                       </IconButton>
                                     </Box>
                                   );
@@ -1597,7 +1597,7 @@ export default function DownloadDrawerSlide({
               "&:hover": { backgroundColor: "rgba(0,0,0,0.6)" },
             }}
           >
-            <CloseIcon size={20} />
+            <CloseIcon fontSize="small" />
           </IconButton>
 
           {/* 大图 */}

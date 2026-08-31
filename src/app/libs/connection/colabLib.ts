@@ -1,5 +1,5 @@
 ﻿import React from "react";
-import { Timer as TimerIcon } from "lucide-react";
+import TimerIcon from "@mui/icons-material/Timer";
 import alertUseMUI from "../tools/alert";
 import { PeerManager } from "./peerManager";
 import {
@@ -3600,7 +3600,7 @@ private isLetShareZip(file: File): boolean {
      } else if (backgroundStartTime && backgroundDurationMs >= overtime) {
       alertUseMUI(
        React.createElement(React.Fragment, null,
-        React.createElement(TimerIcon, { size: "1.1em", style: { marginRight: 4, verticalAlign: 'middle' } }),
+        React.createElement(TimerIcon, { sx: { mr: 0.5, verticalAlign: 'middle', fontSize: '1.1em' } }),
         t("background.timeout", { seconds: overtime / 1000 })
        ),
        3000

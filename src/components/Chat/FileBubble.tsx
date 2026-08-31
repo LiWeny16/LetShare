@@ -7,21 +7,21 @@ import {
     Button,
     useTheme,
 } from '@mui/material';
-import { File as InsertDriveFileIcon } from "lucide-react";
-import { Image as ImageIcon } from "lucide-react";
-import { Film as MovieIcon } from "lucide-react";
-import { FolderArchive as FolderZipIcon } from "lucide-react";
-import { FileType2 as PictureAsPdfIcon } from "lucide-react";
-import { Code as CodeIcon } from "lucide-react";
-import { FileText as TextSnippetIcon } from "lucide-react";
-import { Table as TableChartIcon } from "lucide-react";
-import { Presentation as SlideshowIcon } from "lucide-react";
-import { AlignLeft as SubjectIcon } from "lucide-react";
-import { CircleCheck as CheckCircleIcon } from "lucide-react";
-import { CircleX as ErrorIcon } from "lucide-react";
-import { Download as DownloadIcon } from "lucide-react";
-import { RefreshCw as RefreshIcon } from "lucide-react";
-import { Eye as VisibilityIcon } from "lucide-react";
+import InsertDriveFileIcon from '@mui/icons-material/InsertDriveFile';
+import ImageIcon from '@mui/icons-material/Image';
+import MovieIcon from '@mui/icons-material/Movie';
+import FolderZipIcon from '@mui/icons-material/FolderZip';
+import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf';
+import CodeIcon from '@mui/icons-material/Code';
+import TextSnippetIcon from '@mui/icons-material/TextSnippet';
+import TableChartIcon from '@mui/icons-material/TableChart';
+import SlideshowIcon from '@mui/icons-material/Slideshow';
+import SubjectIcon from '@mui/icons-material/Subject';
+import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import ErrorIcon from '@mui/icons-material/Error';
+import DownloadIcon from '@mui/icons-material/Download';
+import RefreshIcon from '@mui/icons-material/Refresh';
+import VisibilityIcon from '@mui/icons-material/Visibility';
 import { useTranslation } from 'react-i18next';
 import { FileChatMessage, formatFileSize } from '@App/libs/chat/ChatHistoryManager';
 
@@ -283,7 +283,7 @@ const FileBubble: React.FC<FileBubbleProps> = ({ message, isMyMessage, onDownloa
                                     color: secondaryColor,
                                 }}
                             >
-                                <CheckCircleIcon size={16} />
+                                <CheckCircleIcon sx={{ fontSize: 16 }} />
                                 <Typography variant="caption" sx={{ color: secondaryColor }}>
                                     {t('chat.fileCompleted')}
                                 </Typography>
@@ -303,7 +303,7 @@ const FileBubble: React.FC<FileBubbleProps> = ({ message, isMyMessage, onDownloa
                                     },
                                 }}
                             >
-                                <RefreshIcon size={20} />
+                                <RefreshIcon fontSize="small" />
                             </IconButton>
                         )}
                     </Box>
@@ -355,7 +355,7 @@ const FileBubble: React.FC<FileBubbleProps> = ({ message, isMyMessage, onDownloa
                             mt: 0.5,
                         }}
                     >
-                        <ErrorIcon size={14} color={theme.palette.error.light} />
+                        <ErrorIcon sx={{ fontSize: 14, color: theme.palette.error.light }} />
                         <Typography
                             variant="caption"
                             sx={{

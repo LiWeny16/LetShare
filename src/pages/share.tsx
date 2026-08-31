@@ -1,9 +1,9 @@
 /* eslint-disable react-refresh/only-export-components */
 import React, { useEffect, useRef, useState } from "react";
 // const url = "ws://192.168.1.13:9000";
-import { RefreshCw as CachedIcon } from "lucide-react";
-import { WifiOff as WifiOffIcon } from "lucide-react";
-import { Download as DownloadIcon } from "lucide-react";
+import CachedIcon from '@mui/icons-material/Cached';
+import WifiOffIcon from '@mui/icons-material/WifiOff';
+import DownloadIcon from "@mui/icons-material/Download";
 import { createTheme, ThemeProvider, useTheme } from '@mui/material/styles';
 import { ButtonBase, CssBaseline, GlobalStyles } from '@mui/material';
 import {
@@ -27,10 +27,10 @@ import {
   Paper,
 } from "@mui/material";
 import realTimeColab, { UserInfo, UserStatus } from "@App/libs/connection/colabLib";
-import { FileText as FileIcon } from "lucide-react";
-import { Image as ImageIcon } from "lucide-react";
-import { Type as TextIcon } from "lucide-react";
-import { ClipboardPaste as ClipboardIcon } from "lucide-react";
+import FileIcon from "@mui/icons-material/Description";
+import ImageIcon from "@mui/icons-material/Image";
+import TextIcon from "@mui/icons-material/TextFields";
+import ClipboardIcon from "@mui/icons-material/ContentPaste";
 import { readClipboard, writeClipboard } from "@App/libs/clipboard";
 import alertUseMUI from "@App/libs/tools/alert";
 import AlertPortal from "../components/Alert";
@@ -40,15 +40,15 @@ import DownloadDrawer from "../components/Download";
 import ChatPanel from "../components/Chat/ChatPanel";
 import SelectedFileStrip from '../components/SelectedFileStrip';
 import ChatIntegration from "@App/libs/chat/ChatIntegration";
-import { Apple as AppleIcon } from "lucide-react";
-import { Smartphone as PhonelinkRingIcon } from "lucide-react";
-import { MonitorSmartphone as PhonelinkIcon } from "lucide-react";
-import { Link as LinkIcon } from "lucide-react";
-import { RotateCw as SyncIcon } from "lucide-react";
-import { MessageSquare as ChatIcon } from "lucide-react";
-import { Wifi as WifiTetheringIcon } from "lucide-react";
-import { Sparkles as AutoAwesomeIcon } from "lucide-react";
-import { PartyPopper as CelebrationIcon } from "lucide-react";
+import AppleIcon from "@mui/icons-material/Apple";
+import PhonelinkRingIcon from "@mui/icons-material/PhonelinkRing";
+import PhonelinkIcon from "@mui/icons-material/Phonelink";
+import LinkIcon from "@mui/icons-material/Link";
+import SyncIcon from "@mui/icons-material/Sync";
+import ChatIcon from "@mui/icons-material/Chat";
+import WifiTetheringIcon from "@mui/icons-material/WifiTethering";
+import AutoAwesomeIcon from "@mui/icons-material/AutoAwesome";
+import CelebrationIcon from "@mui/icons-material/Celebration";
 import { compareUniqIdPriority, getDeviceType } from "@App/libs/tools/tools";
 import { observer } from "mobx-react-lite";
 import settingsStore from "@App/libs/mobx/mobx";
@@ -642,13 +642,13 @@ const Share = observer(() => {
   const getUserTypeIcon = (userType: string) => {
     switch (userType) {
       case "apple":
-        return <AppleIcon style={{ transition: "color 0.3s ease" }} />;
+        return <AppleIcon sx={{ transition: "color 0.3s ease" }} />;
       case "android":
-        return <PhonelinkRingIcon style={{ transition: "color 0.3s ease" }} />;
+        return <PhonelinkRingIcon sx={{ transition: "color 0.3s ease" }} />;
       case "desktop":
-        return <PhonelinkIcon style={{ transition: "color 0.3s ease" }} />;
+        return <PhonelinkIcon sx={{ transition: "color 0.3s ease" }} />;
       default:
-        return <PhonelinkIcon style={{ transition: "color 0.3s ease" }} />;
+        return <PhonelinkIcon sx={{ transition: "color 0.3s ease" }} />;
     }
   };
   const handleTextSelect = () => {
@@ -1203,7 +1203,7 @@ const Share = observer(() => {
                 color="text.secondary"
                 sx={{ whiteSpace: 'pre-line' }}
               >
-                <CelebrationIcon size="1.1em" style={{ marginRight: 4, verticalAlign: 'middle' }} />{t('guide.title')}
+                <CelebrationIcon sx={{ mr: 0.5, verticalAlign: 'middle', fontSize: '1.1em' }} />{t('guide.title')}
                 {"\n"}<Trans i18nKey="guide.step1" components={{ strong: <strong /> }} />
                 {"\n"}<Trans i18nKey="guide.step2" components={{ strong: <strong /> }} />
                 {"\n"}<Trans i18nKey="guide.step3" components={{ strong: <strong /> }} />
@@ -1362,10 +1362,10 @@ const Share = observer(() => {
                     <Tooltip title={getConnectionStatusTooltip(user.status)} arrow enterDelay={250}>
                       <Box sx={{ display: "flex", alignItems: "center", mr: "5px" }}>
                         {user.status === 'connected' && (
-                          <LinkIcon size={27} color={theme.palette.success.main} />
+                          <LinkIcon sx={{ color: 'success.main', fontSize: 27 }} />
                         )}
                         {user.status === 'connecting' && (
-                          <SyncIcon size={27} color={theme.palette.text.secondary} />
+                          <SyncIcon sx={{ color: 'text.secondary', fontSize: 27 }} />
                         )}
                         {isPublicNetworkStatus(user.status) && (
                           <Box sx={{ display: 'flex', flexDirection: "row", alignItems: "center" }}>
@@ -1386,7 +1386,7 @@ const Share = observer(() => {
                                 },
                               }}
                             />
-                            <WifiTetheringIcon size={27} color={theme.palette.info.main} style={{ marginRight: "5px" }} />
+                            <WifiTetheringIcon sx={{ color: 'info.main', fontSize: 27, mr: "5px" }} />
                           </Box>
                         )}
                       </Box>
@@ -1404,7 +1404,7 @@ const Share = observer(() => {
                       <IconButton
                         size="small"
                       >
-                        <ChatIcon size={20} />
+                        <ChatIcon sx={{ fontSize: 20 }} />
                       </IconButton>
                     </Box>
                     {/* 通话按钮（语音/视频）— 纯增量挂点 */}
@@ -1461,7 +1461,7 @@ const Share = observer(() => {
         }}
       >
         <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1, pt: 2.5, pb: 0, px: 3, fontSize: '1.1rem', fontWeight: 590, letterSpacing: '-0.02em' }}>
-          <AutoAwesomeIcon size="1.1em" color={theme.palette.primary.main} style={{ marginRight: 4, verticalAlign: 'middle', opacity: 0.8 }} />{t('dialog.newShare')}
+          <AutoAwesomeIcon sx={{ mr: 0.5, verticalAlign: 'middle', fontSize: '1.1em', color: 'primary.main', opacity: 0.8 }} />{t('dialog.newShare')}
         </DialogTitle>
         <DialogContent sx={{ width: { xs: 260, sm: 320, md: 380, lg: 380 }, px: 3, pt: 2 }}>
           <DialogContentText sx={{ fontSize: '0.85rem', mb: 1.5, color: 'text.secondary' }}>{t('dialog.incomingMessage')}</DialogContentText>
@@ -1549,7 +1549,7 @@ const Share = observer(() => {
             letterSpacing: '-0.02em',
           }}
         >
-          <TextIcon size={20} color={theme.palette.primary.main} style={{ opacity: 0.8 }} />
+          <TextIcon fontSize="small" sx={{ color: 'primary.main', opacity: 0.8 }} />
           {t('dialog.inputText')}
         </DialogTitle>
         <DialogContent sx={{ px: 3, pt: 2, pb: selectedText ? 1 : 2 }}>
@@ -1643,7 +1643,7 @@ const Share = observer(() => {
                   '&:hover': { bgcolor: (t: any) => t.palette.action.hover, color: 'text.primary' },
                 }}
               >
-                <ClipboardIcon size={20} />
+                <ClipboardIcon fontSize="small" />
               </IconButton>
             </Paper>
           )}

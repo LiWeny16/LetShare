@@ -17,13 +17,13 @@ import {
   useTheme,
   alpha,
 } from "@mui/material";
-import { Phone as CallIcon } from "lucide-react";
-import { Video as VideocamIcon } from "lucide-react";
-import { VideoOff as VideocamOffIcon } from "lucide-react";
-import { Mic as MicIcon } from "lucide-react";
-import { MicOff as MicOffIcon } from "lucide-react";
-import { PhoneOff as CallEndIcon } from "lucide-react";
-import { User as PersonIcon } from "lucide-react";
+import CallIcon from "@mui/icons-material/Call";
+import VideocamIcon from "@mui/icons-material/Videocam";
+import VideocamOffIcon from "@mui/icons-material/VideocamOff";
+import MicIcon from "@mui/icons-material/Mic";
+import MicOffIcon from "@mui/icons-material/MicOff";
+import CallEndIcon from "@mui/icons-material/CallEnd";
+import PersonIcon from "@mui/icons-material/Person";
 import { useTranslation } from "react-i18next";
 
 export type CallMedia = "audio" | "video";
@@ -41,14 +41,14 @@ export function CallButton({ onCall, disabled }: CallButtonHandlers) {
       <Tooltip title={t("call.voice", "语音通话")} arrow enterDelay={250}>
         <span>
           <IconButton size="small" disabled={disabled} onClick={() => onCall("audio")} sx={{ opacity: 0.7, "&:hover": { opacity: 1 } }}>
-            <CallIcon size={20} />
+            <CallIcon sx={{ fontSize: 20 }} />
           </IconButton>
         </span>
       </Tooltip>
       <Tooltip title={t("call.video", "视频通话")} arrow enterDelay={250}>
         <span>
           <IconButton size="small" disabled={disabled} onClick={() => onCall("video")} sx={{ opacity: 0.7, "&:hover": { opacity: 1 } }}>
-            <VideocamIcon size={20} />
+            <VideocamIcon sx={{ fontSize: 20 }} />
           </IconButton>
         </span>
       </Tooltip>
@@ -100,7 +100,7 @@ export function IncomingCallBanner({ info, handlers }: { info: IncomingCallInfo;
         }}
       >
         <Box sx={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 0.5 }}>
-          {isVideo ? <VideocamIcon size={28} color={theme.palette.primary.main} /> : <CallIcon size={28} color={theme.palette.primary.main} />}
+          {isVideo ? <VideocamIcon sx={{ color: theme.palette.primary.main, fontSize: 28 }} /> : <CallIcon sx={{ color: theme.palette.primary.main, fontSize: 28 }} />}
           <Typography variant="caption" color="text.secondary">
             {isVideo ? t("call.incomingVideo", "视频来电") : t("call.incomingVoice", "语音来电")}
           </Typography>
@@ -112,14 +112,14 @@ export function IncomingCallBanner({ info, handlers }: { info: IncomingCallInfo;
         <Tooltip title={t("call.accept", "接听")}>
           <span>
             <IconButton onClick={handlers.onAccept} sx={{ width: 48, height: 48, borderRadius: "50%", bgcolor: theme.palette.success.main, color: theme.palette.getContrastText(theme.palette.success.main), "&:hover": { bgcolor: theme.palette.success.dark } }}>
-              <CallIcon size={24} />
+              <CallIcon sx={{ fontSize: 24 }} />
             </IconButton>
           </span>
         </Tooltip>
         <Tooltip title={t("call.decline", "拒绝")}>
           <span>
             <IconButton onClick={handlers.onDecline} sx={{ width: 48, height: 48, borderRadius: "50%", bgcolor: theme.palette.error.main, color: theme.palette.getContrastText(theme.palette.error.main), "&:hover": { bgcolor: theme.palette.error.dark } }}>
-              <CallEndIcon size={24} />
+              <CallEndIcon sx={{ fontSize: 24 }} />
             </IconButton>
           </span>
         </Tooltip>
@@ -230,7 +230,7 @@ export function ActiveCallPanel(props: ActiveCallProps) {
         )}
         <Tooltip title={t("call.close", "关闭")}>
           <IconButton onClick={props.onClose} size="small">
-            <CallEndIcon size={20} />
+            <CallEndIcon sx={{ fontSize: 20 }} />
           </IconButton>
         </Tooltip>
       </Box>
@@ -251,7 +251,7 @@ export function ActiveCallPanel(props: ActiveCallProps) {
         {!showVideo && (
           <Box sx={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
             <Box sx={{ width: 120, height: 120, borderRadius: "50%", bgcolor: theme.palette.primary.main, display: "flex", alignItems: "center", justifyContent: "center" }}>
-              <PersonIcon size={64} color={theme.palette.getContrastText(theme.palette.primary.main)} />
+              <PersonIcon sx={{ fontSize: 64, color: theme.palette.getContrastText(theme.palette.primary.main) }} />
             </Box>
             <Typography variant="h6">{props.peerName}</Typography>
             <Typography variant="body2" color="text.secondary">
@@ -293,7 +293,7 @@ export function ActiveCallPanel(props: ActiveCallProps) {
                 "&:hover": { bgcolor: props.muted ? theme.palette.error.dark : controlBgHover },
               }}
             >
-              {props.muted ? <MicOffIcon size={26} /> : <MicIcon size={26} />}
+              {props.muted ? <MicOffIcon sx={{ fontSize: 26 }} /> : <MicIcon sx={{ fontSize: 26 }} />}
             </IconButton>
           </span>
         </Tooltip>
@@ -310,7 +310,7 @@ export function ActiveCallPanel(props: ActiveCallProps) {
                   "&:hover": { bgcolor: props.videoEnabled ? controlBgHover : theme.palette.error.dark },
                 }}
               >
-                {props.videoEnabled ? <VideocamOffIcon size={26} /> : <VideocamIcon size={26} />}
+                {props.videoEnabled ? <VideocamOffIcon sx={{ fontSize: 26 }} /> : <VideocamIcon sx={{ fontSize: 26 }} />}
               </IconButton>
             </span>
           </Tooltip>
@@ -327,7 +327,7 @@ export function ActiveCallPanel(props: ActiveCallProps) {
                 "&:hover": { bgcolor: theme.palette.error.dark },
               }}
             >
-              <CallEndIcon size={30} style={{ transform: "rotate(135deg)" }} />
+              <CallEndIcon sx={{ fontSize: 30, transform: "rotate(135deg)" }} />
             </IconButton>
           </span>
         </Tooltip>
