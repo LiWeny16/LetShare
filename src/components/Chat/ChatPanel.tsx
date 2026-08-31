@@ -12,10 +12,10 @@ import {
     Popover,
     GridLegacy as Grid,
 } from '@mui/material';
-import SendIcon from '@mui/icons-material/Send';
-import DeleteIcon from '@mui/icons-material/Delete';
-import AttachFileIcon from '@mui/icons-material/AttachFile';
-import EmojiIcon from '@mui/icons-material/EmojiEmotions';
+import { Send as SendIcon } from "lucide-react";
+import { Trash2 as DeleteIcon } from "lucide-react";
+import { Paperclip as AttachFileIcon } from "lucide-react";
+import { SmilePlus as EmojiIcon } from "lucide-react";
 import { useTranslation } from 'react-i18next';
 import ChatHistoryManager, { ChatMessage, ChatHistory } from '@App/libs/chat/ChatHistoryManager';
 import ChatIntegration from '@App/libs/chat/ChatIntegration';

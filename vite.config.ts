@@ -72,6 +72,10 @@ export default defineConfig({
     // port: 8080,
     host: "0.0.0.0",
   },
+  // 图标已切换为 lucide-react（纯 ESM 单文件，无深路径 prebundle 需求）。
+  // MUI v7 各包也有真 ESM 产物，无需 exclude；react-is 由 MUI material
+  // 预构建时自动做 CJS interop，无需显式 include。
+  optimizeDeps: {},
   plugins: [
     react(),
     VitePWA({

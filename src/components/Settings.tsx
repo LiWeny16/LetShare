@@ -19,6 +19,7 @@ import {
   CircularProgress,
   // Divider,
 } from '@mui/material';
+import { useTheme } from '@mui/material/styles';
 import { invisibleScrollerSx } from '@Style/muiStyles';
 import { observer } from 'mobx-react-lite';
 import settingsStore, { SettingsKey } from '@App/libs/mobx/mobx';
@@ -29,17 +30,18 @@ import { validateRoomName, getDeviceType } from '@App/libs/tools/tools';
 import realTimeColab from '@App/libs/connection/colabLib';
 import i18n from '@App/libs/i18n/i18n';
 import { useTranslation } from 'react-i18next';
-import SettingsIcon from '@mui/icons-material/Settings';
+import { Settings as SettingsIcon } from "lucide-react";
 // import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 // import ExpandLessIcon from '@mui/icons-material/ExpandLess';
-import RestartAltIcon from '@mui/icons-material/RestartAlt';
-import VerifiedIcon from '@mui/icons-material/Verified';
-import WorkspacePremiumIcon from '@mui/icons-material/WorkspacePremium';
+import { RotateCcw as RestartAltIcon } from "lucide-react";
+import { BadgeCheck as VerifiedIcon } from "lucide-react";
+import { Award as WorkspacePremiumIcon } from "lucide-react";
 import ProUpgradeDialog from './ProUpgradeDialog';
 import { registerProUpgradeDialog, isPro as checkIsPro } from '@App/libs/connection/proUpgrade';
 
 const SettingsPage = () => {
   const { t } = useTranslation();
+  const theme = useTheme();
   const settings = settingsStore.getAllSettings();
   const settingsRef = React.useRef<HTMLDivElement>(null);
   const [advancedOpen, setAdvancedOpen] = React.useState(false);
@@ -244,8 +246,8 @@ const SettingsPage = () => {
                 sx={{ minWidth: 0, p: 0, textTransform: 'none', display: 'flex', alignItems: 'center', gap: 0.5, mr: 0.5, '&:hover': { bgcolor: 'action.hover' }, borderRadius: 1.5 }}
               >
                 {isPro
-                  ? <VerifiedIcon sx={{ color: 'success.main', fontSize: 18 }} />
-                  : <WorkspacePremiumIcon sx={{ color: 'text.secondary', fontSize: 18 }} />
+                  ? <VerifiedIcon size={18} color={theme.palette.success.main} />
+                  : <WorkspacePremiumIcon size={18} color={theme.palette.text.secondary} />
                 }
                 <Typography variant="caption" fontWeight={600} color={isPro ? 'success.main' : 'text.secondary'}>
                   {isPro ? 'PRO' : 'Free'}

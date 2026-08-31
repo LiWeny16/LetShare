@@ -6,7 +6,7 @@ import {
   Typography,
 } from "@mui/material";
 import { useNavigate } from "react-router-dom";
-import TranslateIcon from "@mui/icons-material/Translate";
+import { Languages as TranslateIcon } from "lucide-react";
 import { styled } from "@mui/material/styles";
 
 // 自定义样式组件

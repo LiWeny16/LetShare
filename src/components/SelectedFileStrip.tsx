@@ -2,13 +2,13 @@ import React, { useEffect, useRef } from 'react';
 import { Chip, Tooltip, Box, alpha } from '@mui/material';
 import {
   Image as ImageIcon,
-  Movie as MovieIcon,
-  PictureAsPdf as PdfIcon,
+  Film as MovieIcon,
+  FileType2 as PdfIcon,
   Code as CodeIcon,
-  FolderZip as FolderZipIcon,
-  InsertDriveFile as InsertDriveFileIcon,
-  TextSnippet as TextSnippetIcon,
-} from '@mui/icons-material';
+  FolderArchive as FolderZipIcon,
+  File as InsertDriveFileIcon,
+  FileText as TextSnippetIcon,
+} from 'lucide-react';
 
 interface SelectedFileStripProps {
   files: File[];
@@ -22,19 +22,19 @@ function isImageFile(name: string): boolean {
 
 function getFileIcon(fileName: string): React.ReactElement {
   const ext = fileName.split('.').pop()?.toLowerCase() || '';
-  if (isImageFile(fileName)) return <ImageIcon fontSize="small" />;
+  if (isImageFile(fileName)) return <ImageIcon size={20} />;
   if (['mp4', 'mov', 'avi', 'mkv', 'webm'].includes(ext))
-    return <MovieIcon fontSize="small" />;
-  if (ext === 'pdf') return <PdfIcon fontSize="small" />;
+    return <MovieIcon size={20} />;
+  if (ext === 'pdf') return <PdfIcon size={20} />;
   if (['zip', 'rar', '7z', 'tar', 'gz'].includes(ext))
-    return <FolderZipIcon fontSize="small" />;
+    return <FolderZipIcon size={20} />;
   if (['txt', 'md', 'rtf'].includes(ext))
-    return <TextSnippetIcon fontSize="small" />;
+    return <TextSnippetIcon size={20} />;
   if (
     ['js', 'ts', 'jsx', 'tsx', 'html', 'css', 'json', 'xml', 'py', 'java', 'c', 'cpp'].includes(ext)
   )
-    return <CodeIcon fontSize="small" />;
-  return <InsertDriveFileIcon fontSize="small" />;
+    return <CodeIcon size={20} />;
+  return <InsertDriveFileIcon size={20} />;
 }
 
 /* ── Apple-style chip tokens ── */
@@ -96,7 +96,7 @@ const ImageChip: React.FC<{ file: File; index: number; onRemove?: (i: number) =>
 
   const chip = (
     <Chip
-      icon={<ImageIcon fontSize="small" />}
+      icon={<ImageIcon size={20} />}
       label={file.name}
       size="small"
       variant="outlined"
