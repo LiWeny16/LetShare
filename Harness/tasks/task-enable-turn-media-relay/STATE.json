@@ -6,9 +6,9 @@
   "tier": "WF-Light",
   "phase": "verifying",
   "gate": "VERIFICATION-GATE",
-  "updatedAt": "2026-08-30T00:00:00+08:00",
-  "activeQuestion": "ECS coturn 部署（A1）需用户批准线上命令后执行",
-  "nextAction": "列出 ECS coturn 部署命令待用户确认；确认后执行 A1 部署，再真机验证 AC-001/AC-003",
+  "updatedAt": "2026-08-30T13:40:00+08:00",
+  "activeQuestion": null,
+  "nextAction": "已解决 relay 间歇性问题（10/10 稳定）。真机双人通话做最终听觉确认即可",
   "acceptance": ["AC-001", "AC-002", "AC-003"],
   "queues": {
     "ready": [],

@@ -1,10 +1,231 @@
 {
-  "checkedAt": "2026-07-29T02:12:41.342Z",
-  "noticedAt": null,
+  "checkedAt": "2026-08-31T01:58:54.067Z",
+  "noticedAt": "2026-08-31T01:57:15.178Z",
   "update": {
-    "status": "up-to-date",
-    "version": "0.8.17",
-    "remote": "0.8.17",
-    "sourceBase": "npm:create-harness-vibe-coding@0.8.17/templates/common/"
+    "status": "update-available",
+    "from": "0.8.17",
+    "to": "0.8.20",
+    "sourceBase": "npm:create-harness-vibe-coding@0.8.20/templates/common/",
+    "releaseNotes": {
+      "version": "0.8.20",
+      "date": "2026-08-28",
+      "highlights": [
+        "Ship the wf-ui workflow canvas as a full agent-team surface: goal, event, timer, display, and capability node types with typed action surfaces, skills hub, magnetic docking, and undoable versioned graph edits.",
+        "Add agent team cooperation: structured peer requests with request ids, timer wakeup delivery, runtime-aware role profiles, and a subagent strategy matrix covering built-in helpers and visible wf-node agents with depth resume docking.",
+        "Consolidate all agent actions into a single `Harness/a2a/action-registry.json` source of truth (72 actions) with loader validation, derived `help --json`/`manuals` surfaces, and structural anti-drift tests against ghost/phantom actions.",
+        "Upgrade the file node with xlsx/pdf/zip format adapters, preview caching, write locks, `file.changed` watch broadcasts, and security hardening (Zip Slip guards, entry/size clamps, per-page PDF reads).",
+        "Rebuild markdown rendering on a shared markdown-it pipeline with lazy CDN mermaid (SRI-pinned, offline fallback), KaTeX, GFM task lists, and preview toggles for node cards, file big view, and the fullscreen editor.",
+        "Add task capsule groups with `--group`/`--by-group` filtering and whole-group batch archive, plus a task group index for grouped overviews.",
+        "Add real PTY-backed chat sessions (chat driver, Claude stream-json support, WS chat events) alongside terminal-based agent control.",
+        "Harden wf-ui terminal orchestration: full terminal input control, Codex rollout-id capture via PTY scan and sessions-dir polling, PTY resource usage reporting, and per-session terminal transcript ranges."
+      ]
+    },
+    "partialUpdate": null,
+    "acceptedConflicts": {
+      "CLAUDE.md": {
+        "decision": "accept-merged",
+        "targetGenerator": "0.8.17",
+        "localHash": "sha256-f8a14975da0c3eb08b60c07da3b77d5ad168677f476a1e813b5ed40f4727fbb2",
+        "remoteHash": "sha256-cd6b736bf14b4f526223bf15dc7ec625eb4b3a868a4d5961f26484d6bbfb4dca",
+        "templateHint": "CLAUDE.md",
+        "updatedAt": "2026-07-27T03:46:46.371Z"
+      }
+    },
+    "updated": 42,
+    "created": 49,
+    "adopted": 0,
+    "moved": 0,
+    "conflict": 1,
+    "skipped": 98,
+    "agent": {
+      "mode": "script-first-ai-conflicts",
+      "dryRunJsonCommand": "node Harness/scripts/wf-update-check.mjs --json",
+      "safeApplyCommand": "node Harness/scripts/wf-update-check.mjs --apply-safe",
+      "strictApplyCommand": "node Harness/scripts/wf-update-check.mjs --apply",
+      "finalizeCommand": "node Harness/scripts/wf-update-check.mjs --finalize",
+      "pathMoves": [
+        {
+          "from": "Harness/architecture.md",
+          "to": "Harness/project/architecture.md",
+          "deleteOldIfChecksumMatches": true,
+          "preserveOldIfModified": true
+        },
+        {
+          "from": "Harness/ACCEPTANCE_PROTOCOL.md",
+          "to": "Harness/specs/protocols/ACCEPTANCE_PROTOCOL.md",
+          "deleteOldIfChecksumMatches": true,
+          "preserveOldIfModified": true
+        },
+        {
+          "from": "Harness/AGENT_ISOLATION.md",
+          "to": "Harness/specs/protocols/AGENT_ISOLATION.md",
+          "deleteOldIfChecksumMatches": true,
+          "preserveOldIfModified": true
+        },
+        {
+          "from": "Harness/DEBUG_PROTOCOL.md",
+          "to": "Harness/specs/protocols/DEBUG_PROTOCOL.md",
+          "deleteOldIfChecksumMatches": true,
+          "preserveOldIfModified": true
+        },
+        {
+          "from": "Harness/HARNESS_BRIDGE.md",
+          "to": "Harness/specs/protocols/HARNESS_BRIDGE.md",
+          "deleteOldIfChecksumMatches": true,
+          "preserveOldIfModified": true
+        },
+        {
+          "from": "Harness/MEMORY_PROTOCOL.md",
+          "to": "Harness/specs/protocols/MEMORY_PROTOCOL.md",
+          "deleteOldIfChecksumMatches": true,
+          "preserveOldIfModified": true
+        },
+        {
+          "from": "Harness/TASK_ARCHIVE.md",
+          "to": "Harness/specs/protocols/TASK_ARCHIVE.md",
+          "deleteOldIfChecksumMatches": true,
+          "preserveOldIfModified": true
+        },
+        {
+          "from": "Harness/TDD-GUIDE.md",
+          "to": "Harness/specs/protocols/TDD-GUIDE.md",
+          "deleteOldIfChecksumMatches": true,
+          "preserveOldIfModified": true
+        },
+        {
+          "from": "Harness/agent-workflow.md",
+          "to": "Harness/specs/runtime/agent-workflow.md",
+          "deleteOldIfChecksumMatches": true,
+          "preserveOldIfModified": true
+        },
+        {
+          "from": "Harness/context-loading.md",
+          "to": "Harness/specs/runtime/context-loading.md",
+          "deleteOldIfChecksumMatches": true,
+          "preserveOldIfModified": true
+        },
+        {
+          "from": "Harness/dispatch.md",
+          "to": "Harness/specs/runtime/dispatch.md",
+          "deleteOldIfChecksumMatches": true,
+          "preserveOldIfModified": true
+        },
+        {
+          "from": "Harness/subagents.md",
+          "to": "Harness/specs/runtime/subagents.md",
+          "deleteOldIfChecksumMatches": true,
+          "preserveOldIfModified": true
+        },
+        {
+          "from": "Harness/ECC-GUIDE.md",
+          "to": "Harness/specs/guides/ECC-GUIDE.md",
+          "deleteOldIfChecksumMatches": true,
+          "preserveOldIfModified": true
+        },
+        {
+          "from": "Harness/SETUP.md",
+          "to": "Harness/specs/guides/SETUP.md",
+          "deleteOldIfChecksumMatches": true,
+          "preserveOldIfModified": true
+        },
+        {
+          "from": "Harness/extension.md",
+          "to": "Harness/specs/guides/extension.md",
+          "deleteOldIfChecksumMatches": true,
+          "preserveOldIfModified": true
+        },
+        {
+          "from": "Harness/lifecycle.md",
+          "to": "Harness/specs/guides/lifecycle.md",
+          "deleteOldIfChecksumMatches": true,
+          "preserveOldIfModified": true
+        },
+        {
+          "from": "Harness/WF-AUTO-ANGLES.md",
+          "to": "Harness/specs/workflows/WF-AUTO-ANGLES.md",
+          "deleteOldIfChecksumMatches": true,
+          "preserveOldIfModified": true
+        },
+        {
+          "from": "Harness/WF-AUTO-SPARK.md",
+          "to": "Harness/specs/workflows/WF-AUTO-SPARK.md",
+          "deleteOldIfChecksumMatches": true,
+          "preserveOldIfModified": true
+        },
+        {
+          "from": "Harness/WF-AUTO.md",
+          "to": "Harness/specs/workflows/WF-AUTO.md",
+          "deleteOldIfChecksumMatches": true,
+          "preserveOldIfModified": true
+        },
+        {
+          "from": "Harness/WF-KERNEL.md",
+          "to": "Harness/specs/workflows/WF-KERNEL.md",
+          "deleteOldIfChecksumMatches": true,
+          "preserveOldIfModified": true
+        },
+        {
+          "from": "Harness/WF-MAX.md",
+          "to": "Harness/specs/workflows/WF-MAX.md",
+          "deleteOldIfChecksumMatches": true,
+          "preserveOldIfModified": true
+        },
+        {
+          "from": "Harness/WF-STATE.md",
+          "to": "Harness/specs/workflows/WF-STATE.md",
+          "deleteOldIfChecksumMatches": true,
+          "preserveOldIfModified": true
+        },
+        {
+          "from": "Harness/WF.md",
+          "to": "Harness/specs/workflows/WF.md",
+          "deleteOldIfChecksumMatches": true,
+          "preserveOldIfModified": true
+        }
+      ],
+      "partialUpdate": null,
+      "acceptedConflicts": {
+        "CLAUDE.md": {
+          "decision": "accept-merged",
+          "targetGenerator": "0.8.17",
+          "localHash": "sha256-f8a14975da0c3eb08b60c07da3b77d5ad168677f476a1e813b5ed40f4727fbb2",
+          "remoteHash": "sha256-cd6b736bf14b4f526223bf15dc7ec625eb4b3a868a4d5961f26484d6bbfb4dca",
+          "templateHint": "CLAUDE.md",
+          "updatedAt": "2026-07-27T03:46:46.371Z"
+        }
+      },
+      "releaseNotes": {
+        "version": "0.8.20",
+        "date": "2026-08-28",
+        "highlights": [
+          "Ship the wf-ui workflow canvas as a full agent-team surface: goal, event, timer, display, and capability node types with typed action surfaces, skills hub, magnetic docking, and undoable versioned graph edits.",
+          "Add agent team cooperation: structured peer requests with request ids, timer wakeup delivery, runtime-aware role profiles, and a subagent strategy matrix covering built-in helpers and visible wf-node agents with depth resume docking.",
+          "Consolidate all agent actions into a single `Harness/a2a/action-registry.json` source of truth (72 actions) with loader validation, derived `help --json`/`manuals` surfaces, and structural anti-drift tests against ghost/phantom actions.",
+          "Upgrade the file node with xlsx/pdf/zip format adapters, preview caching, write locks, `file.changed` watch broadcasts, and security hardening (Zip Slip guards, entry/size clamps, per-page PDF reads).",
+          "Rebuild markdown rendering on a shared markdown-it pipeline with lazy CDN mermaid (SRI-pinned, offline fallback), KaTeX, GFM task lists, and preview toggles for node cards, file big view, and the fullscreen editor.",
+          "Add task capsule groups with `--group`/`--by-group` filtering and whole-group batch archive, plus a task group index for grouped overviews.",
+          "Add real PTY-backed chat sessions (chat driver, Claude stream-json support, WS chat events) alongside terminal-based agent control.",
+          "Harden wf-ui terminal orchestration: full terminal input control, Codex rollout-id capture via PTY scan and sessions-dir polling, PTY resource usage reporting, and per-session terminal transcript ranges."
+        ]
+      },
+      "releaseHighlights": [
+        "Ship the wf-ui workflow canvas as a full agent-team surface: goal, event, timer, display, and capability node types with typed action surfaces, skills hub, magnetic docking, and undoable versioned graph edits.",
+        "Add agent team cooperation: structured peer requests with request ids, timer wakeup delivery, runtime-aware role profiles, and a subagent strategy matrix covering built-in helpers and visible wf-node agents with depth resume docking.",
+        "Consolidate all agent actions into a single `Harness/a2a/action-registry.json` source of truth (72 actions) with loader validation, derived `help --json`/`manuals` surfaces, and structural anti-drift tests against ghost/phantom actions.",
+        "Upgrade the file node with xlsx/pdf/zip format adapters, preview caching, write locks, `file.changed` watch broadcasts, and security hardening (Zip Slip guards, entry/size clamps, per-page PDF reads).",
+        "Rebuild markdown rendering on a shared markdown-it pipeline with lazy CDN mermaid (SRI-pinned, offline fallback), KaTeX, GFM task lists, and preview toggles for node cards, file big view, and the fullscreen editor.",
+        "Add task capsule groups with `--group`/`--by-group` filtering and whole-group batch archive, plus a task group index for grouped overviews.",
+        "Add real PTY-backed chat sessions (chat driver, Claude stream-json support, WS chat events) alongside terminal-based agent control.",
+        "Harden wf-ui terminal orchestration: full terminal input control, Codex rollout-id capture via PTY scan and sessions-dir polling, PTY resource usage reporting, and per-session terminal transcript ranges."
+      ],
+      "updateReportRequired": "After apply/finalize, tell the user the version, safe/new/conflict counts, validation results, and the core releaseHighlights from this update.",
+      "aiMergeRequiredCount": 1,
+      "conflictPolicy": "Use the script for SAFE/NEW/adopted files. For each CONFLICT file, compare local content with templateHint/remoteUrl, then record the decision with --accept-local, --accept-merged, or --accept-template. Do not hand-edit Harness/.harness-version.",
+      "postUpdateCommands": [
+        "node Harness/scripts/validate-harness.mjs",
+        "node Harness/scripts/scan-clean.mjs --json"
+      ],
+      "bootstrapDebtCommand": "node Harness/scripts/validate-harness.mjs --strict"
+    }
   }
 }
