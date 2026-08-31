@@ -1,13 +1,13 @@
 /* eslint-disable react-refresh/only-export-components */
 import React, { useEffect, useRef, useState } from "react";
 // const url = "ws://192.168.1.13:9000";
-import Dialog from "@mui/material/Dialog";
 import CachedIcon from '@mui/icons-material/Cached';
 import WifiOffIcon from '@mui/icons-material/WifiOff';
 import DownloadIcon from "@mui/icons-material/Download";
 import { createTheme, ThemeProvider, useTheme } from '@mui/material/styles';
 import { ButtonBase, CssBaseline, GlobalStyles } from '@mui/material';
 import {
+  Dialog,
   Box,
   Button,
   Typography,

@@ -43,7 +43,6 @@
     "mitt": "^3.0.1",
     "mobx": "^6.13.7",
     "mobx-react-lite": "^4.1.0",
-    "prop-types": "^15.8.1",
     "react": "^18.2.0",
     "react-device-detect": "^2.2.3",
     "react-dom": "^18.2.0",
