@@ -15,7 +15,9 @@ jobs:
 
       - uses: pnpm/action-setup@v4
         with:
-          version: 9
+          # 必须与本机/lockfile 生成版本一致：pnpm 9 不认 pnpm-workspace.yaml 的 overrides
+          # （报 ERR_PNPM_LOCKFILE_CONFIG_MISMATCH），lockfile 由 pnpm 11 生成
+          version: 11
 
       - uses: actions/setup-node@v4
         with:
@@ -30,8 +32,8 @@ jobs:
       - name: Unit tests
         run: pnpm test:unit
 
-      - name: E2E tests
-        run: pnpm test:e2e
+      # E2E（tests/e2e/，需真浏览器 + 起本地服务器/连生产）不在 CI 跑，
+      # 本地运行：node scripts/run-tests.cjs 或 pnpm test:e2e:call
 
       - name: Production build
         run: pnpm build
