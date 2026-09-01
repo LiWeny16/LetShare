@@ -37,7 +37,7 @@ export type CallButtonHandlers = {
 export function CallButton({ onCall, disabled }: CallButtonHandlers) {
   const { t } = useTranslation();
   return (
-    <Box sx={{ display: "flex", gap: 0.5 }} onClick={(e) => e.stopPropagation()}>
+    <Box sx={{ display: "flex", flexShrink: 0 }} onClick={(e) => e.stopPropagation()}>
       <Tooltip title={t("call.voice", "语音通话")} arrow enterDelay={250}>
         <span>
           <IconButton size="small" disabled={disabled} aria-label={t("call.voice", "语音通话")} onClick={() => onCall("audio")} sx={{ opacity: 0.7, "&:hover": { opacity: 1 } }}>

@@ -21,7 +21,6 @@ import {
   TextField,
   Fab,
   Fade,
-  Chip,
   IconButton,
   Tooltip,
   Paper,
@@ -46,7 +45,7 @@ import PhonelinkIcon from "@mui/icons-material/Phonelink";
 import LinkIcon from "@mui/icons-material/Link";
 import SyncIcon from "@mui/icons-material/Sync";
 import ChatIcon from "@mui/icons-material/Chat";
-import WifiTetheringIcon from "@mui/icons-material/WifiTethering";
+import CloudIcon from "@mui/icons-material/Cloud";
 import AutoAwesomeIcon from "@mui/icons-material/AutoAwesome";
 import CelebrationIcon from "@mui/icons-material/Celebration";
 import { compareUniqIdPriority, getDeviceType } from "@App/libs/tools/tools";
@@ -1346,87 +1345,79 @@ const Share = observer(() => {
                 >
                   <Box sx={{
                     display: "flex",
-                    alignItems: "flex-start",
+                    alignItems: "center",
                     textAlign: "left",
                     gap: 1,
                     width: "100%",
                     transition: 'opacity 0.3s ease',
                     opacity: user.status === 'connecting' ? 0.8 : 1
                   }}>
-                    {getUserTypeIcon(user.userType)}
-
-                    <Typography
-                      variant="body1"
-                      sx={{
-                        width: "100%",
-                        textAlign: "left",
-                        color: user.status === 'connected'
-                          ? 'text.primary'
-                          : isPublicNetworkStatus(user.status)
-                            ? 'text.primary'
-                            : 'text.secondary',
-                        transition: 'color 0.3s ease'
-                      }}
-                    >
-                      {user.name}
-                    </Typography>
-
-
-
-                    {/* 状态图标 */}
-                    <Tooltip title={getConnectionStatusTooltip(user.status)} arrow enterDelay={250}>
-                      <Box sx={{ display: "flex", alignItems: "center", mr: "5px" }}>
-                        {user.status === 'connected' && (
-                          <LinkIcon sx={{ color: 'success.main', fontSize: 27 }} />
-                        )}
-                        {user.status === 'connecting' && (
-                          <SyncIcon sx={{ color: 'text.secondary', fontSize: 27 }} />
-                        )}
-                        {isPublicNetworkStatus(user.status) && (
-                          <Box sx={{ display: 'flex', flexDirection: "row", alignItems: "center" }}>
-                            <Chip
-                              label={t('status.publicNetwork')}
-                              size="small"
-                              sx={{
-                                backgroundColor: 'info.main',
-                                color: 'white',
-                                fontSize: '0.75rem',
-                                fontWeight: 'bold',
-                                borderRadius: '4px',
-                                px: 0.5,
-                                mr: "10px",
-                                py: 0.25,
-                                '& .MuiChip-label': {
-                                  padding: 0,
-                                },
-                              }}
-                            />
-                            <WifiTetheringIcon sx={{ color: 'info.main', fontSize: 27, mr: "5px" }} />
-                          </Box>
-                        )}
-                      </Box>
-                    </Tooltip>
-                    {/* 聊天按钮 */}
-                    <Box onClick={(e) => {
-                      e.stopPropagation();
-                      setChatTargetUser(user.uniqId);
-                      setChatPanelOpen(true);
-                    }} sx={{
-                      mr: 1,
-                      opacity: 0.7,
-                      '&:hover': { opacity: 1 }
-                    }}>
-                      <IconButton
-                        size="small"
-                      >
-                        <ChatIcon sx={{ fontSize: 20 }} />
-                      </IconButton>
+                    <Box sx={{ display: "flex", alignItems: "center", flexShrink: 0 }}>
+                      {getUserTypeIcon(user.userType)}
                     </Box>
-                    {/* 通话按钮（语音/视频）— 纯增量挂点 */}
-                    <CallButton
-                      disabled={callManagerRef.current?.isInCall(user.uniqId) || callManagerRef.current?.isInCall()}
-                      onCall={(media) => { void startCall(user.uniqId, media); }}
-                    />
+
+                    <Box sx={{ display: "flex", alignItems: "center", minWidth: 0, flex: 1, gap: 0.75 }}>
+                      <Typography
+                        variant="body1"
+                        sx={{
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                          textAlign: "left",
+                          color: user.status === 'connected'
+                            ? 'text.primary'
+                            : isPublicNetworkStatus(user.status)
+                              ? 'text.primary'
+                              : 'text.secondary',
+                          transition: 'color 0.3s ease'
+                        }}
+                      >
+                        {user.name}
+                      </Typography>
+                      {/* 状态图标紧跟名字右侧：connected→Link / connecting→Sync / 公网→Cloud */}
+                      <Tooltip title={getConnectionStatusTooltip(user.status)} arrow enterDelay={250}>
+                        <Box sx={{ display: "flex", alignItems: "center", flexShrink: 0 }}>
+                          {user.status === 'connected' && (
+                            <LinkIcon sx={{ color: 'success.main', fontSize: 20 }} />
+                          )}
+                          {user.status === 'connecting' && (
+                            <SyncIcon sx={{ color: 'text.secondary', fontSize: 20 }} />
+                          )}
+                          {isPublicNetworkStatus(user.status) && (
+                            <CloudIcon sx={{ color: 'info.main', fontSize: 20 }} />
+                          )}
+                        </Box>
+                      </Tooltip>
+                    </Box>
+
+                    {/* 操作区：聊天 + 语音/视频 —— 统一 28px 高 */}
+                    <Box sx={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-evenly",
+                      flexShrink: 0,
+                      height: 28,
+                    }}>
+                      <Tooltip title={t('chat.startChat', '开始聊天')} arrow enterDelay={250}>
+                        <span>
+                          <IconButton
+                            size="small"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setChatTargetUser(user.uniqId);
+                              setChatPanelOpen(true);
+                            }}
+                            sx={{ opacity: 0.7, '&:hover': { opacity: 1 } }}
+                          >
+                            <ChatIcon sx={{ fontSize: 20 }} />
+                          </IconButton>
+                        </span>
+                      </Tooltip>
+                      <CallButton
+                        disabled={callManagerRef.current?.isInCall(user.uniqId) || callManagerRef.current?.isInCall()}
+                        onCall={(media) => { void startCall(user.uniqId, media); }}
+                      />
+                    </Box>
                   </Box>
                 </ButtonBase>
 
