@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "taskId": "task-call-audio-quality",
+  "status": "done",
+  "mode": "direct",
+  "tier": "none",
+  "phase": "implemented-verified",
+  "gate": "tsc/eslint/run-tests 328/329/build + diag-loud E2E 四方向全过（FEC+128k 实测生效）",
+  "updatedAt": "2026-09-01T14:20:00Z",
+  "nextAction": "人工验收：真机选对麦克风后对端音量正常；如需再评估 RNNoise-WASM 降噪开关（P2）。",
+  "decisions": [
+    "P0 声音小：显式 3A + 麦/扬声器选择（持久化）+ 输入电平表 + 通话中换麦（replaceTrack）。",
+    "P1 音质：contentHint=speech + Opus fmtp（useinbandfec=1;maxaveragebitrate=128000;stereo=1）双向 SDP 调优。",
+    "拒绝 LDAC/SBC/AAC（蓝牙 A2DP 传输编解码，WebRTC 音频编解码集只有 Opus/G.711，正确路径为 Opus 参数调优）。",
+    "暂缓 WebGPU 端侧降噪（WASM SIMD 对 10ms 帧足够且兼容性好；后续可做 RNNoise-WASM/AudioWorklet 可选开关）。"
+  ],
+  "artifacts": [
+    "src/app/libs/call/audioCapture.ts",
+    "src/app/libs/call/callSession.ts (enhanceOpusFmtp + swapAudioTrack)",
+    "src/app/libs/call/callManager.ts (swapAudioTrack)",
+    "src/components/call/CallBar.tsx (音频设置 Popover)",
+    "src/pages/share.tsx (采集偏好 + handleMicChange)",
+    "src/app/libs/mobx/mobx.ts (micDeviceId/speakerDeviceId/audioContentHint/speakerVolume + loader merge 修复)",
+    "tests/callAudioSdp.test.ts"
+  ],
+  "risks": [
+    "setSinkId 兼容性（Firefox/Android WebView 无声效）",
+    "public 中继模式下 swap 不影响线路（stub）",
+    "电平表标定/换麦延迟未真机调优"
+  ]
+}

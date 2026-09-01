@@ -2,14 +2,21 @@
  * CallBar — 通话 UI（跟随主题色，Discord 风格布局）
  *  - CallButton: 用户卡片上的发起通话按钮（语音/视频，统一 20px 图标）
  *  - IncomingCallBanner: 来电横幅（接听/拒绝）
- *  - ActiveCallPanel: 通话中全屏面板（远端视频/语音头像、计时、静音、视频开关、挂断）
+ *  - ActiveCallPanel: 通话中全屏面板（远端视频/语音头像、计时、静音、视频开关、挂断、
+ *    音频设置：麦克风/扬声器选择、远端音量、输入电平条）
  *
  * 本组件不持有业务逻辑，所有操作经 CallManager 注入的 handlers 完成。
  */
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Box,
+  FormControl,
   IconButton,
+  InputLabel,
+  MenuItem,
+  Popover,
+  Select,
+  Slider,
   Paper,
   Tooltip,
   Typography,
@@ -24,7 +31,10 @@ import MicIcon from "@mui/icons-material/Mic";
 import MicOffIcon from "@mui/icons-material/MicOff";
 import CallEndIcon from "@mui/icons-material/CallEnd";
 import PersonIcon from "@mui/icons-material/Person";
+import TuneIcon from "@mui/icons-material/Tune";
 import { useTranslation } from "react-i18next";
+import settingsStore from "@App/libs/mobx/mobx";
+import { createInputLevelMeter, listAudioDevices } from "@App/libs/call/audioCapture";
 
 export type CallMedia = "audio" | "video";
 
@@ -142,6 +152,8 @@ export type ActiveCallProps = {
   onVideoToggle: () => void;
   onHangup: () => void;
   onClose: () => void;
+  /** 通话中换麦克风（"" = 系统默认）。扬声器/音量经 settingsStore 内部处理，不 prop-drill。 */
+  onMicChange?: (deviceId: string) => void;
 };
 
 function formatDuration(ms: number): string {
@@ -160,6 +172,35 @@ export function ActiveCallPanel(props: ActiveCallProps) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const [duration, setDuration] = useState(0);
   const startedAtRef = useRef<number>(0);
+
+  // ── 音频设置面板（麦克风/扬声器/音量/输入电平）──
+  // 面板非 observer，不订阅 mobx：UI 值用本地 state（挂载时从 settingsStore 播种），改动写回持久化。
+  const [audioPanelAnchor, setAudioPanelAnchor] = useState<HTMLElement | null>(null);
+  const audioPanelOpen = Boolean(audioPanelAnchor);
+  const [devices, setDevices] = useState<{ mics: MediaDeviceInfo[]; speakers: MediaDeviceInfo[] }>({ mics: [], speakers: [] });
+  const [micId, setMicId] = useState<string>(() => settingsStore.get("micDeviceId") ?? "");
+  const [speakerId, setSpeakerId] = useState<string>(() => settingsStore.get("speakerDeviceId") ?? "");
+  const [volume, setVolume] = useState<number>(() => {
+    const v = settingsStore.get("speakerVolume");
+    return Math.round((typeof v === "number" && v >= 0 && v <= 1 ? v : 1) * 100);
+  });
+  const levelBarRef = useRef<HTMLDivElement>(null);
+
+  /** 应用扬声器/音量到远端 audio 元素（setSinkId 浏览器不支持时跳过；volume clamp 到 0..1）。 */
+  const applySpeakerSettings = useCallback((): void => {
+    const el = audioRef.current;
+    if (!el) return;
+    const sinkId = settingsStore.get("speakerDeviceId");
+    if (sinkId && typeof el.setSinkId === "function") {
+      try {
+        void el.setSinkId(sinkId).catch((err) => console.warn("[CallBar] setSinkId failed:", err));
+      } catch (err) {
+        console.warn("[CallBar] setSinkId failed:", err);
+      }
+    }
+    const vol = settingsStore.get("speakerVolume");
+    if (typeof vol === "number") el.volume = Math.min(1, Math.max(0, vol));
+  }, []);
 
   useEffect(() => {
     if (props.open) {
@@ -180,6 +221,7 @@ export function ActiveCallPanel(props: ActiveCallProps) {
     // 独立 audio 元素同样绑定远端流，保证纯语音通话（video display:none）也能出声
     if (audioRef.current && props.remoteStream) {
       audioRef.current.srcObject = props.remoteStream;
+      applySpeakerSettings(); // srcObject 换绑后补设扬声器/音量（元素属性不随流变化，此处幂等兜底）
       console.log("[CallBar] audio element srcObject set, autoplay=", audioRef.current.autoplay, "audioTracks=", props.remoteStream.getAudioTracks().map(t => ({ enabled: t.enabled, readyState: t.readyState })));
     } else if (audioRef.current) {
       audioRef.current.srcObject = null;
@@ -195,7 +237,7 @@ export function ActiveCallPanel(props: ActiveCallProps) {
     if (remoteRef.current && props.remoteStream && props.remoteStream.getVideoTracks().length > 0) {
       remoteRef.current.play().catch(() => undefined);
     }
-  }, [props.remoteStream, props.open]);
+  }, [props.remoteStream, props.open, applySpeakerSettings]);
 
   useEffect(() => {
     if (localRef.current && props.localStream) {
@@ -204,6 +246,35 @@ export function ActiveCallPanel(props: ActiveCallProps) {
       localRef.current.srcObject = null;
     }
   }, [props.localStream, props.open]);
+
+  // 面板打开时枚举一次音频设备（label 为空 = 尚未授权麦克风，仍返回列表由浏览器展示）
+  useEffect(() => {
+    if (!audioPanelOpen) return;
+    void listAudioDevices()
+      .then((devs) => setDevices({ mics: devs.mics, speakers: devs.speakers }))
+      .catch((err) => console.warn("[CallBar] listAudioDevices failed:", err));
+  }, [audioPanelOpen]);
+
+  // 输入电平计量：仅面板打开时运行（省 CPU）；电平走 ref 直改 DOM 宽度，避免 60fps 重渲染
+  useEffect(() => {
+    if (!audioPanelOpen || !props.localStream) return;
+    return createInputLevelMeter(props.localStream, (level) => {
+      const bar = levelBarRef.current;
+      if (bar) bar.style.width = `${Math.min(1, Math.max(0, level)) * 100}%`;
+    });
+  }, [props.localStream, audioPanelOpen]);
+
+  const handleMicSelect = (deviceId: string): void => {
+    setMicId(deviceId);
+    settingsStore.update("micDeviceId", deviceId);
+    props.onMicChange?.(deviceId); // "" = 系统默认，由上层负责换轨（未在通话时仅存偏好）
+  };
+
+  const handleSpeakerSelect = (deviceId: string): void => {
+    setSpeakerId(deviceId);
+    settingsStore.update("speakerDeviceId", deviceId);
+    applySpeakerSettings();
+  };
 
   const showVideo = props.isVideo && props.videoEnabled;
   const controlBg = alpha(theme.palette.primary.main, 0.15);
@@ -309,6 +380,21 @@ export function ActiveCallPanel(props: ActiveCallProps) {
           </span>
         </Tooltip>
 
+        <Tooltip title={t("call.audioSettings", "音频设置")}>
+          <IconButton
+            aria-label={t("call.audioSettings", "音频设置")}
+            onClick={(e) => setAudioPanelAnchor(e.currentTarget)}
+            sx={{
+              width: 48, height: 48, borderRadius: "50%",
+              bgcolor: audioPanelOpen ? controlBgHover : controlBg,
+              color: theme.palette.text.primary,
+              "&:hover": { bgcolor: controlBgHover },
+            }}
+          >
+            <TuneIcon sx={{ fontSize: 22 }} />
+          </IconButton>
+        </Tooltip>
+
         {props.isVideo && (
           <Tooltip title={props.videoEnabled ? t("call.videoOff", "关闭视频") : t("call.videoOn", "开启视频")}>
             <span>
@@ -343,6 +429,81 @@ export function ActiveCallPanel(props: ActiveCallProps) {
           </span>
         </Tooltip>
       </Box>
+
+      {/* 音频设置面板：麦克风 / 扬声器 / 远端音量 / 输入电平 */}
+      <Popover
+        open={audioPanelOpen}
+        anchorEl={audioPanelAnchor}
+        onClose={() => setAudioPanelAnchor(null)}
+        anchorOrigin={{ vertical: "top", horizontal: "center" }}
+        transformOrigin={{ vertical: "bottom", horizontal: "center" }}
+      >
+        <Box sx={{ p: 2, display: "flex", flexDirection: "column", gap: 2, width: 260 }}>
+          <FormControl size="small">
+            <InputLabel>{t("call.microphone", "麦克风")}</InputLabel>
+            <Select
+              value={micId}
+              label={t("call.microphone", "麦克风")}
+              onChange={(e) => handleMicSelect(String(e.target.value))}
+            >
+              <MenuItem value="">{t("call.deviceDefault", "系统默认")}</MenuItem>
+              {devices.mics.map((d, i) => (
+                <MenuItem key={d.deviceId || `mic-${i}`} value={d.deviceId}>
+                  {d.label || `${t("call.microphone", "麦克风")} ${i + 1}`}
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+
+          <FormControl size="small">
+            <InputLabel>{t("call.speaker", "扬声器")}</InputLabel>
+            <Select
+              value={speakerId}
+              label={t("call.speaker", "扬声器")}
+              onChange={(e) => handleSpeakerSelect(String(e.target.value))}
+            >
+              <MenuItem value="">{t("call.deviceDefault", "系统默认")}</MenuItem>
+              {devices.speakers.map((d, i) => (
+                <MenuItem key={d.deviceId || `spk-${i}`} value={d.deviceId}>
+                  {d.label || `${t("call.speaker", "扬声器")} ${i + 1}`}
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+
+          <Box sx={{ px: 1 }}>
+            <Typography variant="caption" color="text.secondary">
+              {t("call.volume", "音量")}
+            </Typography>
+            <Slider
+              value={volume}
+              min={0}
+              max={100}
+              step={1}
+              valueLabelDisplay="auto"
+              aria-label={t("call.volume", "音量")}
+              onChange={(_, val) => {
+                const v = Array.isArray(val) ? val[0] : val;
+                setVolume(v);
+                settingsStore.update("speakerVolume", v / 100); // 持久化 0..1
+                if (audioRef.current) audioRef.current.volume = v / 100;
+              }}
+            />
+          </Box>
+
+          <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+            <Typography variant="caption" color="text.secondary" sx={{ flexShrink: 0 }}>
+              {t("call.inputLevel", "输入电平")}
+            </Typography>
+            <Box sx={{ width: 64, height: 6, borderRadius: 3, overflow: "hidden", bgcolor: alpha(theme.palette.text.primary, 0.15), flexShrink: 0 }}>
+              <Box
+                ref={levelBarRef}
+                sx={{ width: "0%", height: "100%", borderRadius: 3, bgcolor: "success.main", transition: "width 80ms linear" }}
+              />
+            </Box>
+          </Box>
+        </Box>
+      </Popover>
     </Box>
   );
 }

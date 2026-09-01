@@ -72,6 +72,34 @@ type CallSessionOptions = {
   onNegotiationNeeded: () => void;
 };
 
+/**
+ * Opus 质量调优：对 SDP 中 opus PT 的 fmtp 追加/补全 useinbandfec=1;maxaveragebitrate=128000;stereo=1。
+ * 纯函数；无 opus rtpmap 时原样返回；已有参数不覆盖只补缺（补在原有参数之后）。
+ * 行尾风格保持原样（浏览器 SDP 为 \r\n，按原文检测后沿用）。
+ */
+export function enhanceOpusFmtp(sdp: string): string {
+  const EOL = sdp.includes("\r\n") ? "\r\n" : "\n";
+  // 取第一个 opus rtpmap 的 PT（a=rtpmap:<pt> opus/48000/2）。
+  // 行尾用 [^\S\r\n]*（仅水平空白）：\s 会吞掉 \r，导致插入行错位/多出 CR。
+  const rtpmapMatch = sdp.match(/a=rtpmap:(\d+)\s+opus\/48000(?:\/2)?[^\S\r\n]*$/im);
+  if (!rtpmapMatch) return sdp;
+  const pt = rtpmapMatch[1];
+  const desired = ["useinbandfec=1", "maxaveragebitrate=128000", "stereo=1"];
+  // 参数体用 [^\r\n]* 捕获：. 会匹配 \r，替换时会连带吃掉行尾 CR 破坏 CRLF
+  const fmtpRe = new RegExp(`^a=fmtp:${pt}\\b([^\\r\\n]*)$`, "m");
+  const fmtpMatch = sdp.match(fmtpRe);
+  if (fmtpMatch) {
+    const existing = fmtpMatch[1].split(";").map((p) => p.trim()).filter(Boolean);
+    const keys = new Set(existing.map((p) => p.split("=")[0].toLowerCase()));
+    const missing = desired.filter((p) => !keys.has(p.split("=")[0]));
+    if (missing.length === 0) return sdp;
+    return sdp.replace(fmtpRe, `a=fmtp:${pt} ${[...existing, ...missing].join(";")}`);
+  }
+  // 无 fmtp 行：在 rtpmap 行后插入新行
+  const rtpmapLine = rtpmapMatch[0];
+  return sdp.replace(rtpmapLine, `${rtpmapLine}${EOL}a=fmtp:${pt} ${desired.join(";")}`);
+}
+
 export class CallSession {
   private state: CallSessionState = "idle";
   private peer: RTCPeerConnectionLike | null = null;
@@ -333,7 +361,7 @@ export class CallSession {
         await this.flushPendingIce();
         attachLocalMedia();
         const answer = await peer.createAnswer();
-        await peer.setLocalDescription(answer);
+        await peer.setLocalDescription(this.applyOpusTuning(answer));
         this.opts.onNegotiationNeeded();
       } catch (err) {
         console.warn("[CallSession] apply buffered offer failed:", err);
@@ -343,10 +371,18 @@ export class CallSession {
     }
   }
 
+  // ─── SDP 调优 ─────────────────────────────────────────────────────
+
+  /** Opus 质量调优：本地 SDP（offer/answer）统一补全 opus fmtp 参数（FEC/高码率/立体声），治"远端声音小/发糊"。 */
+  private applyOpusTuning(desc: RTCSessionDescriptionInit): RTCSessionDescriptionInit {
+    desc.sdp = enhanceOpusFmtp(desc.sdp ?? "");
+    return desc;
+  }
+
   private async negotiateOffer(): Promise<void> {
     if (!this.peer) throw new Error("peer not ready");
     const offer = await this.peer.createOffer({ offerToReceiveVideo: this.localVideoEnabled });
-    await this.peer.setLocalDescription(offer);
+    await this.peer.setLocalDescription(this.applyOpusTuning(offer));
     await this.opts.onNegotiationNeeded();
   }
 
@@ -374,7 +410,7 @@ export class CallSession {
     await this.peer.setRemoteDescription(sdp);
     if (sdp.type === "offer") {
       const answer = await this.peer.createAnswer();
-      await this.peer.setLocalDescription(answer);
+      await this.peer.setLocalDescription(this.applyOpusTuning(answer));
       await this.opts.onNegotiationNeeded();
     }
     await this.flushPendingIce();
@@ -522,6 +558,33 @@ export class CallSession {
       }
     }
     return { count };
+  }
+
+  /** 通话中换麦克风：用外部传入的新音频轨替换当前音频 sender 的 track（不动协商）。
+   * 同时同步会话 localStream：旧音频轨摘除（清 onended，防止调用方 stop() 旧轨时
+   * 触发 ended → hangup("error") 误杀通话），新轨并入（后续 setMuted / hangup 停轨作用于新轨）。
+   * 返回替换的 sender 数；无音频 sender 或未就绪返回 0（调用方应自行停止新轨）。 */
+  async swapAudioTrack(newTrack: MediaStreamTrack): Promise<number> {
+    if (!this.peer || !this.localStream) return 0;
+    const self = this.peer as unknown as {
+      getSenders?: () => Array<{ track?: MediaStreamTrack | null; replaceTrack?: (t: MediaStreamTrack) => Promise<void>; }>;
+    };
+    let count = 0;
+    for (const s of self.getSenders?.() ?? []) {
+      if (s.track && s.track.kind === "audio" && typeof s.replaceTrack === "function") {
+        try { await s.replaceTrack(newTrack); count++; } catch { /* ignore */ }
+      }
+    }
+    if (count === 0) return 0; // 替换失败：保持现场不动，调用方负责停止新轨
+    for (const old of this.localStream.getAudioTracks()) {
+      old.onended = null;
+      this.localStream.removeTrack(old);
+    }
+    newTrack.onended = () => {
+      if (this.state === "active") this.hangup("error");
+    };
+    this.localStream.addTrack(newTrack);
+    return count;
   }
 
   async getStats(): Promise<{ rttMs: number | null; lossRate: number | null; jitterMs: number | null; throughputBps: number | null }> {

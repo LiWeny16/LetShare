@@ -358,6 +358,14 @@ export class CallManager {
     this.calls.get(callId)?.session.setVideoEnabled(enabled);
   }
 
+  /** 通话中换麦克风：对指定 peer 的活跃会话替换音频发送轨。返回替换的 sender 数（0=无活跃会话）。 */
+  async swapAudioTrack(peerId: string, newTrack: MediaStreamTrack): Promise<number> {
+    const callId = this.byPeer.get(peerId);
+    const call = callId ? this.calls.get(callId) : undefined;
+    if (!call) return 0;
+    return call.session.swapAudioTrack(newTrack);
+  }
+
   attachRemoteAudio(callId: string, el: HTMLAudioElement): void {
     this.calls.get(callId)?.session.attachRemoteAudio(el);
   }

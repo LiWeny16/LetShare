@@ -12,6 +12,10 @@ const DEFAULT_SETTINGS = {
   authToken: "98d9a399675116e5256e9082c192bc06eb6434937af99f201252e9424c7a5652",
   ablyKey: "4TtssQ.e9OvDA:wYBGdtWQNgicbeIKNtgeV_s5XEKmfLKD_Gue5XQrWuw",
   transferPriority: 'p2p' as 'p2p' | 'server',
+  micDeviceId: "",        // 首选麦克风 deviceId（"" = 系统默认）
+  speakerDeviceId: "",    // 首选扬声器 deviceId（"" = 系统默认）
+  audioContentHint: "speech" as "speech" | "music", // Opus 编码模式倾向：speech=人声优化，music=音乐模式
+  speakerVolume: 1 as number, // 音量 0..1（远端播放音量，1 = 100%）
   version: "3.6.6",
   isNewUser: true
 };
@@ -109,10 +113,9 @@ class SettingsStore {
 
       const parsed = raw ? JSON.parse(raw) : null;
 
-      const isValid =
-        parsed &&
-        typeof parsed === 'object' &&
-        Object.keys(DEFAULT_SETTINGS).every((key) => key in parsed);
+      // 新增设置项后，旧 localStorage 载荷必然缺新键：缺键交给下方默认值合并补全，
+      // 不能按"键必须齐全"判无效（否则每次新增字段，老用户全部设置都会被重置一次）
+      const isValid = parsed && typeof parsed === 'object' && !Array.isArray(parsed);
 
       if (isValid) {
         runInAction(() => {

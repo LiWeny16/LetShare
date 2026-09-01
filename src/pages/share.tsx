@@ -55,6 +55,7 @@ import { isApp } from "@App/libs/capacitor/user";
 import { Trans, useTranslation } from "react-i18next";
 import { CallManager } from "@App/libs/call/callManager";
 import { startRingtone, stopRingtone } from "@App/libs/call/ringtone";
+import { acquireCallAudio, mergedAudioConstraints } from "@App/libs/call/audioCapture";
 import { CallButton, IncomingCallBanner, ActiveCallPanel, type CallMedia, type IncomingCallInfo } from "../components/call/CallBar";
 // import VideoPanel from "@Com/VideoPannel/VideoPannel";
 // import VideoPanel from "@Com/VideoPannel/VideoPannel";
@@ -234,22 +235,27 @@ const Share = observer(() => {
       return;
     }
     try {
+      // 音频采集：3A 显式约束 + 首选麦克风 + contentHint（治"远端声音小"），设置项为空 = 系统默认
+      const micId = settingsStore.get("micDeviceId");
+      const contentHint = settingsStore.get("audioContentHint") ?? "speech";
       // 视频通话：先试音频+视频，摄像头不可用时降级为纯语音
       let stream: MediaStream;
       let videoEnabled = media === "video";
       if (media === "video") {
         try {
           stream = await navigator.mediaDevices.getUserMedia({
-            audio: true,
+            audio: mergedAudioConstraints(micId),
             video: { width: { ideal: 1280 }, height: { ideal: 720 } },
           });
+          // 合并采集路径不经过 acquireCallAudio：手动补 contentHint
+          for (const track of stream.getAudioTracks()) track.contentHint = contentHint;
         } catch {
           // 摄像头不可用 → 降级纯语音
-          stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+          stream = await acquireCallAudio(micId, contentHint);
           videoEnabled = false;
         }
       } else {
-        stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        stream = await acquireCallAudio(micId, contentHint);
       }
       console.log("[Call] startCall getUserMedia ok",
         "tracks=", stream.getTracks().map(t => `${t.kind}:${t.readyState}`),
@@ -283,21 +289,26 @@ const Share = observer(() => {
     const incoming = incomingCall;
     if (!manager || !incoming) return;
     try {
+      // 音频采集：3A 显式约束 + 首选麦克风 + contentHint（治"远端声音小"），设置项为空 = 系统默认
+      const micId = settingsStore.get("micDeviceId");
+      const contentHint = settingsStore.get("audioContentHint") ?? "speech";
       // 视频来电：先试音频+视频，摄像头不可用时降级为纯语音接听
       let stream: MediaStream;
       let videoEnabled = incoming.media !== "audio";
       if (videoEnabled) {
         try {
           stream = await navigator.mediaDevices.getUserMedia({
-            audio: true,
+            audio: mergedAudioConstraints(micId),
             video: { width: { ideal: 1280 }, height: { ideal: 720 } },
           });
+          // 合并采集路径不经过 acquireCallAudio：手动补 contentHint
+          for (const track of stream.getAudioTracks()) track.contentHint = contentHint;
         } catch {
-          stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+          stream = await acquireCallAudio(micId, contentHint);
           videoEnabled = false;
         }
       } else {
-        stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        stream = await acquireCallAudio(micId, contentHint);
       }
       // 竞态修复：ontrack 会在 acceptCall 内部（SRD 处理缓冲 offer）同步触发，
       // onRemoteStream 回调此刻就要能查到 activeCall —— 必须先提交状态并同步 seed ref，
@@ -357,6 +368,35 @@ const Share = observer(() => {
     const next = !cur.videoEnabled;
     manager.setVideoEnabled(cur.callId, next);
     setActiveCall({ ...cur, videoEnabled: next });
+  }, []);
+
+  // 通话中换麦克风：重新采集首选麦克风 → replaceTrack 原子换轨（不动协商），旧轨停止。
+  const handleMicChange = React.useCallback(async (deviceId: string) => {
+    settingsStore.update("micDeviceId", deviceId);
+    const cur = activeCallRef.current;
+    if (!cur) return; // 未在通话：仅保存偏好，下次通话生效
+    const manager = callManagerRef.current;
+    if (!manager) return;
+    try {
+      const hint = settingsStore.get("audioContentHint") ?? "speech";
+      const newStream = await acquireCallAudio(deviceId, hint);
+      const newTrack = newStream.getAudioTracks()[0];
+      if (!newTrack) return;
+      if (cur.muted) newTrack.enabled = false; // 保持静音状态
+      const count = await manager.swapAudioTrack(cur.peerId, newTrack);
+      if (count === 0) {
+        newTrack.stop(); // 无活跃会话/替换失败：停止新采集的轨，不泄漏麦克风
+        return;
+      }
+      // 停掉旧音频轨并更新 state（保留旧流视频轨）。
+      // 会话侧 swapAudioTrack 已清旧轨 onended，这里 stop() 不会误触发 hangup("error")。
+      (cur.localStream?.getAudioTracks() ?? []).forEach((track) => track.stop());
+      const merged = new MediaStream([...newStream.getTracks(), ...(cur.localStream?.getVideoTracks() ?? [])]);
+      setActiveCall((prev) => (prev && prev.peerId === cur.peerId ? { ...prev, localStream: merged } : prev));
+      console.log("[Call] mic swapped deviceId=", deviceId || "(default)", "senders=", count);
+    } catch (err) {
+      console.warn("[Call] mic swap failed:", err);
+    }
   }, []);
 
   // ── 文件夹拖拽处理：目录 → ZIP 打包，空文件/空文件夹一律拒绝 ──
@@ -1743,6 +1783,7 @@ const Share = observer(() => {
           onVideoToggle={toggleVideo}
           onHangup={hangupActive}
           onClose={hangupActive}
+          onMicChange={handleMicChange}
         />
       )}
     </>
