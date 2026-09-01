@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "taskId": "task-fix-oneway-call-audio",
+  "status": "in_progress",
+  "mode": "direct",
+  "tier": "none",
+  "phase": "root-caused",
+  "gate": null,
+  "updatedAt": "2026-09-01T10:15:00Z",
+  "activeQuestion": null,
+  "nextAction": "Apply callee orchestration fix (setRemoteDescription(offer) before addTrack send-track + immediate pendingIce flush), then verify app E2E callee packetsDiscarded drops 600→0.",
+  "acceptance": [
+    "AC-001 callee decodes offerer audio: app E2E 中 callee 端对 offerer 方向的 inbound totalSamplesReceived>0 且 packetsDiscarded≈0（双向）。",
+    "AC-002 production sanity: 用真实响亮输入 + TURN(公网) 复测双方向均出声(确认 weak-headless 复现与生产同机制)。"
+  ],
+  "queues": {
+    "ready": [],
+    "running": [],
+    "blocked": [],
+    "done": []
+  },
+  "dispatchLedger": [],
+  "decisions": [],
+  "risks": [],
+  "artifacts": []
+}
