@@ -56,7 +56,20 @@ export function clearProCookie() {
 	clearProToken();
 }
 
-const API_BASE = import.meta.env.DEV ? "" : "https://ecs.letshare.fun";
+// import.meta.env 仅 Vite 存在；Node（单测）下取默认生产地址，避免模块加载即抛错
+const API_BASE = (import.meta as { env?: { DEV?: boolean } }).env?.DEV ? "" : "https://ecs.letshare.fun";
+
+/**
+ * TURN 凭据端点地址。默认 API_BASE；E2E 测试可用 localStorage ls_turn_api
+ * 覆盖为本地 Go 后端（测试钩子，生产零影响）。
+ */
+function turnApiBase(): string {
+	if (typeof localStorage !== "undefined") {
+		const override = localStorage.getItem("ls_turn_api");
+		if (override !== null) return override;
+	}
+	return API_BASE;
+}
 
 export async function activatePro(userId: string, inviteCode: string): Promise<{ token: string; expires_at: string }> {
 	const resp = await fetch(`${API_BASE}/api/pro/activate`, {
@@ -88,7 +101,10 @@ export interface TurnCredentialsResponse {
  * 后端未启用 TURN 时（404）返回空数组，调用方按无 TURN 降级处理。
  */
 export async function fetchTurnCredentials(): Promise<TurnIceServer[]> {
-	const resp = await fetch(`${API_BASE}/api/turn-credentials`);
+	// Node（单测）环境：与"TURN 未启用"同路降级，测试不发真实网络请求
+	// （注意 Node 24 也有全局 fetch，须用 window 判定浏览器环境）
+	if (typeof window === "undefined") return [];
+	const resp = await fetch(`${turnApiBase()}/api/turn-credentials`);
 	if (resp.status === 404) {
 		// TURN 服务未启用：降级为纯 STUN，不影响通话发起
 		return [];

@@ -20,21 +20,33 @@ import { buildInvite, buildBye, buildDecline, buildAccept, buildSdp, buildIce } 
 // ─── Fakes ──────────────────────────────────────────────────────────
 
 class FakeRTCPeerConnection {
+  static instances: FakeRTCPeerConnection[] = [];
   connectionState = "new";
   localDescription: RTCSessionDescription | null = null;
+  remoteDescription: RTCSessionDescription | null = null;
   onnegotiationneeded: (() => void) | null = null;
   onicecandidate: ((ev: { candidate: RTCIceCandidateInit | null }) => void) | null = null;
   ontrack: ((ev: { stream: MediaStream; track: MediaStreamTrack; transceivers: unknown[] }) => void) | null = null;
   onconnectionstatechange: (() => void) | null = null;
+  /** 调用记录（供早到信令缓冲用例断言） */
+  setRemoteDescriptionCalls: RTCSessionDescriptionInit[] = [];
+  createAnswerCount = 0;
+  addIceCandidateCalls: (RTCIceCandidateInit | null)[] = [];
 
-  constructor(_config?: RTCConfiguration) {}
+  constructor(_config?: RTCConfiguration) {
+    FakeRTCPeerConnection.instances.push(this);
+  }
   addTrack(_track: MediaStreamTrack, _stream: MediaStream) { return { track: _track } as RTCRtpSender; }
   addTransceiver(_kind: string, _init?: RTCRtpTransceiverInit) { return {} as RTCRtpTransceiver; }
   async createOffer(_opts?: RTCOfferAnswerOptions) { return { type: "offer", sdp: "fake-offer" }; }
-  async createAnswer(_opts?: RTCOfferAnswerOptions) { return { type: "answer", sdp: "fake-answer" }; }
+  async createAnswer(_opts?: RTCOfferAnswerOptions) { this.createAnswerCount += 1; return { type: "answer", sdp: "fake-answer" }; }
   async setLocalDescription(desc: RTCSessionDescriptionInit) { this.localDescription = { type: desc.type, sdp: desc.sdp } as RTCSessionDescription; return null; }
-  async setRemoteDescription(_desc: RTCSessionDescriptionInit) { return null; }
-  async addIceCandidate(_c: RTCIceCandidateInit | null) { return null; }
+  async setRemoteDescription(desc: RTCSessionDescriptionInit) {
+    this.setRemoteDescriptionCalls.push(desc);
+    this.remoteDescription = { type: desc.type, sdp: desc.sdp } as RTCSessionDescription;
+    return null;
+  }
+  async addIceCandidate(c: RTCIceCandidateInit | null) { this.addIceCandidateCalls.push(c); return null; }
   getSenders() { return []; }
   getReceivers() { return []; }
   async getStats() { return []; }
@@ -42,11 +54,14 @@ class FakeRTCPeerConnection {
 }
 
 /** Install fake RTCPeerConnection for the duration of a test. */
-function withFakeRTC<T>(fn: () => T): T {
+async function withFakeRTC<T>(fn: () => T | Promise<T>): Promise<T> {
   const prevRtc = (globalThis as Record<string, unknown>).RTCPeerConnection;
   (globalThis as Record<string, unknown>).RTCPeerConnection = FakeRTCPeerConnection;
+  FakeRTCPeerConnection.instances = [];
   try {
-    return fn();
+    // await：确保 async 测试体完整跑完后才恢复真实 RTCPeerConnection
+    // （同步 return fn() 会在首个 await 挂起点提前触发 finally 摘掉 fake）
+    return await fn();
   } finally {
     if (prevRtc === undefined) delete (globalThis as Record<string, unknown>).RTCPeerConnection;
     else (globalThis as Record<string, unknown>).RTCPeerConnection = prevRtc;
@@ -75,7 +90,8 @@ function makeManager(overrides: { selfId?: string; broadcast?: (s: object) => vo
   const manager = new CallManager(
     {
       broadcast: (s: object) => { (overrides.broadcast ?? ((x: object) => broadcasted.push(x)))(s); },
-      getSelfId: () => overrides.selfId ?? "self:uid",
+      // 注意不能用 ??：null 也是合法 selfId 值（"不在房间"用例），?? 会把 null 吞成默认值
+      getSelfId: () => ("selfId" in overrides ? overrides.selfId ?? null : "self:uid"),
     },
     {
       onIncoming: (info) => events.onIncoming.push(info),
@@ -95,10 +111,10 @@ function fakeStream(): MediaStream {
 
 // ─── Tests ──────────────────────────────────────────────────────────
 
-test("startCall: throws if not in room (no selfId)", () => {
-  withFakeRTC(() => {
+test("startCall: throws if not in room (no selfId)", async () => {
+  await withFakeRTC(async () => {
     const { manager } = makeManager({ selfId: null });
-    assert.rejects(() => manager.startCall("peer:uid", "audio", fakeStream() as MediaStream), /not in room/);
+    await assert.rejects(() => manager.startCall("peer:uid", "audio", fakeStream() as MediaStream), /not in room/);
   });
 });
 
@@ -327,5 +343,81 @@ test("CallSession: setMuted/setVideoEnabled toggle track.enabled without stream"
     session.setVideoEnabled(false);
     assert.equal(session.isMuted(), true);
     assert.equal(session.isVideoEnabled(), false);
+  });
+});
+
+// ─── 接听死锁 + 早到信令缓冲 ─────────────────────────────────────────
+
+test("invite 后 session 进入 incoming 状态（死锁修复）", async () => {
+  await withFakeRTC(async () => {
+    const { manager } = makeManager();
+    manager.handleSignal("peer:uid", buildInvite("c_in", "audio"));
+    const session = manager.getCallByPeer("peer:uid");
+    assert.ok(session, "pending session should exist");
+    assert.equal(session.getState(), "incoming", "invite 后应 markIncoming");
+    // 死锁回归：accept 不再静默 return，能走通（FakePC 下不抛错）
+    await manager.acceptCall("c_in", fakeStream() as MediaStream);
+    assert.equal(session.getState(), "connecting");
+    manager.leaveRoom();
+  });
+});
+
+test("早到 offer 缓冲：accept 前收到的 offer 在 accept 后被应用并回 answer", async () => {
+  await withFakeRTC(async () => {
+    const { manager, broadcasted } = makeManager();
+    manager.handleSignal("peer:uid", buildInvite("c_early", "audio"));
+    // 未接听时 offer 先到 —— 旧代码此处 peer 为 null，offer 被丢弃
+    await manager.handleSignal("peer:uid", buildSdp("c_early", "offer", { type: "offer", sdp: "early-offer" }));
+    const pc = FakeRTCPeerConnection.instances.at(-1);
+    assert.equal(pc, undefined, "accept 前 peer 不应创建");
+
+    await manager.acceptCall("c_early", fakeStream() as MediaStream);
+    const pc2 = FakeRTCPeerConnection.instances.at(-1);
+    assert.ok(pc2, "accept 后 peer 应创建");
+    assert.ok(
+      pc2!.setRemoteDescriptionCalls.some((d) => (d as { sdp?: string }).sdp === "early-offer"),
+      "早到 offer 应在 accept 后被 setRemoteDescription 应用",
+    );
+    assert.ok(pc2!.createAnswerCount >= 1, "应用 offer 后应 createAnswer");
+    const answers = broadcasted.filter(
+      (s) => (s as { type?: string; sdpRole?: string }).type === "call:sdp" && (s as { sdpRole?: string }).sdpRole === "answer",
+    );
+    assert.ok(answers.length >= 1, "应广播 answer 型 call:sdp");
+    manager.leaveRoom();
+  });
+});
+
+test("早到 ICE 缓冲：accept 前收到的候选在 offer 应用后被 addIceCandidate", async () => {
+  await withFakeRTC(async () => {
+    const { manager } = makeManager();
+    manager.handleSignal("peer:uid", buildInvite("c_ice", "audio"));
+    const cand = { candidate: "candidate:1 1 udp 2122260223 192.0.2.1 5000 typ host", sdpMid: "0", sdpMLineIndex: 0 } as RTCIceCandidateInit;
+    await manager.handleSignal("peer:uid", buildIce("c_ice", cand));
+    await manager.handleSignal("peer:uid", buildIce("c_ice", cand));
+    await manager.handleSignal("peer:uid", buildIce("c_ice", cand));
+    // 此刻 peer 尚未创建，旧代码候选被静默丢弃
+    await manager.acceptCall("c_ice", fakeStream() as MediaStream);
+    await manager.handleSignal("peer:uid", buildSdp("c_ice", "offer", { type: "offer", sdp: "late-offer" }));
+    await new Promise((r) => setTimeout(r, 50)); // 等 flush 微任务链
+    const pc = FakeRTCPeerConnection.instances.at(-1)!;
+    assert.equal(pc.addIceCandidateCalls.length, 3, "3 个早到候选都应被应用");
+    manager.leaveRoom();
+  });
+});
+
+test("发起方侧：answer 前到达的 ICE 候选被缓冲，answer 应用后 flush", async () => {
+  await withFakeRTC(async () => {
+    const { manager } = makeManager();
+    const callId = await manager.startCall("peer:uid", "audio", fakeStream() as MediaStream);
+    const callerPc = FakeRTCPeerConnection.instances.at(-1)!;
+    assert.ok(callerPc, "发起方 peer 应已创建");
+    // answer 之前 remoteDescription 为 null，旧代码 addIceCandidate 抛 InvalidStateError 被丢弃
+    const cand = { candidate: "candidate:9 1 udp 2122260223 192.0.2.9 5009 typ host", sdpMid: "0", sdpMLineIndex: 0 } as RTCIceCandidateInit;
+    await manager.handleSignal("peer:uid", buildIce(callId, cand));
+    assert.equal(callerPc.addIceCandidateCalls.length, 0, "remoteDescription 未设置时不应直接 addIceCandidate");
+    await manager.handleSignal("peer:uid", buildSdp(callId, "answer", { type: "answer", sdp: "late-answer" }));
+    await new Promise((r) => setTimeout(r, 50));
+    assert.equal(callerPc.addIceCandidateCalls.length, 1, "answer 应用后候选应被 flush");
+    manager.leaveRoom();
   });
 });

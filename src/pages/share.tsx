@@ -188,6 +188,21 @@ const Share = observer(() => {
         onRemoteStream: (peerId, stream, kind) => {
           const cur = activeCallRef.current;
           if (cur && cur.peerId === peerId) {
+            // 防御：浏览器可能把 audio/video 拆成两个 stream 且 video 先到，
+            // 此时后到的音频流若被丢弃即无声 —— 把缺失 kind 的轨道并入现有流
+            // （保持 stream 引用稳定，UI 绑定不重挂）。
+            const existing = cur.remoteStream;
+            if (existing && existing !== stream) {
+              const existingTracks = existing.getTracks();
+              const missing = stream.getTracks().filter((t) => !existingTracks.some((e) => e.kind === t.kind));
+              if (missing.length > 0) {
+                for (const track of missing) existing.addTrack(track);
+                // 触发重渲染（同一流对象，UI effect 依赖引用不变，需要手动 kick）
+                setActiveCall({ ...cur });
+                return;
+              }
+              return; // 轨道已齐（重复事件），不动
+            }
             setActiveCall({ ...cur, remoteStream: kind === "video" ? stream : (cur.remoteStream ?? stream) });
           }
         },

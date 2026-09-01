@@ -48,11 +48,18 @@ type RTCPeerConnectionLike = {
   getStats(): Promise<unknown>;
   close(): void;
   connectionState: string;
+  remoteDescription: RTCSessionDescription | null;
   onnegotiationneeded: ((ev?: unknown) => void) | null;
   onicecandidate: ((ev: { candidate: RTCIceCandidateInit | null }) => void) | null;
   ontrack: ((ev: { stream: MediaStream; track: MediaStreamTrack; transceivers: RTCRtpTransceiver[] }) => void) | null;
   onconnectionstatechange: ((ev?: unknown) => void) | null;
 };
+
+/**
+ * 规范化 ontrack 事件：浏览器真实事件携带 streams（数组），
+ * 本模块 fake/真实实现统一在 handler 内部处理，类型仅约束最小字段。
+ */
+type OnTrackEventLike = { track: MediaStreamTrack; streams?: MediaStream[] };
 
 type CallSessionOptions = {
   callId: string;
@@ -77,6 +84,10 @@ export class CallSession {
   private publicFrameHandler: ((buf: ArrayBuffer) => void) | null = null;
   private publicSink: ((buf: ArrayBuffer) => void) | null = null;
   private ended = false;
+  /** 早到 offer 缓冲：发起方 invite 后立刻广播 offer，接听方 accept 前 peer 未建（覆盖式只留最新） */
+  private pendingRemoteOffer: RTCSessionDescriptionInit | null = null;
+  /** 早到 ICE 缓冲：remoteDescription 未就绪前收到的候选（FIFO，应用 offer/answer 后 flush） */
+  private pendingIce: RTCIceCandidateInit[] = [];
 
   constructor(
     private readonly opts: CallSessionOptions,
@@ -187,6 +198,13 @@ export class CallSession {
 
   private bindRemoteStream(stream: MediaStream, kind: MediaKind): void {
     console.log(`[Call] bindRemoteStream kind=${kind} tracks=${stream.getTracks().map(t => `${t.kind}:${t.readyState}`)}`);
+    // 轨道 unmute/mute 订阅：远端开始/停止发送媒体时的唯一可观测信号（无声排查关键日志）
+    for (const track of stream.getTracks()) {
+      if (track.kind === "audio") {
+        track.onunmute = () => console.log(`[Call] remote audio track unmuted (media flowing) callId=${this.opts.callId}`);
+        track.onmute = () => console.log(`[Call] remote audio track muted (media stopped) callId=${this.opts.callId}`);
+      }
+    }
     if (kind === "audio" && this.remoteAudioEl) {
       this.remoteAudioEl.srcObject = stream;
       console.log("[Call] audio stream bound to remoteAudioEl, audioTracks=", stream.getAudioTracks().map(t => ({ enabled: t.enabled, muted: t.muted })));
@@ -227,15 +245,31 @@ export class CallSession {
     }
     const peer = new Ctor(this.opts.rtcConfig);
     peer.onicecandidate = (ev) => {
+      if (ev.candidate) {
+        console.log(`[Call] local ICE candidate: ${ev.candidate.candidate?.slice(0, 60)} callId=${this.opts.callId}`);
+      }
       this.opts.onIceCandidate(ev.candidate);
+    };
+    const pcWithIce = peer as unknown as { oniceconnectionstatechange?: ((ev?: unknown) => void) | null };
+    pcWithIce.oniceconnectionstatechange = () => {
+      const st = (peer as unknown as { iceConnectionState?: string }).iceConnectionState;
+      console.log(`[Call] iceConnectionState=${st} callId=${this.opts.callId}`);
     };
     peer.onnegotiationneeded = () => {
       this.opts.onNegotiationNeeded();
     };
-    peer.ontrack = (ev) => {
+    peer.ontrack = (ev: OnTrackEventLike) => {
       const kind: MediaKind = ev.track.kind === "video" ? "video" : "audio";
-      console.log(`[Call] ontrack kind=${kind} trackState=${ev.track.readyState} tracks=${ev.stream?.getTracks?.().map(t => t.kind)}`);
-      this.bindRemoteStream(ev.stream, kind);
+      // 浏览器真实事件是 ev.streams（数组，MSID 关联）；无关联流时为空数组。
+      // 空数组时必须自建 MediaStream 挂 track，否则远端渲染拿到 undefined 流 → 无声。
+      const streams = ev.streams ?? [];
+      let stream = streams[0] ?? null;
+      if (!stream) {
+        console.log(`[Call] ontrack kind=${kind} without stream — building one from track`);
+        stream = new MediaStream([ev.track]);
+      }
+      console.log(`[Call] ontrack kind=${kind} trackState=${ev.track.readyState} tracks=${stream.getTracks().map(t => t.kind)}`);
+      this.bindRemoteStream(stream, kind);
       if (this.state === "connecting") this.setState("active");
     };
     peer.onconnectionstatechange = () => {
@@ -262,6 +296,21 @@ export class CallSession {
       // 确保至少有一个音频收发器，避免 offer 中无媒体
       peer.addTransceiver("audio", { direction: "sendrecv" });
     }
+
+    // 接听方：应用缓冲的早到 offer（发起方 invite 后立刻广播，accept 前已缓存）
+    if (this.pendingRemoteOffer) {
+      const offer = this.pendingRemoteOffer;
+      this.pendingRemoteOffer = null;
+      try {
+        await peer.setRemoteDescription(offer);
+        const answer = await peer.createAnswer();
+        await peer.setLocalDescription(answer);
+        this.opts.onNegotiationNeeded();
+        await this.flushPendingIce();
+      } catch (err) {
+        console.warn("[CallSession] apply buffered offer failed:", err);
+      }
+    }
   }
 
   private async negotiateOffer(): Promise<void> {
@@ -274,24 +323,52 @@ export class CallSession {
   // ─── 协商（由 CallManager 分发信令后调用）────────────────────────
 
   async handleRemoteSdp(sdp: RTCSessionDescriptionInit): Promise<void> {
-    if (!this.peer) throw new Error("peer not ready");
+    // 早到 offer：接听方 accept 前 peer 未建，缓冲待 ensurePeer 后应用
+    if (!this.peer) {
+      if (sdp.type === "offer") {
+        this.pendingRemoteOffer = sdp;
+        console.log(`[Call] buffered early offer (peer not ready) callId=${this.opts.callId}`);
+      }
+      return;
+    }
     await this.peer.setRemoteDescription(sdp);
     if (sdp.type === "offer") {
       const answer = await this.peer.createAnswer();
       await this.peer.setLocalDescription(answer);
       await this.opts.onNegotiationNeeded();
     }
+    await this.flushPendingIce();
     if (this.state === "connecting" || this.state === "incoming") {
       this.setState("connecting");
     }
   }
 
   async handleRemoteIce(candidate: RTCIceCandidateInit | null): Promise<void> {
-    if (!this.peer) return;
+    // 早到候选：peer 未建或 remoteDescription 未就绪时缓冲，避免 addIceCandidate 抛
+    // InvalidStateError 被静默丢弃（发起方 answer 前收候选、接听方 accept 前收候选）
+    const remoteReady = this.peer?.remoteDescription != null;
+    if (!this.peer || !remoteReady) {
+      if (candidate) this.pendingIce.push(candidate);
+      return;
+    }
     try {
       await this.peer.addIceCandidate(candidate);
     } catch (err) {
       console.warn("[CallSession] addIceCandidate failed:", err);
+    }
+  }
+
+  /** 应用 remoteDescription 后冲刷缓冲的早到 ICE 候选（失败 warn 丢弃，不阻塞协商）。 */
+  private async flushPendingIce(): Promise<void> {
+    if (this.pendingIce.length === 0) return;
+    const queued = this.pendingIce;
+    this.pendingIce = [];
+    for (const c of queued) {
+      try {
+        await this.peer?.addIceCandidate(c);
+      } catch (err) {
+        console.warn("[CallSession] flush addIceCandidate failed (dropped):", err);
+      }
     }
   }
 
@@ -334,6 +411,16 @@ export class CallSession {
   }
 
   // ─── 质量采样（供 transportPolicy 决策）──────────────────────────
+
+  /** 原始 RTCPeerConnection.getStats()（测试钩子暴露用；无 peer 时返回空 Map）。 */
+  async getRawStats(): Promise<Map<string, unknown>> {
+    if (!this.peer) return new Map();
+    try {
+      return (await this.peer.getStats()) as unknown as Map<string, unknown>;
+    } catch {
+      return new Map();
+    }
+  }
 
   async getStats(): Promise<{ rttMs: number | null; lossRate: number | null; jitterMs: number | null; throughputBps: number | null }> {
     if (!this.peer) return { rttMs: null, lossRate: null, jitterMs: null, throughputBps: null };

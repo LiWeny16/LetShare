@@ -165,11 +165,31 @@ pnpm app-start
 | Frontend | Vite builds into `docs/`, which is used for GitHub Pages. |
 | CDN | The public site is served through CDN in front of GitHub Pages. |
 | Backend | The custom WebSocket backend is deployed separately from the static frontend. |
+| TURN relay | Embedded `pion/turn` inside the Go backend — see "TURN (voice/video relay)" below. |
 | Versioning | For app or service-worker changes, keep `package.json`, `src/app/libs/mobx/mobx.ts`, the service worker cache name in `vite.config.ts`, and generated `docs/version.json` in sync. |
+
+### TURN (voice/video relay)
+
+Voice/video calls use WebRTC. Signaling rides the existing WebSocket channel; media prefers P2P and falls back to the TURN relay embedded in the Go server (`internal/turnserver`, `pion/turn/v2`) when NAT traversal fails. Short-lived TURN credentials are issued by `GET /api/turn-credentials` (RFC 5766 use-auth-secret, shared HMAC logic in `internal/turnauth`).
+
+Production checklist:
+
+1. Set the env var `LETSHARE_TURN_SECRET` (any long random string; never commit it).
+2. Edit `server/configs/production.yaml` `turn.public_ip` to the server's public IP.
+3. Open firewall / security-group ports: `3478/udp` + `3478/tcp` (TURN/STUN listener) and `49160-49200/udp` (relay port range, adjustable via `turn.relay_port_min/max`).
+4. Restart the backend; verify `curl https://<host>/api/turn-credentials` returns `ice_servers` (not 404).
+
+When TURN is disabled (`turn.enabled: false`), the endpoint returns 404 and clients degrade to pure STUN — calls still start, but symmetric-NAT peers may fail to connect.
+
+Local E2E (two headless clients, forced through the embedded TURN relay):
+
+```bash
+pnpm test:e2e:call
+```
 
 ## Known Constraints
 
-- P2P success depends on NAT traversal, browser support, and network policy.
+- P2P success depends on NAT traversal, browser support, and network policy; the embedded TURN relay is the fallback path for symmetric NAT.
 - Public relay transfer requires the Custom WebSocket provider; Ably is signaling only.
 - Free public relay transfers above 50 MB are rejected by the backend.
 - PRO authorization for relay transfer is evaluated by server-side token state.

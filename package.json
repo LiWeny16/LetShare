@@ -19,6 +19,7 @@
     "test:unit": "node --import tsx --test tests/fileMessage-unit.test.ts",
     "test:db": "node --import tsx --test tests/fileBlobStore.test.ts",
     "test:e2e": "node --import tsx --test tests/fileMessage-e2e.test.ts",
+    "test:e2e:call": "node --import tsx --test --test-force-exit tests/e2e/call-relay.test.ts",
     "gen-img": "npx @capacitor/assets generate",
     "prepare": "husky"
   },
@@ -63,6 +64,7 @@
     "fake-indexeddb": "^6.2.5",
     "happy-dom": "^20.10.6",
     "husky": "^9.1.7",
+    "playwright": "^1.62.1",
     "react-is": "18.3.1",
     "tsx": "^4.22.4",
     "typescript": "^5.2.2",

@@ -64,13 +64,10 @@ type CallManagerDeps = {
 
 const RTC_CONFIG: RTCConfiguration = {
   iceServers: [
+    // 自建 STUN（与嵌入式 TURN 同端口，pion listener 同时响应 STUN binding）
+    { urls: "stun:ecs.letshare.fun:3478" },
+    // Google 留作海外/自建不可达时兜底
     { urls: "stun:stun.l.google.com:19302" },
-    { urls: "stun:stun.counterpath.net" },
-    { urls: "stun:stun.internetcalls.com" },
-    { urls: "stun:stun.voip.aebc.com" },
-    { urls: "stun:stun.voipbuster.com" },
-    { urls: "stun:stun.xten.com" },
-    { urls: "stun:global.stun.twilio.com:3478" },
   ],
   iceTransportPolicy: "all",
   bundlePolicy: "max-bundle",
@@ -84,7 +81,10 @@ const RTC_CONFIG: RTCConfiguration = {
  */
 function buildRtcConfig(turnServers: TurnIceServer[]): RTCConfiguration {
   const iceServers: RTCIceServer[] = [...(RTC_CONFIG.iceServers ?? []), ...turnServers];
-  return { ...RTC_CONFIG, iceServers };
+  // 测试钩子：E2E 用 localStorage ls_force_relay=1 强制只走 TURN 中继，
+  // 验证媒体确实经过后端（candidateType === "relay"）。默认关闭，生产零影响。
+  const forceRelay = typeof localStorage !== "undefined" && localStorage.getItem("ls_force_relay") === "1";
+  return forceRelay ? { ...RTC_CONFIG, iceServers, iceTransportPolicy: "relay" } : { ...RTC_CONFIG, iceServers };
 }
 
 const INCOMING_TIMEOUT_MS = 30_000;
@@ -233,8 +233,11 @@ export class CallManager {
       case "call:invite": {
         // 重复来电忽略（已有该 peer 通话或同 callId）
         if (this.byPeer.has(from) || this.calls.has(callId)) return;
+        const pendingSession = this.createPendingSession(callId, from, signal.media === "audio");
+        // 进入 incoming 状态：accept() 的状态机守卫依赖它，缺失会导致接听死锁（无声）
+        pendingSession.markIncoming();
         const pending: ActiveCall = {
-          session: this.createPendingSession(callId, from, signal.media === "audio"),
+          session: pendingSession,
           peerId: from,
           role: "callee",
           lastSwitch: null,
@@ -412,6 +415,12 @@ export class CallManager {
 
   private startStatsLoop(call: ActiveCall): void {
     if (call.statsTimer != null) return;
+    // 测试钩子：E2E 用 localStorage ls_force_relay=1 时暴露原始 stats 给 page.evaluate 断言。
+    // 默认关闭，生产不挂 window 全局。
+    const exposeStats = typeof localStorage !== "undefined" && localStorage.getItem("ls_force_relay") === "1";
+    if (exposeStats) {
+      (globalThis as { __lsCallStats?: unknown }).__lsCallStats = call.session.getRawStats.bind(call.session);
+    }
     const loop = async (): Promise<void> => {
       // 自递归：每次调度前先检查是否已被清理，避免通话结束后循环自我续期
       if (!this.calls.has(call.session.getCallId())) return;

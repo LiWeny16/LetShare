@@ -40,14 +40,14 @@ export function CallButton({ onCall, disabled }: CallButtonHandlers) {
     <Box sx={{ display: "flex", gap: 0.5 }} onClick={(e) => e.stopPropagation()}>
       <Tooltip title={t("call.voice", "语音通话")} arrow enterDelay={250}>
         <span>
-          <IconButton size="small" disabled={disabled} onClick={() => onCall("audio")} sx={{ opacity: 0.7, "&:hover": { opacity: 1 } }}>
+          <IconButton size="small" disabled={disabled} aria-label={t("call.voice", "语音通话")} onClick={() => onCall("audio")} sx={{ opacity: 0.7, "&:hover": { opacity: 1 } }}>
             <CallIcon sx={{ fontSize: 20 }} />
           </IconButton>
         </span>
       </Tooltip>
       <Tooltip title={t("call.video", "视频通话")} arrow enterDelay={250}>
         <span>
-          <IconButton size="small" disabled={disabled} onClick={() => onCall("video")} sx={{ opacity: 0.7, "&:hover": { opacity: 1 } }}>
+          <IconButton size="small" disabled={disabled} aria-label={t("call.video", "视频通话")} onClick={() => onCall("video")} sx={{ opacity: 0.7, "&:hover": { opacity: 1 } }}>
             <VideocamIcon sx={{ fontSize: 20 }} />
           </IconButton>
         </span>
@@ -111,14 +111,14 @@ export function IncomingCallBanner({ info, handlers }: { info: IncomingCallInfo;
         </Box>
         <Tooltip title={t("call.accept", "接听")}>
           <span>
-            <IconButton onClick={handlers.onAccept} sx={{ width: 48, height: 48, borderRadius: "50%", bgcolor: theme.palette.success.main, color: theme.palette.getContrastText(theme.palette.success.main), "&:hover": { bgcolor: theme.palette.success.dark } }}>
+            <IconButton aria-label={t("call.accept", "接听")} onClick={handlers.onAccept} sx={{ width: 48, height: 48, borderRadius: "50%", bgcolor: theme.palette.success.main, color: theme.palette.getContrastText(theme.palette.success.main), "&:hover": { bgcolor: theme.palette.success.dark } }}>
               <CallIcon sx={{ fontSize: 24 }} />
             </IconButton>
           </span>
         </Tooltip>
         <Tooltip title={t("call.decline", "拒绝")}>
           <span>
-            <IconButton onClick={handlers.onDecline} sx={{ width: 48, height: 48, borderRadius: "50%", bgcolor: theme.palette.error.main, color: theme.palette.getContrastText(theme.palette.error.main), "&:hover": { bgcolor: theme.palette.error.dark } }}>
+            <IconButton aria-label={t("call.decline", "拒绝")} onClick={handlers.onDecline} sx={{ width: 48, height: 48, borderRadius: "50%", bgcolor: theme.palette.error.main, color: theme.palette.getContrastText(theme.palette.error.main), "&:hover": { bgcolor: theme.palette.error.dark } }}>
               <CallEndIcon sx={{ fontSize: 24 }} />
             </IconButton>
           </span>
@@ -183,6 +183,17 @@ export function ActiveCallPanel(props: ActiveCallProps) {
       console.log("[CallBar] audio element srcObject set, autoplay=", audioRef.current.autoplay, "audioTracks=", props.remoteStream.getAudioTracks().map(t => ({ enabled: t.enabled, readyState: t.readyState })));
     } else if (audioRef.current) {
       audioRef.current.srcObject = null;
+    }
+    // 显式 play()：流异步到达时 autoplay 可能被自动播放策略拦下
+    // （Android WebView 尤甚）；接听点击是用户手势，但手势不跨异步边界，必须补一次。
+    // muted 元素播放不受策略限制；远端 audio 元素绝不静音，失败只能靠重试/日志暴露。
+    if (audioRef.current && props.remoteStream) {
+      audioRef.current.play().catch((err) => {
+        console.warn("[CallBar] remote audio play() rejected:", err?.name, err?.message);
+      });
+    }
+    if (remoteRef.current && props.remoteStream && props.remoteStream.getVideoTracks().length > 0) {
+      remoteRef.current.play().catch(() => undefined);
     }
   }, [props.remoteStream, props.open]);
 
