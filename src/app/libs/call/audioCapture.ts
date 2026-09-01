@@ -18,11 +18,24 @@ export const BASE_AUDIO_CONSTRAINTS: MediaTrackConstraints = {
   sampleRate: { ideal: 48000 },
 };
 
-/** 合并首选麦克风的完整音频约束（preferredMicId 为空 → 纯基础约束，供视频合并采集路径复用） */
-export function mergedAudioConstraints(preferredMicId?: string): MediaTrackConstraints {
+/** 3A 微调项：回声消除引擎选择 + 噪声抑制开关（缺省 = 基础约束行为） */
+export type AudioAecOptions = {
+  /** 回声消除引擎：browser=浏览器 AEC3（默认），system=OS 级 AEC（不支持的浏览器按 spec 忽略该约束） */
+  echoCancelType?: "browser" | "system";
+  /** 浏览器噪声抑制开关（false = 保真/音乐场景） */
+  noiseSuppression?: boolean;
+};
+
+/** 合并首选麦克风 + 3A 微调项的完整音频约束（preferredMicId/opts 均可省略，向后兼容单参调用） */
+export function mergedAudioConstraints(preferredMicId?: string, opts?: AudioAecOptions): MediaTrackConstraints {
   return {
-    ...BASE_AUDIO_CONSTRAINTS,
+    echoCancellation: true,   // 3A 之一：回声消除常开（引擎由 echoCancelType 细分）
+    autoGainControl: true,    // 3A 之一：自动增益常开（治"远场麦声音小"）
+    noiseSuppression: opts?.noiseSuppression ?? true, // 3A 之一：噪声抑制可关（音乐保真/端侧 RNNoise 预留）
+    sampleRate: { ideal: 48000 },
     ...(preferredMicId ? { deviceId: { exact: preferredMicId } } : {}),
+    // echoCancellationType 为 Chromium 扩展约束（lib.dom 未收录）：不支持的浏览器按 spec 忽略未知约束 → 安全
+    ...(opts?.echoCancelType === "system" ? { echoCancellationType: "system" as const } : {}),
   };
 }
 
@@ -42,22 +55,24 @@ export async function listAudioDevices(): Promise<{ mics: MediaDeviceInfo[]; spe
  * 采集通话音频（纯音频路径）。
  * - 有首选麦克风：deviceId exact 采集；失败（设备已拔出等）→ 降级系统默认重试一次
  * - 成功后给每个音频 track 设 contentHint（提升 Opus 编码模式选择）
+ * - opts（回声消除引擎/降噪开关）在主路径与降级路径同样生效
  * 调用方负责停止返回 stream 的 tracks。
  */
 export async function acquireCallAudio(
   preferredMicId?: string,
   contentHint: AudioContentHint = "speech",
+  opts?: AudioAecOptions,
 ): Promise<MediaStream> {
   if (preferredMicId) {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: mergedAudioConstraints(preferredMicId) });
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: mergedAudioConstraints(preferredMicId, opts) });
       applyContentHint(stream, contentHint);
       return stream;
     } catch (err) {
       console.warn("[Call] 首选麦克风采集失败（可能已拔出），降级为系统默认重试:", err);
     }
   }
-  const stream = await navigator.mediaDevices.getUserMedia({ audio: BASE_AUDIO_CONSTRAINTS });
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: mergedAudioConstraints(undefined, opts) });
   applyContentHint(stream, contentHint);
   return stream;
 }

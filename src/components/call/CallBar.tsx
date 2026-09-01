@@ -3,7 +3,7 @@
  *  - CallButton: 用户卡片上的发起通话按钮（语音/视频，统一 20px 图标）
  *  - IncomingCallBanner: 来电横幅（接听/拒绝）
  *  - ActiveCallPanel: 通话中全屏面板（远端视频/语音头像、计时、静音、视频开关、挂断、
- *    音频设置：麦克风/扬声器选择、远端音量、输入电平条）
+ *    音频设置：麦克风/扬声器选择、回声消除/降噪、远端音量、输入电平条）
  *
  * 本组件不持有业务逻辑，所有操作经 CallManager 注入的 handlers 完成。
  */
@@ -11,12 +11,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Box,
   FormControl,
+  FormControlLabel,
   IconButton,
   InputLabel,
   MenuItem,
   Popover,
   Select,
   Slider,
+  Switch,
   Paper,
   Tooltip,
   Typography,
@@ -184,6 +186,8 @@ export function ActiveCallPanel(props: ActiveCallProps) {
     const v = settingsStore.get("speakerVolume");
     return Math.round((typeof v === "number" && v >= 0 && v <= 1 ? v : 1) * 100);
   });
+  const [echoCancelType, setEchoCancelType] = useState<"browser" | "system">(() => settingsStore.get("echoCancelType") ?? "browser");
+  const [nsEnabled, setNsEnabled] = useState<boolean>(() => settingsStore.get("noiseSuppression") ?? true);
   const levelBarRef = useRef<HTMLDivElement>(null);
 
   /** 应用扬声器/音量到远端 audio 元素（setSinkId 浏览器不支持时跳过；volume clamp 到 0..1）。 */
@@ -276,6 +280,28 @@ export function ActiveCallPanel(props: ActiveCallProps) {
     applySpeakerSettings();
   };
 
+  /** 回声消除引擎切换：写回持久化 + 对当前通话轨热更新（不支持的浏览器约束被忽略/拒绝 → 下次通话生效）。 */
+  const handleEchoCancelChange = (v: "browser" | "system"): void => {
+    setEchoCancelType(v);
+    settingsStore.update("echoCancelType", v);
+    for (const track of props.localStream?.getAudioTracks() ?? []) {
+      // echoCancellationType 为 Chromium 扩展约束（lib.dom 未收录）：不支持的浏览器按 spec 忽略/拒绝
+      const constraints = (v === "system"
+        ? { echoCancellation: true, echoCancellationType: "system" as const }
+        : { echoCancellation: true }) as MediaTrackConstraints;
+      track.applyConstraints(constraints).catch(() => undefined);
+    }
+  };
+
+  /** 降噪开关切换：写回持久化 + 对当前通话轨热更新（applyConstraints 被拒绝时下次通话生效）。 */
+  const handleNsToggle = (checked: boolean): void => {
+    setNsEnabled(checked);
+    settingsStore.update("noiseSuppression", checked);
+    for (const track of props.localStream?.getAudioTracks() ?? []) {
+      track.applyConstraints({ noiseSuppression: checked }).catch(() => undefined);
+    }
+  };
+
   const showVideo = props.isVideo && props.videoEnabled;
   const controlBg = alpha(theme.palette.primary.main, 0.15);
   const controlBgHover = alpha(theme.palette.primary.main, 0.3);
@@ -321,12 +347,14 @@ export function ActiveCallPanel(props: ActiveCallProps) {
           远端 <video> 始终渲染（用 display 控制显隐），保证 remoteRef 不丢失、
           语音↔视频切换时远端流绑定不失效（避免黑屏）。
           独立 <audio> 元素始终挂载承载远端语音 —— 纯语音通话时远端视频流
-          display:none，浏览器可能不播放隐藏 <video> 的音频，audio 兜底保证出声。 */}
+          display:none，浏览器可能不播放隐藏 <video> 的音频，audio 兜底保证出声。
+          音频统一由 <audio> 承载，<video> 必须静音（否则视频通话双路出声 → 音量翻倍且回声）。 */}
       <Box sx={{ flex: 1, position: "relative", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
         <audio ref={audioRef} autoPlay playsInline />
         <video
           ref={remoteRef}
           autoPlay
+          muted
           playsInline
           style={{ width: "100%", height: "100%", objectFit: "contain", display: showVideo ? "block" : "none" }}
         />
@@ -430,7 +458,7 @@ export function ActiveCallPanel(props: ActiveCallProps) {
         </Tooltip>
       </Box>
 
-      {/* 音频设置面板：麦克风 / 扬声器 / 远端音量 / 输入电平 */}
+      {/* 音频设置面板：麦克风 / 扬声器 / 回声消除 / 降噪 / 远端音量 / 输入电平 */}
       <Popover
         open={audioPanelOpen}
         anchorEl={audioPanelAnchor}
@@ -470,6 +498,31 @@ export function ActiveCallPanel(props: ActiveCallProps) {
               ))}
             </Select>
           </FormControl>
+
+          <FormControl size="small">
+            <InputLabel>{t("call.echoCancelType", "回声消除")}</InputLabel>
+            <Select
+              value={echoCancelType}
+              label={t("call.echoCancelType", "回声消除")}
+              onChange={(e) => handleEchoCancelChange(String(e.target.value) as "browser" | "system")}
+            >
+              <MenuItem value="browser">{t("call.echoBrowser", "浏览器（默认）")}</MenuItem>
+              <MenuItem value="system">{t("call.echoSystem", "系统级（实验）")}</MenuItem>
+            </Select>
+          </FormControl>
+
+          <FormControlLabel
+            control={
+              <Switch
+                size="small"
+                checked={nsEnabled}
+                onChange={(e) => handleNsToggle(e.target.checked)}
+              />
+            }
+            slotProps={{ typography: { variant: "caption", color: "text.secondary" } }}
+            label={t("call.noiseSuppression", "降噪")}
+            sx={{ alignSelf: "flex-start" }}
+          />
 
           <Box sx={{ px: 1 }}>
             <Typography variant="caption" color="text.secondary">

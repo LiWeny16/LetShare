@@ -16,6 +16,8 @@ const DEFAULT_SETTINGS = {
   speakerDeviceId: "",    // 首选扬声器 deviceId（"" = 系统默认）
   audioContentHint: "speech" as "speech" | "music", // Opus 编码模式倾向：speech=人声优化，music=音乐模式
   speakerVolume: 1 as number, // 音量 0..1（远端播放音量，1 = 100%）
+  echoCancelType: "browser" as "browser" | "system", // 回声消除引擎：browser=浏览器 AEC3（默认），system=OS 级 AEC（部分设备更好；不支持时浏览器忽略）
+  noiseSuppression: true as boolean, // 浏览器噪声抑制开关（关=保真/音乐场景，也为端侧 RNNoise 预留）
   version: "3.6.6",
   isNewUser: true
 };

@@ -238,24 +238,28 @@ const Share = observer(() => {
       // 音频采集：3A 显式约束 + 首选麦克风 + contentHint（治"远端声音小"），设置项为空 = 系统默认
       const micId = settingsStore.get("micDeviceId");
       const contentHint = settingsStore.get("audioContentHint") ?? "speech";
+      // 回声消除引擎/降噪开关：每次采集读一次设置（get() 返回存储值，缺省走约束侧 ?? 兜底）
+      const echoCancelType = settingsStore.get("echoCancelType");
+      const ns = settingsStore.get("noiseSuppression");
+      const audioOpts = { echoCancelType, noiseSuppression: ns };
       // 视频通话：先试音频+视频，摄像头不可用时降级为纯语音
       let stream: MediaStream;
       let videoEnabled = media === "video";
       if (media === "video") {
         try {
           stream = await navigator.mediaDevices.getUserMedia({
-            audio: mergedAudioConstraints(micId),
+            audio: mergedAudioConstraints(micId, audioOpts),
             video: { width: { ideal: 1280 }, height: { ideal: 720 } },
           });
           // 合并采集路径不经过 acquireCallAudio：手动补 contentHint
           for (const track of stream.getAudioTracks()) track.contentHint = contentHint;
         } catch {
           // 摄像头不可用 → 降级纯语音
-          stream = await acquireCallAudio(micId, contentHint);
+          stream = await acquireCallAudio(micId, contentHint, audioOpts);
           videoEnabled = false;
         }
       } else {
-        stream = await acquireCallAudio(micId, contentHint);
+        stream = await acquireCallAudio(micId, contentHint, audioOpts);
       }
       console.log("[Call] startCall getUserMedia ok",
         "tracks=", stream.getTracks().map(t => `${t.kind}:${t.readyState}`),
@@ -292,23 +296,27 @@ const Share = observer(() => {
       // 音频采集：3A 显式约束 + 首选麦克风 + contentHint（治"远端声音小"），设置项为空 = 系统默认
       const micId = settingsStore.get("micDeviceId");
       const contentHint = settingsStore.get("audioContentHint") ?? "speech";
+      // 回声消除引擎/降噪开关：每次采集读一次设置（get() 返回存储值，缺省走约束侧 ?? 兜底）
+      const echoCancelType = settingsStore.get("echoCancelType");
+      const ns = settingsStore.get("noiseSuppression");
+      const audioOpts = { echoCancelType, noiseSuppression: ns };
       // 视频来电：先试音频+视频，摄像头不可用时降级为纯语音接听
       let stream: MediaStream;
       let videoEnabled = incoming.media !== "audio";
       if (videoEnabled) {
         try {
           stream = await navigator.mediaDevices.getUserMedia({
-            audio: mergedAudioConstraints(micId),
+            audio: mergedAudioConstraints(micId, audioOpts),
             video: { width: { ideal: 1280 }, height: { ideal: 720 } },
           });
           // 合并采集路径不经过 acquireCallAudio：手动补 contentHint
           for (const track of stream.getAudioTracks()) track.contentHint = contentHint;
         } catch {
-          stream = await acquireCallAudio(micId, contentHint);
+          stream = await acquireCallAudio(micId, contentHint, audioOpts);
           videoEnabled = false;
         }
       } else {
-        stream = await acquireCallAudio(micId, contentHint);
+        stream = await acquireCallAudio(micId, contentHint, audioOpts);
       }
       // 竞态修复：ontrack 会在 acceptCall 内部（SRD 处理缓冲 offer）同步触发，
       // onRemoteStream 回调此刻就要能查到 activeCall —— 必须先提交状态并同步 seed ref，
@@ -379,7 +387,10 @@ const Share = observer(() => {
     if (!manager) return;
     try {
       const hint = settingsStore.get("audioContentHint") ?? "speech";
-      const newStream = await acquireCallAudio(deviceId, hint);
+      // 换麦重采同样携带回声消除引擎/降噪设置，避免换轨后设置被静默重置为默认
+      const echoCancelType = settingsStore.get("echoCancelType");
+      const ns = settingsStore.get("noiseSuppression");
+      const newStream = await acquireCallAudio(deviceId, hint, { echoCancelType, noiseSuppression: ns });
       const newTrack = newStream.getAudioTracks()[0];
       if (!newTrack) return;
       if (cur.muted) newTrack.enabled = false; // 保持静音状态
