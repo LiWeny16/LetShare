@@ -2,8 +2,8 @@
  * CallBar — 通话 UI（跟随主题色，Discord 风格布局）
  *  - CallButton: 用户卡片上的发起通话按钮（语音/视频，统一 20px 图标）
  *  - IncomingCallBanner: 来电横幅（接听/拒绝）
- *  - ActiveCallPanel: 通话中全屏面板（远端视频/语音头像、计时、静音、视频开关、挂断、
- *    音频设置：麦克风/扬声器选择、回声消除/降噪、远端音量、输入电平条）
+ *  - ActiveCallPanel: 通话中全屏面板（远端视频/语音头像、计时、连接质量徽标、远端说话亮环、
+ *    静音、视频开关、挂断、音频设置：麦克风/扬声器选择、回声消除/降噪、远端音量、输入电平条）
  *
  * 本组件不持有业务逻辑，所有操作经 CallManager 注入的 handlers 完成。
  */
@@ -34,7 +34,8 @@ import PersonIcon from "@mui/icons-material/Person";
 import TuneIcon from "@mui/icons-material/Tune";
 import { useTranslation } from "react-i18next";
 import settingsStore from "@App/libs/mobx/mobx";
-import { createInputLevelMeter, listAudioDevices } from "@App/libs/call/audioCapture";
+import { createInputLevelMeter, createRemoteSpeakingDetector, listAudioDevices } from "@App/libs/call/audioCapture";
+import type { CallQualitySample } from "@App/libs/call/callSession";
 
 export type CallMedia = "audio" | "video";
 
@@ -159,6 +160,8 @@ export type ActiveCallProps = {
   onMicChange?: (deviceId: string) => void;
   /** 通话中切换降噪模式：由上层重建发送轨（端侧管线/浏览器约束），未在通话时仅存偏好。 */
   onNsModeChange?: (mode: NsModeSetting) => void;
+  /** 连接质量采样（可选）：面板打开时每 3s 轮询一次；未提供则不渲染质量徽标。 */
+  getQuality?: () => Promise<CallQualitySample | null>;
 };
 
 function formatDuration(ms: number): string {
@@ -166,6 +169,30 @@ function formatDuration(ms: number): string {
   const m = Math.floor(total / 60);
   const s = total % 60;
   return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
+/** 质量等级：good=绿 / fair=琥珀 / poor=红 / unknown=缺数据灰 */
+type QualityLevel = "good" | "fair" | "poor" | "unknown";
+
+/**
+ * 由采样推导质量等级：
+ * - 绿：rtt<150ms 且 loss<1%
+ * - 琥珀：rtt<400ms 或 loss<5%（二者其一尚可）
+ * - 红：其余（rtt≥400 且 loss≥5，或已知维度超阈且另一维度未知）
+ * - 灰：rtt 与 loss 均缺数据（抖动单独存在不足以判级）
+ */
+function resolveQualityLevel(sample: CallQualitySample | null): QualityLevel {
+  const rtt = sample?.rttMs ?? null;
+  const loss = sample?.lossPct ?? null;
+  if (rtt === null && loss === null) return "unknown";
+  if (rtt !== null && rtt < 150 && loss !== null && loss < 1) return "good";
+  if ((rtt !== null && rtt < 400) || (loss !== null && loss < 5)) return "fair";
+  return "poor";
+}
+
+/** 质量数值显示：null → "—"，否则四舍五入取整 */
+function formatQualityValue(v: number | null): string {
+  return v === null ? "—" : String(Math.round(v));
 }
 
 /** 通话中全屏面板（深色底，控件跟随主题色）。 */
@@ -271,6 +298,51 @@ export function ActiveCallPanel(props: ActiveCallProps) {
     });
   }, [props.localStream, audioPanelOpen]);
 
+  // ── 连接质量徽标：每 3s 采样一次（RTT/抖动/丢包），面板关闭即停 ──
+  // getQuality 经 ref 读取：上层回调身份可能随渲染变化，避免 interval 反复重建
+  const [quality, setQuality] = useState<CallQualitySample | null>(null);
+  const getQualityRef = useRef(props.getQuality);
+  useEffect(() => { getQualityRef.current = props.getQuality; }, [props.getQuality]);
+  useEffect(() => {
+    if (!props.open) {
+      setQuality(null);
+      return;
+    }
+    let cancelled = false;
+    const poll = (): void => {
+      const fn = getQualityRef.current;
+      if (!fn) return;
+      fn()
+        .then((sample) => { if (!cancelled) setQuality(sample); })
+        .catch(() => { /* 采样失败保持上次结果，下一轮重试 */ });
+    };
+    poll();
+    const timer = window.setInterval(poll, 3000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [props.open]);
+
+  // ── 远端说话亮环（Discord 同款）：detector 与组件同生命周期（useRef 持有）， ──
+  // 远端流变化经 setStream 切换；挂断/空流传 null 复位；组件卸载 stop() 释放资源
+  const speakingDetectorRef = useRef<ReturnType<typeof createRemoteSpeakingDetector> | null>(null);
+  const [remoteSpeaking, setRemoteSpeaking] = useState(false);
+  useEffect(() => {
+    if (!speakingDetectorRef.current) {
+      speakingDetectorRef.current = createRemoteSpeakingDetector(setRemoteSpeaking);
+    }
+    // 面板未打开视为无远端流（复位说话状态）
+    speakingDetectorRef.current.setStream(props.open ? props.remoteStream : null);
+  }, [props.remoteStream, props.open]);
+  useEffect(() => {
+    // 仅组件卸载时停检测器（关 AudioContext/清定时器）；流切换走上方 setStream
+    return () => {
+      speakingDetectorRef.current?.stop();
+      speakingDetectorRef.current = null;
+    };
+  }, []);
+
   const handleMicSelect = (deviceId: string): void => {
     setMicId(deviceId);
     settingsStore.update("micDeviceId", deviceId);
@@ -308,6 +380,15 @@ export function ActiveCallPanel(props: ActiveCallProps) {
   const controlBg = alpha(theme.palette.primary.main, 0.15);
   const controlBgHover = alpha(theme.palette.primary.main, 0.3);
 
+  // ── 连接质量徽标取值：颜色 + 数值 + tooltip（缺数据显示灰色 "—"）──
+  const qualityLevel = resolveQualityLevel(quality);
+  const qualityColor = qualityLevel === "good" ? theme.palette.success.main
+    : qualityLevel === "fair" ? theme.palette.warning.main
+      : qualityLevel === "poor" ? theme.palette.error.main
+        : theme.palette.text.disabled;
+  const qualityLabel = quality?.rttMs != null ? `${Math.round(quality.rttMs)}ms` : "—";
+  const qualityTooltip = `${t("call.qualityTooltipDelay", "延迟")} ${formatQualityValue(quality?.rttMs ?? null)}ms · ${t("call.qualityTooltipJitter", "抖动")} ${formatQualityValue(quality?.jitterMs ?? null)}ms · ${t("call.qualityTooltipLoss", "丢包")} ${formatQualityValue(quality?.lossPct ?? null)}%`;
+
   return (
     <Box
       sx={{
@@ -327,6 +408,20 @@ export function ActiveCallPanel(props: ActiveCallProps) {
         <Typography variant="caption" color="text.secondary" sx={{ fontVariantNumeric: "tabular-nums" }}>
           {formatDuration(duration)}
         </Typography>
+        {/* 连接质量徽标：3s 轮询采样，绿/琥珀/红/灰（缺数据）；提供 getQuality 才渲染 */}
+        {props.getQuality && (
+          <Tooltip title={qualityTooltip} arrow enterDelay={250}>
+            <Box
+              data-testid="call-quality-badge"
+              sx={{ display: "flex", alignItems: "center", gap: 0.5, px: 0.75, py: 0.25, borderRadius: 1, bgcolor: alpha(qualityColor, 0.12), cursor: "default" }}
+            >
+              <Box sx={{ width: 8, height: 8, borderRadius: "50%", bgcolor: qualityColor, flexShrink: 0 }} />
+              <Typography variant="caption" sx={{ color: qualityColor, fontWeight: 600, fontVariantNumeric: "tabular-nums", lineHeight: 1.2 }}>
+                {qualityLabel}
+              </Typography>
+            </Box>
+          </Tooltip>
+        )}
         {props.state === "connecting" && (
           <Typography variant="caption" color="text.secondary">
             {t("call.connecting", "连接中…")}
@@ -358,11 +453,24 @@ export function ActiveCallPanel(props: ActiveCallProps) {
           autoPlay
           muted
           playsInline
-          style={{ width: "100%", height: "100%", objectFit: "contain", display: showVideo ? "block" : "none" }}
+          style={{
+            width: "100%", height: "100%", objectFit: "contain", display: showVideo ? "block" : "none",
+            // 远端说话反馈（视频模式）：success 色 2px 内描边（outline 不占布局，subtle）
+            outline: remoteSpeaking ? `2px solid ${theme.palette.success.main}` : "none",
+            outlineOffset: -2,
+          }}
         />
         {!showVideo && (
           <Box sx={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
-            <Box sx={{ width: 120, height: 120, borderRadius: "50%", bgcolor: theme.palette.primary.main, display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <Box
+              sx={{
+                width: 120, height: 120, borderRadius: "50%", bgcolor: theme.palette.primary.main,
+                display: "flex", alignItems: "center", justifyContent: "center",
+                // 远端说话亮环（Discord 同款，语音模式）：对方发声时头像外圈亮起
+                boxShadow: remoteSpeaking ? `0 0 0 4px ${theme.palette.success.main}` : "none",
+                transition: "box-shadow 180ms ease",
+              }}
+            >
               <PersonIcon sx={{ fontSize: 64, color: theme.palette.getContrastText(theme.palette.primary.main) }} />
             </Box>
             <Typography variant="h6">{props.peerName}</Typography>
@@ -467,6 +575,8 @@ export function ActiveCallPanel(props: ActiveCallProps) {
         onClose={() => setAudioPanelAnchor(null)}
         anchorOrigin={{ vertical: "top", horizontal: "center" }}
         transformOrigin={{ vertical: "bottom", horizontal: "center" }}
+        // 音频设置 Popover 必须盖过通话面板根层（zIndex 2500），否则鼠标不可点。
+        sx={{ zIndex: 2600 }}
       >
         <Box sx={{ p: 2, display: "flex", flexDirection: "column", gap: 2, width: 260 }}>
           <FormControl size="small">
@@ -475,6 +585,9 @@ export function ActiveCallPanel(props: ActiveCallProps) {
               value={micId}
               label={t("call.microphone", "麦克风")}
               onChange={(e) => handleMicSelect(String(e.target.value))}
+              // Select 下拉菜单是独立 portal（默认 zIndex 1300），必须与外层 Popover 同层（2600），
+              // 否则被 Popover 根层遮挡 → 鼠标不可点（同根因：面板 2500 > Popover 1300）。
+              MenuProps={{ sx: { zIndex: 2600 } }}
             >
               <MenuItem value="">{t("call.deviceDefault", "系统默认")}</MenuItem>
               {devices.mics.map((d, i) => (
@@ -491,6 +604,7 @@ export function ActiveCallPanel(props: ActiveCallProps) {
               value={speakerId}
               label={t("call.speaker", "扬声器")}
               onChange={(e) => handleSpeakerSelect(String(e.target.value))}
+              MenuProps={{ sx: { zIndex: 2600 } }}
             >
               <MenuItem value="">{t("call.deviceDefault", "系统默认")}</MenuItem>
               {devices.speakers.map((d, i) => (
@@ -507,6 +621,7 @@ export function ActiveCallPanel(props: ActiveCallProps) {
               value={echoCancelType}
               label={t("call.echoCancelType", "回声消除")}
               onChange={(e) => handleEchoCancelChange(String(e.target.value) as "browser" | "system")}
+              MenuProps={{ sx: { zIndex: 2600 } }}
             >
               <MenuItem value="browser">{t("call.echoBrowser", "浏览器（默认）")}</MenuItem>
               <MenuItem value="system">{t("call.echoSystem", "系统级（实验）")}</MenuItem>
@@ -519,6 +634,7 @@ export function ActiveCallPanel(props: ActiveCallProps) {
               value={nsMode}
               label={t("call.nsMode", "降噪")}
               onChange={(e) => handleNsModeChange(String(e.target.value) as NsModeSetting)}
+              MenuProps={{ sx: { zIndex: 2600 } }}
             >
               <MenuItem value="off">{t("call.nsOff", "关闭")}</MenuItem>
               <MenuItem value="browser">{t("call.nsBrowser", "标准（浏览器）")}</MenuItem>

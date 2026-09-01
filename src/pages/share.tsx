@@ -54,6 +54,7 @@ import settingsStore from "@App/libs/mobx/mobx";
 import { isApp } from "@App/libs/capacitor/user";
 import { Trans, useTranslation } from "react-i18next";
 import { CallManager } from "@App/libs/call/callManager";
+import type { CallQualitySample } from "@App/libs/call/callSession";
 import { startRingtone, stopRingtone } from "@App/libs/call/ringtone";
 import { acquireCallAudio, mergedAudioConstraints } from "@App/libs/call/audioCapture";
 import { nsPipeline } from "@App/libs/call/noiseSuppression";
@@ -66,7 +67,7 @@ import { CallButton, IncomingCallBanner, ActiveCallPanel, type CallMedia, type I
 const loadNsPipeline = () => import("@App/libs/call/noiseSuppression");
 
 /**
- * 按当前降噪模式（nsMode）采集通话音频流：
+ * 按当前降噪模式（nsMode）采集纯音频通话流（统一采集层的语音分支）：
  * - rnnoise/gtcrn：先采原始流（浏览器降噪关），再进端侧 WebAudio 管线降噪，返回降噪后流。
  *   原始流生命周期由管线接管（通话结束统一 nsPipeline.stop() 释放麦克风）
  * - browser：直接按浏览器约束采集（开浏览器降噪）
@@ -95,6 +96,70 @@ const acquireCallAudioPipeline = async (
     }
   }
   return acquireCallAudio(micId, hint, { echoCancelType, noiseSuppression: mode !== "off" });
+};
+
+/**
+ * 统一音频采集层：所有通话路径（语音/视频、P2P/中继）的麦克风流都经过同一降噪层。
+ * - 语音（wantVideo=false）：走 acquireCallAudioPipeline（3A + 首选麦 + nsMode 分流）
+ * - 视频（wantVideo=true）：先合并采集音频+视频（音频约束与语音路径同源）；
+ *   nsMode 为实验室模式(RNNoise/GTCRN)时把音频轨单独送入端侧模型管线后与视频轨重组。
+ *   视频轨不动；audioOnly 包装流只含音频轨，管线 stop 时不会误停视频轨。
+  *   实验室模式(RNNoise/GTCRN)合并采集即关浏览器降噪（端侧模型接管，避免双重抑制）；
+  *   实验室管线失败 → 重新合并采集一次（带浏览器降噪）并持久化（nsMode 写回 browser）。
+ * - 摄像头不可用（合并采集抛错）→ 降级纯语音采集：调用方据返回流的视频轨数量判定 videoEnabled
+ * 轨道生命周期：合并采集的原始音频轨由 nsPipeline 接管（通话结束 nsPipeline.stop() 释放），
+ * 处理后音频轨与视频轨由通话会话 hangup 统一停止；静音语义不变（enabled 不在此触碰）。
+ */
+const acquireCallStreams = async (
+  opts: { wantVideo: boolean; micId?: string; hint?: "speech" | "music" },
+): Promise<MediaStream> => {
+  if (!opts.wantVideo) return acquireCallAudioPipeline(opts.micId, opts.hint);
+  const echoCancelType = settingsStore.get("echoCancelType");
+  const nsMode = settingsStore.get("nsMode") ?? "browser";
+  const hint = opts.hint ?? "speech";
+  let combined: MediaStream;
+  try {
+    // 合并采集：音频约束与语音路径同源（mergedAudioConstraints）；
+    // 实验室降噪(RNNoise/GTCRN)时关浏览器降噪（端侧模型接管，避免双重抑制/E2E 测量污染）
+    combined = await navigator.mediaDevices.getUserMedia({
+      audio: mergedAudioConstraints(opts.micId, {
+        echoCancelType,
+        noiseSuppression: nsMode !== "rnnoise" && nsMode !== "gtcrn",
+      }),
+      video: { width: { ideal: 1280 }, height: { ideal: 720 } },
+    });
+  } catch (err) {
+    // 摄像头不可用 → 降级纯语音（回退后无视频轨，调用方据轨数判定 videoEnabled）
+    console.warn("[Call] 视频+音频合并采集失败，降级纯语音:", err);
+    return acquireCallAudioPipeline(opts.micId, hint);
+  }
+  // 合并采集不经过 acquireCallAudio：手动补 contentHint（引导 Opus 编码模式选择）
+  for (const track of combined.getAudioTracks()) track.contentHint = hint;
+  if (nsMode !== "rnnoise" && nsMode !== "gtcrn") return combined;
+  try {
+    const { nsPipeline } = await loadNsPipeline();
+    // audioOnly 包装流只含音频轨：管线接管其生命周期，stop 时不会误停视频轨
+    const audioOnly = new MediaStream(combined.getAudioTracks());
+    const processed = await nsPipeline.process(audioOnly, nsMode);
+    return new MediaStream([...processed.getTracks(), ...combined.getVideoTracks()]);
+  } catch (err) {
+    console.warn("[Call] 实验室降噪失败，视频通话回退浏览器降噪", err);
+    settingsStore.update("nsMode", "browser");
+    // 回退浏览器降噪：重新合并采集一次（显式开浏览器 NS），先停旧轨避免麦克风双开
+    try {
+      const fallback = await navigator.mediaDevices.getUserMedia({
+        audio: mergedAudioConstraints(opts.micId, { echoCancelType, noiseSuppression: true }),
+        video: { width: { ideal: 1280 }, height: { ideal: 720 } },
+      });
+      for (const track of fallback.getAudioTracks()) track.contentHint = hint;
+      combined.getTracks().forEach((track) => track.stop());
+      return fallback; // 回退流带浏览器降噪，等价于 browser 模式正常路径
+    } catch (fallbackErr) {
+      // 二次采集也失败：按今日回退行为上报，沿用首次合并流（无浏览器降噪但可用）
+      console.warn("[Call] 浏览器降噪回退采集失败，沿用首次合并流", fallbackErr);
+      return combined;
+    }
+  }
 };
 
 // 确保状态类型正确
@@ -276,32 +341,13 @@ const Share = observer(() => {
       return;
     }
     try {
-      // 音频采集：3A 显式约束 + 首选麦克风 + contentHint（治"远端声音小"），设置项为空 = 系统默认
+      // 统一采集层：语音/视频全部经 acquireCallStreams（3A 显式约束 + 首选麦克风 +
+      // contentHint + nsMode 统一分流，视频合并采集不再绕过端侧降噪管线）
       const micId = settingsStore.get("micDeviceId");
       const contentHint = settingsStore.get("audioContentHint") ?? "speech";
-      // 回声消除引擎：每次采集读一次设置；降噪按 nsMode 分流（合并视频采集路径用浏览器
-      // 约束兜底，实验室端侧管线在 acquireCallAudioPipeline 内处理）
-      const echoCancelType = settingsStore.get("echoCancelType");
-      const audioOpts = { echoCancelType, noiseSuppression: (settingsStore.get("nsMode") ?? "browser") !== "off" };
-      // 视频通话：先试音频+视频，摄像头不可用时降级为纯语音
-      let stream: MediaStream;
-      let videoEnabled = media === "video";
-      if (media === "video") {
-        try {
-          stream = await navigator.mediaDevices.getUserMedia({
-            audio: mergedAudioConstraints(micId, audioOpts),
-            video: { width: { ideal: 1280 }, height: { ideal: 720 } },
-          });
-          // 合并采集路径不经过 acquireCallAudio：手动补 contentHint
-          for (const track of stream.getAudioTracks()) track.contentHint = contentHint;
-        } catch {
-          // 摄像头不可用 → 降级纯语音
-          stream = await acquireCallAudioPipeline(micId, contentHint);
-          videoEnabled = false;
-        }
-      } else {
-        stream = await acquireCallAudioPipeline(micId, contentHint);
-      }
+      const stream = await acquireCallStreams({ wantVideo: media === "video", micId, hint: contentHint });
+      // 视频通话合并采集失败已由采集层内部降级：按返回流视频轨数量判定 videoEnabled
+      const videoEnabled = media === "video" && stream.getVideoTracks().length > 0;
       console.log("[Call] startCall getUserMedia ok",
         "tracks=", stream.getTracks().map(t => `${t.kind}:${t.readyState}`),
         "audioTracks=", stream.getAudioTracks().map(t => ({ enabled: t.enabled, readyState: t.readyState, muted: t.muted })),
@@ -334,31 +380,13 @@ const Share = observer(() => {
     const incoming = incomingCall;
     if (!manager || !incoming) return;
     try {
-      // 音频采集：3A 显式约束 + 首选麦克风 + contentHint（治"远端声音小"），设置项为空 = 系统默认
+      // 统一采集层：语音/视频全部经 acquireCallStreams（3A 显式约束 + 首选麦克风 +
+      // contentHint + nsMode 统一分流，视频合并采集不再绕过端侧降噪管线）
       const micId = settingsStore.get("micDeviceId");
       const contentHint = settingsStore.get("audioContentHint") ?? "speech";
-      // 回声消除引擎：每次采集读一次设置；降噪按 nsMode 分流（合并视频采集路径用浏览器
-      // 约束兜底，实验室端侧管线在 acquireCallAudioPipeline 内处理）
-      const echoCancelType = settingsStore.get("echoCancelType");
-      const audioOpts = { echoCancelType, noiseSuppression: (settingsStore.get("nsMode") ?? "browser") !== "off" };
-      // 视频来电：先试音频+视频，摄像头不可用时降级为纯语音接听
-      let stream: MediaStream;
-      let videoEnabled = incoming.media !== "audio";
-      if (videoEnabled) {
-        try {
-          stream = await navigator.mediaDevices.getUserMedia({
-            audio: mergedAudioConstraints(micId, audioOpts),
-            video: { width: { ideal: 1280 }, height: { ideal: 720 } },
-          });
-          // 合并采集路径不经过 acquireCallAudio：手动补 contentHint
-          for (const track of stream.getAudioTracks()) track.contentHint = contentHint;
-        } catch {
-          stream = await acquireCallAudioPipeline(micId, contentHint);
-          videoEnabled = false;
-        }
-      } else {
-        stream = await acquireCallAudioPipeline(micId, contentHint);
-      }
+      const stream = await acquireCallStreams({ wantVideo: incoming.media !== "audio", micId, hint: contentHint });
+      // 视频来电合并采集失败已由采集层内部降级：按返回流视频轨数量判定 videoEnabled
+      const videoEnabled = incoming.media !== "audio" && stream.getVideoTracks().length > 0;
       // 竞态修复：ontrack 会在 acceptCall 内部（SRD 处理缓冲 offer）同步触发，
       // onRemoteStream 回调此刻就要能查到 activeCall —— 必须先提交状态并同步 seed ref，
       // 否则远端流被丢弃，被叫端远端 track 无 sink → 浏览器不启动 NetEq 渲染 → 单通。
@@ -419,6 +447,14 @@ const Share = observer(() => {
     setActiveCall({ ...cur, videoEnabled: next });
   }, []);
 
+  // 连接质量采样（CallBar 质量徽标）：经 ref 取当前通话 peer 委托 CallManager.getQuality。
+  // useCallback 固定身份，避免 ActiveCallPanel 轮询 interval 随渲染反复重建。
+  const getCallQuality = React.useCallback((): Promise<CallQualitySample | null> => {
+    const cur = activeCallRef.current;
+    if (!cur) return Promise.resolve(null);
+    return callManagerRef.current?.getQuality(cur.peerId) ?? Promise.resolve(null);
+  }, []);
+
   // 通话中换麦克风：重新采集首选麦克风 → replaceTrack 原子换轨（不动协商），旧轨停止。
   const handleMicChange = React.useCallback(async (deviceId: string) => {
     settingsStore.update("micDeviceId", deviceId);
@@ -428,8 +464,8 @@ const Share = observer(() => {
     if (!manager) return;
     try {
       const hint = settingsStore.get("audioContentHint") ?? "speech";
-      // 换麦重采同样按降噪模式分流（实验室模式走端侧管线重建），避免换轨后设置被静默重置
-      const newStream = await acquireCallAudioPipeline(deviceId, hint);
+      // 换麦重采同样走统一采集层按降噪模式分流（实验室模式走端侧管线重建），避免换轨后设置被静默重置
+      const newStream = await acquireCallStreams({ wantVideo: false, micId: deviceId, hint });
       const newTrack = newStream.getAudioTracks()[0];
       if (!newTrack) return;
       if (cur.muted) newTrack.enabled = false; // 保持静音状态
@@ -458,7 +494,8 @@ const Share = observer(() => {
     if (!manager) return;
     try {
       // 先采新流（当前麦克风），采集不受旧管线图影响；实验室模式内部会重建管线图
-      const newStream = await acquireCallAudioPipeline();
+      // 统一采集层语音分支：按 nsMode 分流（端侧管线/浏览器约束），与通话发起同源
+      const newStream = await acquireCallStreams({ wantVideo: false });
       const newTrack = newStream.getAudioTracks()[0];
       if (!newTrack) return;
       if (cur.muted) newTrack.enabled = false; // 保持静音状态
@@ -1869,6 +1906,7 @@ const Share = observer(() => {
           onClose={hangupActive}
           onMicChange={handleMicChange}
           onNsModeChange={handleNsModeChange}
+          getQuality={getCallQuality}
         />
       )}
     </>

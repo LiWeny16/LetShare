@@ -25,6 +25,13 @@ export type CallSessionState = "idle" | "incoming" | "outgoing" | "connecting" |
 export type MediaKind = "audio" | "video";
 export type CallTransport = "p2p" | "public";
 
+/** 连接质量采样（UI 质量徽标用）：单次 getStats 快照，取不到的字段为 null */
+export type CallQualitySample = {
+  rttMs: number | null;
+  jitterMs: number | null;
+  lossPct: number | null;
+};
+
 export type CallSessionEvents = {
   onStateChange: (state: CallSessionState, info?: { error?: string }) => void;
   onLocalStream: (stream: MediaStream) => void;
@@ -615,6 +622,49 @@ export class CallSession {
       return { rttMs: rtt, lossRate: loss, jitterMs: jitter, throughputBps: bytes / 10 };
     } catch {
       return { rttMs: null, lossRate: null, jitterMs: null, throughputBps: null };
+    }
+  }
+
+  /**
+   * 连接质量采样（UI 质量徽标用）：单次 getStats 快照。
+   * - rttMs：selected/nominated candidate-pair 的 currentRoundTripTime（秒 → 毫秒）
+   * - jitterMs：音频 inbound-rtp 的 jitter（秒 → 毫秒）
+   * - lossPct：音频 inbound-rtp 的 fractionLost ×100（滚动丢包率，无需 packetsLost 差分）
+   * 取不到的字段返回 null（对端未发包/统计未就绪属正常现象）。
+   * 与 __lsCallStats 测试钩子同源：均走 this.peer.getStats()。
+   */
+  async getQualitySample(): Promise<CallQualitySample> {
+    if (!this.peer) return { rttMs: null, jitterMs: null, lossPct: null };
+    try {
+      const stats = (await this.peer.getStats()) as unknown as Iterable<
+        [string, {
+          type: string;
+          selected?: boolean;
+          nominated?: boolean;
+          currentRoundTripTime?: number;
+          kind?: string;
+          mediaType?: string;
+          jitter?: number;
+          fractionLost?: number;
+        }]
+      >;
+      let rttMs: number | null = null;
+      let jitterMs: number | null = null;
+      let lossPct: number | null = null;
+      for (const [, report] of stats) {
+        // RTT：selected/nominated candidate-pair（标准为 nominated，Chromium 另有 selected，二者其一命中即可）
+        if (report.type === "candidate-pair" && (report.selected === true || report.nominated === true)) {
+          if (typeof report.currentRoundTripTime === "number") rttMs = report.currentRoundTripTime * 1000;
+        }
+        // 抖动/丢包：音频 inbound-rtp（新版 kind / 旧版 mediaType 兼容）
+        if (report.type === "inbound-rtp" && (report.kind === "audio" || report.mediaType === "audio")) {
+          if (typeof report.jitter === "number") jitterMs = report.jitter * 1000;
+          if (typeof report.fractionLost === "number") lossPct = report.fractionLost * 100;
+        }
+      }
+      return { rttMs, jitterMs, lossPct };
+    } catch {
+      return { rttMs: null, jitterMs: null, lossPct: null };
     }
   }
 

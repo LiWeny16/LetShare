@@ -278,7 +278,10 @@ const sharedMalayTranslation = {
             nsOff: "Matikan",
             nsBrowser: "Standard (pelayar)",
             nsRnnoise: "RNNoise (eksperimen)",
-            nsGtcrn: "GTCRN (makmal)"
+            nsGtcrn: "GTCRN (makmal)",
+            qualityTooltipDelay: "Latensi",
+            qualityTooltipJitter: "Jitter",
+            qualityTooltipLoss: "Paket hilang"
         }
     }
 }
@@ -564,7 +567,10 @@ export const resources = {
                 nsOff: "Off",
                 nsBrowser: "Standard (browser)",
                 nsRnnoise: "RNNoise (experimental)",
-                nsGtcrn: "GTCRN (lab)"
+                nsGtcrn: "GTCRN (lab)",
+                qualityTooltipDelay: "Delay",
+                qualityTooltipJitter: "Jitter",
+                qualityTooltipLoss: "Loss"
             }
         }
     },
@@ -850,7 +856,10 @@ export const resources = {
                 nsOff: "关闭",
                 nsBrowser: "标准（浏览器）",
                 nsRnnoise: "RNNoise（实验）",
-                nsGtcrn: "GTCRN（实验室）"
+                nsGtcrn: "GTCRN（实验室）",
+                qualityTooltipDelay: "延迟",
+                qualityTooltipJitter: "抖动",
+                qualityTooltipLoss: "丢包"
             }
 
         }

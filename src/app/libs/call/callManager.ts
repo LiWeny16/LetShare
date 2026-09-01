@@ -23,7 +23,7 @@ import {
   type CallKind,
   type CallSignal,
 } from "./callSignaling";
-import { CallSession, type CallSessionState, type CallTransport } from "./callSession";
+import { CallSession, type CallSessionState, type CallTransport, type CallQualitySample } from "./callSession";
 import {
   DEFAULT_POLICY_CONFIG,
   decideTransport,
@@ -364,6 +364,14 @@ export class CallManager {
     const call = callId ? this.calls.get(callId) : undefined;
     if (!call) return 0;
     return call.session.swapAudioTrack(newTrack);
+  }
+
+  /** 连接质量采样（UI 质量徽标用）：委托活跃会话 getQualitySample；无该 peer 活跃会话返回 null。 */
+  async getQuality(peerId: string): Promise<CallQualitySample | null> {
+    const callId = this.byPeer.get(peerId);
+    const call = callId ? this.calls.get(callId) : undefined;
+    if (!call) return null;
+    return call.session.getQualitySample();
   }
 
   attachRemoteAudio(callId: string, el: HTMLAudioElement): void {
