@@ -1,7 +1,7 @@
 # RCA：通话单通（只有一方能听到对方声音）
 
 - 状态：已定位并修复（代码已改，E2E 双向验证通过）
-- 关联缺陷：GitHub issue「phone calls have one-way audio (only one side can hear)」
+- 关联缺陷：外部报告「phone calls have one-way audio (only one side can hear)」——缺陷为用户实测报告；LiWeny16/LetShare 仓库 issues 中无对应条目（仓库唯一 issue 为已关闭的 PR #1，PRO 中继鉴权，与本缺陷无关）。本仓库内的缺陷跟踪与处置记录见 `Harness/tasks/task-fix-oneway-call-audio/`。
 - 验证脚本：`tests/e2e/diag-loud.mts`（AC-001 门禁）、`tests/e2e/diag-sink.mts`（决定性实验）、`tests/e2e/diag-reanchor.mts`（排除项）
 - 涉及代码：`src/pages/share.tsx`、`src/app/libs/call/callSession.ts`、`src/app/libs/call/callManager.ts`
 
