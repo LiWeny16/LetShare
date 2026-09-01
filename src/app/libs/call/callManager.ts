@@ -241,7 +241,8 @@ export class CallManager {
       case "call:invite": {
         // 重复来电忽略（已有该 peer 通话或同 callId）
         if (this.byPeer.has(from) || this.calls.has(callId)) return;
-        const pendingSession = this.createPendingSession(callId, from, signal.media === "audio");
+        // wantVideo：audio 来电为 false；video/audio+video 来电为 true
+        const pendingSession = this.createPendingSession(callId, from, signal.media !== "audio");
         // 进入 incoming 状态：accept() 的状态机守卫依赖它，缺失会导致接听死锁（无声）
         pendingSession.markIncoming();
         const pending: ActiveCall = {

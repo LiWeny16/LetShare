@@ -1,26 +1,68 @@
 {
   "schemaVersion": 1,
   "taskId": "task-fix-oneway-call-audio",
-  "status": "in_progress",
+  "status": "done",
   "mode": "direct",
   "tier": "none",
-  "phase": "root-caused",
-  "gate": null,
-  "updatedAt": "2026-09-01T10:15:00Z",
+  "phase": "fix-verified-ac001",
+  "gate": "AC-001 PASS",
+  "updatedAt": "2026-09-01T13:30:00Z",
   "activeQuestion": null,
-  "nextAction": "Apply callee orchestration fix (setRemoteDescription(offer) before addTrack send-track + immediate pendingIce flush), then verify app E2E callee packetsDiscarded drops 600→0.",
+  "nextAction": "AC-002 人工复测：真实设备（物理音频输出）+ 公网 TURN 下双机互打，确认双方向出声。",
   "acceptance": [
-    "AC-001 callee decodes offerer audio: app E2E 中 callee 端对 offerer 方向的 inbound totalSamplesReceived>0 且 packetsDiscarded≈0（双向）。",
-    "AC-002 production sanity: 用真实响亮输入 + TURN(公网) 复测双方向均出声(确认 weak-headless 复现与生产同机制)。"
+    "AC-001 callee decodes offerer audio: PASS — diag-loud 最终验证四方向(E1 alice↔bob + E2 bob↔alice) smpl≈669k~670k/disc0/emit≈668k~669k，双侧日志含 session sink (muted) 绑定 + CallBar stream has audio=1 + srcObject set。",
+    "AC-002 production sanity: 待人工复测 — 响亮输入 + TURN(公网) 双方向出声（本环境无法人耳验收）。"
   ],
   "queues": {
     "ready": [],
     "running": [],
     "blocked": [],
-    "done": []
+    "done": [
+      "根因调查与实证（diag-loud/diag-sink/diag-reanchor/diag-min）",
+      "方向一：callSession.ts 规范顺序 + callManager.ts wantVideo 修正 + 2 条回归用例",
+      "Fix A：share.tsx await 前同步种 ref + 五回调函数式 setState（RC-2）",
+      "Fix B：callSession.ts ensureRemoteAudioSink 保底 muted sink（RC-1）",
+      "AC-001 E2E 最终验证 PASS",
+      "RCA 交付 documents/RCA-oneway-call-audio.md",
+      "门禁：tsc=0 / eslint=0 / run-tests 322/323(唯一失败预存 publicRelayAuthSync)"
+    ]
   },
-  "dispatchLedger": [],
-  "decisions": [],
-  "risks": [],
-  "artifacts": []
+  "dispatchLedger": [
+    {
+      "worker": "implementer#1",
+      "task": "方向一实施（callSession 规范顺序 + wantVideo + 回归用例）",
+      "result": "完成，门禁通过；AC-001 首轮 FAIL（证伪为主因，保留为 latent 修复）"
+    },
+    {
+      "worker": "implementer#2",
+      "task": "share.tsx await 前同步种 activeCallRef（Fix A 第一步）",
+      "result": "完成；暴露 RC-2（CallBar 仍收不到流）"
+    },
+    {
+      "worker": "implementer#3",
+      "task": "share.tsx onRemoteStream 临时探针日志",
+      "result": "完成；证实 setActiveCall 执行但被同批次覆盖（RC-2 定位）"
+    },
+    {
+      "worker": "implementer#4",
+      "task": "share.tsx 五回调函数式 setState（Fix A 第二步）",
+      "result": "完成；tsc/单测通过；AC-001 最终 PASS"
+    }
+  ],
+  "decisions": [
+    "根因：RC-1 被叫远端音轨无 sink → Chromium 不启动 NetEq → 包在 jitter buffer 前整路丢弃（签名 smpl0/disc=收包速率/flush 字段缺失）；RC-2 同批次 onRemoteStream+onCallState 读 stale activeCallRef 互相覆盖。",
+    "修复：Fix A（share.tsx 种子 + 函数式 setState）+ Fix B（callSession.ts 会话自有 muted sink，解码与 UI 解耦）。",
+    "排除（有实验）：方向一单独不足、M149 flush 回归、重协商/replaceTrack 恢复、SDP/ICE/TURN 不对称。"
+  ],
+  "risks": [
+    "AC-002 人工生产复测未做（真实设备人耳验收，环境不可自动执行）。",
+    "若未来回调再以 ref 派生 state，同批次覆盖 bug 会回归 —— 规约：对现有 state 增量合并必须用函数式更新。"
+  ],
+  "artifacts": [
+    "documents/RCA-oneway-call-audio.md",
+    "tests/e2e/diag-loud.mts",
+    "tests/e2e/diag-sink.mts",
+    "tests/e2e/diag-reanchor.mts",
+    "tests/callManager.test.ts"
+  ]
 }

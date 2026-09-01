@@ -77,6 +77,8 @@ export class CallSession {
   private peer: RTCPeerConnectionLike | null = null;
   private localStream: MediaStream | null = null;
   private remoteAudioEl: HTMLAudioElement | null = null;
+  /** bindRemoteStream 自动创建的静音 <audio> sink 归属标记（UI 未 attachRemoteAudio 时为 true） */
+  private remoteAudioSinkOwned = false;
   private remoteVideoEl: HTMLVideoElement | null = null;
   private localAudioMuted = false;
   private localVideoEnabled: boolean;
@@ -86,7 +88,7 @@ export class CallSession {
   private ended = false;
   /** 早到 offer 缓冲：发起方 invite 后立刻广播 offer，接听方 accept 前 peer 未建（覆盖式只留最新） */
   private pendingRemoteOffer: RTCSessionDescriptionInit | null = null;
-  /** 早到 ICE 缓冲：remoteDescription 未就绪前收到的候选（FIFO，应用 offer/answer 后 flush） */
+  /** 早到 ICE 缓冲：remoteDescription 未就绪前收到的候选（FIFO，remoteDescription 就绪后立即 flush） */
   private pendingIce: RTCIceCandidateInit[] = [];
 
   constructor(
@@ -196,6 +198,23 @@ export class CallSession {
     el.playsInline = true;
   }
 
+  /** 会话自有的静音 sink：仅用于驱动浏览器开始渲染远端音频（无 sink 时 Chromium 不解码 → 单通）。
+   *  静音是为了与 UI 的 <audio> 共存时不产生双重播放。 */
+  private ensureRemoteAudioSink(): HTMLAudioElement | null {
+    if (this.remoteAudioEl) return this.remoteAudioEl;
+    if (typeof document === "undefined") return null; // 单测环境无 DOM
+    const el = document.createElement("audio");
+    el.autoplay = true;
+    el.muted = true;
+    el.style.display = "none";
+    const host = document.body ?? document.documentElement;
+    if (!host) return null;
+    host.appendChild(el);
+    this.remoteAudioEl = el;
+    this.remoteAudioSinkOwned = true;
+    return el;
+  }
+
   private bindRemoteStream(stream: MediaStream, kind: MediaKind): void {
     console.log(`[Call] bindRemoteStream kind=${kind} tracks=${stream.getTracks().map(t => `${t.kind}:${t.readyState}`)}`);
     // 轨道 unmute/mute 订阅：远端开始/停止发送媒体时的唯一可观测信号（无声排查关键日志）
@@ -205,9 +224,12 @@ export class CallSession {
         track.onmute = () => console.log(`[Call] remote audio track muted (media stopped) callId=${this.opts.callId}`);
       }
     }
-    if (kind === "audio" && this.remoteAudioEl) {
-      this.remoteAudioEl.srcObject = stream;
-      console.log("[Call] audio stream bound to remoteAudioEl, audioTracks=", stream.getAudioTracks().map(t => ({ enabled: t.enabled, muted: t.muted })));
+    if (kind === "audio") {
+      const el = this.ensureRemoteAudioSink();
+      if (el) {
+        el.srcObject = stream;
+        console.log("[Call] audio stream bound to session sink (muted), audioTracks=", stream.getAudioTracks().map(t => ({ enabled: t.enabled, muted: t.muted })));
+      }
     }
     if (kind === "video" && this.remoteVideoEl) {
       this.remoteVideoEl.srcObject = stream;
@@ -288,28 +310,36 @@ export class CallSession {
     this.peer = peer;
 
     // 媒体流挂接（发起方已有；接听方 accept 时补充）
-    if (this.localStream) {
-      for (const track of this.localStream.getTracks()) {
-        peer.addTrack(track, this.localStream);
+    const attachLocalMedia = (): void => {
+      if (this.localStream) {
+        for (const track of this.localStream.getTracks()) {
+          peer.addTrack(track, this.localStream);
+        }
+      } else {
+        // 确保至少有一个音频收发器，避免 offer 中无媒体
+        peer.addTransceiver("audio", { direction: "sendrecv" });
       }
-    } else {
-      // 确保至少有一个音频收发器，避免 offer 中无媒体
-      peer.addTransceiver("audio", { direction: "sendrecv" });
-    }
+    };
 
-    // 接听方：应用缓冲的早到 offer（发起方 invite 后立刻广播，accept 前已缓存）
+    // 接听方：应用缓冲的早到 offer（发起方 invite 后立刻广播，accept 前已缓存）。
+    // 规范 JSEP 接听端顺序：SRD(offer) → 冲刷早到 ICE → 挂发送轨 → createAnswer ——
+    // 接收端接收链必须先于发送轨建立，否则远端 RTP 包会在进 jitter buffer 前被整路丢弃（单通）。
     if (this.pendingRemoteOffer) {
       const offer = this.pendingRemoteOffer;
       this.pendingRemoteOffer = null;
       try {
         await peer.setRemoteDescription(offer);
+        // remoteDescription 已就绪：缓冲的早到 ICE 立即冲刷，不等 answer
+        await this.flushPendingIce();
+        attachLocalMedia();
         const answer = await peer.createAnswer();
         await peer.setLocalDescription(answer);
         this.opts.onNegotiationNeeded();
-        await this.flushPendingIce();
       } catch (err) {
         console.warn("[CallSession] apply buffered offer failed:", err);
       }
+    } else {
+      attachLocalMedia();
     }
   }
 
@@ -546,8 +576,14 @@ export class CallSession {
       for (const track of this.localStream.getTracks()) track.stop();
       this.localStream = null;
     }
-    if (this.remoteAudioEl) this.remoteAudioEl.srcObject = null;
+    if (this.remoteAudioEl) {
+      this.remoteAudioEl.srcObject = null;
+      if (this.remoteAudioSinkOwned) this.remoteAudioEl.remove();
+    }
     if (this.remoteVideoEl) this.remoteVideoEl.srcObject = null;
+    this.remoteAudioEl = null;
+    this.remoteVideoEl = null;
+    this.remoteAudioSinkOwned = false;
     this.setState("ended");
     void reason;
   }

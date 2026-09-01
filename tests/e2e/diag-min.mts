@@ -8,14 +8,16 @@
 import { chromium } from "playwright";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { ensureLoudWav } from "./loudwav.mts";
 
-const LOUD_WAV = "C:\\Users\\onion\\AppData\\Local\\Temp\\loud.bin";
+const LOUD_WAV = ensureLoudWav();
 const URL = "http://127.0.0.1:5173/";
 const TWO_PC_JS = join(dirname(fileURLToPath(import.meta.url)), "two-pc.js");
 
 async function run(order: "calleeAddFirst" | "calleeAddLast" | "relayed") {
   const browser = await chromium.launch({
-    args: [`--use-file-for-fake-audio-capture=${LOUD_WAV}`, "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required"],
+    // --use-fake-device-for-media-stream 是 --use-file-for-fake-audio-capture 生效的前置条件
+    args: [`--use-file-for-fake-audio-capture=${LOUD_WAV}`, "--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required"],
   });
   const ctx = await browser.newContext({ permissions: ["microphone"] });
   const page = await ctx.newPage();

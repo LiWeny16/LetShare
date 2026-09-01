@@ -179,47 +179,38 @@ const Share = observer(() => {
           });
         },
         onCallState: (peerId, state) => {
-          const cur = activeCallRef.current;
-          if (cur && cur.peerId === peerId) {
-            setActiveCall({ ...cur, state });
-          }
+          // 函数式更新：同一批次内多个事件（如 onRemoteStream 后紧跟 state=active）
+          // 依赖 activeCallRef.current 会互相覆盖，必须链式基于最新 state 合并
+          setActiveCall((prev) => (prev && prev.peerId === peerId ? { ...prev, state } : prev));
         },
         onRemoteStream: (peerId, stream, kind) => {
-          const cur = activeCallRef.current;
-          if (cur && cur.peerId === peerId) {
+          setActiveCall((prev) => {
+            if (!prev || prev.peerId !== peerId) return prev;
             // 防御：浏览器可能把 audio/video 拆成两个 stream 且 video 先到，
             // 此时后到的音频流若被丢弃即无声 —— 把缺失 kind 的轨道并入现有流
             // （保持 stream 引用稳定，UI 绑定不重挂）。
-            const existing = cur.remoteStream;
+            const existing = prev.remoteStream;
             if (existing && existing !== stream) {
               const existingTracks = existing.getTracks();
               const missing = stream.getTracks().filter((t) => !existingTracks.some((e) => e.kind === t.kind));
               if (missing.length > 0) {
                 for (const track of missing) existing.addTrack(track);
                 // 触发重渲染（同一流对象，UI effect 依赖引用不变，需要手动 kick）
-                setActiveCall({ ...cur });
-                return;
+                return { ...prev };
               }
-              return; // 轨道已齐（重复事件），不动
+              return prev; // 轨道已齐（重复事件），不动
             }
-            setActiveCall({ ...cur, remoteStream: kind === "video" ? stream : (cur.remoteStream ?? stream) });
-          }
+            return { ...prev, remoteStream: kind === "video" ? stream : (prev.remoteStream ?? stream) };
+          });
         },
         onLocalStream: (peerId, stream) => {
-          const cur = activeCallRef.current;
-          if (cur && cur.peerId === peerId) {
-            setActiveCall({ ...cur, localStream: stream });
-          }
+          setActiveCall((prev) => (prev && prev.peerId === peerId ? { ...prev, localStream: stream } : prev));
         },
         onTransportChange: (peerId, transport) => {
-          const cur = activeCallRef.current;
-          if (cur && cur.peerId === peerId) {
-            setActiveCall({ ...cur, transport });
-          }
+          setActiveCall((prev) => (prev && prev.peerId === peerId ? { ...prev, transport } : prev));
         },
         onCallEnded: (peerId) => {
-          const cur = activeCallRef.current;
-          if (cur && cur.peerId === peerId) setActiveCall(null);
+          setActiveCall((prev) => (prev && prev.peerId === peerId ? null : prev));
           setIncomingCall((prev) => (prev && prev.from === peerId ? null : prev));
         },
       },
@@ -266,18 +257,21 @@ const Share = observer(() => {
         "media=", media);
       const callId = await manager.startCall(peerId, videoEnabled ? "audio+video" : "audio", stream);
       const peer = connectedUsersRef.current.find((u) => u.uniqId === peerId);
-      setActiveCall({
+      const call = {
         callId,
         peerId,
         peerName: peer?.name || peerId.split(":")[0],
         isVideo: videoEnabled,
         remoteStream: null,
         localStream: stream,
-        transport: "p2p",
+        transport: "p2p" as const,
         state: "connecting",
         muted: false,
         videoEnabled,
-      });
+      };
+      // 同步 seed ref：ontrack/状态回调可能在 React effect 同步 ref 前触发（同 acceptIncoming 竞态）
+      setActiveCall(call);
+      activeCallRef.current = call;
     } catch (err) {
       console.error("通话启动失败:", err);
       alertUseMUI(t("call.startFailed", "无法启动通话（请检查摄像头/麦克风权限）"), 3000, { kind: "error" });
@@ -305,19 +299,24 @@ const Share = observer(() => {
       } else {
         stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
       }
-      await manager.acceptCall(incoming.callId, stream);
-      setActiveCall({
+      // 竞态修复：ontrack 会在 acceptCall 内部（SRD 处理缓冲 offer）同步触发，
+      // onRemoteStream 回调此刻就要能查到 activeCall —— 必须先提交状态并同步 seed ref，
+      // 否则远端流被丢弃，被叫端远端 track 无 sink → 浏览器不启动 NetEq 渲染 → 单通。
+      const call = {
         callId: incoming.callId,
         peerId: incoming.from,
         peerName: incoming.fromName,
         isVideo: videoEnabled,
         remoteStream: null,
         localStream: stream,
-        transport: "p2p",
+        transport: "p2p" as const,
         state: "connecting",
         muted: false,
         videoEnabled,
-      });
+      };
+      setActiveCall(call);
+      activeCallRef.current = call;
+      await manager.acceptCall(incoming.callId, stream);
       setIncomingCall(null);
     } catch (err) {
       console.error("接听失败:", err);

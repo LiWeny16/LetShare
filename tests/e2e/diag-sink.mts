@@ -1,8 +1,9 @@
 /**
- * 响亮假音频 role-swap：用 --use-file-for-fake-audio-capture=<响亮440Hz wav>，
- * 检验 E2E"offerer 0 样本"是否为"假麦克风太弱→DTX抑制"的假象。
- * E1 alice 发起 / E2 bob 发起。双方 samplesSent/SamplesReceived 均打印。
- * 若响亮下双方向均有样本 → 原单通是假象；若 offerer 方向仍 0 样本 → 真 bug。
+ * 决定性实验：被叫端远端 track 无 sink → Chromium NetEq 渲染循环不启动 →
+ * packet buffer 塞满后全部包在进 jitter buffer 前被丢弃（单通）。
+ * 用 RTCPeerConnection monkeypatch 给每个远端 audio track 强挂 <audio> sink，
+ * 若 callee smpl 从 0 翻正 → 证明"sink 缺失"是根因（share.tsx accept 竞态把 onRemoteStream 丢掉）。
+ * E1 alice 发起 / E2 bob 发起（role-swap 佐证）。
  */
 import { chromium } from "playwright";
 import { spawn, ChildProcess } from "node:child_process";
@@ -31,39 +32,30 @@ function killTree(p: ChildProcess | null) {
   if (process.platform === "win32") spawn("taskkill", ["/PID", String(p.pid), "/T", "/F"], { shell: true, stdio: "ignore" });
 }
 
-const tmpBin = mkdtempSync(join(tmpdir(), "ls-loud-"));
+const tmpBin = mkdtempSync(join(tmpdir(), "ls-sink-"));
 let goProc: ChildProcess | null = null;
 let viteProc: ChildProcess | null = null;
 
 const probe = (page: import("playwright").Page) => page.evaluate(async () => {
   const g = (window as unknown as { __lsCallStats?: () => Promise<Map<string, Record<string, unknown>>> }).__lsCallStats;
-  const di = (window as unknown as { __lsPc?: () => Record<string, unknown> }).__lsPc;
-  const out: { rows: { t: string; ssrc: unknown; smpl: number; pkt: number; disc: number; E: number; conce: number; lost: number; jb: number; byes: number; codecId: unknown; flushes: number; emitted: number; decImpl: string; fl: number }[]; codecs: Record<string, { pt: unknown; mime: unknown }>; sdp: { local: string | null; remote: string | null } } = { rows: [], codecs: {}, sdp: { local: null, remote: null } };
-  const di0 = di ? di() : null;
-  if (di0) { out.sdp.local = ((di0 as Record<string, unknown>).localSdp as string) ?? null; out.sdp.remote = ((di0 as Record<string, unknown>).remoteSdp as string) ?? null; }
+  const out: string[] = [];
+  let sink = String((window as unknown as { __lsSinkAttached?: unknown }).__lsSinkAttached ?? "no");
+  const patch = String((window as unknown as { __lsPatchInstalled?: unknown }).__lsPatchInstalled ?? "no");
+  const slog = ((window as unknown as { __lsSinkLog?: string[] }).__lsSinkLog ?? []).join(",");
   if (g) {
     const st = await g();
-    for (const pair of st) {
-      const r = pair[1]; if (r.type === "codec") out.codecs[r.id as string] = { pt: r.payloadType as unknown, mime: r.mimeType as unknown };
-    }
-    for (const pair of st) {
-      const r = pair[1]; const t = r.type;
-      if (t !== "inbound-rtp" && t !== "outbound-rtp" && t !== "remote-inbound-rtp") continue;
-      if (t === "remote-inbound-rtp" && r.kind !== "audio") continue;
-      if (t !== "remote-inbound-rtp" && r.kind !== "audio") continue;
-      const smpl = t === "inbound-rtp" ? (r.totalSamplesReceived as number ?? 0) : (r.totalSamplesSent as number ?? 0);
-      const pkt = t === "inbound-rtp" ? (r.packetsReceived as number ?? 0) : (r.packetsSent as number ?? 0);
-      const byes = t === "inbound-rtp" ? (r.bytesReceived as number ?? 0) : (r.bytesSent as number ?? 0);
-      out.rows.push({ t, ssrc: r.ssrc, smpl, pkt, disc: r.packetsDiscarded as number ?? 0, E: r.totalAudioEnergy as number ?? 0, conce: r.concealedSamples as number ?? 0, lost: r.packetsLost as number ?? 0, jb: r.jitterBufferDelay as number ?? 0, byes, codecId: r.codecId, flushes: (r as Record<string, unknown>).jitterBufferFlushes as number ?? -1, emitted: (r as Record<string, unknown>).jitterBufferEmittedCount as number ?? -1, decImpl: String((r as Record<string, unknown>).decoderImplementation ?? "n/a"), fl: r.fractionLost as number ?? -1 });
+    for (const [, r] of st) {
+      if (r.kind !== "audio") continue;
+      if (r.type === "inbound-rtp") out.push(`IN s${r.ssrc}:smpl${r.totalSamplesReceived ?? 0}/pkt${r.packetsReceived ?? 0}/disc${r.packetsDiscarded ?? 0}/E${Number(r.totalAudioEnergy ?? 0).toFixed(1)}/emit${r.jitterBufferEmittedCount ?? 0}/jb${r.jitterBufferDelay ?? 0}`);
+      if (r.type === "outbound-rtp") out.push(`OUT s${r.ssrc}:pkt${r.packetsSent ?? 0}/B${r.bytesSent ?? 0}`);
     }
   }
-  return out;
+  return `patch=${patch} sink=${sink} log=${slog} | ${out.join(" | ")}`;
 });
 
 async function run() {
   const browser = await chromium.launch({
-    // --use-fake-device-for-media-stream 是 --use-file-for-fake-audio-capture 生效的前置条件
-    args: [`--use-file-for-fake-audio-capture=${LOUD_WAV}`, "--use-file-for-fake-video-capture=fake", "--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required"],
+    args: [`--use-file-for-fake-audio-capture=${LOUD_WAV}`, "--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required"],
   });
   async function client(name: string, room: string) {
     const ctx = await browser.newContext({ permissions: ["microphone"] });
@@ -73,12 +65,35 @@ async function run() {
         customServerUrl: `ws://127.0.0.1:${a.port}/`, authToken: "98d9a399675116e5256e9082c192bc06eb6434937af99f201252e9424c7a5652",
         ablyKey: "", transferPriority: "p2p", version: "0", isNewUser: false };
       localStorage.setItem("user_settings", JSON.stringify(s));
+      // —— sink 强挂（prototype 级）：SRD 完成后给每个远端 audio receiver 挂 <audio> ——
+      const W = window as unknown as { __lsPatchInstalled?: boolean; __lsSinkAttached?: boolean; __lsSinkLog?: string[] };
+      W.__lsSinkLog = [];
+      const OrigSRD = RTCPeerConnection.prototype.setRemoteDescription;
+      RTCPeerConnection.prototype.setRemoteDescription = function (this: RTCPeerConnection, desc: RTCSessionDescriptionInit | RTCSdpType) {
+        const p = OrigSRD.apply(this, [desc as RTCSessionDescriptionInit]);
+        p.then(() => {
+          W.__lsPatchInstalled = true;
+          for (const r of this.getReceivers()) {
+            const tr = r.track;
+            if (tr && tr.kind === "audio") {
+              const el = document.createElement("audio");
+              el.autoplay = true;
+              el.muted = true; // 生产修复设计：会话内部 sink 静音防双音，验证静音 sink 是否同样驱动渲染
+              el.srcObject = new MediaStream([tr]);
+              el.style.display = "none";
+              (document.body || document.documentElement).appendChild(el);
+              W.__lsSinkAttached = true;
+              W.__lsSinkLog!.push(`sinked ssrc-track=${tr.id.slice(0, 8)}`);
+            }
+          }
+        }).catch((e) => W.__lsSinkLog!.push("srd-err:" + String(e)));
+        return p;
+      } as typeof RTCPeerConnection.prototype.setRemoteDescription;
     }, { port: GO_PORT, room });
     const page = await ctx.newPage();
     page.on("console", (msg) => {
       const t = msg.text();
-      if (t.includes("[Call]") || t.includes("ontrack") || t.includes("unmute") || t.includes("mute") || t.includes("bindRemoteStream") || t.includes("CallBar") || t.includes("remote audio"))
-        console.log(`[${name}][console]`, t);
+      if (t.includes("[Call]") || t.includes("CallBar")) console.log(`[${name}][console]`, t);
     });
     for (let t = 0; t < 4; t++) {
       await page.goto(`http://127.0.0.1:${VITE_PORT}/?room=${room}#`, { waitUntil: "domcontentloaded", timeout: 45_000 });
@@ -94,22 +109,15 @@ async function run() {
     await until(async () => (await l.page.getByRole("button", { name: /接听/ }).count()) >= 1, 40_000);
     await l.page.evaluate(() => (document.querySelector('button[aria-label="接听"]') as HTMLButtonElement).click());
     await new Promise((r) => setTimeout(r, 14_000));
-    const fmt = (p: { rows: { t: string; ssrc: unknown; smpl: number; pkt: number; disc: number; E: number; conce: number; lost: number; jb: number; byes: number; codecId: unknown; flushes: number; emitted: number; decImpl: string; fl: number }[]; codecs: Record<string, { pt: unknown; mime: unknown }>; sdp: { local: string | null; remote: string | null } }) => {
-      const line = (row: { t: string; ssrc: unknown; smpl: number; pkt: number; disc: number; E: number; conce: number; lost: number; jb: number; byes: number; codecId: unknown; flushes: number; emitted: number; decImpl: string; fl: number }) => {
-        const ci = p.codecs[row.codecId as string] || {};
-        return `${row.t[0]}${row.t === "remote-inbound-rtp" ? "x" : ""}s${row.ssrc}:smpl${row.smpl}/pkt${row.pkt}/disc${row.disc}/E${row.E.toFixed(1)}/conce${row.conce}/lost${row.lost}/jb${row.jb}/flush${row.flushes}/emit${row.emitted}/dec${row.decImpl}/fl${row.fl}/byes${row.byes}/pt${ci.pt}/mime${ci.mime}`;
-      };
-      return `${p.rows.map(line).join(" | ")}\n  SDPaudio_l=${(p.sdp.local ?? "").includes("m=audio") ? "yes" : "no"} SDPaudio_r=${(p.sdp.remote ?? "").includes("m=audio") ? "yes" : "no"}`;
-    };
-    console.log(`[${label}] ${callerName}(caller):\n${fmt(await probe(c.page))}`);
-    console.log(`[${label}] ${calleeName}(callee):\n${fmt(await probe(l.page))}`);
+    console.log(`[${label}] ${callerName}(caller):`, await probe(c.page));
+    console.log(`[${label}] ${calleeName}(callee):`, await probe(l.page));
     await browser.contexts()[0]?.close().catch(() => undefined);
     await browser.contexts()[0]?.close().catch(() => undefined);
   }
-  console.log("=== LOUD E1: alice 发起 ===");
-  await one("loud-a", "loud1", "alice", "bob");
-  console.log("=== LOUD E2: 互换 bob 发起 ===");
-  await one("loud-b", "loud2", "bob", "alice");
+  console.log("=== SINK E1: alice 发起 ===");
+  await one("sink-a", "sink1", "alice", "bob");
+  console.log("=== SINK E2: 互换 bob 发起 ===");
+  await one("sink-b", "sink2", "bob", "alice");
   await browser.close();
 }
 

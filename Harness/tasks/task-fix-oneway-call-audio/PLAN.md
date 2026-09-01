@@ -9,35 +9,38 @@
 - Outcome: 修复"offerer(发起方)的音频永远不被 callee(接听方)解码"的单通 bug。目标：双向都能被对端解码出声。
 - Non-goals: 不引入新传输模式；不动视频路径；不作超出根因范围的架构改动。
 
-## 根因画像（调查已收敛，2026-09-01）
+## 根因画像（最终版，实证收敛，2026-09-01）
 
-Symptom（LetShare app E2E，两个 browser context 经 WebSocket 信令中继 + vite preview 产物）：
-- offerer→callee：callee 端 inbound-rtp totalSamplesReceived=0，**packetsDiscarded≈600/663**，jitterBufferDelay=0，concealedSamples=0；全速率、零丢包、每包~72B 真实 Opus 载荷、SSRC/pt=111/opus/m=audio sendrecv 全部匹配。包收下来却**在进解码器/jitter buffer 前被整路丢弃**。
-- callee→offerer：offerer 端正常（629k 采样、disc=0）。
-- 跟随 offerer 角色（互换发起方则互换静音方向）；replaceTrack(同轨/新轨)+ 整轮 renegotiate 均无法修复。
+**RC-1（音频解码根因，决定性）**：被叫的远端音频轨在 ontrack 时无任何 sink。
+- 早到 offer 缓冲使被叫 `ontrack` 在 `acceptCall()` 的 `await` 期间触发；旧 `acceptIncoming()` 在 await 后才 `setActiveCall`，`onRemoteStream` 以 `activeCallRef.current` 判空 → 流被静默丢弃。
+- 旧 `callSession.ts bindRemoteStream` 仅在 `remoteAudioEl` 非空时绑 sink，而 `attachRemoteAudio` 从未被调用 → 被叫远端音轨全程无 sink。
+- Chromium 无 sink 不启动 NetEq 渲染循环 → 抖动缓冲填满(~200包/4s)后包在进 jitter buffer 前整路丢弃。签名：`smpl0/disc=收包速率/jb0/emit0/flush字段缺失`。
+- 主叫 ontrack 晚于 setActiveCall（answer 往返后）→ 永远正常 ⇒ "caller 听 callee、callee 听不到" 的确定性角色不对称。
 
-已逐链路排除（每条有硬数据）：
-1. 网络/代理/TURN —— 排除：loopback 同机、connectionState=connected 已证 ICE 五元组双向（RFC 8445 §6）。
-2. DTX/空包/麦克风弱 —— 排除：全速率非 DTX(2.5/s)、每包72B非2字节空包头、同源假声在反向正常解出62万采样。
-3. 编解码/PT/SSRC/方向错配 —— 排除：offer/answer 的 m=audio 均 `111 opus/48000/2` `a=sendrecv`，SSRC一一对应（见 diag-p2p-sdp/diag-loud SDP dump）。
-4. addTrack 顺序 —— 排除：裸同页两-PC 控制里 calleeAddFirst/calleeAddLast 均双向 disc=0（tests/e2e/diag-min.mts + two-pc.js）。
-5. ontrack/渲染 —— 排除：callee 端 offerer 流 ontrack→bind <audio>→srcObject→unmute(media flowing)，仍 disc=600（diag-loud 带 console 转发）。
+**RC-2（UI 状态根因，被 Fix A 第一步暴露）**：被叫 `onRemoteStream` 与 `onCallState("active")` 在同一 React 批次背靠背触发（ontrack 处理器内连续发射），旧回调读同一 stale `activeCallRef.current` 后者覆盖前者 → `activeCall.remoteStream` 恒 null，CallBar 永不绑定。运行时探针证实 `setActiveCall` 执行了但状态最终无流。
 
-未排除差异（根因候选）：**app 的信令/协商编排时序** —— 干净同页裸 P2P 双向正常 ↔ app 跨两 context + WebSocket 中继传 offer/answer/ICE + callee 的 pendingRemoteOffer/pendingIce 缓冲-flush 逻辑。
+决定性实验（tests/e2e/diag-sink.mts）：原型补丁 SRD 后立即给每个 audio receiver 挂 `<audio>` sink（含 muted=true）→ 两种角色被叫全部翻转 `smpl0/disc600 → smpl≈670k/disc0/emit≈667k`。Sink 因果闭环；muted sink 生产可用（不与 CallBar 双重出声）。
 
-坑（诚实记录）：早期 `loud.bin` 不存在 → 之前"响亮仍复现"结论实际喂的是近静音假声；**weak-headless 复现与生产(新加坡响亮真人声+TURN)可能非同一机制**，需 AC-002 确认。已生成合法响亮 WAV 于 `C:\Users\onion\AppData\Local\Temp\loud.bin`（440Hz 9s 16bit/48k）。
+排除项（均有硬数据，历史记录保留于下方原画像）：
+1. 网络/代理/TURN —— 排除：loopback、connectionState=connected 已证 ICE 双向（RFC 8445 §6）。
+2. DTX/空包/麦克风弱 —— 排除：全速率、72B/包真实载荷、同源假声反向正常解出。
+3. 编解码/PT/SSRC/方向错配 —— 排除：SDP 全对称（diag-p2p-sdp/diag-loud dump）。
+4. SRD/addTrack 顺序（方向一）—— 真实潜在 bug 但非本单通主因：修复后 AC-001 仍 FAIL。
+5. M149 NetEq flush 回归 —— 排除：卡死侧无 flush 字段。
+6. 重协商/replaceTrack 恢复 —— 排除：diag-reanchor.mts 两 lever 均不解卡。
 
 ## Decisions
 
-- 修复方向一（首选）：把 callee 侧改为规范顺序 —— **先 setRemoteDescription(offer) 应用缓冲 offer，再 addTrack 挂发送轨，再 createAnswer**；并将 flushPendingIce 从"setLocalDescription(answer) 后一次刷"改为"remoteDescription 就绪立即刷"。低风险、直接对应当前唯一未排除差异。
-- 修复方向二（兜底）：连接成功后无法破 log 时，用全新 RTCPeerConnection + 新凭注重建通话（replaceTrack/renegotiate 都清不掉此接收端绑定态）。
-- 方向三：真实响亮输入 + TURN(公网) E2E 先确诊生产机制（AC-002）。
-- 次要 latent bug：`callManager.ts:244` 纯音频来电时 callee 的 `wantVideo` 被传 `signal.media==="audio"` → true（应为 false），需顺带修。
+- **Fix A（share.tsx，实施）**：① `startCall`/`acceptIncoming` 在 `await manager.*` 前同步构造 call 对象并种 `setActiveCall(call)+activeCallRef.current=call`；② CallManager 初始化 effect 五个回调（onCallState/onRemoteStream/onLocalStream/onTransportChange/onCallEnded）全部改函数式 `setActiveCall((prev)=>...)`，同批次事件链式合并不再覆盖。
+- **Fix B（callSession.ts，实施）**：新增 `ensureRemoteAudioSink()`（隐藏 muted `<audio>`，DOM 缺失 no-op），`bindRemoteStream` audio 分支必调 → 远端音轨永远有 sink，NetEq 必启动；`hangup` 清理。解码正确性与 UI 状态解耦，UI 绑定 CallBar 可见元件负责实际出声。
+- 方向一（callSession.ts 规范顺序 SRD(offer)→flushPendingIce→addTrack + callManager.ts:244 wantVideo `!==` 修正）：保留 —— 真实潜在 bug + 2 条回归用例，但被证伪为本单通主因。
+- 方向二（重建 PC）、方向三（生产机制确诊）：方向二不再需要；方向三转 AC-002 人工复测。
+- 交付物：`documents/RCA-oneway-call-audio.md`（根因分析 + 证据链 + 代码引用）。
 
 ## Acceptance
 
-- AC-001（E2E/回归）：app E2E 中 callee 端对 offerer 方向 inbound totalSamplesReceived>0 且 packetsDiscarded≈0；双向均如此。
-- AC-002（生产合理性）：响亮输入 + TURN 公网路径下双方向均出声，确认修复在生产同机制下成立。
+- AC-001（E2E/回归）：**已通过（2026-09-01）** —— diag-loud 最终验证：E1/E2 双场景四方向全部 `smpl≈669k~670k/disc0/emit≈668k~669k/jb≈19900`；双侧日志含 `audio stream bound to session sink (muted)` + CallBar `stream has audio=1` + `srcObject set`。
+- AC-002（生产合理性）：**待人工复测** —— 真实设备物理音频输出 + 公网 TURN 下双机互打双方向出声（环境无法自动验收，见 PROGRESS.md 风险）。
 
 证据要求（触发时）：E2E 用 getStats 探针 + SDP dump（tests/e2e/diag-loud.mts 已具备）；UI 用真实浏览器证据。
 

@@ -32,21 +32,24 @@ class FakeRTCPeerConnection {
   setRemoteDescriptionCalls: RTCSessionDescriptionInit[] = [];
   createAnswerCount = 0;
   addIceCandidateCalls: (RTCIceCandidateInit | null)[] = [];
+  /** 有序调用日志（验证 SRD → flush ICE → addTrack 的规范接听端顺序） */
+  callLog: string[] = [];
 
   constructor(_config?: RTCConfiguration) {
     FakeRTCPeerConnection.instances.push(this);
   }
-  addTrack(_track: MediaStreamTrack, _stream: MediaStream) { return { track: _track } as RTCRtpSender; }
+  addTrack(_track: MediaStreamTrack, _stream: MediaStream) { this.callLog.push("addTrack"); return { track: _track } as RTCRtpSender; }
   addTransceiver(_kind: string, _init?: RTCRtpTransceiverInit) { return {} as RTCRtpTransceiver; }
   async createOffer(_opts?: RTCOfferAnswerOptions) { return { type: "offer", sdp: "fake-offer" }; }
   async createAnswer(_opts?: RTCOfferAnswerOptions) { this.createAnswerCount += 1; return { type: "answer", sdp: "fake-answer" }; }
   async setLocalDescription(desc: RTCSessionDescriptionInit) { this.localDescription = { type: desc.type, sdp: desc.sdp } as RTCSessionDescription; return null; }
   async setRemoteDescription(desc: RTCSessionDescriptionInit) {
+    this.callLog.push("setRemoteDescription");
     this.setRemoteDescriptionCalls.push(desc);
     this.remoteDescription = { type: desc.type, sdp: desc.sdp } as RTCSessionDescription;
     return null;
   }
-  async addIceCandidate(c: RTCIceCandidateInit | null) { this.addIceCandidateCalls.push(c); return null; }
+  async addIceCandidate(c: RTCIceCandidateInit | null) { this.callLog.push("addIceCandidate"); this.addIceCandidateCalls.push(c); return null; }
   getSenders() { return []; }
   getReceivers() { return []; }
   async getStats() { return []; }
@@ -383,6 +386,51 @@ test("早到 offer 缓冲：accept 前收到的 offer 在 accept 后被应用并
       (s) => (s as { type?: string; sdpRole?: string }).type === "call:sdp" && (s as { sdpRole?: string }).sdpRole === "answer",
     );
     assert.ok(answers.length >= 1, "应广播 answer 型 call:sdp");
+    manager.leaveRoom();
+  });
+});
+
+test("早到 offer 缓冲：规范顺序 SRD(offer) 先于 addTrack，缓冲 ICE 在 SRD 后立即 flush", async () => {
+  await withFakeRTC(async () => {
+    const { manager } = makeManager();
+    manager.handleSignal("peer:uid", buildInvite("c_ord", "audio"));
+    // 早到 offer + 早到 ICE 都在 accept 前到达（peer 尚未创建）
+    await manager.handleSignal("peer:uid", buildSdp("c_ord", "offer", { type: "offer", sdp: "early-offer" }));
+    const cand = { candidate: "candidate:1 1 udp 2122260223 192.0.2.1 5000 typ host", sdpMid: "0", sdpMLineIndex: 0 } as RTCIceCandidateInit;
+    await manager.handleSignal("peer:uid", buildIce("c_ord", cand));
+    // accept 携带含 audio track 的本地流 → 触发 addTrack
+    const track = { kind: "audio", stop: () => {}, onended: null } as unknown as MediaStreamTrack;
+    const stream = { getTracks: () => [track], getAudioTracks: () => [track], getVideoTracks: () => [] } as unknown as MediaStream;
+    await manager.acceptCall("c_ord", stream);
+    const pc = FakeRTCPeerConnection.instances.at(-1)!;
+    assert.ok(pc, "accept 后 peer 应创建");
+    // 规范接听端顺序：SRD(offer) → flush 早到 ICE → addTrack（接收端接收链先于发送轨）
+    const log = pc.callLog;
+    const iSrd = log.indexOf("setRemoteDescription");
+    const iIce = log.indexOf("addIceCandidate");
+    const iAdd = log.indexOf("addTrack");
+    assert.ok(iSrd >= 0, "缓冲 offer 应被 setRemoteDescription 应用");
+    assert.ok(iSrd < iAdd, `SRD(offer) 应先于 addTrack（log=${log.join("→")}）`);
+    assert.ok(iSrd < iIce, `缓冲 ICE 应在 SRD 之后立即 flush（log=${log.join("→")}）`);
+    assert.ok(pc.setRemoteDescriptionCalls.some((d) => (d as { sdp?: string }).sdp === "early-offer"));
+    assert.equal(pc.addIceCandidateCalls.length, 1, "早到候选应在 SRD 后被 flush");
+    assert.ok(pc.createAnswerCount >= 1, "应用 offer 后应 createAnswer");
+    manager.leaveRoom();
+  });
+});
+
+test("来电 wantVideo：纯 audio 来电为 false，audio+video 来电为 true", () => {
+  withFakeRTC(() => {
+    const { manager } = makeManager();
+    manager.handleSignal("peer:uid", buildInvite("c_a", "audio"));
+    const audioSession = manager.getCallByPeer("peer:uid");
+    assert.ok(audioSession, "audio 来电应创建 pending session");
+    assert.equal(audioSession.isVideoEnabled(), false, "纯音频来电 wantVideo 应为 false");
+    manager.leaveRoom();
+    manager.handleSignal("peer:uid2", buildInvite("c_v", "audio+video"));
+    const videoSession = manager.getCallByPeer("peer:uid2");
+    assert.ok(videoSession, "video 来电应创建 pending session");
+    assert.equal(videoSession.isVideoEnabled(), true, "audio+video 来电 wantVideo 应为 true");
     manager.leaveRoom();
   });
 });

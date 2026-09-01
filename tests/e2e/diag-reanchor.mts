@@ -74,15 +74,19 @@ try {
     const g = (window as unknown as { __lsCallStats?: () => Promise<Map<string, Record<string, unknown>>> }).__lsCallStats;
     let rxE = -1, pkt = 0, concealed = 0, rxSamples = 0, rxBytes = 0;
     let txE = -1, txPkt = 0, txSamples = 0, txBytes = 0, qlr = "n/a";
+    let full = "";
     if (g) {
       const st = await g();
+      const dump: string[] = [];
       for (const [, r] of st) {
         if (r.kind !== "audio") continue;
-        if (r.type === "inbound-rtp") { rxE = Number(r.totalAudioEnergy ?? 0); pkt = Number(r.packetsReceived ?? 0); concealed = Number(r.concealedSamples ?? 0); rxSamples = Number(r.totalSamplesReceived ?? 0); rxBytes = Number(r.bytesReceived ?? 0); }
+        if (r.type === "inbound-rtp") { rxE = Number(r.totalAudioEnergy ?? 0); pkt = Number(r.packetsReceived ?? 0); concealed = Number(r.concealedSamples ?? 0); rxSamples = Number(r.totalSamplesReceived ?? 0); rxBytes = Number(r.bytesReceived ?? 0); dump.push("IN:" + JSON.stringify(r)); }
         if (r.type === "outbound-rtp") { txE = Number(r.totalAudioEnergy ?? 0); txPkt = Number(r.packetsSent ?? 0); txSamples = Number(r.totalSamplesSent ?? 0); txBytes = Number(r.bytesSent ?? 0); qlr = String(r.qualityLimitationReason ?? "n/a"); }
+        if (r.type === "remote-inbound-rtp") dump.push("RX:" + JSON.stringify(r));
       }
+      full = dump.join(" ;; ");
     }
-    return `IN rxE=${+rxE.toFixed(1)} pkt=${pkt} conce=${concealed} smpl=${rxSamples} B=${rxBytes} | OUT txE=${+txE.toFixed(1)} pkt=${txPkt} smpl=${txSamples} B=${txBytes} qlr=${qlr}`;
+    return `IN rxE=${+rxE.toFixed(1)} pkt=${pkt} conce=${concealed} smpl=${rxSamples} B=${rxBytes} | OUT txE=${+txE.toFixed(1)} pkt=${txPkt} smpl=${txSamples} B=${txBytes} qlr=${qlr}\n  FULL: ${full}`;
   });
 
   const alice = await client("alice");
