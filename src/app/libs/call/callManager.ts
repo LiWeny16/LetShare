@@ -80,11 +80,19 @@ const RTC_CONFIG: RTCConfiguration = {
  * turnServers 为空时退化为纯 STUN（不影响发起通话）。
  */
 function buildRtcConfig(turnServers: TurnIceServer[]): RTCConfiguration {
+  let bundle = RTC_CONFIG.bundlePolicy;
+  // 测试钩子：E2E 用 localStorage ls_bundle 覆写 bundlePolicy（验证 max-bundle 单通音频假设）
+  if (typeof localStorage !== "undefined") {
+    const b = localStorage.getItem("ls_bundle");
+    if (b === "balanced" || b === "max-compat") bundle = b;
+  }
   const iceServers: RTCIceServer[] = [...(RTC_CONFIG.iceServers ?? []), ...turnServers];
   // 测试钩子：E2E 用 localStorage ls_force_relay=1 强制只走 TURN 中继，
   // 验证媒体确实经过后端（candidateType === "relay"）。默认关闭，生产零影响。
   const forceRelay = typeof localStorage !== "undefined" && localStorage.getItem("ls_force_relay") === "1";
-  return forceRelay ? { ...RTC_CONFIG, iceServers, iceTransportPolicy: "relay" } : { ...RTC_CONFIG, iceServers };
+  return forceRelay
+    ? { ...RTC_CONFIG, iceServers, bundlePolicy: bundle, iceTransportPolicy: "relay" }
+    : { ...RTC_CONFIG, iceServers, bundlePolicy: bundle };
 }
 
 const INCOMING_TIMEOUT_MS = 30_000;
@@ -415,11 +423,17 @@ export class CallManager {
 
   private startStatsLoop(call: ActiveCall): void {
     if (call.statsTimer != null) return;
-    // 测试钩子：E2E 用 localStorage ls_force_relay=1 时暴露原始 stats 给 page.evaluate 断言。
-    // 默认关闭，生产不挂 window 全局。
-    const exposeStats = typeof localStorage !== "undefined" && localStorage.getItem("ls_force_relay") === "1";
+    // 测试钩子：E2E 用 localStorage ls_force_relay=1（或独立两关 ls_debug_stats=1）
+    // 暴露原始 stats 给 page.evaluate 断言。默认关闭，生产不挂 window 全局。
+    const exposeStats =
+      typeof localStorage !== "undefined" &&
+      (localStorage.getItem("ls_force_relay") === "1" || localStorage.getItem("ls_debug_stats") === "1");
     if (exposeStats) {
       (globalThis as { __lsCallStats?: unknown }).__lsCallStats = call.session.getRawStats.bind(call.session);
+      (globalThis as { __lsPc?: unknown }).__lsPc = call.session.getDebugInfo.bind(call.session);
+      (globalThis as { __lsReanchor?: unknown }).__lsReanchor = call.session.reanchorAudioSenders.bind(call.session);
+      (globalThis as { __lsFreshen?: unknown }).__lsFreshen = call.session.freshenAudio.bind(call.session);
+      (globalThis as { __lsRenegotiate?: unknown }).__lsRenegotiate = call.session.renegotiate.bind(call.session);
     }
     const loop = async (): Promise<void> => {
       // 自递归：每次调度前先检查是否已被清理，避免通话结束后循环自我续期

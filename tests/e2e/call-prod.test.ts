@@ -67,7 +67,7 @@ test("生产环境：双客户端经 ecs.letshare.fun 嵌入式 TURN 完成语�
       }
     });
     for (let attempt = 0; attempt < 5; attempt++) {
-      await page.goto(`${SITE}/?room=${ROOM}#`, { waitUntil: "domcontentloaded" });
+      await page.goto(`${SITE}/?room=${ROOM}#`, { waitUntil: "domcontentloaded", timeout: 60_000 });
       const ok = await page
         .waitForFunction(() => document.querySelectorAll("button").length > 0, null, { timeout: 20_000 })
         .then(() => true)
@@ -104,30 +104,52 @@ test("生产环境：双客户端经 ecs.letshare.fun 嵌入式 TURN 完成语�
     btn.click();
   });
 
-  // ── 3. 断言：relay 候选 + 音频字节递增 ───────────────────────────
-  type Stats = { audioBytes: number; relay: boolean | null };
+  // ── 3. 断言：relay 候选 + 双向音频字节 + 语音电平 + 丢包 ──────────
+  // 单通（"听得到对方、对方听不到我"）的三层定位：
+  //   层1 字节：bytesSent/bytesReceived 递增 —— 包确实在双向流动（网络/中继 OK）
+  //   层2 电平：inbound audioLevel > 0 —— 收到的包里真的有声音（排除"静音包"）
+  //   层3 恢复：mute→unmute 后 outbound 恢复递增 —— track.enabled 状态机无残留
+  type Stats = {
+    rxBytes: number;
+    txBytes: number;
+    relay: boolean | null;
+    audioLevel: number;
+    packetsReceived: number;
+    packetsLost: number;
+  };
   async function sampleStats(page: import("playwright").Page): Promise<Stats> {
     return page.evaluate(async () => {
       const getStats = (window as unknown as { __lsCallStats?: () => Promise<Map<string, Record<string, unknown>>> }).__lsCallStats;
-      if (!getStats) return { audioBytes: -1, relay: null };
+      if (!getStats) return { rxBytes: -1, txBytes: -1, relay: null, audioLevel: -1, packetsReceived: -1, packetsLost: -1 };
       const stats = await getStats();
-      let audioBytes = 0;
+      let rxBytes = 0;
+      let txBytes = 0;
       let relay: boolean | null = null;
+      let audioLevel = 0;
+      let packetsReceived = 0;
+      let packetsLost = 0;
       for (const [, r] of stats) {
-        if (r.type === "inbound-rtp" && r.kind === "audio") audioBytes += Number(r.bytesReceived ?? 0);
+        if (r.type === "inbound-rtp" && r.kind === "audio") {
+          rxBytes += Number(r.bytesReceived ?? 0);
+          packetsReceived += Number(r.packetsReceived ?? 0);
+          packetsLost += Number(r.packetsLost ?? 0);
+          const lvl = Number(r.audioLevel ?? 0);
+          if (lvl > audioLevel) audioLevel = lvl;
+        }
+        if (r.type === "outbound-rtp" && r.kind === "audio") txBytes += Number(r.bytesSent ?? 0);
         if (r.type === "candidate-pair" && (r.state === "succeeded" || r.nominated === true)) {
           const local = stats.get(String(r.localCandidateId ?? "")) as { candidateType?: string } | undefined;
           if (local?.candidateType) relay = local.candidateType === "relay";
         }
       }
-      return { audioBytes, relay };
+      return { rxBytes, txBytes, relay, audioLevel, packetsReceived, packetsLost };
     });
   }
 
   for (const [i, page] of pages.entries()) {
     await until(`client${i} 经生产 TURN 中继连通`, async () => {
       const s = await sampleStats(page);
-      return s.audioBytes >= 0 && s.relay === true;
+      return s.rxBytes >= 0 && s.relay === true;
     }, 90_000);
   }
 
@@ -135,6 +157,38 @@ test("生产环境：双客户端经 ecs.letshare.fun 嵌入式 TURN 完成语�
     const a = await sampleStats(page);
     await new Promise((r) => setTimeout(r, 2000));
     const b = await sampleStats(page);
-    assert.ok(b.audioBytes > a.audioBytes, `client${i} audio bytesReceived 应递增: ${a.audioBytes} → ${b.audioBytes}`);
+    assert.ok(b.rxBytes > a.rxBytes, `client${i} audio bytesReceived 应递增（听得到对方）: ${a.rxBytes} → ${b.rxBytes}`);
+    assert.ok(b.txBytes > a.txBytes, `client${i} audio bytesSent 应递增（对方听得到我）: ${a.txBytes} → ${b.txBytes}`);
+    // 电平断言：假麦产生恒定音调，正常应 > 0；若包在流而电平≈0，即"静音包"单通现场
+    assert.ok(b.audioLevel > 0, `client${i} inbound audioLevel 应 > 0（收到的包含真实语音电平）: ${b.audioLevel}`);
+    // 丢包告警（非硬断言：跨网抖动可能瞬时超阈，打印供诊断）
+    const lossRate = b.packetsReceived + b.packetsLost > 0 ? b.packetsLost / (b.packetsReceived + b.packetsLost) : 0;
+    console.log(`[diag:client${i}] lossRate=${(lossRate * 100).toFixed(1)}% rx=${b.rxBytes} tx=${b.txBytes} audioLevel=${b.audioLevel.toFixed(3)}`);
+  }
+
+  // ── 4. 静音往返：mute → outbound 停/降 → unmute → outbound 恢复递增 ──
+  // 复现"点过静音再取消后对方听不到"的 track.enabled 残留 bug 现场。
+  for (const page of pages) {
+    const before = await sampleStats(page);
+    // 静音 1.5s（DOM click 静音按钮）
+    await page.evaluate(() => {
+      const btns = Array.from(document.querySelectorAll('button[aria-label]'));
+      const mute = btns.find((b) => /静音|Mute/i.test(b.getAttribute("aria-label") ?? ""));
+      (mute as HTMLButtonElement | undefined)?.click();
+    });
+    await new Promise((r) => setTimeout(r, 1500));
+    const during = await sampleStats(page);
+    // 取消静音
+    await page.evaluate(() => {
+      const btns = Array.from(document.querySelectorAll('button[aria-label]'));
+      const unmute = btns.find((b) => /取消静音|Unmute/i.test(b.getAttribute("aria-label") ?? ""));
+      (unmute as HTMLButtonElement | undefined)?.click();
+    });
+    await new Promise((r) => setTimeout(r, 2000));
+    const after = await sampleStats(page);
+    assert.ok(
+      after.txBytes > during.txBytes,
+      `静音往返后 outbound 应恢复递增: mute前=${before.txBytes} 静音中=${during.txBytes} 取消后=${after.txBytes}`,
+    );
   }
 }, 300_000);

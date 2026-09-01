@@ -320,6 +320,16 @@ export class CallSession {
     await this.opts.onNegotiationNeeded();
   }
 
+  /** 测试钩子：对已建立通话再触发一次 offer/answer 重协商（重建编码器，验证静音锁死假设）。 */
+  async renegotiate(): Promise<{ ok: boolean }> {
+    try {
+      await this.negotiateOffer();
+      return { ok: true };
+    } catch {
+      return { ok: false };
+    }
+  }
+
   // ─── 协商（由 CallManager 分发信令后调用）────────────────────────
 
   async handleRemoteSdp(sdp: RTCSessionDescriptionInit): Promise<void> {
@@ -420,6 +430,68 @@ export class CallSession {
     } catch {
       return new Map();
     }
+  }
+
+  /** 测试钩子只读访问：对端标识 + 本地/远端 SDP + 各发送器 track 身份（仅 E2E 用）。 */
+  getDebugInfo(): Record<string, unknown> {
+    if (!this.peer) return {};
+    const self = this.peer as unknown as {
+      getSenders?: () => Array<{ replaceTrack?: unknown; track?: MediaStreamTrack | null }>;
+      localDescription?: { sdp?: string } | null;
+      remoteDescription?: { sdp?: string } | null;
+    };
+    const senders = (self.getSenders?.() ?? []).map((s) => ({
+      hasTrack: !!s.track,
+      kind: s.track?.kind ?? null,
+      readyState: s.track?.readyState ?? null,
+      enabled: s.track?.enabled ?? null,
+      muted: s.track?.muted ?? null,
+    }));
+    const audioSend = senders.filter((s) => s.kind === "audio");
+    return {
+      localSdp: self.localDescription?.sdp ?? null,
+      remoteSdp: self.remoteDescription?.sdp ?? null,
+      audSenders: audioSend.length,
+      senders,
+    };
+  }
+
+  /** 测试钩子：幂等重锚音频 sender（replaceTrack(sameTrack)），用于验证 offerer 静音锁死假设。 */
+  async reanchorAudioSenders(): Promise<{ count: number }> {
+    if (!this.peer) return { count: 0 };
+    const self = this.peer as unknown as {
+      getSenders?: () => Array<{ track?: MediaStreamTrack | null; replaceTrack?: (t: MediaStreamTrack) => Promise<void>; }>;
+    };
+    let count = 0;
+    for (const s of self.getSenders?.() ?? []) {
+      if (s.track && s.track.kind === "audio" && typeof s.replaceTrack === "function") {
+        try { await s.replaceTrack(s.track); count++; } catch { /* ignore */ }
+      }
+    }
+    return { count };
+  }
+
+  /** 测试钩子：用全新 getUserMedia 的暖音频 track replaceTrack（验证"零样本源需换新源"假设）。 */
+  async freshenAudio(): Promise<{ count: number; err?: string }> {
+    if (!this.peer || typeof navigator === "undefined") return { count: 0 };
+    const self = this.peer as unknown as {
+      getSenders?: () => Array<{ track?: MediaStreamTrack | null; replaceTrack?: (t: MediaStreamTrack) => Promise<void>; }>;
+    };
+    let fresh: MediaStream | null = null;
+    try {
+      fresh = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    } catch (e) {
+      return { count: 0, err: String(e) };
+    }
+    const freshAudio = fresh.getAudioTracks()[0];
+    if (!freshAudio) return { count: 0, err: "no fresh audio track" };
+    let count = 0;
+    for (const s of self.getSenders?.() ?? []) {
+      if (s.track && s.track.kind === "audio" && typeof s.replaceTrack === "function") {
+        try { await s.replaceTrack(freshAudio); count++; } catch { /* ignore */ }
+      }
+    }
+    return { count };
   }
 
   async getStats(): Promise<{ rttMs: number | null; lossRate: number | null; jitterMs: number | null; throughputBps: number | null }> {
