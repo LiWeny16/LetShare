@@ -41,6 +41,9 @@ importers:
       '@mui/material':
         specifier: 7.3.6
         version: 7.3.6(@emotion/react@11.14.0(@types/react@18.3.31)(react@18.3.1)(supports-color@7.2.0))(@emotion/styled@11.14.1(@emotion/react@11.14.0(@types/react@18.3.31)(react@18.3.1)(supports-color@7.2.0))(@types/react@18.3.31)(react@18.3.1)(supports-color@7.2.0))(@types/react@18.3.31)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      '@sapphi-red/web-noise-suppressor':
+        specifier: ^0.4.0
+        version: 0.4.0
       '@types/react-i18next':
         specifier: ^8.1.0
         version: 8.1.0(i18next@24.2.3(typescript@5.9.3))(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(typescript@5.9.3)
@@ -1391,6 +1394,9 @@ packages:
     cpu: [x64]
     os: [win32]
 
+  '@sapphi-red/web-noise-suppressor@0.4.0':
+    resolution: {integrity: sha512-vkBEL/VDkbeP3qqSRQFRtPLGa19a38JUzO6J0r5D/MQSumrlERy671DAMaETgY6etXjDCoJcD7JBIaXnuGVtVw==}
+
   '@sindresorhus/is@4.6.0':
     resolution: {integrity: sha512-t09vSN3MdfsyCHoFcTRCH/iUtG7OJ0CsjzB8cjAmKc/va/kIgeDI/TxsigdncE/4be734m0cvIYwNaV4i2XqAw==}
     engines: {node: '>=10'}
@@ -1554,6 +1560,7 @@ packages:
   '@xmldom/xmldom@0.9.10':
     resolution: {integrity: sha512-A9gOqLdi6cV4ibazAjcQufGj0B1y/vDqYrcuP6d/6x8P27gRS8643Dj9o1dEKtB6O7fwxb2FgBmJS2mX7gpvdw==}
     engines: {node: '>=14.6'}
+    deprecated: this version has critical issues, please update to the latest version
 
   ably@2.23.0:
     resolution: {integrity: sha512-hDmCmNNS/XS/+1g00kVmuFkNW2PPPgeerX7bAp2ALMBsH7nTesvJwvZs/x9VEljBpB8mS0oWDDrLkitJDkUyRg==}
@@ -4818,6 +4825,8 @@ snapshots:
 
   '@rollup/rollup-win32-x64-msvc@4.62.2':
     optional: true
+
+  '@sapphi-red/web-noise-suppressor@0.4.0': {}
 
   '@sindresorhus/is@4.6.0': {}
 

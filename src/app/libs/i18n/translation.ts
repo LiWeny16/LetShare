@@ -268,6 +268,17 @@ const sharedMalayTranslation = {
         },
         background: {
             timeout: "Halaman latar belakang melebihi {{seconds}} saat, memutuskan sambungan pelayan untuk penjimatan"
+        },
+        call: {
+            echoCancelType: "Pembatalan gema",
+            echoBrowser: "Pelayar (lalai)",
+            echoSystem: "Tahap sistem (eksperimen)",
+            noiseSuppression: "Peredam bising",
+            nsMode: "Peredam bising",
+            nsOff: "Matikan",
+            nsBrowser: "Standard (pelayar)",
+            nsRnnoise: "RNNoise (eksperimen)",
+            nsGtcrn: "GTCRN (makmal)"
         }
     }
 }
@@ -543,6 +554,17 @@ export const resources = {
             },
             background: {
                 timeout: "Background page exceeded {{seconds}} seconds, disconnecting server for saving"
+            },
+            call: {
+                echoCancelType: "Echo cancellation",
+                echoBrowser: "Browser (default)",
+                echoSystem: "System-level (experimental)",
+                noiseSuppression: "Noise suppression",
+                nsMode: "Noise suppression",
+                nsOff: "Off",
+                nsBrowser: "Standard (browser)",
+                nsRnnoise: "RNNoise (experimental)",
+                nsGtcrn: "GTCRN (lab)"
             }
         }
     },
@@ -818,6 +840,17 @@ export const resources = {
             },
             background: {
                 timeout: "后台页面超过 {{seconds}} 秒，断开服务器以节省资源"
+            },
+            call: {
+                echoCancelType: "回声消除",
+                echoBrowser: "浏览器（默认）",
+                echoSystem: "系统级（实验）",
+                noiseSuppression: "降噪",
+                nsMode: "降噪",
+                nsOff: "关闭",
+                nsBrowser: "标准（浏览器）",
+                nsRnnoise: "RNNoise（实验）",
+                nsGtcrn: "GTCRN（实验室）"
             }
 
         }

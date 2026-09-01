@@ -56,9 +56,46 @@ import { Trans, useTranslation } from "react-i18next";
 import { CallManager } from "@App/libs/call/callManager";
 import { startRingtone, stopRingtone } from "@App/libs/call/ringtone";
 import { acquireCallAudio, mergedAudioConstraints } from "@App/libs/call/audioCapture";
-import { CallButton, IncomingCallBanner, ActiveCallPanel, type CallMedia, type IncomingCallInfo } from "../components/call/CallBar";
+import { nsPipeline } from "@App/libs/call/noiseSuppression";
+import { CallButton, IncomingCallBanner, ActiveCallPanel, type CallMedia, type IncomingCallInfo, type NsModeSetting } from "../components/call/CallBar";
 // import VideoPanel from "@Com/VideoPannel/VideoPannel";
 // import VideoPanel from "@Com/VideoPannel/VideoPannel";
+
+// ── 端侧实验室降噪（RNNoise/GTCRN）──
+// 动态加载降噪管线模块（wasm 加载/Worklet 注册都发生在 process() 内，失败可回退）
+const loadNsPipeline = () => import("@App/libs/call/noiseSuppression");
+
+/**
+ * 按当前降噪模式（nsMode）采集通话音频流：
+ * - rnnoise/gtcrn：先采原始流（浏览器降噪关），再进端侧 WebAudio 管线降噪，返回降噪后流。
+ *   原始流生命周期由管线接管（通话结束统一 nsPipeline.stop() 释放麦克风）
+ * - browser：直接按浏览器约束采集（开浏览器降噪）
+ * - off：浏览器降噪关，无端侧管线
+ * 实验室模式建图失败（wasm 加载失败/Worklet 不支持等）时自动回退浏览器降噪，
+ * 并把回退结果持久化（nsMode 写回 browser，UI 同步）。
+ */
+const acquireCallAudioPipeline = async (
+  micId?: string,
+  hint?: "speech" | "music",
+): Promise<MediaStream> => {
+  const echoCancelType = settingsStore.get("echoCancelType");
+  const mode = settingsStore.get("nsMode") ?? "browser";
+  if (mode === "rnnoise" || mode === "gtcrn") {
+    let raw: MediaStream | null = null;
+    try {
+      const { nsPipeline } = await loadNsPipeline();
+      // 原始流采集关浏览器降噪：抑制交给端侧模型，避免双重抑制
+      raw = await acquireCallAudio(micId, hint, { echoCancelType, noiseSuppression: false });
+      return await nsPipeline.process(raw, mode);
+    } catch (err) {
+      console.warn("[Call] 实验室降噪初始化失败，回退浏览器降噪:", err);
+      settingsStore.update("nsMode", "browser");
+      // 释放半成品原始流，避免回退采集时双开麦克风
+      raw?.getTracks().forEach((track) => track.stop());
+    }
+  }
+  return acquireCallAudio(micId, hint, { echoCancelType, noiseSuppression: mode !== "off" });
+};
 
 // 确保状态类型正确
 
@@ -180,6 +217,10 @@ const Share = observer(() => {
           });
         },
         onCallState: (peerId, state) => {
+          // 通话结束（所有结束路径统一收口：主动挂断/对端挂断/超时/异常）：
+          // 停端侧降噪管线 —— 会话层无法停止管线持有的原始流轨与 AudioContext，
+          // 必须在此释放，否则麦克风持续被占用；stop() 幂等，无管线时无副作用
+          if (state === "ended") nsPipeline.stop();
           // 函数式更新：同一批次内多个事件（如 onRemoteStream 后紧跟 state=active）
           // 依赖 activeCallRef.current 会互相覆盖，必须链式基于最新 state 合并
           setActiveCall((prev) => (prev && prev.peerId === peerId ? { ...prev, state } : prev));
@@ -238,10 +279,10 @@ const Share = observer(() => {
       // 音频采集：3A 显式约束 + 首选麦克风 + contentHint（治"远端声音小"），设置项为空 = 系统默认
       const micId = settingsStore.get("micDeviceId");
       const contentHint = settingsStore.get("audioContentHint") ?? "speech";
-      // 回声消除引擎/降噪开关：每次采集读一次设置（get() 返回存储值，缺省走约束侧 ?? 兜底）
+      // 回声消除引擎：每次采集读一次设置；降噪按 nsMode 分流（合并视频采集路径用浏览器
+      // 约束兜底，实验室端侧管线在 acquireCallAudioPipeline 内处理）
       const echoCancelType = settingsStore.get("echoCancelType");
-      const ns = settingsStore.get("noiseSuppression");
-      const audioOpts = { echoCancelType, noiseSuppression: ns };
+      const audioOpts = { echoCancelType, noiseSuppression: (settingsStore.get("nsMode") ?? "browser") !== "off" };
       // 视频通话：先试音频+视频，摄像头不可用时降级为纯语音
       let stream: MediaStream;
       let videoEnabled = media === "video";
@@ -255,11 +296,11 @@ const Share = observer(() => {
           for (const track of stream.getAudioTracks()) track.contentHint = contentHint;
         } catch {
           // 摄像头不可用 → 降级纯语音
-          stream = await acquireCallAudio(micId, contentHint, audioOpts);
+          stream = await acquireCallAudioPipeline(micId, contentHint);
           videoEnabled = false;
         }
       } else {
-        stream = await acquireCallAudio(micId, contentHint, audioOpts);
+        stream = await acquireCallAudioPipeline(micId, contentHint);
       }
       console.log("[Call] startCall getUserMedia ok",
         "tracks=", stream.getTracks().map(t => `${t.kind}:${t.readyState}`),
@@ -296,10 +337,10 @@ const Share = observer(() => {
       // 音频采集：3A 显式约束 + 首选麦克风 + contentHint（治"远端声音小"），设置项为空 = 系统默认
       const micId = settingsStore.get("micDeviceId");
       const contentHint = settingsStore.get("audioContentHint") ?? "speech";
-      // 回声消除引擎/降噪开关：每次采集读一次设置（get() 返回存储值，缺省走约束侧 ?? 兜底）
+      // 回声消除引擎：每次采集读一次设置；降噪按 nsMode 分流（合并视频采集路径用浏览器
+      // 约束兜底，实验室端侧管线在 acquireCallAudioPipeline 内处理）
       const echoCancelType = settingsStore.get("echoCancelType");
-      const ns = settingsStore.get("noiseSuppression");
-      const audioOpts = { echoCancelType, noiseSuppression: ns };
+      const audioOpts = { echoCancelType, noiseSuppression: (settingsStore.get("nsMode") ?? "browser") !== "off" };
       // 视频来电：先试音频+视频，摄像头不可用时降级为纯语音接听
       let stream: MediaStream;
       let videoEnabled = incoming.media !== "audio";
@@ -312,11 +353,11 @@ const Share = observer(() => {
           // 合并采集路径不经过 acquireCallAudio：手动补 contentHint
           for (const track of stream.getAudioTracks()) track.contentHint = contentHint;
         } catch {
-          stream = await acquireCallAudio(micId, contentHint, audioOpts);
+          stream = await acquireCallAudioPipeline(micId, contentHint);
           videoEnabled = false;
         }
       } else {
-        stream = await acquireCallAudio(micId, contentHint, audioOpts);
+        stream = await acquireCallAudioPipeline(micId, contentHint);
       }
       // 竞态修复：ontrack 会在 acceptCall 内部（SRD 处理缓冲 offer）同步触发，
       // onRemoteStream 回调此刻就要能查到 activeCall —— 必须先提交状态并同步 seed ref，
@@ -387,10 +428,8 @@ const Share = observer(() => {
     if (!manager) return;
     try {
       const hint = settingsStore.get("audioContentHint") ?? "speech";
-      // 换麦重采同样携带回声消除引擎/降噪设置，避免换轨后设置被静默重置为默认
-      const echoCancelType = settingsStore.get("echoCancelType");
-      const ns = settingsStore.get("noiseSuppression");
-      const newStream = await acquireCallAudio(deviceId, hint, { echoCancelType, noiseSuppression: ns });
+      // 换麦重采同样按降噪模式分流（实验室模式走端侧管线重建），避免换轨后设置被静默重置
+      const newStream = await acquireCallAudioPipeline(deviceId, hint);
       const newTrack = newStream.getAudioTracks()[0];
       if (!newTrack) return;
       if (cur.muted) newTrack.enabled = false; // 保持静音状态
@@ -407,6 +446,40 @@ const Share = observer(() => {
       console.log("[Call] mic swapped deviceId=", deviceId || "(default)", "senders=", count);
     } catch (err) {
       console.warn("[Call] mic swap failed:", err);
+    }
+  }, []);
+
+  // 通话中切换降噪模式：先按新模式采好替换流，再按需停端侧管线并原子换轨。
+  // 实验室模式建图/重建期间旧发送轨约 1s 无声（wasm 加载 + addModule），通话中切换可接受。
+  const handleNsModeChange = React.useCallback(async (mode: NsModeSetting) => {
+    const cur = activeCallRef.current;
+    if (!cur) return; // 未在通话：CallBar 已持久化偏好，下次通话生效
+    const manager = callManagerRef.current;
+    if (!manager) return;
+    try {
+      // 先采新流（当前麦克风），采集不受旧管线图影响；实验室模式内部会重建管线图
+      const newStream = await acquireCallAudioPipeline();
+      const newTrack = newStream.getAudioTracks()[0];
+      if (!newTrack) return;
+      if (cur.muted) newTrack.enabled = false; // 保持静音状态
+      // browser/off：停掉端侧管线（若开着）——先采后停，把发送无声窗口压到最小；
+      // stop() 会同时停掉管线持有的旧原始流轨，释放多余占用
+      if (mode === "browser" || mode === "off") nsPipeline.stop();
+      const count = await manager.swapAudioTrack(cur.peerId, newTrack);
+      if (count === 0) {
+        // 无活跃会话/替换失败：停新流与管线，不泄漏麦克风
+        newTrack.stop();
+        nsPipeline.stop();
+        return;
+      }
+      // 停掉旧音频轨并更新 state（保留旧流视频轨）。
+      // 会话侧 swapAudioTrack 已清旧轨 onended，这里 stop() 不会误触发 hangup("error")。
+      (cur.localStream?.getAudioTracks() ?? []).forEach((track) => track.stop());
+      const merged = new MediaStream([...newStream.getTracks(), ...(cur.localStream?.getVideoTracks() ?? [])]);
+      setActiveCall((prev) => (prev && prev.peerId === cur.peerId ? { ...prev, localStream: merged } : prev));
+      console.log("[Call] noise suppression mode changed:", mode, "senders=", count);
+    } catch (err) {
+      console.warn("[Call] noise suppression mode change failed:", err);
     }
   }, []);
 
@@ -1795,6 +1868,7 @@ const Share = observer(() => {
           onHangup={hangupActive}
           onClose={hangupActive}
           onMicChange={handleMicChange}
+          onNsModeChange={handleNsModeChange}
         />
       )}
     </>

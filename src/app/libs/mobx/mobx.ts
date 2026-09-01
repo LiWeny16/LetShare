@@ -18,6 +18,7 @@ const DEFAULT_SETTINGS = {
   speakerVolume: 1 as number, // 音量 0..1（远端播放音量，1 = 100%）
   echoCancelType: "browser" as "browser" | "system", // 回声消除引擎：browser=浏览器 AEC3（默认），system=OS 级 AEC（部分设备更好；不支持时浏览器忽略）
   noiseSuppression: true as boolean, // 浏览器噪声抑制开关（关=保真/音乐场景，也为端侧 RNNoise 预留）
+  nsMode: "browser" as "off" | "browser" | "rnnoise" | "gtcrn", // 降噪模式：off=关 / browser=浏览器内置 / rnnoise=RNNoise 实验 / gtcrn=GTCRN 实验室新算法
   version: "3.6.6",
   isNewUser: true
 };
@@ -124,6 +125,10 @@ class SettingsStore {
           // auto 模式已废弃（依赖 ipinfo 地区探测，国内网络下会卡）：旧值迁移为国内
           if (parsed.serverMode === 'auto') {
             parsed.serverMode = 'custom';
+          }
+          // 一次性迁移：老用户曾用 nsMode 前身 noiseSuppression 开关关掉降噪的，映射为 nsMode=off
+          if (parsed.noiseSuppression === false && parsed.nsMode === undefined) {
+            parsed.nsMode = 'off';
           }
           this.settings = { ...DEFAULT_SETTINGS, ...parsed };
         });

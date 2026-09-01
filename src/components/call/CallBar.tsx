@@ -11,14 +11,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Box,
   FormControl,
-  FormControlLabel,
   IconButton,
   InputLabel,
   MenuItem,
   Popover,
   Select,
   Slider,
-  Switch,
   Paper,
   Tooltip,
   Typography,
@@ -39,6 +37,9 @@ import settingsStore from "@App/libs/mobx/mobx";
 import { createInputLevelMeter, listAudioDevices } from "@App/libs/call/audioCapture";
 
 export type CallMedia = "audio" | "video";
+
+/** 降噪模式：off=关 / browser=浏览器内置 / rnnoise=RNNoise（实验） / gtcrn=GTCRN（实验室） */
+export type NsModeSetting = "off" | "browser" | "rnnoise" | "gtcrn";
 
 export type CallButtonHandlers = {
   onCall: (media: CallMedia) => void;
@@ -156,6 +157,8 @@ export type ActiveCallProps = {
   onClose: () => void;
   /** 通话中换麦克风（"" = 系统默认）。扬声器/音量经 settingsStore 内部处理，不 prop-drill。 */
   onMicChange?: (deviceId: string) => void;
+  /** 通话中切换降噪模式：由上层重建发送轨（端侧管线/浏览器约束），未在通话时仅存偏好。 */
+  onNsModeChange?: (mode: NsModeSetting) => void;
 };
 
 function formatDuration(ms: number): string {
@@ -187,7 +190,7 @@ export function ActiveCallPanel(props: ActiveCallProps) {
     return Math.round((typeof v === "number" && v >= 0 && v <= 1 ? v : 1) * 100);
   });
   const [echoCancelType, setEchoCancelType] = useState<"browser" | "system">(() => settingsStore.get("echoCancelType") ?? "browser");
-  const [nsEnabled, setNsEnabled] = useState<boolean>(() => settingsStore.get("noiseSuppression") ?? true);
+  const [nsMode, setNsMode] = useState<NsModeSetting>(() => settingsStore.get("nsMode") ?? "browser");
   const levelBarRef = useRef<HTMLDivElement>(null);
 
   /** 应用扬声器/音量到远端 audio 元素（setSinkId 浏览器不支持时跳过；volume clamp 到 0..1）。 */
@@ -293,13 +296,12 @@ export function ActiveCallPanel(props: ActiveCallProps) {
     }
   };
 
-  /** 降噪开关切换：写回持久化 + 对当前通话轨热更新（applyConstraints 被拒绝时下次通话生效）。 */
-  const handleNsToggle = (checked: boolean): void => {
-    setNsEnabled(checked);
-    settingsStore.update("noiseSuppression", checked);
-    for (const track of props.localStream?.getAudioTracks() ?? []) {
-      track.applyConstraints({ noiseSuppression: checked }).catch(() => undefined);
-    }
+  /** 降噪模式切换：写回持久化 + 通知上层重建发送轨（端侧管线启停/浏览器约束由上层处理）。
+   *  未在通话时仅存偏好，下次通话生效。 */
+  const handleNsModeChange = (mode: NsModeSetting): void => {
+    setNsMode(mode);
+    settingsStore.update("nsMode", mode);
+    props.onNsModeChange?.(mode);
   };
 
   const showVideo = props.isVideo && props.videoEnabled;
@@ -511,18 +513,19 @@ export function ActiveCallPanel(props: ActiveCallProps) {
             </Select>
           </FormControl>
 
-          <FormControlLabel
-            control={
-              <Switch
-                size="small"
-                checked={nsEnabled}
-                onChange={(e) => handleNsToggle(e.target.checked)}
-              />
-            }
-            slotProps={{ typography: { variant: "caption", color: "text.secondary" } }}
-            label={t("call.noiseSuppression", "降噪")}
-            sx={{ alignSelf: "flex-start" }}
-          />
+          <FormControl size="small">
+            <InputLabel>{t("call.nsMode", "降噪")}</InputLabel>
+            <Select
+              value={nsMode}
+              label={t("call.nsMode", "降噪")}
+              onChange={(e) => handleNsModeChange(String(e.target.value) as NsModeSetting)}
+            >
+              <MenuItem value="off">{t("call.nsOff", "关闭")}</MenuItem>
+              <MenuItem value="browser">{t("call.nsBrowser", "标准（浏览器）")}</MenuItem>
+              <MenuItem value="rnnoise">{t("call.nsRnnoise", "RNNoise（实验）")}</MenuItem>
+              <MenuItem value="gtcrn">{t("call.nsGtcrn", "GTCRN（实验室）")}</MenuItem>
+            </Select>
+          </FormControl>
 
           <Box sx={{ px: 1 }}>
             <Typography variant="caption" color="text.secondary">
