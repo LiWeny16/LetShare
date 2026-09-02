@@ -1,36 +1,58 @@
 #!/usr/bin/env node
 /**
  * LetShare 一键部署脚本
- * 部署前后端到 ecs.letshare.fun
+ * 后端 -> ecs.letshare.fun systemd；前端静态 docs/ -> ECS nginx（CDN 回源口 18081）
  *
  * 用法:
- *   node scripts/deploy.cjs              # 部署全栈
- *   node scripts/deploy.cjs --frontend   # 仅部署前端
- *   node scripts/deploy.cjs --backend    # 仅部署后端
- *   node scripts/deploy.cjs --dry-run    # 预览将要执行的操作
+ *   node scripts/deploy.cjs               # 部署全栈
+ *   node scripts/deploy.cjs --frontend    # 仅部署前端（推 docs/ 到 ECS）
+ *   node scripts/deploy.cjs --backend     # 仅部署后端
+ *   node scripts/deploy.cjs --dry-run     # 预览将要执行的操作
+ *   node scripts/deploy.cjs --skip-cdn    # 跳过 CDN 刷新（默认: 有 AK 则刷新）
+ *
+ * CDN 预热/刷新（可选）: 设置环境变量 ALIYUN_ACCESS_KEY_ID / ALIYUN_ACCESS_KEY_SECRET
+ * 后会自动调用 RefreshObjectCaches。未设置 AK 则跳过（提示手动刷新）。
  */
 
 const { execSync } = require("child_process");
+const crypto = require("crypto");
 const fs = require("fs");
+const https = require("https");
+const os = require("os");
 const path = require("path");
 
 const CONFIG = {
   remote: { host: "ecs.letshare.fun", user: "root", port: 22 },
-  // 实际生产环境路径（systemd service，非 docker）
   serverBinary: "/root/cloud/letshare-server-linux",
   serverService: "letshare.service",
-  webDir: "/var/www/html",
+  frontend: {
+    // Aliyun CDN 回源口：ECS nginx vhost 监听 18081，server_name letshare.fun
+    originIp: "101.133.108.16",
+    originPort: 18081,
+    remoteDir: "/var/www/letshare",
+  },
 };
 
 const ROOT = path.resolve(__dirname, "..");
 const SERVER_DIR = path.join(ROOT, "server");
 const FRONTEND_DIST = path.join(ROOT, "docs");
+const TMP_ZIP = path.join(os.tmpdir(), "letshare-docs.zip");
+const TMP_UNZ = path.join(os.tmpdir(), "letshare-unz.py");
+const EXTRACTOR = [
+  "import zipfile, os, shutil",
+  "d = '/var/www/letshare'",
+  "shutil.rmtree(d, ignore_errors=True)",
+  "os.makedirs(d)",
+  "os.chdir(d)",
+  "with zipfile.ZipFile('/tmp/letshare-docs.zip') as z: z.extractall('.')",
+  "print('extracted', len(zipfile.ZipFile('/tmp/letshare-docs.zip').namelist()), 'entries')",
+].join("\n");
 
 // ─── 工具 ────────────────────────────────────────────────
 function log(icon, msg) { console.log(`  ${icon} ${msg}`); }
 function run(cmd, opts = {}) { return execSync(cmd, { encoding: "utf-8", cwd: ROOT, ...opts }); }
-function ssh(cmd) { return run(`ssh ${CONFIG.remote.user}@${CONFIG.remote.host} "${cmd}"`, { stdio: "pipe" }); }
-function scp(local, remote) { run(`scp "${local}" ${CONFIG.remote.user}@${CONFIG.remote.host}:${remote}`, { stdio: "inherit" }); }
+function ssh(cmd) { return run(`ssh -o BatchMode=yes ${CONFIG.remote.user}@${CONFIG.remote.host} "${cmd}"`, { stdio: "pipe" }); }
+function scp(local, remote) { run(`scp -o BatchMode=yes "${local}" ${CONFIG.remote.user}@${CONFIG.remote.host}:${remote}`, { stdio: "inherit" }); }
 
 // ─── 构建后端 (Go → Linux binary) ───────────────────────
 function buildBackend() {
@@ -53,20 +75,63 @@ function buildFrontend() {
 // ─── 部署后端 ────────────────────────────────────────────
 function deployBackend(binary) {
   log("▶", "部署后端...");
-  // 上传到临时路径，校验后再替换，避免 SCP 中断留下半截二进制
   const tmp = `${CONFIG.serverBinary}.new`;
   scp(binary, tmp);
   ssh(`cp ${CONFIG.serverBinary} ${CONFIG.serverBinary}.bak; mv ${tmp} ${CONFIG.serverBinary}; chmod +x ${CONFIG.serverBinary}; systemctl restart ${CONFIG.serverService}`);
   log("✓", "后端部署完成，systemd 已重启");
 }
 
-// ─── 前端（GitHub Pages）────────────────────────────────
-// 前端静态文件由 GitHub Pages 服务（letshare.fun），source = main 分支 /docs。
-// 发布流程：pnpm build 生成 docs/ → git push origin main → Pages 自动部署。
-// ECS 不服务前端（nginx 被 mask，后端守护进程只占 WebSocket 端口）。
+// ─── CDN 刷新（阿里云 OpenAPI RPC 签名）─────────────────
+function cdnRefresh() {
+  const ak = process.env.ALIYUN_ACCESS_KEY_ID;
+  const sk = process.env.ALIYUN_ACCESS_KEY_SECRET;
+  if (!ak || !sk) { log("ℹ", "未设置 ALIYUN_ACCESS_KEY_ID/SECRET，跳过 CDN 刷新（部署后请手动刷新或预热）"); return; }
+
+  function enc(s) {
+    return encodeURIComponent(s).replace(/[!'()*]/g, c => "%" + c.charCodeAt(0).toString(16).toUpperCase());
+  }
+  const params = {
+    AccessKeyId: ak,
+    Action: "RefreshObjectCaches",
+    Format: "JSON",
+    ObjectPath: "https://letshare.fun/",
+    ObjectType: "Directory",
+    SignatureMethod: "HMAC-SHA1",
+    SignatureNonce: crypto.randomUUID(),
+    SignatureVersion: "1.0",
+    Timestamp: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"),
+    Version: "2018-05-10",
+  };
+  const sorted = Object.keys(params).sort();
+  const canonical = sorted.map(k => `${enc(k)}=${enc(params[k])}`).join("&");
+  const stringToSign = `GET&${enc("/")}&${enc(canonical)}`;
+  const sig = crypto.createHmac("sha1", `${sk}&`).update(stringToSign).digest("base64");
+  const url = `https://cdn.aliyuncs.com/?${canonical}&${enc("Signature")}=${enc(sig)}`;
+
+  log("▶", "刷新 CDN 缓存 (RefreshObjectCaches: https://letshare.fun/)...");
+  https.get(url, res => {
+    let body = "";
+    res.on("data", d => body += d);
+    res.on("end", () => {
+      const ok = JSON.parse(body);
+      if (ok.RefreshTaskId) log("✓", `CDN 刷新任务已提交: ${ok.RefreshTaskId} (可在控制台查看进度)`);
+      else log("⚠", `CDN 刷新响应: ${body}`);
+    });
+  }).on("error", e => log("⚠", `CDN 刷新失败: ${e.message}`));
+}
+
+// ─── 部署前端（推 docs/ → ECS nginx 回源）───────────────
 function deployFrontend() {
-  log("▶", "前端由 GitHub Pages 服务（letshare.fun），需 git push origin main 触发部署");
-  log("ℹ", "若已 push main，Pages 会自动从 /docs 部署；此处无需 SCP 到 ECS");
+  log("▶", "打包 docs/ → 上传 ECS nginx 回源口(18081)...");
+  // bsdtar 生成 zip（正斜杠路径，跨平台可靠）
+  run(`tar -caf "${TMP_ZIP}" -C "${FRONTEND_DIST}" .`, { stdio: "pipe" });
+  fs.writeFileSync(TMP_UNZ, EXTRACTOR);
+  scp(TMP_ZIP, "/tmp/letshare-docs.zip");
+  scp(TMP_UNZ, "/tmp/letshare-unz.py");
+  const out = ssh(`python3 /tmp/letshare-unz.py && rm -f /tmp/letshare-docs.zip /tmp/letshare-unz.py && curl -s -H 'Host: letshare.fun' http://127.0.0.1:18081/ -o /dev/null -w 'origin /: %{http_code}\\n'`);
+  log("✓", `已部署到 ${CONFIG.frontend.remoteDir}；${out.trim().split("\n").pop()}`);
+  fs.rmSync(TMP_ZIP, { force: true });
+  fs.rmSync(TMP_UNZ, { force: true });
 }
 
 // ─── 健康检查 ────────────────────────────────────────────
@@ -74,12 +139,12 @@ function healthCheck() {
   log("▶", "健康检查...");
   try {
     run("timeout /t 5 >nul", { stdio: "pipe" });
-    // 后端 WebSocket 端点（443 返回 401 表示服务存活且要求 token，属正常）
     const res = run(`curl -sk -o NUL -w "%{http_code}" "https://${CONFIG.remote.host}/"`, { stdio: "pipe" }).trim();
     log((res === "200" || res === "401") ? "✓" : "⚠", `后端 WebSocket (${CONFIG.remote.host}): ${res}`);
-    // 前端走 GitHub Pages
+    const origin = run(`curl -sk -o NUL -w "%{http_code}" -H "Host: letshare.fun" "http://${CONFIG.frontend.originIp}:${CONFIG.frontend.originPort}/version.json"`, { stdio: "pipe" }).trim();
+    log(origin === "200" ? "✓" : "⚠", `前端回源 ECS (${CONFIG.frontend.originIp}:${CONFIG.frontend.originPort}): ${origin}`);
     const web = run(`curl -sk -o NUL -w "%{http_code}" "https://letshare.fun/version.json"`, { stdio: "pipe" }).trim();
-    log(web === "200" ? "✓" : "⚠", `前端 Pages (letshare.fun/version.json): ${web}`);
+    log(web === "200" ? "✓" : "⚠", `前端线上 (letshare.fun/version.json): ${web}`);
   } catch { log("⚠", "curl 不可用，跳过健康检查"); }
 }
 
@@ -89,19 +154,20 @@ async function main() {
   const doFrontend = !a.includes("--backend");
   const doBackend = !a.includes("--frontend");
   const dry = a.includes("--dry-run");
+  const skipCdn = a.includes("--skip-cdn");
 
   console.log(`\n  LetShare Deploy → ${CONFIG.remote.host}${dry ? " [DRY-RUN]" : ""}\n`);
   const t0 = Date.now();
 
   let binary = null;
   if (doBackend) binary = buildBackend();
-  if (doFrontend) buildFrontend();
+  if (doFrontend && !a.includes("--no-build")) buildFrontend();
 
   if (dry) { log("ℹ", "DRY-RUN 完成，跳过部署"); return; }
 
   console.log("");
   if (doBackend && binary) deployBackend(binary);
-  if (doFrontend) deployFrontend();
+  if (doFrontend) { deployFrontend(); if (!skipCdn) cdnRefresh(); }
 
   console.log("");
   healthCheck();
