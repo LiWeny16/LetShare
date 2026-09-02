@@ -155,6 +155,7 @@ const sharedMalayTranslation = {
         },
         download: {
             deleteSelected: "Padam Dipilih",
+            downloadSelected: "Muat Turun Dipilih",
             selectAll: "Pilih Semua",
             deleteAllFrom: 'Padam semua dari {{name}}',
             deleteFile: "Padam fail ini",
@@ -444,6 +445,7 @@ export const resources = {
             },
             download: {
                 deleteSelected: "Delete Selected",
+                downloadSelected: "Download Selected",
                 selectAll: "Select All",
                 deleteAllFrom: 'Delete all from {{name}}',
                 deleteFile: "Delete this file",
@@ -733,6 +735,7 @@ export const resources = {
             },
             download: {
                 deleteSelected: "删除选中",
+                downloadSelected: "下载已选",
                 selectAll: "全选",
                 deleteAllFrom: '删除来自 {{name}} 的所有文件',
                 deleteFile: "删除该文件",

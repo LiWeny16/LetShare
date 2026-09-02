@@ -6,7 +6,7 @@
  *   idle → incoming（收到 invite，等待本地 accept 决策）
  *   outgoing/incoming → connecting（accept 后开始 SDP/ICE 协商）
  *   connecting → active（协商完成、媒体流建立）
- *   active/connecting → ended（bye / 错误 / 超时）
+ *   active/connecting → ended（bye / 错误 / 超时 / 断连宽限超时）
  *
  * 轨道：
  *   p2p    — 媒体走本 peer 的 RTCPeerConnection（DTLS-SRTP 天然 E2E 加密）
@@ -25,6 +25,13 @@ import { orderVideoCodecs, type VideoCodecPrioritySetting } from "./videoCapture
 export type CallSessionState = "idle" | "incoming" | "outgoing" | "connecting" | "active" | "ended";
 export type MediaKind = "audio" | "video";
 export type CallTransport = "p2p" | "public";
+
+/**
+ * connectionState === "disconnected" 后的宽限毫秒数：对端静默消失（断网/关页未发 bye）
+ * 时 ICE 先进入 disconnected；宽限期内恢复 connected 则取消，超时判定通话中断。
+ * 浏览器检测到断连本身需数秒，故合计约 15~20s 内收尾（避免 UI 永远残留通话）。
+ */
+const DISCONNECT_GRACE_MS = 10_000;
 
 /** 连接质量采样（UI 质量徽标用）：单次 getStats 快照，取不到的字段为 null */
 export type CallQualitySample = {
@@ -132,6 +139,8 @@ export class CallSession {
   private pendingRemoteOffer: RTCSessionDescriptionInit | null = null;
   /** 早到 ICE 缓冲：remoteDescription 未就绪前收到的候选（FIFO，remoteDescription 就绪后立即 flush） */
   private pendingIce: RTCIceCandidateInit[] = [];
+  /** ICE disconnected 宽限定时器：到时判定通话中断（见 onconnectionstatechange） */
+  private disconnectGraceTimer: number | ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     private readonly opts: CallSessionOptions,
@@ -340,13 +349,19 @@ export class CallSession {
       if (!this.peer) return;
       const st = this.peer.connectionState;
       console.log(`[Call] connectionState=${st}`);
-      if (st === "connected" && this.state === "connecting") {
-        this.setState("active");
-      } else if (["failed", "closed", "disconnected"].includes(st) && this.state !== "ended") {
-        // disconnected 可能是临时网络抖动，交给上层超时/重连策略
-        if (st === "failed" || st === "closed") {
-          this.hangup("error");
+      if (st === "connected") {
+        // 恢复连接：取消断开宽限（可能短暂 disconnected —— 网络抖动已恢复）
+        this.clearDisconnectGrace();
+        if (this.state === "connecting") {
+          this.setState("active");
         }
+      } else if (st === "disconnected") {
+        // 对端静默消失（断网/关页未发 bye）的第一信号：进入宽限期，
+        // 宽限期内恢复 connected 则取消；超时未恢复判定通话中断（UI 不残留）。
+        if (this.state !== "ended") this.armDisconnectGrace();
+      } else if (["failed", "closed"].includes(st) && this.state !== "ended") {
+        this.clearDisconnectGrace();
+        this.hangup("error");
       }
     };
     this.peer = peer;
@@ -774,9 +789,30 @@ export class CallSession {
 
   // ─── 挂断 / 清理 ─────────────────────────────────────────────────
 
+  /** 武装断连宽限定时器：disconnected 后未在宽限期内恢复连接 → 判定通话中断。幂等（已武装则忽略）。 */
+  private armDisconnectGrace(): void {
+    if (this.disconnectGraceTimer != null) return;
+    console.log(`[Call] connection disconnected — grace ${DISCONNECT_GRACE_MS}ms before end (callId=${this.opts.callId})`);
+    const g = globalThis as { setTimeout: (fn: () => void, ms: number) => number | ReturnType<typeof setTimeout> };
+    this.disconnectGraceTimer = g.setTimeout(() => {
+      this.disconnectGraceTimer = null;
+      console.log(`[Call] disconnect grace expired — ending call (callId=${this.opts.callId})`);
+      this.hangup("error");
+    }, DISCONNECT_GRACE_MS);
+  }
+
+  /** 取消断连宽限定时器（恢复 connected 或已挂断时）。 */
+  private clearDisconnectGrace(): void {
+    if (this.disconnectGraceTimer == null) return;
+    const g = globalThis as { clearTimeout: (h: number | ReturnType<typeof setTimeout>) => void };
+    g.clearTimeout(this.disconnectGraceTimer as number | ReturnType<typeof setTimeout>);
+    this.disconnectGraceTimer = null;
+  }
+
   hangup(reason?: "hangup" | "error" | "left-room"): void {
     if (this.ended) return;
     this.ended = true;
+    this.clearDisconnectGrace();
     if (this.peer) {
       this.peer.onicecandidate = null;
       this.peer.onnegotiationneeded = null;

@@ -47,7 +47,7 @@ export type CallManagerEvents = {
   onLocalStream: (peerId: string, stream: MediaStream) => void;
   /** 轨道切换（UI 显示 P2P/公网状态） */
   onTransportChange: (peerId: string, transport: CallTransport) => void;
-  /** 通话结束（UI 清理横幅） */
+  /** 通话结束（所有结束路径统一收口：UI 清理横幅/面板；对端断开且 bye 丢失时也会触发） */
   onCallEnded: (peerId: string) => void;
 };
 
@@ -293,8 +293,8 @@ export class CallManager {
       case "call:bye": {
         const call = this.calls.get(callId);
         if (!call) return;
+        // onCallEnded 由 cleanup 统一收口，见 cleanup()
         this.cleanup(callId);
-        this.events.onCallEnded(call.peerId);
         return;
       }
       case "call:sdp": {
@@ -348,8 +348,19 @@ export class CallManager {
     const call = this.calls.get(callId);
     if (!call) return;
     this.deps.broadcast(buildBye(callId, "hangup"));
+    // onCallEnded 由 cleanup 统一收口，见 cleanup()
     this.cleanup(callId);
-    this.events.onCallEnded(call.peerId);
+  }
+
+  /** 信令层通知：对端离开房间（页面关闭/刷新广播 leave）。
+   *  其 call:bye 已不可能到达，立即结束与对端的通话（含未接听的来电横幅），
+   *  不必等待 RTCPeerConnection 断连宽限。 */
+  peerLeft(peerId: string): void {
+    const callId = this.byPeer.get(peerId);
+    if (!callId) return;
+    const call = this.calls.get(callId);
+    if (!call) return;
+    this.cleanup(callId);
   }
 
   /** 本端离开房间：结束所有通话。 */
@@ -535,5 +546,9 @@ export class CallManager {
       call.incomingTimeout = null;
     }
     call.session.hangup("hangup");
+    // 统一收口：所有结束路径（bye / decline / 来电超时 / 会话错误 / 对端离开 / 主动挂断）
+    // 都经此上抛 onCallEnded，UI 才能清理面板/横幅 —— 否则对端断开且 bye 丢失时，
+    // 通话残留在界面（session.hangup 的 onStateChange("ended") 已同步完成，此处只触发一次）
+    this.events.onCallEnded(call.peerId);
   }
 }

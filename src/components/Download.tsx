@@ -13,6 +13,7 @@ import {
   DialogContent,
   IconButton,
   Tooltip,
+  alpha,
 } from "@mui/material";
 import InsertDriveFile from "@mui/icons-material/InsertDriveFile";
 import PictureAsPdf from "@mui/icons-material/PictureAsPdf";
@@ -331,29 +332,30 @@ export default function DownloadDrawerSlide({
   };
   const isDownloadingRef = React.useRef(false);
 
-  const downloadAllAsZip = async () => {
-    if (receivedList.length === 0) return;
-    // 防止重复点击导致双重 ZIP 生成
-    if (isDownloadingRef.current) return;
-    isDownloadingRef.current = true;
+  /**
+   * 把给定文件列表打包为 zip 并触发保存（App 直存磁盘 / 浏览器交给「保存文件」）。
+   * 返回 true 表示打包并送出成功；false 表示被安全闸门拦截或打包失败。
+   */
+  const buildZipAndDownload = async (files: File[]): Promise<boolean> => {
+    if (files.length === 0) return false;
+
+    const zipGuard = canCreateSafeZipBundle(
+      files.map((file) => ({ size: file.size })),
+      getDeviceType()
+    );
+    if (!zipGuard.allowed) {
+      alertUseMUI(
+        `文件较多或较大（${zipGuard.totalFiles} 个，${formatSize(zipGuard.totalBytes)}），为避免浏览器内存崩溃，请逐个下载。当前设备安全打包上限：${zipGuard.maxFiles} 个 / ${formatSize(zipGuard.maxBytes)}。`,
+        6000,
+        { kind: "warning" }
+      );
+      return false;
+    }
 
     try {
-      const zipGuard = canCreateSafeZipBundle(
-        receivedList.map(([, file]) => ({ size: file.size })),
-        getDeviceType()
-      );
-      if (!zipGuard.allowed) {
-        alertUseMUI(
-          `文件较多或较大（${zipGuard.totalFiles} 个，${formatSize(zipGuard.totalBytes)}），为避免浏览器内存崩溃，请逐个下载。当前设备安全打包上限：${zipGuard.maxFiles} 个 / ${formatSize(zipGuard.maxBytes)}。`,
-          6000,
-          { kind: "warning" }
-        );
-        return;
-      }
-
       const { default: JSZip } = await import("jszip");
       const zip = new JSZip();
-      receivedList.forEach(([, file]) => {
+      files.forEach((file) => {
         zip.file(file.name, file);
       });
       const content = await zip.generateAsync({ type: "blob" });
@@ -372,9 +374,38 @@ export default function DownloadDrawerSlide({
       } else {
         prepareBrowserDownload(zipFile, zipFileName);
       }
+      return true;
     } catch (err) {
       console.error("打包下载失败:", err);
       alertUseMUI("打包下载失败，请重试！", 2000, { kind: "error" });
+      return false;
+    }
+  };
+
+  const downloadAllAsZip = async () => {
+    if (receivedList.length === 0) return;
+    // 防止重复点击导致双重 ZIP 生成
+    if (isDownloadingRef.current) return;
+    isDownloadingRef.current = true;
+
+    try {
+      await buildZipAndDownload(receivedList.map(([, file]) => file));
+    } finally {
+      isDownloadingRef.current = false;
+    }
+  };
+
+  /** 下载已勾选的文件（打包 zip） */
+  const downloadSelectedAsZip = async () => {
+    if (selectedFiles.size === 0 || isDownloadingRef.current) return;
+    const files = receivedList
+      .filter(([key]) => selectedFiles.has(key))
+      .map(([, file]) => file);
+    if (files.length === 0) return;
+
+    isDownloadingRef.current = true;
+    try {
+      await buildZipAndDownload(files);
     } finally {
       isDownloadingRef.current = false;
     }
@@ -587,6 +618,68 @@ export default function DownloadDrawerSlide({
   };
 
   // —— 批量选择与用户分组操作 ——
+
+  /**
+   * 勾选列拖拽滑选状态机（鼠标/触屏统一 Pointer Events）：
+   * - 在勾选框上按下 → 立即切换该行（anchor），并记录切换后的状态为基准
+   * - 指针滑过其他行 → 该行跟随基准状态
+   * - 指针抬起/取消 → 结束；若发生过滑动，抑制随后的 checkbox click / 行点击
+   */
+  const dragSelectRef = React.useRef<{
+    active: boolean;
+    anchorKey: string | null;
+    anchorSelected: boolean;
+    dragged: boolean;
+  }>({ active: false, anchorKey: null, anchorSelected: false, dragged: false });
+  // 上次手势是否发生了滑动（用于抑制拖拽结束落点上的 click/change）
+  const lastDragDraggedRef = React.useRef(false);
+
+  React.useEffect(() => {
+    const finishDrag = () => {
+      const drag = dragSelectRef.current;
+      if (!drag.active) return;
+      lastDragDraggedRef.current = drag.dragged;
+      dragSelectRef.current = { ...drag, active: false, anchorKey: null };
+    };
+    window.addEventListener("pointerup", finishDrag);
+    window.addEventListener("pointercancel", finishDrag);
+    return () => {
+      window.removeEventListener("pointerup", finishDrag);
+      window.removeEventListener("pointercancel", finishDrag);
+    };
+  }, []);
+
+  /** 勾选区按下：记录基准并立即切换该行 */
+  const handleDragSelectStart = (key: string) => {
+    const willSelect = !selectedFiles.has(key);
+    lastDragDraggedRef.current = false;
+    dragSelectRef.current = {
+      active: true,
+      anchorKey: key,
+      anchorSelected: willSelect,
+      dragged: false,
+    };
+    setSelectedFiles((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  /** 指针滑入某行：拖动中则让该行跟随基准状态 */
+  const handleDragEnterRow = (key: string) => {
+    const drag = dragSelectRef.current;
+    if (!drag.active || key === drag.anchorKey) return;
+    drag.dragged = true;
+    setSelectedFiles((prev) => {
+      if (prev.has(key) === drag.anchorSelected) return prev;
+      const next = new Set(prev);
+      if (drag.anchorSelected) next.add(key);
+      else next.delete(key);
+      return next;
+    });
+  };
 
   const toggleFileSelection = (key: string) => {
     setSelectedFiles((prev) => {
@@ -860,33 +953,43 @@ export default function DownloadDrawerSlide({
                   <Box
                     sx={{
                       display: "flex",
-                      alignItems: { xs: "stretch", sm: "center" },
-                      flexDirection: { xs: "column", sm: "row" },
+                      alignItems: "center",
                       gap: 1,
                       px: 1.25,
-                      py: 1,
+                      py: 0.75,
                       borderRadius: 1,
-                      color: theme.palette.info.dark,
-                      backgroundColor: theme.palette.info.light,
+                      color: theme.palette.primary.contrastText,
+                      backgroundColor: theme.palette.primary.main,
                     }}
                   >
-                    <Box sx={{ flex: 1, minWidth: 0 }}>
-                      <Typography variant="caption" sx={{ display: "block" }}>
-                        {browserDownloadNotice ?? (
-                          pendingBrowserDownload
+                    <DownloadIcon sx={{ flexShrink: 0, fontSize: "1.1rem" }} />
+                    <Tooltip
+                      title={
+                        browserDownloadNotice ??
+                        (pendingBrowserDownload
+                          ? getPreparedDownloadNotice(pendingBrowserDownload.fileName)
+                          : "")
+                      }
+                      arrow
+                      slotProps={{ popper: { sx: { pointerEvents: "none" } } }}
+                    >
+                      <Typography
+                        variant="body2"
+                        sx={{
+                          flex: 1,
+                          minWidth: 0,
+                          fontWeight: 500,
+                          textOverflow: "ellipsis",
+                          overflow: "hidden",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {browserDownloadNotice ??
+                          (pendingBrowserDownload
                             ? getPreparedDownloadNotice(pendingBrowserDownload.fileName)
-                            : ""
-                        )}
+                            : "")}
                       </Typography>
-                      {pendingBrowserDownload && (
-                        <Typography
-                          variant="caption"
-                          sx={{ display: "block", mt: 0.5 }}
-                        >
-                          {pendingBrowserDownload.fileName} · {formatSize(pendingBrowserDownload.size)}
-                        </Typography>
-                      )}
-                    </Box>
+                    </Tooltip>
                     {pendingBrowserDownload && (
                       <Button
                         component="a"
@@ -894,16 +997,19 @@ export default function DownloadDrawerSlide({
                         download={pendingBrowserDownload.fileName}
                         variant="contained"
                         size="small"
-                        startIcon={<DownloadIcon />}
                         onClick={() => {
                           const notice = getBrowserDownloadNotice(pendingBrowserDownload.fileName);
                           setBrowserDownloadNotice(notice);
                           alertUseMUI(notice, 7000, { kind: "info" });
                         }}
                         sx={{
-                          alignSelf: { xs: "flex-start", sm: "center" },
+                          flexShrink: 0,
                           whiteSpace: "nowrap",
-                          ...buttonStyleNormal,
+                          backgroundColor: theme.palette.primary.contrastText,
+                          color: theme.palette.primary.main,
+                          "&:hover": {
+                            backgroundColor: alpha(theme.palette.primary.contrastText, 0.9),
+                          },
                         }}
                       >
                         保存文件
@@ -1405,6 +1511,11 @@ export default function DownloadDrawerSlide({
                                         },
                                       }}
                                       onClick={() => {
+                                        // 拖拽滑选结束时落点可能落在行上，抑制误触预览/下载
+                                        if (lastDragDraggedRef.current) {
+                                          lastDragDraggedRef.current = false;
+                                          return;
+                                        }
                                         if (isImg) {
                                           openPreview(file);
                                         } else {
@@ -1416,16 +1527,35 @@ export default function DownloadDrawerSlide({
                                           }
                                         }
                                       }}
+                                      onPointerEnter={() => handleDragEnterRow(key)}
+                                      onPointerDown={() => {
+                                        // 新手势开始，复位上一次拖拽的抑制标记（避免误吞本次点击）
+                                        lastDragDraggedRef.current = false;
+                                      }}
                                     >
                                       <Checkbox
                                         size="small"
                                         checked={isSelected}
                                         onChange={(event) => {
                                           event.stopPropagation();
-                                          toggleFileSelection(key);
+                                          // 勾选动作统一由 pointerdown（拖拽状态机）与 onKeyDown 处理；
+                                          // pointer 路径的 click/change 一律吞掉，避免二次切换
+                                          lastDragDraggedRef.current = false;
+                                        }}
+                                        onKeyDown={(event) => {
+                                          // 键盘支持：Space/Enter 手动切换（原生 change 已被吞）
+                                          if (event.key === " " || event.key === "Enter") {
+                                            event.preventDefault();
+                                            event.stopPropagation();
+                                            toggleFileSelection(key);
+                                          }
                                         }}
                                         onClick={(event) => event.stopPropagation()}
-                                        sx={{ p: { xs: 0.5, sm: 1 }, flexShrink: 0 }}
+                                        onPointerDown={(event) => {
+                                          event.stopPropagation();
+                                          handleDragSelectStart(key);
+                                        }}
+                                        sx={{ p: { xs: 0.5, sm: 1 }, flexShrink: 0, touchAction: "none" }}
                                       />
                                       {/* 图片：显示缩略图（已生成）或通用图标（生成中） */}
                                       <Box
@@ -1495,15 +1625,52 @@ export default function DownloadDrawerSlide({
                       })}
                     </Box>
 
-                    {/* 批量删除按钮 */}
+                    {/* 批量操作条（sticky 悬浮：折叠/滚动时始终可见，主色底随主题变化） */}
                     {selectedFiles.size > 0 && (
-                      <Box sx={{ display: "flex", justifyContent: "center", mt: 2 }}>
+                      <Box
+                        sx={{
+                          position: "sticky",
+                          bottom: 0,
+                          zIndex: 2,
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          gap: 1,
+                          px: 1,
+                          py: 0.75,
+                          mt: 2,
+                          mb: -2.5,
+                          whiteSpace: "nowrap",
+                          overflow: "hidden",
+                          backgroundColor: theme.palette.primary.main,
+                          color: theme.palette.primary.contrastText,
+                          boxShadow: "0 -4px 12px rgba(0,0,0,0.15)",
+                        }}
+                      >
+                        <Button
+                          variant="contained"
+                          size="small"
+                          startIcon={<DownloadIcon />}
+                          onClick={downloadSelectedAsZip}
+                          sx={{
+                            flexShrink: 0,
+                            minWidth: "auto",
+                            whiteSpace: "nowrap",
+                            backgroundColor: theme.palette.primary.contrastText,
+                            color: theme.palette.primary.main,
+                            "&:hover": {
+                              backgroundColor: alpha(theme.palette.primary.contrastText, 0.9),
+                            },
+                          }}
+                        >
+                          {t('download.downloadSelected')} ({selectedFiles.size})
+                        </Button>
                         <Button
                           variant="contained"
                           color="error"
                           size="small"
                           onClick={deleteSelectedFiles}
-                          sx={{ ...buttonStyleNormal }}
+                          sx={{ flexShrink: 0, minWidth: "auto", whiteSpace: "nowrap" }}
                         >
                           {t('download.deleteSelected')} ({selectedFiles.size})
                         </Button>

@@ -909,6 +909,15 @@ export class RealTimeColab {
    this.callSignalHandler = handler;
   }
 
+  // 对端离开（leave 广播）联动：页面关闭/刷新时对端的 call:bye 已不可能到达，
+  // 由 CallManager 立即结束与其的通话（避免通话永远残留在接收端界面）。
+  private callPeerLeaveHandler: ((fromId: string) => void) | null = null;
+
+  /** 注册通话对端离开处理器（收到 leave 广播时调用；由 CallManager 结束与其的通话）。 */
+  public registerCallPeerLeaveHandler(handler: (fromId: string) => void): void {
+   this.callPeerLeaveHandler = handler;
+  }
+
   private handleCallSignal(data: any): void {
    const fromId = data.from;
    if (!fromId || fromId === this.getUniqId()) return;
@@ -1196,6 +1205,10 @@ export class RealTimeColab {
   this.userList.delete(fromId);
   this.updateUI();
   console.debug(`[LEAVE] All data for user ${fromId} has been cleaned up`);
+
+  // 通话联动：对端离开（页面关闭/刷新广播 leave）→ 立即结束与其的通话
+  // （其 call:bye 已不可能到达，需马上清理，否则通话永远残留在界面）
+  this.callPeerLeaveHandler?.(fromId);
 
  }
 

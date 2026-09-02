@@ -354,6 +354,8 @@ const Share = observer(() => {
     );
     callManagerRef.current = manager;
     realTimeColab.registerCallSignalHandler((from, data) => manager.handleSignal(from, data));
+    // 对端离开（页面关闭/刷新广播 leave）：立即结束与其的通话（其 bye 已不可能到达）
+    realTimeColab.registerCallPeerLeaveHandler((peerId) => manager.peerLeft(peerId));
     return () => {
       manager.leaveRoom();
       callManagerRef.current = null;

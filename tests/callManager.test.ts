@@ -12,6 +12,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mock } from "node:test";
 
 import { CallManager, type CallManagerDeps } from "../src/app/libs/call/callManager";
 import { CallSession } from "../src/app/libs/call/callSession";
@@ -622,5 +623,118 @@ test("handleSignal: 旧版 invite（无 to 字段）保持兼容（维持全接�
     manager.handleSignal("caller:uid", buildInvite("c_y1", "audio"));
     assert.equal(events.onIncoming.length, 1, "无 to 的旧 invite 维持旧行为");
     manager.leaveRoom();
+  });
+});
+
+// ─── 统一收口：cleanup 必然触发 onCallEnded（对端断开且 bye 丢失时不残留 UI）─────
+
+test("cleanup 收口：caller 收到 decline 也触发 onCallEnded（对端拒接时面板不残留）", async () => {
+  await withFakeRTC(async () => {
+    const { manager, events } = makeManager();
+    const callId = await manager.startCall("peer:uid", "audio", fakeStream() as MediaStream);
+    manager.handleSignal("peer:uid", buildDecline(callId, "declined"));
+    assert.equal(manager.getCallIdByPeer("peer:uid"), null);
+    assert.ok(events.onCallEnded.includes("peer:uid"), "decline 路径应触发 onCallEnded");
+    manager.leaveRoom();
+  });
+});
+
+test("cleanup 收口：bye 路径只触发一次 onCallEnded（无重复事件）", async () => {
+  await withFakeRTC(async () => {
+    const { manager, events } = makeManager();
+    const callId = await manager.startCall("peer:uid", "audio", fakeStream() as MediaStream);
+    manager.handleSignal("peer:uid", buildBye(callId, "hangup"));
+    const count = events.onCallEnded.filter((p) => p === "peer:uid").length;
+    assert.equal(count, 1, "bye 路径应由 cleanup 恰好触发一次 onCallEnded");
+    manager.leaveRoom();
+  });
+});
+
+test("peerLeft: 对端 leave 广播到来立即结束通话并触发 onCallEnded", async () => {
+  await withFakeRTC(async () => {
+    const { manager, events } = makeManager();
+    await manager.startCall("peer:uid", "audio", fakeStream() as MediaStream);
+    manager.peerLeft("peer:uid");
+    assert.equal(manager.getCallIdByPeer("peer:uid"), null);
+    assert.ok(events.onCallEnded.includes("peer:uid"), "对端离开应触发 onCallEnded");
+    manager.leaveRoom();
+  });
+});
+
+test("peerLeft: 无通话对端为 no-op（不误触发）", () => {
+  withFakeRTC(() => {
+    const { manager, events } = makeManager();
+    manager.peerLeft("stranger:uid");
+    assert.equal(events.onCallEnded.length, 0);
+  });
+});
+
+// ─── CallSession 断连宽限：disconnected → 恢复 / 超时判定中断 ────────────────────
+
+/** 构造最小 CallSession（本地无流，不 attach）。 */
+function makeSession(events: Record<string, unknown> = {}) {
+  return new CallSession(
+    {
+      callId: "c_1",
+      peerId: "peer:uid",
+      rtcConfig: { iceServers: [] },
+      localStream: undefined,
+      wantVideo: false,
+      onIceCandidate: () => {},
+      onNegotiationNeeded: () => {},
+    },
+    {
+      onStateChange: (s) => (events.onStateChange as ((s: string) => void) | undefined)?.(s),
+      onLocalStream: () => {},
+      onRemoteStream: () => {},
+      onTrack: () => {},
+      onTransportChange: () => {},
+    },
+  );
+}
+
+test("CallSession: disconnected 后宽限期内未恢复 → hangup(error) 判定中断", async () => {
+  await withFakeRTC(async () => {
+    mock.timers.enable({ apis: ["setTimeout"] });
+    try {
+      const states: string[] = [];
+      const session = makeSession({ onStateChange: (s) => states.push(s) });
+      await session.startOutgoing();
+      const pc = FakeRTCPeerConnection.instances.at(-1)!;
+
+      pc.connectionState = "disconnected";
+      pc.onconnectionstatechange?.();
+      assert.equal(session.getState(), "outgoing", "宽限期内不应立即结束");
+
+      mock.timers.tick(11_000);
+      assert.equal(session.getState(), "ended", "宽限期超时应判定通话中断");
+      assert.ok(states.includes("ended"));
+    } finally {
+      mock.timers.reset();
+    }
+  });
+});
+
+test("CallSession: disconnected 后及时恢复 connected → 取消宽限，通话保留", async () => {
+  await withFakeRTC(async () => {
+    mock.timers.enable({ apis: ["setTimeout"] });
+    try {
+      const states: string[] = [];
+      const session = makeSession({ onStateChange: (s) => states.push(s) });
+      await session.startOutgoing();
+      const pc = FakeRTCPeerConnection.instances.at(-1)!;
+
+      pc.connectionState = "disconnected";
+      pc.onconnectionstatechange?.();
+      // 网络抖动恢复
+      pc.connectionState = "connected";
+      pc.onconnectionstatechange?.();
+
+      mock.timers.tick(15_000);
+      assert.equal(session.getState(), "outgoing", "恢复连接后宽限应取消，通话保留");
+      assert.equal(states.includes("ended"), false);
+    } finally {
+      mock.timers.reset();
+    }
   });
 });

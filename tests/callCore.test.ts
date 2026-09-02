@@ -197,7 +197,8 @@ test("isCallSignal: false for non-call messages", () => {
 
 test("buildInvite carries media and device label", () => {
   const media: CallKind = "audio+video";
-  const sig = buildInvite("c1", media, "iPhone");
+  // 签名：buildInvite(callId, media, to?, deviceLabel?) —— deviceLabel 在第 4 位
+  const sig = buildInvite("c1", media, undefined, "iPhone");
   assert.equal(sig.type, "call:invite");
   assert.equal(sig.callId, "c1");
   assert.equal(sig.media, media);
