@@ -225,8 +225,8 @@ const Share = observer(() => {
   const [openDialog, setOpenDialog] = useState(false);
   const [connectedUsers, setConnectedUsers] = useState<ConnectedUser[]>([]);
   const [loading, setLoading] = useState(false);
-  // 修改状态的类型，增加 "video"
-  const [selectedButton, setSelectedButton] = useState<"file" | "text" | "clip" | "image" | "video">("clip");
+  // 修改状态的类型，增加 "video"；默认不选任何发送模式（点击用户卡片 = 打开聊天）
+  const [selectedButton, setSelectedButton] = useState<"" | "file" | "text" | "clip" | "image" | "video">("");
 
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
@@ -1050,6 +1050,10 @@ const Share = observer(() => {
         } else {
           alertUseMUI(t('toast.clipboardEmpty'), 2000, { kind: "info" });
         }
+      } else if (selectedButton === "") {
+        // 未选择任何内容：点击用户卡片 = 打开聊天（与聊天按钮同效果）
+        setChatTargetUser(targetUserId);
+        setChatPanelOpen(true);
       } else {
         alertUseMUI(t('toast.noContentSelected'), 2000, { kind: "info" });
       }
@@ -1439,7 +1443,7 @@ const Share = observer(() => {
 
           <Divider sx={{ mb: 0.5, mt: 2 }} />
 
-          <Box className="uniformed-scroller" sx={{ mt: 0, p: 0, flexGrow: 1, overflowY: "auto", pr: { xs: "56px", sm: 0 } }}>
+          <Box className="uniformed-scroller" sx={{ mt: 0, p: 0, flexGrow: 1, overflowY: "auto" }}>
             {(connectedUsers.length == 0) && (settingsStore.get("isNewUser")) ? <><Box
               sx={{
                 display: 'flex',
@@ -1628,12 +1632,14 @@ const Share = observer(() => {
                       </Tooltip>
                     </Box>
 
-                    {/* 操作区：聊天 + 语音/视频 —— 统一 28px 高 */}
+                    {/* 操作区：聊天 + 语音/视频 —— 统一 28px 高；zIndex 高于悬浮下载 Fab，保证窄屏可点 */}
                     <Box sx={{
                       display: "flex",
                       alignItems: "center",
                       justifyContent: "space-evenly",
                       flexShrink: 0,
+                      position: "relative",
+                      zIndex: 4,
                       height: 28,
                     }}>
                       <Tooltip title={t('chat.startChat', '开始聊天')} arrow enterDelay={250}>
@@ -1663,7 +1669,7 @@ const Share = observer(() => {
             ))}
           </Box>
 
-          {/* 悬浮按钮（窄屏缩小贴边，避免遮挡用户卡片操作区） */}
+          {/* 悬浮按钮（窄屏缩小贴边；zIndex 3 浮于卡片背景但低于卡片操作区(4)，不遮挡按钮） */}
           <Fab
             color="primary"
             onClick={() => { setDwnloadPageState(true) }}
@@ -1673,7 +1679,7 @@ const Share = observer(() => {
               right: { xs: 10, sm: 35 },
               width: { xs: 40, sm: 56 },
               height: { xs: 40, sm: 56 },
-              zIndex: (theme) => theme.zIndex.modal + 1,
+              zIndex: 3,
             }}
           >
             <DownloadIcon sx={{ fontSize: { xs: 22, sm: 24 } }} />
@@ -1959,6 +1965,12 @@ const Share = observer(() => {
           onClose={() => setChatPanelOpen(false)}
           targetUserId={chatTargetUser}
           targetUserName={chatTargetUser.split(':')[0] || 'Unknown User'}
+          onVideoCall={() => {
+            // 「+」面板「视频通话」：关闭聊天窗并发起视频通话
+            if (!chatTargetUser) return;
+            setChatPanelOpen(false);
+            void startCall(chatTargetUser, "video");
+          }}
         />
       )}
 

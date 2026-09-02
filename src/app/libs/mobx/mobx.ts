@@ -25,7 +25,7 @@ const DEFAULT_SETTINGS = {
   videoCodecPriority: "auto" as "auto" | "h264" | "vp8" | "vp9" | "av1", // 视频编码器优先次序（协商前生效，通话中切换下次生效）
   videoBackground: "off" as "off" | "blur", // 背景模糊（Chromium 118+ 原生约束，不支持时自动降级）
   videoDegradation: "maintain-framerate" as "balanced" | "maintain-framerate" | "maintain-resolution", // 网络差时浏览器降级策略：默认帧率优先（流畅 > 码率/清晰度）
-  version: "3.6.10",
+  version: "3.6.11",
   isNewUser: true
 };
 export type SettingsKey = keyof typeof DEFAULT_SETTINGS;
