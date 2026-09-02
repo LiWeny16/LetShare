@@ -13,7 +13,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { CallManager } from "../src/app/libs/call/callManager";
+import { CallManager, type CallManagerDeps } from "../src/app/libs/call/callManager";
 import { CallSession } from "../src/app/libs/call/callSession";
 import { buildInvite, buildBye, buildDecline, buildAccept, buildSdp, buildIce } from "../src/app/libs/call/callSignaling";
 
@@ -34,11 +34,38 @@ class FakeRTCPeerConnection {
   addIceCandidateCalls: (RTCIceCandidateInit | null)[] = [];
   /** 有序调用日志（验证 SRD → flush ICE → addTrack 的规范接听端顺序） */
   callLog: string[] = [];
+  /** 注入的 sender 列表（视频能力/换轨用例用；startCall 走 addTrack 时同步追加） */
+  senders: Array<{
+    track?: MediaStreamTrack | null;
+    replaceTrack?: (t: MediaStreamTrack) => Promise<void>;
+    getParameters?: () => { encodings?: Array<{ maxBitrate?: number }> };
+    setParameters?: (p: unknown) => Promise<void>;
+    transceiver?: { setCodecPreferences?: (codecs: unknown[]) => void };
+  }> = [];
 
   constructor(_config?: RTCConfiguration) {
     FakeRTCPeerConnection.instances.push(this);
   }
-  addTrack(_track: MediaStreamTrack, _stream: MediaStream) { this.callLog.push("addTrack"); return { track: _track } as RTCRtpSender; }
+  addTrack(_track: MediaStreamTrack, _stream: MediaStream) {
+    this.callLog.push("addTrack");
+    // 附 transceiver.setCodecPreferences / getParameters / setParameters：
+    // 验证视频编码器排序与码率上限应用路径（h264 调优走不到则这些调用不出现）
+    const sender: FakeRTCPeerConnection["senders"][number] = {
+      track: _track,
+      replaceTrack: async (t: MediaStreamTrack) => { sender.track = t; },
+      transceiver: {
+        setCodecPreferences: (codecs: unknown[]) => { this.codecPrefsCalls.push(codecs); },
+      } as unknown as RTCRtpSender["transceiver"],
+      getParameters: () => ({ encodings: [{ maxBitrate: undefined }] }),
+      setParameters: async (p: unknown) => { this.paramCalls.push(p); },
+    };
+    this.senders.push(sender);
+    return sender as unknown as RTCRtpSender;
+  }
+  /** 编码器排序调用记录（setCodecPreferences 的入参列表） */
+  codecPrefsCalls: unknown[][] = [];
+  /** sender.setParameters 调用记录（码率上限热更新断言用） */
+  paramCalls: unknown[] = [];
   addTransceiver(_kind: string, _init?: RTCRtpTransceiverInit) { return {} as RTCRtpTransceiver; }
   async createOffer(_opts?: RTCOfferAnswerOptions) { return { type: "offer", sdp: "fake-offer" }; }
   async createAnswer(_opts?: RTCOfferAnswerOptions) { this.createAnswerCount += 1; return { type: "answer", sdp: "fake-answer" }; }
@@ -50,7 +77,7 @@ class FakeRTCPeerConnection {
     return null;
   }
   async addIceCandidate(c: RTCIceCandidateInit | null) { this.callLog.push("addIceCandidate"); this.addIceCandidateCalls.push(c); return null; }
-  getSenders() { return []; }
+  getSenders() { return this.senders; }
   getReceivers() { return []; }
   async getStats() { return []; }
   close() { this.connectionState = "closed"; }
@@ -85,7 +112,7 @@ function makeEmptyStream(): MediaStream {
 
 type Events = Record<string, unknown[]>;
 
-function makeManager(overrides: { selfId?: string; broadcast?: (s: object) => void } = {}) {
+function makeManager(overrides: { selfId?: string; broadcast?: (s: object) => void; videoPrefs?: CallManagerDeps["videoPrefs"] } = {}) {
   const broadcasted: object[] = [];
   const events: Events = {
     onIncoming: [], onCallState: [], onRemoteStream: [], onLocalStream: [], onTransportChange: [], onCallEnded: [],
@@ -95,6 +122,7 @@ function makeManager(overrides: { selfId?: string; broadcast?: (s: object) => vo
       broadcast: (s: object) => { (overrides.broadcast ?? ((x: object) => broadcasted.push(x)))(s); },
       // 注意不能用 ??：null 也是合法 selfId 值（"不在房间"用例），?? 会把 null 吞成默认值
       getSelfId: () => ("selfId" in overrides ? overrides.selfId ?? null : "self:uid"),
+      ...(overrides.videoPrefs ? { videoPrefs: overrides.videoPrefs } : {}),
     },
     {
       onIncoming: (info) => events.onIncoming.push(info),
@@ -466,6 +494,111 @@ test("发起方侧：answer 前到达的 ICE 候选被缓冲，answer 应用后 
     await manager.handleSignal("peer:uid", buildSdp(callId, "answer", { type: "answer", sdp: "late-answer" }));
     await new Promise((r) => setTimeout(r, 50));
     assert.equal(callerPc.addIceCandidateCalls.length, 1, "answer 应用后候选应被 flush");
+    manager.leaveRoom();
+  });
+});
+
+// ─── 视频能力 fixtures ─────────────────────────────────────────────
+
+/** 带音/视频轨的假流（视频能力/换轨用例用）：真实 add/remove 语义，验证 session 换轨同步。 */
+function makeVideoStream(): MediaStream {
+  const videoTrack = { kind: "video", enabled: true, readyState: "live", contentHint: "", onended: null, stop() { this.readyState = "ended"; } } as unknown as MediaStreamTrack;
+  const audioTrack = { kind: "audio", enabled: true, readyState: "live", stop() { this.readyState = "ended"; } } as unknown as MediaStreamTrack;
+  const tracks: MediaStreamTrack[] = [audioTrack, videoTrack];
+  return {
+    getTracks: () => tracks.slice(),
+    getAudioTracks: () => tracks.filter((t) => t.kind === "audio"),
+    getVideoTracks: () => tracks.filter((t) => t.kind === "video"),
+    addTrack: (t) => { if (!tracks.includes(t)) tracks.push(t); },
+    removeTrack: (t) => { const i = tracks.indexOf(t); if (i >= 0) tracks.splice(i, 1); },
+    id: "fake-video-stream",
+  } as unknown as MediaStream;
+}
+
+test("视频能力：videoPrefs 经协商应用到视频 sender（编码器排序 + 码率上限）", async () => {
+  await withFakeRTC(async () => {
+    // 注入平台能力：浏览器 RTCRtpSender.getCapabilities 返回 H264/VP8/rtx
+    const prevSender = (globalThis as Record<string, unknown>).RTCRtpSender;
+    (globalThis as Record<string, unknown>).RTCRtpSender = {
+      getCapabilities: () => ({
+        codecs: [{ mimeType: "video/VP8" }, { mimeType: "video/H264" }, { mimeType: "video/rtx" }],
+      }),
+    };
+    try {
+      const { manager } = makeManager({
+        videoPrefs: () => ({ videoCodec: "h264", videoMaxBitrateKbps: 750 }),
+      });
+      await manager.startCall("peer:uid", "audio+video", makeVideoStream());
+      await new Promise((r) => setTimeout(r, 30)); // 等协商链（setLocalDesc → bitrate 应用）
+      const pc = FakeRTCPeerConnection.instances.at(-1)!;
+      assert.ok(pc.senders.some((s) => s.track?.kind === "video"), "video sender 应存在");
+      // 编码器排序：h264 排最前（只排序不删除，rtx 附属保留）
+      assert.ok(pc.codecPrefsCalls.length > 0, "应调用 setCodecPreferences");
+      const ordered = pc.codecPrefsCalls[0] as { mimeType: string }[];
+      assert.equal(ordered[0].mimeType, "video/H264");
+      assert.equal(ordered.length, 3, "rtx 等附属 codec 不得被删除");
+      // 码率上限：协商后对 video sender 应用 maxBitrate = 750kbps
+      const params = pc.paramCalls.at(-1) as { encodings: Array<{ maxBitrate?: number }> };
+      assert.equal(params.encodings[0].maxBitrate, 750000);
+      manager.leaveRoom();
+    } finally {
+      if (prevSender === undefined) delete (globalThis as Record<string, unknown>).RTCRtpSender;
+      else (globalThis as Record<string, unknown>).RTCRtpSender = prevSender;
+    }
+  });
+});
+
+test("swapVideoTrack: 替换视频 sender 并同步 localStream（旧轨摘除、新轨并入）", async () => {
+  await withFakeRTC(async () => {
+    const { manager } = makeManager();
+    const localStream = makeVideoStream();
+    await manager.startCall("peer:uid", "audio+video", localStream);
+    const pc = FakeRTCPeerConnection.instances.at(-1)!;
+    const oldTrack = localStream.getVideoTracks()[0];
+    const videoSender = pc.senders.find((s) => s.track?.kind === "video")!;
+    assert.equal(videoSender.track, oldTrack);
+
+    const newTrack = { kind: "video", enabled: true, readyState: "live", onended: null, stop() { this.readyState = "ended"; } } as unknown as MediaStreamTrack;
+    const count = await manager.swapVideoTrack("peer:uid", newTrack);
+    assert.equal(count, 1);
+    assert.equal(videoSender.track, newTrack, "sender 应持有新轨");
+    // session.localStream（与调用方传的流同引用）已移除旧轨并并入新轨
+    assert.equal(localStream.getVideoTracks().includes(newTrack), true);
+    assert.equal(localStream.getVideoTracks().includes(oldTrack), false);
+    manager.leaveRoom();
+  });
+});
+
+test("setVideoBitrate: 通话中热更新 sender encodings[0].maxBitrate", async () => {
+  await withFakeRTC(async () => {
+    const { manager } = makeManager();
+    await manager.startCall("peer:uid", "audio+video", makeVideoStream());
+    const pc = FakeRTCPeerConnection.instances.at(-1)!;
+    const before = pc.paramCalls.length;
+    manager.setVideoBitrate("peer:uid", 500);
+    await new Promise((r) => setTimeout(r, 20));
+    const after = pc.paramCalls.slice(before);
+    assert.ok(after.length > 0, "应产生一次 setParameters");
+    const last = after.at(-1) as { encodings: Array<{ maxBitrate?: number }> };
+    assert.equal(last.encodings[0].maxBitrate, 500000);
+    manager.leaveRoom();
+  });
+});
+
+test("getQualitySample: 视频接收字节数被采样（GPU 渲染故障判定信号）", async () => {
+  await withFakeRTC(async () => {
+    const { manager } = makeManager();
+    await manager.startCall("peer:uid", "audio+video", makeVideoStream());
+    const pc = FakeRTCPeerConnection.instances.at(-1)!;
+    pc.getStats = async () => new Map([
+      ["c0", { type: "candidate-pair", nominated: true, currentRoundTripTime: 0.05 }],
+      ["a1", { type: "inbound-rtp", kind: "audio", jitter: 0.01, fractionLost: 0.02 }],
+      ["v1", { type: "inbound-rtp", kind: "video", bytesReceived: 123456 }],
+    ]) as unknown as Map<string, unknown>;
+    const sample = await manager.getQuality("peer:uid");
+    assert.ok(sample);
+    assert.equal(sample.videoBytes, 123456, "视频接收字节数应被采样");
+    assert.equal(sample.rttMs, 50, "candidate-pair RTT 采样不受影响");
     manager.leaveRoom();
   });
 });

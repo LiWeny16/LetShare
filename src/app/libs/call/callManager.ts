@@ -24,6 +24,7 @@ import {
   type CallSignal,
 } from "./callSignaling";
 import { CallSession, type CallSessionState, type CallTransport, type CallQualitySample } from "./callSession";
+import type { VideoCodecPrioritySetting } from "./videoCapture";
 import {
   DEFAULT_POLICY_CONFIG,
   decideTransport,
@@ -55,11 +56,16 @@ type ConnectionManagerLike = {
   onBinaryReceived(callback: (data: ArrayBuffer) => void): void;
 };
 
-type CallManagerDeps = {
+export type CallManagerDeps = {
   broadcast: (signal: object) => void;
   getSelfId: () => string | null;
   /** 公网媒体帧收发（public 轨道）。复用现有 WebSocket 二进制通道，与文件传输同路。 */
   connection?: ConnectionManagerLike;
+  /**
+   * 视频能力偏好（编码器优先/码率上限）：由 UI 层从 settingsStore 组装传入，
+   * 避免本模块（node 单测环境）静态依赖浏览器存储。缺省 = 浏览器自动。
+   */
+  videoPrefs?: () => { videoCodec: VideoCodecPrioritySetting; videoMaxBitrateKbps: number | null };
 };
 
 const RTC_CONFIG: RTCConfiguration = {
@@ -180,6 +186,7 @@ export class CallManager {
     if (this.byPeer.has(peerId)) throw new Error("already in a call with this peer");
 
     const callId = `c_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    const prefs = this.videoPrefs();
     const session = new CallSession(
       {
         callId,
@@ -187,6 +194,8 @@ export class CallManager {
         rtcConfig: buildRtcConfig(this.turnServers),
         localStream,
         wantVideo: media !== "audio",
+        videoCodec: prefs.videoCodec,
+        videoMaxBitrateKbps: prefs.videoMaxBitrateKbps,
         onIceCandidate: (candidate) => {
           this.deps.broadcast(buildIce(callId, candidate));
         },
@@ -366,6 +375,21 @@ export class CallManager {
     return call.session.swapAudioTrack(newTrack);
   }
 
+  /** 通话中换摄像头：对指定 peer 的活跃会话替换视频发送轨。返回替换的 sender 数（0=无活跃会话）。 */
+  async swapVideoTrack(peerId: string, newTrack: MediaStreamTrack): Promise<number> {
+    const callId = this.byPeer.get(peerId);
+    const call = callId ? this.calls.get(callId) : undefined;
+    if (!call) return 0;
+    return call.session.swapVideoTrack(newTrack);
+  }
+
+  /** 通话中热更新视频码率上限（kbps=上限，null=恢复 auto）。 */
+  setVideoBitrate(peerId: string, kbps: number | null): void {
+    const callId = this.byPeer.get(peerId);
+    const call = callId ? this.calls.get(callId) : undefined;
+    if (call) call.session.setVideoBitrateLimit(kbps);
+  }
+
   /** 连接质量采样（UI 质量徽标用）：委托活跃会话 getQualitySample；无该 peer 活跃会话返回 null。 */
   async getQuality(peerId: string): Promise<CallQualitySample | null> {
     const callId = this.byPeer.get(peerId);
@@ -402,13 +426,22 @@ export class CallManager {
 
   // ─── 内部 ─────────────────────────────────────────────────────────
 
+  /** 视频能力偏好（编码器优先/码率上限）：UI 层注入；缺省"浏览器自动"。 startCall/接听两路径共用。 */
+  private videoPrefs(): { videoCodec: VideoCodecPrioritySetting; videoMaxBitrateKbps: number | null } {
+    return this.deps.videoPrefs?.() ?? { videoCodec: "auto" as VideoCodecPrioritySetting, videoMaxBitrateKbps: null };
+  }
+
   private createPendingSession(callId: string, peerId: string, wantVideo: boolean): CallSession {
+    // 视频能力偏好（编码器优先/码率上限）：UI 层注入；缺省"浏览器自动"
+    const prefs = this.videoPrefs();
     return new CallSession(
       {
         callId,
         peerId,
         rtcConfig: buildRtcConfig(this.turnServers),
         wantVideo,
+        videoCodec: prefs.videoCodec,
+        videoMaxBitrateKbps: prefs.videoMaxBitrateKbps,
         onIceCandidate: (candidate) => {
           this.deps.broadcast(buildIce(callId, candidate));
         },

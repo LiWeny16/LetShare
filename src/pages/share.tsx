@@ -57,6 +57,7 @@ import { CallManager } from "@App/libs/call/callManager";
 import type { CallQualitySample } from "@App/libs/call/callSession";
 import { startRingtone, stopRingtone } from "@App/libs/call/ringtone";
 import { acquireCallAudio, mergedAudioConstraints } from "@App/libs/call/audioCapture";
+import { buildVideoConstraintAttempts, acquireCallVideo, type VideoCaptureOpts } from "@App/libs/call/videoCapture";
 import { nsPipeline } from "@App/libs/call/noiseSuppression";
 import { CallButton, IncomingCallBanner, ActiveCallPanel, type CallMedia, type IncomingCallInfo, type NsModeSetting } from "../components/call/CallBar";
 // import VideoPanel from "@Com/VideoPannel/VideoPannel";
@@ -117,24 +118,43 @@ const acquireCallStreams = async (
   const echoCancelType = settingsStore.get("echoCancelType");
   const nsMode = settingsStore.get("nsMode") ?? "browser";
   const hint = opts.hint ?? "speech";
-  let combined: MediaStream;
-  try {
-    // 合并采集：音频约束与语音路径同源（mergedAudioConstraints）；
-    // 实验室降噪(RNNoise/GTCRN)时关浏览器降噪（端侧模型接管，避免双重抑制/E2E 测量污染）
-    combined = await navigator.mediaDevices.getUserMedia({
-      audio: mergedAudioConstraints(opts.micId, {
-        echoCancelType,
-        noiseSuppression: nsMode !== "rnnoise" && nsMode !== "gtcrn",
-      }),
-      video: { width: { ideal: 1280 }, height: { ideal: 720 } },
-    });
-  } catch (err) {
+  // 视频能力参数（摄像头/质量档/背景/降级策略）：统一取自设置
+  const videoOpts: VideoCaptureOpts = {
+    deviceId: settingsStore.get("videoDeviceId") || undefined,
+    quality: settingsStore.get("videoQuality") ?? "720p30",
+    degradation: settingsStore.get("videoDegradation") ?? "balanced",
+    background: settingsStore.get("videoBackground") ?? "off",
+  };
+  let combined: MediaStream | null = null;
+  // 合并采集带降级链：全约束 → 去背景模糊 → 去摄像头 exact → 720p 保底（摄像头不可用时最后降级纯语音）
+  for (const attempt of buildVideoConstraintAttempts(videoOpts)) {
+    try {
+      // 合并采集：音频约束与语音路径同源（mergedAudioConstraints）；
+      // 实验室降噪(RNNoise/GTCRN)时关浏览器降噪（端侧模型接管，避免双重抑制/E2E 测量污染）
+      combined = await navigator.mediaDevices.getUserMedia({
+        audio: mergedAudioConstraints(opts.micId, {
+          echoCancelType,
+          noiseSuppression: nsMode !== "rnnoise" && nsMode !== "gtcrn",
+        }),
+        video: attempt.constraints,
+      });
+      if (attempt.label !== "full") {
+        console.warn(`[Call] 视频通话合并采集经降级链生效（${attempt.label}）`);
+      }
+      break;
+    } catch (err) {
+      console.warn(`[Call] 合并采集 ${attempt.label} 失败，尝试下一级:`, String((err as Error)?.name ?? err));
+    }
+  }
+  if (!combined) {
     // 摄像头不可用 → 降级纯语音（回退后无视频轨，调用方据轨数判定 videoEnabled）
-    console.warn("[Call] 视频+音频合并采集失败，降级纯语音:", err);
+    console.warn("[Call] 视频+音频合并采集失败，降级纯语音:");
     return acquireCallAudioPipeline(opts.micId, hint);
   }
-  // 合并采集不经过 acquireCallAudio：手动补 contentHint（引导 Opus 编码模式选择）
+  // 合并采集不经过 acquireCallAudio：手动补 contentHint（音频引导 Opus 编码模式选择；
+  // 视频 motion=运动优先，通话画面随人物运动，与屏幕共享的 detail 区分）
   for (const track of combined.getAudioTracks()) track.contentHint = hint;
+  for (const track of combined.getVideoTracks()) track.contentHint = "motion";
   if (nsMode !== "rnnoise" && nsMode !== "gtcrn") return combined;
   try {
     const { nsPipeline } = await loadNsPipeline();
@@ -270,6 +290,14 @@ const Share = observer(() => {
         broadcast: (signal: object) => realTimeColab.broadcastSignal(signal as never),
         getSelfId: () => realTimeColab.getUniqId(),
         connection: realTimeColab.getConnectionManager(),
+        // 视频能力偏好（编码器优先/码率上限）：从设置实时读取，每次建会话生效
+        videoPrefs: () => ({
+          videoCodec: settingsStore.get("videoCodecPriority") ?? "auto",
+          videoMaxBitrateKbps: (() => {
+            const v = settingsStore.get("videoMaxBitrate");
+            return v && v !== "auto" ? Number(v) : null;
+          })(),
+        }),
       },
       {
         onIncoming: (info) => {
@@ -518,6 +546,53 @@ const Share = observer(() => {
     } catch (err) {
       console.warn("[Call] noise suppression mode change failed:", err);
     }
+  }, []);
+
+  // 通话中换摄像头/背景/质量档：单独重采视频轨（不动音频）→ swapVideoTrack →
+  // 会话层把新轨并入 session.localStream（与 UI 同引用），UI 只停旧视频轨并 kick 重渲染。
+  // 与 handleMicChange 同构，但先捕获旧轨再交换，避免换轨后误停新轨。
+  const handleVideoPipelineChange = React.useCallback(async () => {
+    const cur = activeCallRef.current;
+    if (!cur) return; // 未在通话：CallBar 已持久化偏好，下次通话生效
+    const manager = callManagerRef.current;
+    if (!manager) return;
+    const oldVideoTracks = [...(cur.localStream?.getVideoTracks() ?? [])]; // swap 前的旧轨（会话内将移出）
+    try {
+      const videoOpts: VideoCaptureOpts = {
+        deviceId: settingsStore.get("videoDeviceId") || undefined,
+        quality: settingsStore.get("videoQuality") ?? "720p30",
+        degradation: settingsStore.get("videoDegradation") ?? "balanced",
+        background: settingsStore.get("videoBackground") ?? "off",
+      };
+      // 只采视频轨（降级链内部处理不支持的约束）；完全不动麦克风
+      const newStream = await acquireCallVideo(videoOpts);
+      const newTrack = newStream.getVideoTracks()[0];
+      if (!newTrack) {
+        newStream.getTracks().forEach((t) => t.stop());
+        return;
+      }
+      if (!cur.videoEnabled) newTrack.enabled = false; // 保持视频关闭状态（开关在会话层为软开关）
+      const count = await manager.swapVideoTrack(cur.peerId, newTrack);
+      if (count === 0) {
+        newStream.getTracks().forEach((t) => t.stop()); // 无活跃会话/替换失败：停新采集的轨，不泄漏摄像头
+        return;
+      }
+      // 停掉旧视频轨（会话侧已清旧轨 onended，stop 不会误触发 hangup("error")）；
+      // session.localStream 已并入新轨，UI 端引用不变，只需触发重渲染
+      oldVideoTracks.forEach((track) => track.stop());
+      setActiveCall((prev) => (prev && prev.peerId === cur.peerId ? { ...prev, localStream: cur.localStream } : prev));
+      console.log("[Call] video pipeline changed deviceId=", videoOpts.deviceId || "(default)",
+        "quality=", videoOpts.quality, "background=", videoOpts.background, "senders=", count);
+    } catch (err) {
+      console.warn("[Call] video pipeline change failed:", err);
+    }
+  }, []);
+
+  // 通话中热更新视频码率上限：sender 参数本地生效，无需重协商。
+  const handleVideoBitrateChange = React.useCallback((kbps: number | null) => {
+    const cur = activeCallRef.current;
+    if (!cur) return; // 未在通话：仅存偏好，下次通话生效
+    callManagerRef.current?.setVideoBitrate(cur.peerId, kbps);
   }, []);
 
   // ── 文件夹拖拽处理：目录 → ZIP 打包，空文件/空文件夹一律拒绝 ──
@@ -1361,7 +1436,7 @@ const Share = observer(() => {
 
           <Divider sx={{ mb: 0.5, mt: 2 }} />
 
-          <Box className="uniformed-scroller" sx={{ mt: 0, p: 0, flexGrow: 1, overflowY: "auto" }}>
+          <Box className="uniformed-scroller" sx={{ mt: 0, p: 0, flexGrow: 1, overflowY: "auto", pr: { xs: "56px", sm: 0 } }}>
             {(connectedUsers.length == 0) && (settingsStore.get("isNewUser")) ? <><Box
               sx={{
                 display: 'flex',
@@ -1585,18 +1660,20 @@ const Share = observer(() => {
             ))}
           </Box>
 
-          {/* 悬浮按钮 */}
+          {/* 悬浮按钮（窄屏缩小贴边，避免遮挡用户卡片操作区） */}
           <Fab
             color="primary"
             onClick={() => { setDwnloadPageState(true) }}
             sx={{
               position: "absolute",
-              bottom: 65,
-              right: 35,
+              bottom: { xs: 52, sm: 65 },
+              right: { xs: 10, sm: 35 },
+              width: { xs: 40, sm: 56 },
+              height: { xs: 40, sm: 56 },
               zIndex: (theme) => theme.zIndex.modal + 1,
             }}
           >
-            <DownloadIcon />
+            <DownloadIcon sx={{ fontSize: { xs: 22, sm: 24 } }} />
           </Fab>
 
           <EditableUserId />
@@ -1906,6 +1983,8 @@ const Share = observer(() => {
           onClose={hangupActive}
           onMicChange={handleMicChange}
           onNsModeChange={handleNsModeChange}
+          onVideoPipelineChange={handleVideoPipelineChange}
+          onVideoBitrateChange={handleVideoBitrateChange}
           getQuality={getCallQuality}
         />
       )}

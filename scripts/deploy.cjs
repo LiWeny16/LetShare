@@ -39,13 +39,15 @@ const FRONTEND_DIST = path.join(ROOT, "docs");
 const TMP_ZIP = path.join(os.tmpdir(), "letshare-docs.zip");
 const TMP_UNZ = path.join(os.tmpdir(), "letshare-unz.py");
 const EXTRACTOR = [
-  "import zipfile, os, shutil",
+  "import tarfile, os, shutil",
   "d = '/var/www/letshare'",
   "shutil.rmtree(d, ignore_errors=True)",
   "os.makedirs(d)",
   "os.chdir(d)",
-  "with zipfile.ZipFile('/tmp/letshare-docs.zip') as z: z.extractall('.')",
-  "print('extracted', len(zipfile.ZipFile('/tmp/letshare-docs.zip').namelist()), 'entries')",
+  "with tarfile.open('/tmp/letshare-docs.zip') as t:",
+  "    n = len(t.getmembers())",
+  "    t.extractall('.')",
+  "print('extracted', n, 'entries')",
 ].join("\n");
 
 // ─── 工具 ────────────────────────────────────────────────
@@ -123,8 +125,9 @@ function cdnRefresh() {
 // ─── 部署前端（推 docs/ → ECS nginx 回源）───────────────
 function deployFrontend() {
   log("▶", "打包 docs/ → 上传 ECS nginx 回源口(18081)...");
-  // bsdtar 生成 zip（正斜杠路径，跨平台可靠）
-  run(`tar -caf "${TMP_ZIP}" -C "${FRONTEND_DIST}" .`, { stdio: "pipe" });
+  // tar（纯归档，无压缩）：GNU tar 不支持 zip 容器，纯 tar 跨平台确定可解（服务器 tarfile 解压）
+  const toPosix = (p) => (process.platform === "win32" ? p.replace(/\\/g, "/").replace(/^([A-Za-z]):/, "/$1") : p);
+  run(`tar -cf "${toPosix(TMP_ZIP)}" -C "${toPosix(FRONTEND_DIST)}" .`, { stdio: "pipe" });
   fs.writeFileSync(TMP_UNZ, EXTRACTOR);
   scp(TMP_ZIP, "/tmp/letshare-docs.zip");
   scp(TMP_UNZ, "/tmp/letshare-unz.py");

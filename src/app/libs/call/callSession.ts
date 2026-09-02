@@ -20,6 +20,7 @@ import {
   decodeMediaFrame,
   type MediaFrame,
 } from "./callSignaling";
+import { orderVideoCodecs, type VideoCodecPrioritySetting } from "./videoCapture";
 
 export type CallSessionState = "idle" | "incoming" | "outgoing" | "connecting" | "active" | "ended";
 export type MediaKind = "audio" | "video";
@@ -30,6 +31,8 @@ export type CallQualitySample = {
   rttMs: number | null;
   jitterMs: number | null;
   lossPct: number | null;
+  /** 视频接收字节数（远端在发帧的信号；GPU 渲染故障检测用，无视频轨道时 null） */
+  videoBytes: number | null;
 };
 
 export type CallSessionEvents = {
@@ -75,6 +78,10 @@ type CallSessionOptions = {
   /** 本地媒体流（发起方已捕获；接听方 accept 前可为空，accept 时补充） */
   localStream?: MediaStream;
   wantVideo: boolean;
+  /** 视频编码器优先次序：非 auto 时在协商前经 setCodecPreferences 排序（通话中切换仅下次生效） */
+  videoCodec?: VideoCodecPrioritySetting;
+  /** 视频码率上限 kbps（null/0=不设上限，浏览器拥塞控制自适应） */
+  videoMaxBitrateKbps?: number | null;
   onIceCandidate: (candidate: RTCIceCandidateInit | null) => void;
   onNegotiationNeeded: () => void;
 };
@@ -354,6 +361,7 @@ export class CallSession {
         // 确保至少有一个音频收发器，避免 offer 中无媒体
         peer.addTransceiver("audio", { direction: "sendrecv" });
       }
+      this.applyVideoCapabilities(peer);
     };
 
     // 接听方：应用缓冲的早到 offer（发起方 invite 后立刻广播，accept 前已缓存）。
@@ -368,7 +376,7 @@ export class CallSession {
         await this.flushPendingIce();
         attachLocalMedia();
         const answer = await peer.createAnswer();
-        await peer.setLocalDescription(this.applyOpusTuning(answer));
+        await this.setLocalDesc(answer);
         this.opts.onNegotiationNeeded();
       } catch (err) {
         console.warn("[CallSession] apply buffered offer failed:", err);
@@ -386,10 +394,72 @@ export class CallSession {
     return desc;
   }
 
+  /** 统一本地 SDP 提交：Opus 调优 + 协商后立即应用视频码率上限（发送端参数，无需重协商）。 */
+  private async setLocalDesc(desc: RTCSessionDescriptionInit): Promise<void> {
+    if (!this.peer) return;
+    await this.peer.setLocalDescription(this.applyOpusTuning(desc));
+    this.applyBitrateToSenders(this.opts.videoMaxBitrateKbps ?? null);
+  }
+
+  /**
+   * 视频能力协商前调优（必须在 createOffer/createAnswer 之前调用）：
+   * 按设置对视频 transceiver 排序编码器（setCodecPreferences，只排序不删
+   * rtcpFeedback/rtx 附属，浏览器不支持目标 codec 时自然回退）。
+   */
+  private applyVideoCapabilities(peer: RTCPeerConnectionLike): void {
+    if (!this.localVideoEnabled || !this.opts.videoCodec || this.opts.videoCodec === "auto") return;
+    // 浏览器 getCapabilities 的 codec 描述类型 lib.dom 未收录完整结构，用最小形状接口
+    type CodecCapabilityLike = { mimeType: string };
+    const sender = peer.getSenders().find((s) => s.track?.kind === "video");
+    const transceiver = (sender as unknown as { transceiver?: { setCodecPreferences?: (codecs: CodecCapabilityLike[]) => void } } | null)?.transceiver;
+    if (!transceiver?.setCodecPreferences) return;
+    const capabilities = (globalThis as { RTCRtpSender?: { getCapabilities?: (kind: string) => { codecs: CodecCapabilityLike[] } | null } })
+      .RTCRtpSender?.getCapabilities?.("video");
+    if (!capabilities?.codecs?.length) return;
+    const ordered = orderVideoCodecs(this.opts.videoCodec, capabilities.codecs);
+    if (!ordered) return;
+    try {
+      transceiver.setCodecPreferences(ordered);
+      console.log(`[Call] 视频编码器优先次序: ${this.opts.videoCodec} (${ordered.map((c) => c.mimeType).slice(0, 3).join(", ")}…)`);
+    } catch (err) {
+      console.warn("[Call] setCodecPreferences failed (忽略，浏览器自动协商):", err);
+    }
+  }
+
+  /** 对视频 sender 应用码率上限（发送端本地参数，无需重协商；null/0 表示不设上限）。 */
+  private applyBitrateToSenders(kbps: number | null): void {
+    if (!this.peer) return;
+    const self = this.peer as unknown as {
+      getSenders?: () => Array<{
+        track?: MediaStreamTrack | null;
+        getParameters?: () => { encodings?: Array<{ maxBitrate?: number }> };
+        setParameters?: (p: unknown) => Promise<void>;
+      }>;
+    };
+    for (const s of self.getSenders?.() ?? []) {
+      if (s.track?.kind !== "video" || !s.getParameters || !s.setParameters) continue;
+      try {
+        const params = s.getParameters();
+        if (!params.encodings?.length) continue;
+        if (kbps) params.encodings[0].maxBitrate = kbps * 1000;
+        // 注意：不删除 maxBitrate（清掉 maxBitrate 需 setParameters 传新对象；
+        // 保留旧上限无害——浏览器拥塞控制本身在更低带宽时仍会压码率）
+        void s.setParameters(params).catch((err) => console.warn("[Call] setParameters(maxBitrate) failed:", err));
+      } catch (err) {
+        console.warn("[Call] applyBitrateToSenders failed:", err);
+      }
+    }
+  }
+
+  /** 通话中热更新视频码率上限（kbps=上限，null=恢复 auto）。 */
+  setVideoBitrateLimit(kbps: number | null): void {
+    this.applyBitrateToSenders(kbps);
+  }
+
   private async negotiateOffer(): Promise<void> {
     if (!this.peer) throw new Error("peer not ready");
     const offer = await this.peer.createOffer({ offerToReceiveVideo: this.localVideoEnabled });
-    await this.peer.setLocalDescription(this.applyOpusTuning(offer));
+    await this.setLocalDesc(offer);
     await this.opts.onNegotiationNeeded();
   }
 
@@ -417,7 +487,7 @@ export class CallSession {
     await this.peer.setRemoteDescription(sdp);
     if (sdp.type === "offer") {
       const answer = await this.peer.createAnswer();
-      await this.peer.setLocalDescription(this.applyOpusTuning(answer));
+      await this.setLocalDesc(answer);
       await this.opts.onNegotiationNeeded();
     }
     await this.flushPendingIce();
@@ -594,6 +664,34 @@ export class CallSession {
     return count;
   }
 
+  /** 通话中换摄像头：用外部传入的新视频轨替换当前视频 sender 的 track（不动协商）。
+   * 同步会话 localStream：旧视频轨摘除（清 onended，防止调用方 stop() 旧轨时
+   * 触发 ended → hangup("error") 误杀通话），新轨并入（后续 setVideoEnabled / hangup 作用其于新轨）。
+   * 返回替换的 sender 数；无视频 sender 或未就绪返回 0（调用方应自行停止新轨）。
+   * 视频开关关闭时（videoEnabled=false）由调用方保持新轨 enabled=false。 */
+  async swapVideoTrack(newTrack: MediaStreamTrack): Promise<number> {
+    if (!this.peer || !this.localStream) return 0;
+    const self = this.peer as unknown as {
+      getSenders?: () => Array<{ track?: MediaStreamTrack | null; replaceTrack?: (t: MediaStreamTrack) => Promise<void>; }>;
+    };
+    let count = 0;
+    for (const s of self.getSenders?.() ?? []) {
+      if (s.track && s.track.kind === "video" && typeof s.replaceTrack === "function") {
+        try { await s.replaceTrack(newTrack); count++; } catch { /* ignore */ }
+      }
+    }
+    if (count === 0) return 0; // 替换失败：保持现场不动，调用方负责停止新轨
+    for (const old of this.localStream.getVideoTracks()) {
+      old.onended = null;
+      this.localStream.removeTrack(old);
+    }
+    newTrack.onended = () => {
+      if (this.state === "active") this.hangup("error");
+    };
+    this.localStream.addTrack(newTrack);
+    return count;
+  }
+
   async getStats(): Promise<{ rttMs: number | null; lossRate: number | null; jitterMs: number | null; throughputBps: number | null }> {
     if (!this.peer) return { rttMs: null, lossRate: null, jitterMs: null, throughputBps: null };
     try {
@@ -634,7 +732,7 @@ export class CallSession {
    * 与 __lsCallStats 测试钩子同源：均走 this.peer.getStats()。
    */
   async getQualitySample(): Promise<CallQualitySample> {
-    if (!this.peer) return { rttMs: null, jitterMs: null, lossPct: null };
+    if (!this.peer) return { rttMs: null, jitterMs: null, lossPct: null, videoBytes: null };
     try {
       const stats = (await this.peer.getStats()) as unknown as Iterable<
         [string, {
@@ -646,11 +744,13 @@ export class CallSession {
           mediaType?: string;
           jitter?: number;
           fractionLost?: number;
+          bytesReceived?: number;
         }]
       >;
       let rttMs: number | null = null;
       let jitterMs: number | null = null;
       let lossPct: number | null = null;
+      let videoBytes: number | null = null;
       for (const [, report] of stats) {
         // RTT：selected/nominated candidate-pair（标准为 nominated，Chromium 另有 selected，二者其一命中即可）
         if (report.type === "candidate-pair" && (report.selected === true || report.nominated === true)) {
@@ -661,10 +761,14 @@ export class CallSession {
           if (typeof report.jitter === "number") jitterMs = report.jitter * 1000;
           if (typeof report.fractionLost === "number") lossPct = report.fractionLost * 100;
         }
+        // 视频接收字节数：远端是否仍在推送视频帧（GPU 渲染故障判定用）
+        if (report.type === "inbound-rtp" && (report.kind === "video" || report.mediaType === "video")) {
+          if (typeof report.bytesReceived === "number") videoBytes = report.bytesReceived;
+        }
       }
-      return { rttMs, jitterMs, lossPct };
+      return { rttMs, jitterMs, lossPct, videoBytes };
     } catch {
-      return { rttMs: null, jitterMs: null, lossPct: null };
+      return { rttMs: null, jitterMs: null, lossPct: null, videoBytes: null };
     }
   }
 
