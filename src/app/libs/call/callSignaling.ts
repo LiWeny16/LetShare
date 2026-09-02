@@ -20,6 +20,8 @@ export type CallInvitePayload = {
   type: "call:invite";
   callId: string;
   media: CallKind;
+  /** 目标用户 uniqId（invite 全房间广播，接收端凭此过滤非目标来电） */
+  to?: string;
   /** 发起方设备描述，供接听方 UI 展示 */
   deviceLabel?: string;
 };
@@ -80,8 +82,8 @@ export function isCallSignal(data: unknown): data is CallSignal {
   return typeof type === "string" && (CALL_SIGNAL_TYPES as readonly string[]).includes(type);
 }
 
-export function buildInvite(callId: string, media: CallKind, deviceLabel?: string): CallInvitePayload {
-  return { type: "call:invite", callId, media, deviceLabel };
+export function buildInvite(callId: string, media: CallKind, to?: string, deviceLabel?: string): CallInvitePayload {
+  return { type: "call:invite", callId, media, to, ...(deviceLabel ? { deviceLabel } : {}) };
 }
 
 export function buildAccept(callId: string): CallAcceptPayload {

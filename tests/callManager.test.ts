@@ -602,3 +602,25 @@ test("getQualitySample: 视频接收字节数被采样（GPU 渲染故障判定�
     manager.leaveRoom();
   });
 });
+
+test("handleSignal: invite 带 to 时非目标用户忽略（第三人不再误弹来电）", () => {
+  withFakeRTC(() => {
+    const { manager, events } = makeManager(); // selfId = "self:uid"
+    // 发给别人的 invite → 本端不应弹来电
+    manager.handleSignal("caller:uid", { ...buildInvite("c_x1", "audio"), to: "other:uid" });
+    assert.equal(events.onIncoming.length, 0, "非目标 invite 应被忽略");
+    // 发给自己的 invite → 正常触发来电
+    manager.handleSignal("caller:uid", { ...buildInvite("c_x2", "audio"), to: "self:uid" });
+    assert.equal(events.onIncoming.length, 1, "目标 invite 应触发来电");
+    manager.leaveRoom();
+  });
+});
+
+test("handleSignal: 旧版 invite（无 to 字段）保持兼容（维持全接收行为）", () => {
+  withFakeRTC(() => {
+    const { manager, events } = makeManager();
+    manager.handleSignal("caller:uid", buildInvite("c_y1", "audio"));
+    assert.equal(events.onIncoming.length, 1, "无 to 的旧 invite 维持旧行为");
+    manager.leaveRoom();
+  });
+});

@@ -221,7 +221,8 @@ export class CallManager {
     this.calls.set(callId, call);
     this.byPeer.set(peerId, callId);
 
-    this.deps.broadcast(buildInvite(callId, media));
+    // invite 全房间广播（告知房间成员「存在此会话」）；目标用户在 to 字段，接收端按 to 过滤
+    this.deps.broadcast(buildInvite(callId, media, peerId));
 
     try {
       await session.startOutgoing();
@@ -248,6 +249,9 @@ export class CallManager {
 
     switch (signal.type) {
       case "call:invite": {
+        // 目标过滤：invite 全房间广播，非目标用户（to 不匹配）忽略，避免第三人误弹来电
+        // （旧版本 invite 无 to 字段：维持全接收的旧行为，随两端同版部署自然淘汰）
+        if (signal.to && selfId && signal.to !== selfId) return;
         // 重复来电忽略（已有该 peer 通话或同 callId）
         if (this.byPeer.has(from) || this.calls.has(callId)) return;
         // wantVideo：audio 来电为 false；video/audio+video 来电为 true
