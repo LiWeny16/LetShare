@@ -19,7 +19,7 @@ const DEFAULT_SETTINGS = {
   echoCancelType: "browser" as "browser" | "system", // 回声消除引擎：browser=浏览器 AEC3（默认），system=OS 级 AEC（部分设备更好；不支持时浏览器忽略）
   noiseSuppression: true as boolean, // 浏览器噪声抑制开关（关=保真/音乐场景，也为端侧 RNNoise 预留）
   nsMode: "browser" as "off" | "browser" | "rnnoise" | "gtcrn", // 降噪模式：off=关 / browser=浏览器内置 / rnnoise=RNNoise 实验 / gtcrn=GTCRN 实验室新算法
-  version: "3.6.7",
+  version: "3.6.8",
   isNewUser: true
 };
 export type SettingsKey = keyof typeof DEFAULT_SETTINGS;
