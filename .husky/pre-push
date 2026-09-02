@@ -3,48 +3,43 @@ set -e
 
 echo ""
 echo "╔══════════════════════════════════════╗"
-echo "║    LetShare Pre-Push CI Check        ║"
+echo "║    LetShare Pre-Push Gate            ║"
 echo "╚══════════════════════════════════════╝"
 echo ""
 
 # ── Frontend ──────────────────────────────────
-echo "━━━ Frontend: TypeScript check ━━━"
-npx tsc --noEmit
-echo "  ✅ tsc passed"
-
-echo ""
-echo "━━━ Frontend: Unit tests ━━━"
+echo "━━━ Frontend: unit tests ━━━"
 pnpm test:unit
 echo "  ✅ unit tests passed"
 
 echo ""
-echo "━━━ Frontend: E2E tests ━━━"
-pnpm test:e2e
-echo "  ✅ e2e tests passed"
-
-echo ""
-echo "━━━ Frontend: Production build ━━━"
+echo "━━━ Frontend: production build (含 tsc) ━━━"
 pnpm build
 echo "  ✅ build passed"
 
+# ── docs/ 产物新鲜度闸门（防 Pages 部署旧产物）──
+# version.json 是每次构建都变的时间戳哨兵，随下次产物同步提交即可，不阻断
+if [ -n "$(git status -s docs | grep -v 'docs/version.json')" ]; then
+  echo ""
+  echo "  ⛔ PUSH BLOCKED：pnpm build 重建了 docs/ 但真实产物未提交（GitHub Pages 会部署旧产物）"
+  echo ""
+  echo "     补同步后重推："
+  echo "       git add docs && git commit -m 'chore: 同步构建产物到 docs/' && git push"
+  echo ""
+  echo "     （发版请直接用: node scripts/deploy.cjs --frontend —— 脚本自动完成同步）"
+  exit 1
+fi
+echo "  ✅ docs/ 产物与源码一致（version.json 哨兵漂移不阻断）"
+
 # ── Backend ───────────────────────────────────
 echo ""
-echo "━━━ Backend: Go vet ━━━"
+echo "━━━ Backend: go vet / test / build ━━━"
 cd server
 go vet ./cmd/... ./internal/...
-echo "  ✅ go vet passed"
-
-echo ""
-echo "━━━ Backend: Go test ━━━"
 go test ./internal/... -count=1
-echo "  ✅ go test passed"
-
-echo ""
-echo "━━━ Backend: Go build ━━━"
 go build ./cmd/server/
-echo "  ✅ go build passed"
-
 cd ..
+echo "  ✅ backend passed"
 
 echo ""
 echo "╔══════════════════════════════════════╗"

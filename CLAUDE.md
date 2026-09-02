@@ -119,3 +119,9 @@ Never record secrets, credentials, tokens, or private data in memory.
 - If a Worker dispatch is missing role, objective, writeSet, forbidden scope, or verification requirements, the controller must not proceed with source edits.
 
 Keep `CLAUDE.md` as a thin routing and global-behavior file. Put detailed workflows in `Harness/specs/workflows/WF.md` or `Harness/workflows/`, subagent rules in `Harness/specs/runtime/subagents.md`, architecture in `Harness/project/architecture.md`, and project operations in `README.md`.
+
+## 8. Release Gate (git push)
+
+- Deploy/release must go through `node scripts/deploy.cjs --frontend` or `--backend` (build → ECS origin → CDN refresh → docs/ artifact sync → health). Checklist: README "Standard Release Flow" + `memory/push-checklist.md`.
+- Manual `git push --no-verify` is allowed only when `src/` and `server/` are untouched; otherwise the docs/ artifact sync must be committed first.
+- The pre-push hook is the last line of defense: it builds, then **blocks the push** if `git status -s docs` is dirty. When blocked: `git add docs && git commit && git push`.

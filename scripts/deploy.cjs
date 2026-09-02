@@ -134,11 +134,26 @@ function deployFrontend() {
   fs.rmSync(TMP_UNZ, { force: true });
 }
 
+// ─── 同步构建产物到 git docs/（海外 GitHub Pages 侧）──────
+// pre-push 钩子被 --no-verify 跳过时不会重建/提交 docs/，此处兜底保证双端一致
+function syncDocs() {
+  const st = run("git status -s docs", { stdio: "pipe" }).trim();
+  if (!st) { log("✓", "docs/ 无变化，跳过产物同步"); return; }
+  log("▶", `同步 docs/ 构建产物到 git（${st.split("\n").length} 个文件；触发 GitHub Pages 海外侧同步）...`);
+  run("git add docs", { stdio: "pipe" });
+  try {
+    run('git commit -m "chore: 同步构建产物到 docs/ (deploy.cjs)"', { stdio: "pipe" });
+  } catch {
+    run('git -c user.name=LiWeny16 -c user.email=a454888395@gmail.com commit -m "chore: 同步构建产物到 docs/ (deploy.cjs)"', { stdio: "pipe" });
+  }
+  run("git push origin main --no-verify", { stdio: "pipe" });
+  log("✓", "已推送；大陆侧 ECS 已即时生效，海外侧 Pages 约 1-2 分钟后同步");
+}
+
 // ─── 健康检查 ────────────────────────────────────────────
 function healthCheck() {
   log("▶", "健康检查...");
   try {
-    run("timeout /t 5 >nul", { stdio: "pipe" });
     const res = run(`curl -sk -o NUL -w "%{http_code}" "https://${CONFIG.remote.host}/"`, { stdio: "pipe" }).trim();
     log((res === "200" || res === "401") ? "✓" : "⚠", `后端 WebSocket (${CONFIG.remote.host}): ${res}`);
     const origin = run(`curl -sk -o NUL -w "%{http_code}" -H "Host: letshare.fun" "http://${CONFIG.frontend.originIp}:${CONFIG.frontend.originPort}/version.json"`, { stdio: "pipe" }).trim();
@@ -167,7 +182,11 @@ async function main() {
 
   console.log("");
   if (doBackend && binary) deployBackend(binary);
-  if (doFrontend) { deployFrontend(); if (!skipCdn) cdnRefresh(); }
+  if (doFrontend) {
+    deployFrontend();
+    if (!skipCdn) cdnRefresh();
+    if (!a.includes("--no-sync-docs")) syncDocs();
+  }
 
   console.log("");
   healthCheck();
