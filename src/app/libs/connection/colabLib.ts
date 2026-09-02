@@ -918,6 +918,21 @@ export class RealTimeColab {
    this.callPeerLeaveHandler = handler;
   }
 
+  // 活跃通话查询（由 CallManager.isInCall 注入）：后台省流定时器据此豁免通话中断连。
+  private callActivityProvider: (() => boolean) | null = null;
+
+  /**
+   * 注册"是否存在活跃通话/视频"查询（由 UI 层注入）。
+   * 后台超时定时器到点时若返回 true 则完全豁免：不断开连接、不停传输、不弹提示。
+   */
+  public registerCallActivityProvider(provider: (() => boolean) | null): void {
+   this.callActivityProvider = provider;
+  }
+
+  private hasActiveCall(): boolean {
+   return this.callActivityProvider?.() ?? false;
+  }
+
   private handleCallSignal(data: any): void {
    const fromId = data.from;
    if (!fromId || fromId === this.getUniqId()) return;
@@ -3576,54 +3591,62 @@ private isLetShareZip(file: File): boolean {
   let backgroundStartTime: number | null = null;
   let ablyTimeoutHandle: ReturnType<typeof setTimeout> | null = null;
   const overtime = CONFIG.BACKGROUND_TIMEOUT;
+  // 后台超时处理（省流机制）：到点后停传输并断开连接。
+  // 通话/视频进行中完全豁免 —— 重挂定时器（通话结束后若仍在后台，下一轮才生效）。
+  const handleBackgroundTimeout = () => {
+   const now = Date.now();
+   const backgroundDurationMs = backgroundStartTime ? now - backgroundStartTime : 0;
+   if (this.hasActiveCall()) {
+    console.debug("[Visibility] Call active — background timeout exempted, keeping connection alive");
+    ablyTimeoutHandle = setTimeout(handleBackgroundTimeout, overtime);
+    return;
+   }
+   if (this.hasPendingDirectSaveRequest()) {
+    console.debug("[Visibility] Direct-to-disk save request pending, keeping connection alive");
+    return;
+   }
+   const activeTransferCount = this.getActiveFileTransferCount();
+   if (shouldStopTransfersForPageLifecycle({
+    backgroundDurationMs,
+    timeoutMs: overtime,
+    activeTransferCount,
+    deviceType: getDeviceType(),
+   })) {
+    this.stopActiveFileTransfersForLifecycle(
+     t('alert.p2pBackgroundTimeout')
+    );
+    // 仅当没有活跃的服务器传输时才断开 WebSocket
+    // 服务器传输走 WebSocket 不依赖页面焦点，可以继续在后台运行
+    const serverActiveCount =
+     this.serverFileTransfer?.getActiveTransferCount() ?? 0;
+    if (serverActiveCount === 0) {
+     void runTransferHandlerSafely(
+      () => this.disconnect(),
+      (error) => console.warn("Background disconnect failed:", error)
+     );
+    } else {
+     console.debug(
+      `[Visibility] 公网传输活跃，保持 WebSocket 连接在后台继续`
+     );
+    }
+   } else if (backgroundStartTime && backgroundDurationMs >= overtime) {
+    alertUseMUI(
+     React.createElement(React.Fragment, null,
+      React.createElement(TimerIcon, { sx: { mr: 0.5, verticalAlign: 'middle', fontSize: '1.1em' } }),
+      t("background.timeout", { seconds: overtime / 1000 })
+     ),
+     3000
+    );
+    void runTransferHandlerSafely(
+     () => this.disconnect(),
+     (error) => console.warn("Background disconnect failed:", error)
+    );
+   }
+  };
   document.addEventListener("visibilitychange", () => {
    if (document.visibilityState === "hidden") {
     backgroundStartTime = Date.now();
-    ablyTimeoutHandle = setTimeout(() => {
-     const now = Date.now();
-     const backgroundDurationMs = backgroundStartTime ? now - backgroundStartTime : 0;
-     if (this.hasPendingDirectSaveRequest()) {
-      console.debug("[Visibility] Direct-to-disk save request pending, keeping connection alive");
-      return;
-     }
-     const activeTransferCount = this.getActiveFileTransferCount();
-     if (shouldStopTransfersForPageLifecycle({
-      backgroundDurationMs,
-      timeoutMs: overtime,
-      activeTransferCount,
-      deviceType: getDeviceType(),
-     })) {
-      this.stopActiveFileTransfersForLifecycle(
-       t('alert.p2pBackgroundTimeout')
-      );
-      // 仅当没有活跃的服务器传输时才断开 WebSocket
-      // 服务器传输走 WebSocket 不依赖页面焦点，可以继续在后台运行
-      const serverActiveCount =
-       this.serverFileTransfer?.getActiveTransferCount() ?? 0;
-      if (serverActiveCount === 0) {
-       void runTransferHandlerSafely(
-        () => this.disconnect(),
-        (error) => console.warn("Background disconnect failed:", error)
-       );
-      } else {
-       console.debug(
-        `[Visibility] 公网传输活跃，保持 WebSocket 连接在后台继续`
-       );
-      }
-     } else if (backgroundStartTime && backgroundDurationMs >= overtime) {
-      alertUseMUI(
-       React.createElement(React.Fragment, null,
-        React.createElement(TimerIcon, { sx: { mr: 0.5, verticalAlign: 'middle', fontSize: '1.1em' } }),
-        t("background.timeout", { seconds: overtime / 1000 })
-       ),
-       3000
-      );
-      void runTransferHandlerSafely(
-       () => this.disconnect(),
-       (error) => console.warn("Background disconnect failed:", error)
-      );
-     }
-    }, overtime);
+    ablyTimeoutHandle = setTimeout(handleBackgroundTimeout, overtime);
    } else if (document.visibilityState === "visible") {
     if (ablyTimeoutHandle) {
      clearTimeout(ablyTimeoutHandle);

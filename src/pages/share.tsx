@@ -356,7 +356,10 @@ const Share = observer(() => {
     realTimeColab.registerCallSignalHandler((from, data) => manager.handleSignal(from, data));
     // 对端离开（页面关闭/刷新广播 leave）：立即结束与其的通话（其 bye 已不可能到达）
     realTimeColab.registerCallPeerLeaveHandler((peerId) => manager.peerLeft(peerId));
+    // 后台省流定时器豁免：通话/视频进行中注入活跃查询，后台 10 分钟到点也不断开连接
+    realTimeColab.registerCallActivityProvider(() => manager.isInCall());
     return () => {
+      realTimeColab.registerCallActivityProvider(null);
       manager.leaveRoom();
       callManagerRef.current = null;
     };
