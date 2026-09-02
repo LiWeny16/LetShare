@@ -55,7 +55,7 @@ import { isApp } from "@App/libs/capacitor/user";
 import { Trans, useTranslation } from "react-i18next";
 import { CallManager } from "@App/libs/call/callManager";
 import type { CallQualitySample } from "@App/libs/call/callSession";
-import { startRingtone, stopRingtone } from "@App/libs/call/ringtone";
+import { startRingtone, stopRingtone, playDisconnectTone } from "@App/libs/call/ringtone";
 import { acquireCallAudio, mergedAudioConstraints } from "@App/libs/call/audioCapture";
 import { buildVideoConstraintAttempts, acquireCallVideo, type VideoCaptureOpts } from "@App/libs/call/videoCapture";
 import { nsPipeline } from "@App/libs/call/noiseSuppression";
@@ -345,6 +345,8 @@ const Share = observer(() => {
           setActiveCall((prev) => (prev && prev.peerId === peerId ? { ...prev, transport } : prev));
         },
         onCallEnded: (peerId) => {
+          // 对端挂断/通话中断：自动关闭面板 + Discord 式"嘟"提示音（自动关闭已由置 null 承担）
+          playDisconnectTone();
           setActiveCall((prev) => (prev && prev.peerId === peerId ? null : prev));
           setIncomingCall((prev) => (prev && prev.from === peerId ? null : prev));
         },
@@ -455,6 +457,7 @@ const Share = observer(() => {
     if (!manager || !cur) return;
     manager.hangup(cur.callId);
     setActiveCall(null);
+    playDisconnectTone(); // 本端挂断同款提示音（与对端挂断一致）
   }, []);
 
   const toggleMute = React.useCallback(() => {

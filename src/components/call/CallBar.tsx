@@ -668,7 +668,9 @@ export function ActiveCallPanel(props: ActiveCallProps) {
           muted
           playsInline
           style={{
-            width: "100%", height: "100%", objectFit: "contain",
+            width: "100%", height: "100%",
+            // cover 铺满主区域（微信式；竖屏远端画面不再留两侧黑边），竖屏人物头部可能裁切边缘
+            objectFit: "cover",
             display: mainVideoVisible ? "block" : "none",
             // 本地画面在主窗时镜像（微信同款）；远端说话反馈描边跟随远端所在元素
             transform: pipSwapped ? "scaleX(-1)" : "none",
