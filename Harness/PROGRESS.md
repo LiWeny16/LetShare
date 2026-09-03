@@ -4,7 +4,7 @@ Global task index. Load at session start to see what is active and what was done
 
 ## Active Task
 
-- task-integrate-meeting-frontend — 会议前端集成收尾:创建/加入/分享全流程 + 成员同步 + 404 提示,已 push(不 deploy)。下一 session:重跑 .e2e-meeting-flow.cjs 看 [C⇐] 帧日志验证 404 toast;真实 SFU 媒体流验证。线上 ecs.letshare.fun 后端为旧版,会议可用需先部署后端
+- task-integrate-meeting-frontend — 会议前端集成收尾(feature/meeting-sfu 分支):创建/加入/分享/成员同步全通,404 toast 已修复(colabLib errText 优先级 + meeting 路由挂 AlertPortal,两修复未 commit)。e2e 全绿。下一:真实双端 SFU 媒体流验证 → 12 号参考图 UI 打磨 → 用户决策 deploy 后端。已知:pnpm test 1 存量失败(publicRelayAuthSync,与本次无关)
 
 ## Task Index
 

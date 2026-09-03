@@ -666,9 +666,8 @@ export class RealTimeColab {
      if (!message.data?.transfer_id) {
       const errText =
        (message as any).error?.message ??
-       (typeof message.data === "object" && message.data !== null && message.data.message)
-        ? (message.data as any).message
-        : "服务器错误";
+       ((message.data as any)?.message) ??
+       "服务器错误";
       this.meetingHandler?.("error", message);
       alertUseMUI(String(errText), 3000, { kind: "error" });
       return;

@@ -1,11 +1,27 @@
 # PROGRESS — 会议前端集成收尾（SFU 会议全流程 + UI 重构）
 
-## Heartbeat (2026-09-03 换 session 存档)
-- Phase: W2 验证收尾(核心链路已通,负例验证待重跑)
+## Heartbeat (2026-09-03 feature/meeting-sfu 会话)
+- Phase: W2 验证收尾(404 toast 已修复验证,负例闭环 ✅)
 - running: 无
-- nextAction: (1) 重跑 `node .e2e-meeting-flow.cjs` 验证 C 的 404 toast(脚本已加 WS 帧监听,未重跑);(2) 真实双端 SFU 媒体流握手验证;(3) 按 12 号参考图打磨视频墙/顶栏
+- nextAction: (1) 真实双端 SFU 媒体流握手验证;(2) 按 12 号参考图打磨视频墙/顶栏;(3) 用户决策:线上 ecs.letshare.fun 旧后端需 deploy 才能真实使用 meeting:*
 - blocked: 无
-- decision: 本次已 push 到 GitHub(不 deploy)。线上 wss://ecs.letshare.fun/ 仍是旧版后端,不支持 meeting:* —— 会议功能真实可用需先 deploy 后端
+- decision: 本次修复均未 commit(用户定夺);`.e2e-diag-404.cjs` 为新增诊断脚本(toast 采样 8s + console 抓取),可复用
+
+### 本次修复(2 项,根因链)
+1. **colabLib.ts:667-671 errText 优先级 bug**:`(A ?? B) ? C : D` 中 404 帧(无 data 字段)走到 `(message.data as any).message` 抛 TypeError → meetingHandler/alertUseMUI 均不执行。修复为 `error?.message ?? (data)?.message ?? "服务器错误"`(optional chaining)。Worker 完成,tsc EXIT:0。
+2. **meeting 路由无 toast 宿主**:`AlertPortal`(src/components/Alert.tsx)只挂在 share.tsx:2215;#/meeting 独立路由无挂载 → alertEmitter.emit("show") 无人渲染,所有会议页 toast 静默丢失。修复:meeting.tsx 挂 `<AlertPortal />`(Fragment 包裹,MeetingRoom 前)。Worker 完成,tsc EXIT:0。
+   - 诊断方法:`.e2e-diag-404.cjs` 抓 404 帧到达(WS 帧 OK)但 8s 内 role=alert 恒为 0 → 锁定渲染层缺宿主,与 alert.ts 的 alertEmitter.emit 机制对照定位。
+
+## 验证证据(2026-09-03)
+- `.e2e-diag-404.cjs`:404toast 在 1.0s~3.5s 可见(1s 防抖+3s 时长),alerts=2(404+400 sdp 两帧),期间 role=alert 计数正确。
+- `.e2e-meeting-flow.cjs` 全绿:[A] 创建(名称/url/分享面板/复制会议号+链接) → [B] 加入(👥2) → [A-afterB] 成员同步 👥2 → **[C] errorToastVis=会议不存在:true**(修复前 false)。
+- `npx tsc --noEmit` EXIT:0(两处修复后均验)。
+- `pnpm test`:370 tests,369 pass,1 fail —— `tests/publicRelayAuthSync.test.ts:41` "large public-relay sends resync custom-server PRO auth"(indexOf -1 断言)。**stash 本次改动后仍复现 → 存量失败,与本次无关**(疑似 feature/meeting-sfu 分支基点早于 pro-public-relay-auth-sync 修复,或时序偶发,待后续核查)。
+
+### 环境备忘
+- 后端:`cd server` 下 `cmd /c "set MODE=local&& go run ./cmd/server"` 监听 8080(默认 MODE=production 监听 443,本地必带 MODE=local)
+- 前端:`pnpm dev --port 5174 --strictPort`
+- 探测端口勿用 Test-NetConnection(closed 端口挂死),用 TcpClient.ConnectAsync().Wait(800)
 
 ## 用户本次(换 session 前)反馈与修复状态
 

@@ -26,8 +26,8 @@ export function VideoWall({ tiles, focusedUniqId, onSelectFocus, formFactor }: V
   const sorted = useMemo(() => {
     // 焦点置前，便于手机端展示为主视角
     return [...tiles].sort((a, b) => {
-      if (a.uniqId === focusedUniqId) return -1;
-      if (b.uniqId === focusedUniqId) return 1;
+      if (a.tileKey === focusedUniqId) return -1;
+      if (b.tileKey === focusedUniqId) return 1;
       return 0;
     });
   }, [tiles, focusedUniqId]);
@@ -45,7 +45,7 @@ export function VideoWall({ tiles, focusedUniqId, onSelectFocus, formFactor }: V
     const [focus, ...rest] = sorted;
     return (
       <Stack direction="column" spacing={1.5} sx={{ height: "100%" }}>
-        {focus && <MemberTile tile={focus} isFocused onFocus={() => onSelectFocus(focus.uniqId)} />}
+        {focus && <MemberTile tile={focus} isFocused onFocus={() => onSelectFocus(focus.tileKey)} />}
         {rest.length > 0 && (
           <Stack
             direction="row"
@@ -53,8 +53,8 @@ export function VideoWall({ tiles, focusedUniqId, onSelectFocus, formFactor }: V
             sx={{ overflowX: "auto", pb: 0.5, "&::-webkit-scrollbar": { height: 6 } }}
           >
             {rest.map((tile) => (
-              <Box key={tile.uniqId} sx={{ width: 160, flexShrink: 0 }}>
-                <MemberTile tile={tile} isFocused={false} onFocus={() => onSelectFocus(tile.uniqId)} />
+              <Box key={tile.tileKey} sx={{ width: 160, flexShrink: 0 }}>
+                <MemberTile tile={tile} isFocused={false} onFocus={() => onSelectFocus(tile.tileKey)} />
               </Box>
             ))}
           </Stack>
@@ -76,9 +76,9 @@ export function VideoWall({ tiles, focusedUniqId, onSelectFocus, formFactor }: V
     >
       {sorted.map((tile) => (
         <MemberTile
-          key={tile.uniqId}
+          key={tile.tileKey}
           tile={tile}
-          isFocused={tile.uniqId === focusedUniqId}
+          isFocused={tile.tileKey === focusedUniqId}
           onFocus={() => onSelectFocus(tile.uniqId)}
         />
       ))}

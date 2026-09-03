@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from "react-router-dom"
 import { meetingManager } from "@App/libs/meeting/meetingManager"
 import realTimeColab from "@App/libs/connection/colabLib"
 import MeetingRoom from "../components/meeting/MeetingRoom"
+import AlertPortal from "../components/Alert"
 
 /**
  * 会议房间路由页（懒加载 chunk）。
@@ -22,6 +23,11 @@ export default function MeetingPage() {
   const room = sp.get("room") ?? ""
   const autoScreen = sp.get("screen") === "1"
   const owner = sp.get("owner") === "1"
+
+  // E2E/调试钩子（仅 dev 构建）：暴露 manager 单例供 CDP 断言内部状态
+  if (import.meta.env.DEV) {
+    ;(window as any).__meeting = meetingManager
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -43,12 +49,15 @@ export default function MeetingPage() {
   }, [])
 
   return (
-    <MeetingRoom
-      owner={owner}
-      onExit={() => {
-        meetingManager.leaveMeeting()
-        nav("/")
-      }}
-    />
+    <>
+      <AlertPortal />
+      <MeetingRoom
+        owner={owner}
+        onExit={() => {
+          meetingManager.leaveMeeting()
+          nav("/")
+        }}
+      />
+    </>
   )
 }
