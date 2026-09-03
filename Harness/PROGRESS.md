@@ -4,7 +4,7 @@ Global task index. Load at session start to see what is active and what was done
 
 ## Active Task
 
-- task-fix-oneway-call-audio — 修复 offerer 音频不被 callee 解码的单通 bug（根因已定位到 app 信令/协商编排时序）
+- task-integrate-meeting-frontend — 会议前端集成收尾:创建/加入/分享全流程 + 成员同步 + 404 提示,已 push(不 deploy)。下一 session:重跑 .e2e-meeting-flow.cjs 看 [C⇐] 帧日志验证 404 toast;真实 SFU 媒体流验证。线上 ecs.letshare.fun 后端为旧版,会议可用需先部署后端
 
 ## Task Index
 

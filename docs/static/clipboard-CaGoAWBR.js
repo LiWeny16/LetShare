@@ -1,0 +1,1 @@
+import{t as e}from"./share-CUPctFtJ.js";export{e as readClipboard};

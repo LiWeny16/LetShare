@@ -7,6 +7,7 @@ import { HashRouter, Navigate, Route, Routes } from "react-router-dom"
 // 改为懒加载，首屏只加载轻量路由壳，减少新设备第一次访问的下载量与超时。
 const Share = lazy(() => import("../pages/share"))
 const PayNowComponent = lazy(() => import("./paynow"))
+const MeetingPage = lazy(() => import("./meeting"))
 
 export default function Index() {
  return (
@@ -28,6 +29,14 @@ export default function Index() {
      element={
       <Suspense fallback={null}>
        <PayNowComponent />
+      </Suspense>
+     }
+    />
+    <Route
+     path="/meeting"
+     element={
+      <Suspense fallback={null}>
+       <MeetingPage />
       </Suspense>
      }
     />

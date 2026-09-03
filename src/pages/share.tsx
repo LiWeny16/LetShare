@@ -4,8 +4,15 @@ import React, { useEffect, useRef, useState } from "react";
 import CachedIcon from '@mui/icons-material/Cached';
 import WifiOffIcon from '@mui/icons-material/WifiOff';
 import DownloadIcon from "@mui/icons-material/Download";
-import { createTheme, ThemeProvider, useTheme } from '@mui/material/styles';
+import AddIcon from "@mui/icons-material/Add";
+import VideoCallIcon from "@mui/icons-material/VideoCall";
+import VideocamIcon from "@mui/icons-material/Videocam";
+import MeetingRoomIcon from "@mui/icons-material/MeetingRoom";
+import ScreenShareIcon from "@mui/icons-material/ScreenShare";
+import PhonelinkIcon from "@mui/icons-material/Phonelink";
+import PhonelinkRingIcon from "@mui/icons-material/PhonelinkRing";
 import { ButtonBase, CssBaseline, GlobalStyles } from '@mui/material';
+import { createTheme, ThemeProvider, useTheme } from '@mui/material/styles';
 import {
   Dialog,
   Box,
@@ -24,8 +31,11 @@ import {
   IconButton,
   Tooltip,
   Paper,
+  Menu,
+  MenuItem,
 } from "@mui/material";
 import realTimeColab, { UserInfo, UserStatus } from "@App/libs/connection/colabLib";
+import { meetingManager } from "@App/libs/meeting/meetingManager";
 import FileIcon from "@mui/icons-material/Description";
 import ImageIcon from "@mui/icons-material/Image";
 import TextIcon from "@mui/icons-material/TextFields";
@@ -40,8 +50,6 @@ import ChatPanel from "../components/Chat/ChatPanel";
 import SelectedFileStrip from '../components/SelectedFileStrip';
 import ChatIntegration from "@App/libs/chat/ChatIntegration";
 import AppleIcon from "@mui/icons-material/Apple";
-import PhonelinkRingIcon from "@mui/icons-material/PhonelinkRing";
-import PhonelinkIcon from "@mui/icons-material/Phonelink";
 import LinkIcon from "@mui/icons-material/Link";
 import SyncIcon from "@mui/icons-material/Sync";
 import ChatIcon from "@mui/icons-material/Chat";
@@ -60,6 +68,8 @@ import { acquireCallAudio, mergedAudioConstraints } from "@App/libs/call/audioCa
 import { buildVideoConstraintAttempts, acquireCallVideo, type VideoCaptureOpts } from "@App/libs/call/videoCapture";
 import { nsPipeline } from "@App/libs/call/noiseSuppression";
 import { CallButton, IncomingCallBanner, ActiveCallPanel, type CallMedia, type IncomingCallInfo, type NsModeSetting } from "../components/call/CallBar";
+// ── 会议(SFU)入口 —— 并行 agent 提供的共享契约（未落地时 tsc 会报"等待并行依赖"，合并后即自洽）──
+import { useNavigate } from "react-router-dom";
 // import VideoPanel from "@Com/VideoPannel/VideoPannel";
 // import VideoPanel from "@Com/VideoPannel/VideoPannel";
 
@@ -378,6 +388,7 @@ const Share = observer(() => {
       manager.leaveRoom();
       callManagerRef.current = null;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const connectedUsersRef = React.useRef<ConnectedUser[]>([]);
@@ -770,6 +781,116 @@ const Share = observer(() => {
     return t('status.disconnected');
   };
 
+  // ── 用户卡片：设备类型图标（apple→Apple / android→手机 / desktop→电脑）──
+  const getUserTypeIcon = (userType: string) => {
+    switch (userType) {
+      case "apple":
+        return <AppleIcon sx={{ transition: "color 0.3s ease" }} />;
+      case "android":
+        return <PhonelinkRingIcon sx={{ transition: "color 0.3s ease" }} />;
+      case "desktop":
+        return <PhonelinkIcon sx={{ transition: "color 0.3s ease" }} />;
+      default:
+        return <PhonelinkIcon sx={{ transition: "color 0.3s ease" }} />;
+    }
+  };
+
+  // ── 加号 FAB 弹出菜单 ──
+  const [fabMenuAnchor, setFabMenuAnchor] = useState<null | HTMLElement>(null);
+  const fabAnchorRef = useRef<HTMLButtonElement | null>(null);
+  // 下载管理角标：进行中的传输任务数（复用现有发送/进度状态；无源时至少 1）
+  const activeTransferCount =
+    (fileTransferProgress !== null ? 1 : 0) +
+    (realTimeColab.hasActiveOutgoingFileTransfer() ? 1 : 0);
+  // 会议房间入口状态
+  const navigator = useNavigate();
+  const [meetingDialogOpen, setMeetingDialogOpen] = useState(false);
+  const [meetingDialogMode, setMeetingDialogMode] = useState<"create" | "join">("create");
+  const [meetingRoomIdInput, setMeetingRoomIdInput] = useState("");
+  const [meetingTitleInput, setMeetingTitleInput] = useState("");
+  const [meetingCreating, setMeetingCreating] = useState(false);
+
+  const openMeetingDialog = (mode: "create" | "join") => {
+    setMeetingDialogMode(mode);
+    if (mode === "join") {
+      setMeetingRoomIdInput(settingsStore.get("roomId") ?? "");
+    } else {
+      setMeetingRoomIdInput("");
+      setMeetingTitleInput("");
+    }
+    setMeetingDialogOpen(true);
+  };
+  const confirmMeeting = async () => {
+    if (meetingDialogMode === "join") {
+      // 加入：输入 4 位会议号，经 URL 带会议号自动加入
+      const roomId = meetingRoomIdInput.trim();
+      if (!/^\d{4}$/.test(roomId)) {
+        alertUseMUI(t('meeting.roomInvalid', '请输入 4 位会议号'), 1500, { kind: "info" });
+        return;
+      }
+      setMeetingDialogOpen(false);
+      navigator(`/meeting?room=${encodeURIComponent(roomId)}`);
+      return;
+    }
+    // 创建：向服务器申请 4 位会议号，再跳转到创建者视角（owner=1 触发分享页）
+    setMeetingDialogOpen(false);
+    setMeetingCreating(true);
+    try {
+      const id = await meetingManager.createMeeting(meetingTitleInput);
+      navigator(`/meeting?room=${encodeURIComponent(id)}&owner=1`);
+    } catch (e) {
+      alertUseMUI(e instanceof Error ? e.message : String(e), 2000, { kind: "error" });
+    } finally {
+      setMeetingCreating(false);
+    }
+  };
+  const handleStartScreenShare = () => {
+    setFabMenuAnchor(null);
+    // 即时屏幕共享：也进入会议路由并自动发起共享（同一条 SFU 上行）
+    navigator("/meeting?screen=1");
+  };
+  const factoryMenuItem = ({
+    icon: Icon, title, sub, badge, onClick,
+  }: {
+    icon: React.ComponentType<{ sx?: object }>;
+    title: string;
+    sub: string;
+    badge?: number;
+    onClick: () => void;
+  }) => (
+    <MenuItem
+      key={title}
+      onClick={() => { setFabMenuAnchor(null); onClick(); }}
+      sx={{ px: 1.5, py: 1, gap: 1.25, borderRadius: 2, mx: 0.5 }}
+    >
+      <Box sx={{
+        width: 40, height: 40, borderRadius: '50%', flexShrink: 0,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        bgcolor: `${theme.palette.primary.main}1A`, color: 'primary.main',
+      }}>
+        <Icon sx={{ fontSize: 22 }} />
+      </Box>
+      <Box sx={{ flex: 1, minWidth: 0 }}>
+        <Typography sx={{ fontWeight: 700, color: 'text.primary', fontSize: '0.9rem', lineHeight: 1.25 }}>
+          {title}
+        </Typography>
+        <Typography sx={{ fontSize: '0.75rem', color: 'text.secondary', lineHeight: 1.3 }}>
+          {sub}
+        </Typography>
+      </Box>
+      {badge !== undefined && badge > 0 && (
+        <Box sx={{
+          minWidth: 22, height: 22, px: badge > 9 ? 1 : 0, borderRadius: '50%', flexShrink: 0,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          bgcolor: 'primary.main', color: 'common.white', fontSize: '0.75rem', fontWeight: 700,
+        }}>
+          {badge}
+        </Box>
+      )}
+    </MenuItem>
+  );
+
+
 
   // 聊天相关状态
   const [chatPanelOpen, setChatPanelOpen] = useState<boolean>(false);
@@ -918,18 +1039,6 @@ const Share = observer(() => {
   }, [connectedUsers, selectedButton, selectedFile, fileTransferProgress, fileSendingTargetUser, downloadPageState]);
 
 
-  const getUserTypeIcon = (userType: string) => {
-    switch (userType) {
-      case "apple":
-        return <AppleIcon sx={{ transition: "color 0.3s ease" }} />;
-      case "android":
-        return <PhonelinkRingIcon sx={{ transition: "color 0.3s ease" }} />;
-      case "desktop":
-        return <PhonelinkIcon sx={{ transition: "color 0.3s ease" }} />;
-      default:
-        return <PhonelinkIcon sx={{ transition: "color 0.3s ease" }} />;
-    }
-  };
   const handleTextSelect = () => {
     setTextInput(""); // 清空上次输入
     setTextInputDialogOpen(true); // 打开输入弹窗
@@ -1612,94 +1721,88 @@ const Share = observer(() => {
                       display: "block", // 避免默认 inline-flex
                     }}
                 >
-                  <Box sx={{
-                    display: "flex",
-                    alignItems: "center",
-                    textAlign: "left",
-                    gap: 1,
-                    width: "100%",
-                    transition: 'opacity 0.3s ease',
-                    opacity: user.status === 'connecting' ? 0.8 : 1
-                  }}>
-                    <Box sx={{ display: "flex", alignItems: "center", flexShrink: 0 }}>
-                      {getUserTypeIcon(user.userType)}
-                    </Box>
+                    <Box sx={{ display: "flex", alignItems: "center", textAlign: "left", gap: 1, width: "100%", transition: 'opacity 0.3s ease', opacity: user.status === 'connecting' ? 0.8 : 1 }}>
+                      <Box sx={{ display: "flex", alignItems: "center", flexShrink: 0 }}>
+                        {getUserTypeIcon(user.userType)}
+                      </Box>
 
-                    <Box sx={{ display: "flex", alignItems: "center", minWidth: 0, flex: 1, gap: 0.75 }}>
-                      <Typography
-                        variant="body1"
-                        sx={{
-                          overflow: "hidden",
-                          textOverflow: "ellipsis",
-                          whiteSpace: "nowrap",
-                          textAlign: "left",
-                          color: user.status === 'connected'
-                            ? 'text.primary'
-                            : isPublicNetworkStatus(user.status)
+                      <Box sx={{ display: "flex", alignItems: "center", minWidth: 0, flex: 1, gap: 0.75 }}>
+                        <Typography
+                          variant="body1"
+                          sx={{
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                            textAlign: "left",
+                            color: user.status === 'connected'
                               ? 'text.primary'
-                              : 'text.secondary',
-                          transition: 'color 0.3s ease'
-                        }}
-                      >
-                        {user.name}
-                      </Typography>
-                      {/* 状态图标紧跟名字右侧：connected→Link / connecting→Sync / 公网→Cloud */}
-                      <Tooltip title={getConnectionStatusTooltip(user.status)} arrow enterDelay={250}>
-                        <Box sx={{ display: "flex", alignItems: "center", flexShrink: 0 }}>
-                          {user.status === 'connected' && (
-                            <LinkIcon sx={{ color: 'success.main', fontSize: 20 }} />
-                          )}
-                          {user.status === 'connecting' && (
-                            <SyncIcon sx={{ color: 'text.secondary', fontSize: 20 }} />
-                          )}
-                          {isPublicNetworkStatus(user.status) && (
-                            <CloudIcon sx={{ color: 'info.main', fontSize: 20 }} />
-                          )}
-                        </Box>
-                      </Tooltip>
-                    </Box>
+                              : isPublicNetworkStatus(user.status)
+                                ? 'text.primary'
+                                : 'text.secondary',
+                            transition: 'color 0.3s ease'
+                          }}
+                        >
+                          {user.name}
+                        </Typography>
+                        {/* 状态图标紧跟名字右侧：connected→Link / connecting→Sync / 公网→Cloud */}
+                        <Tooltip title={getConnectionStatusTooltip(user.status)} arrow enterDelay={250}>
+                          <Box sx={{ display: "flex", alignItems: "center", flexShrink: 0 }}>
+                            {user.status === 'connected' && (
+                              <LinkIcon sx={{ color: 'success.main', fontSize: 20 }} />
+                            )}
+                            {user.status === 'connecting' && (
+                              <SyncIcon sx={{ color: 'text.secondary', fontSize: 20 }} />
+                            )}
+                            {isPublicNetworkStatus(user.status) && (
+                              <CloudIcon sx={{ color: 'info.main', fontSize: 20 }} />
+                            )}
+                          </Box>
+                        </Tooltip>
+                      </Box>
 
-                    {/* 操作区：聊天 + 语音/视频 —— 统一 28px 高；zIndex 高于悬浮下载 Fab，保证窄屏可点 */}
-                    <Box sx={{
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "space-evenly",
-                      flexShrink: 0,
-                      position: "relative",
-                      zIndex: 4,
-                      height: 28,
-                    }}>
-                      <Tooltip title={t('chat.startChat', '开始聊天')} arrow enterDelay={250}>
-                        <span>
-                          <IconButton
-                            size="small"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setChatTargetUser(user.uniqId);
-                              setChatPanelOpen(true);
-                            }}
-                            sx={{ opacity: 0.7, '&:hover': { opacity: 1 } }}
-                          >
-                            <ChatIcon sx={{ fontSize: 20 }} />
-                          </IconButton>
-                        </span>
-                      </Tooltip>
-                      <CallButton
-                        disabled={callManagerRef.current?.isInCall(user.uniqId) || callManagerRef.current?.isInCall()}
-                        onCall={(media) => { void startCall(user.uniqId, media); }}
-                      />
+                      {/* 操作区：聊天 + 语音/视频 —— 统一 28px 高；zIndex 高于悬浮 Fab，保证窄屏可点 */}
+                      <Box sx={{
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-evenly",
+                        flexShrink: 0,
+                        position: "relative",
+                        zIndex: 4,
+                        height: 28,
+                      }}>
+                        <Tooltip title={t('chat.startChat', '开始聊天')} arrow enterDelay={250}>
+                          <span>
+                            <IconButton
+                              size="small"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setChatTargetUser(user.uniqId);
+                                setChatPanelOpen(true);
+                              }}
+                              sx={{ opacity: 0.7, '&:hover': { opacity: 1 } }}
+                            >
+                              <ChatIcon sx={{ fontSize: 20 }} />
+                            </IconButton>
+                          </span>
+                        </Tooltip>
+                        <CallButton
+                          disabled={callManagerRef.current?.isInCall(user.uniqId) || callManagerRef.current?.isInCall()}
+                          onCall={(media) => { void startCall(user.uniqId, media); }}
+                        />
+                      </Box>
                     </Box>
-                  </Box>
                 </ButtonBase>
 
               </Box>
             ))}
           </Box>
 
-          {/* 悬浮按钮（窄屏缩小贴边；zIndex 3 浮于卡片背景但低于卡片操作区(4)，不遮挡按钮） */}
+          {/* 加号 FAB（含下载角标）+ 弹出菜单 */}
           <Fab
             color="primary"
-            onClick={() => { setDwnloadPageState(true) }}
+            ref={fabAnchorRef}
+            onClick={(e) => setFabMenuAnchor(e.currentTarget)}
+            aria-label="plus"
             sx={{
               position: "absolute",
               bottom: { xs: 52, sm: 65 },
@@ -1709,12 +1812,142 @@ const Share = observer(() => {
               zIndex: 3,
             }}
           >
-            <DownloadIcon sx={{ fontSize: { xs: 22, sm: 24 } }} />
+            <Badge
+              badgeContent={activeTransferCount}
+              color="error"
+              invisible={activeTransferCount === 0}
+              anchorOrigin={{ vertical: "top", horizontal: "right" }}
+            >
+              <AddIcon sx={{ fontSize: { xs: 22, sm: 24 } }} />
+            </Badge>
           </Fab>
+
+          <Menu
+            anchorEl={fabMenuAnchor}
+            open={Boolean(fabMenuAnchor)}
+            onClose={() => setFabMenuAnchor(null)}
+            anchorOrigin={{ vertical: "top", horizontal: "right" }}
+            transformOrigin={{ vertical: "bottom", horizontal: "right" }}
+          >
+            {factoryMenuItem({
+              icon: MeetingRoomIcon, title: t('meeting.create', '创建会议'), sub: t('meeting.createSub', '发起一个新的会议房间'), onClick: () => openMeetingDialog("create"),
+            })}
+            {factoryMenuItem({
+              icon: VideoCallIcon, title: t('meeting.join', '加入会议'), sub: t('meeting.joinSub', '输入会议号加入'), onClick: () => openMeetingDialog("join"),
+            })}
+            {factoryMenuItem({
+              icon: ScreenShareIcon, title: t('meeting.screenShare', '即时屏幕共享'), sub: t('meeting.screenShareSub', '无需加入房间直接共享屏幕'), onClick: () => handleStartScreenShare(),
+            })}
+            {factoryMenuItem({
+              icon: DownloadIcon, title: t('meeting.downloads', '下载管理'), sub: t('meeting.downloadsSub', '查看进行中的传输'), badge: activeTransferCount, onClick: () => setDwnloadPageState(true),
+            })}
+          </Menu>
 
           <EditableUserId />
       </Box>
 
+      {/* 创建/加入会议对话框 */}
+      <Dialog
+        open={meetingDialogOpen}
+        onClose={() => setMeetingDialogOpen(false)}
+        fullWidth
+        maxWidth="xs"
+        BackdropProps={{
+          sx: {
+            backgroundColor: 'rgba(0,0,0,0.4)',
+          },
+        }}
+        PaperProps={{
+          sx: {
+            borderRadius: '20px',
+            boxShadow: '0 12px 48px rgba(0,0,0,0.14), 0 4px 16px rgba(0,0,0,0.06)',
+            overflow: 'hidden',
+          },
+        }}
+      >
+        <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1, pt: 2.5, pb: 0, px: 3, fontSize: '1.1rem', fontWeight: 590, letterSpacing: '-0.02em' }}>
+          <MeetingRoomIcon sx={{ mr: 0.5, verticalAlign: 'middle', fontSize: '1.1em', color: 'primary.main', opacity: 0.8 }} />
+          {meetingDialogMode === "create" ? t('meeting.create', '创建会议') : t('meeting.join', '加入会议')}
+        </DialogTitle>
+        <DialogContent sx={{ px: 3, pt: 2 }}>
+          <DialogContentText sx={{ fontSize: '0.85rem', mb: 1.5, color: 'text.secondary' }}>
+            {meetingDialogMode === "create" ? t('meeting.dialogCreateSub', '发起多人协作会议，开始后将生成 4 位会议号') : t('meeting.dialogJoinSub', '输入 4 位会议号加入')}
+          </DialogContentText>
+          {meetingDialogMode === "create" ? (
+            <TextField
+              autoFocus
+              value={meetingTitleInput}
+              onChange={(e) => setMeetingTitleInput(e.target.value.slice(0, 64))}
+              onKeyDown={(e) => { if (e.key === 'Enter') confirmMeeting(); }}
+              fullWidth
+              variant="filled"
+              label={t('meeting.title', '会议名称（可选）')}
+              inputProps={{ maxLength: 64 }}
+              InputProps={{
+                disableUnderline: true,
+                sx: {
+                  borderRadius: '14px',
+                  fontSize: '0.9375rem',
+                  bgcolor: (t: any) => t.palette.mode === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
+                  px: 1,
+                  '&:hover': { bgcolor: (t: any) => t.palette.mode === 'dark' ? 'rgba(255,255,255,0.09)' : 'rgba(0,0,0,0.06)' },
+                  '&.Mui-focused': {
+                    bgcolor: (t: any) => t.palette.mode === 'dark' ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.9)',
+                    boxShadow: (t: any) => `0 0 0 3px ${t.palette.primary.main}18`,
+                  },
+                },
+              }}
+            />
+          ) : (
+            <TextField
+              autoFocus
+              value={meetingRoomIdInput}
+              onChange={(e) => setMeetingRoomIdInput(e.target.value.replace(/\D/g, "").slice(0, 4))}
+              onKeyDown={(e) => { if (e.key === 'Enter') confirmMeeting(); }}
+              fullWidth
+              variant="filled"
+              label={t('meeting.roomId', '会议号')}
+              placeholder="0000"
+              inputProps={{ maxLength: 4, inputMode: "numeric" }}
+              InputProps={{
+                disableUnderline: true,
+                sx: {
+                  borderRadius: '14px',
+                  fontSize: '1.6rem',
+                  fontWeight: 700,
+                  textAlign: 'center',
+                  letterSpacing: '0.3em',
+                  bgcolor: (t: any) => t.palette.mode === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
+                  px: 1,
+                  '&:hover': { bgcolor: (t: any) => t.palette.mode === 'dark' ? 'rgba(255,255,255,0.09)' : 'rgba(0,0,0,0.06)' },
+                  '&.Mui-focused': {
+                    bgcolor: (t: any) => t.palette.mode === 'dark' ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.9)',
+                    boxShadow: (t: any) => `0 0 0 3px ${t.palette.primary.main}18`,
+                  },
+                },
+              }}
+            />
+          )}
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2.5, gap: 1.5 }}>
+          <Button
+            onClick={() => setMeetingDialogOpen(false)}
+            sx={{ color: 'text.secondary', fontWeight: 520, fontSize: '0.875rem', letterSpacing: '-0.01em', borderRadius: '12px', px: 2, textTransform: 'none' }}
+          >
+            {t('button.cancel')}
+          </Button>
+          <Button
+            onClick={confirmMeeting}
+            variant="contained"
+            autoFocus
+            disabled={meetingCreating}
+            startIcon={meetingDialogMode === "create" ? <VideocamIcon /> : <VideoCallIcon />}
+            sx={{ fontWeight: 590, fontSize: '0.875rem', letterSpacing: '-0.01em', borderRadius: '12px', px: 3, textTransform: 'none', boxShadow: (t: any) => `0 2px 8px ${t.palette.primary.main}30` }}
+          >
+            {meetingCreating ? t('meeting.creating', '创建中…') : meetingDialogMode === "create" ? t('meeting.startNow', '开始会议') : t('meeting.joinNow', '加入会议')}
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       <Dialog
         open={openDialog}
@@ -1726,9 +1959,7 @@ const Share = observer(() => {
         }}
         BackdropProps={{
           sx: {
-            backdropFilter: 'blur(12px)',
-            WebkitBackdropFilter: 'blur(12px)',
-            backgroundColor: 'rgba(0,0,0,0.24)',
+            backgroundColor: 'rgba(0,0,0,0.4)',
           },
         }}
         PaperProps={{
@@ -1801,9 +2032,7 @@ const Share = observer(() => {
         maxWidth="xs"
         BackdropProps={{
           sx: {
-            backdropFilter: 'blur(12px)',
-            WebkitBackdropFilter: 'blur(12px)',
-            backgroundColor: 'rgba(0,0,0,0.24)',
+            backgroundColor: 'rgba(0,0,0,0.4)',
           },
         }}
         PaperProps={{

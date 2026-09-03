@@ -1,0 +1,1 @@
+import{t as e}from"./share-B3GzVqo9.js";export{e as readClipboard};

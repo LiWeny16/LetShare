@@ -655,10 +655,45 @@ export class RealTimeColab {
   // 设置文件传输消息处理器
   if (this.connectionManager.onMessageReceived) {
    this.connectionManager.onMessageReceived((message) => {
-    if (message.type && (message.type.startsWith("file:transfer:") || message.type === "error")) {
-     // 如果 data 是嵌套的，需要提取实际数据
+    if (message.type && message.type.startsWith("file:transfer:")) {
      const actualData = message.data?.transfer_id ? message.data : message;
      this.serverFileTransfer?.handleFileTransferMessage(message.type, actualData);
+     return;
+    }
+    if (message.type === "error") {
+     // 服务器通用错误（meeting:join 404"会议不存在"、参数错误等）。
+     // 无 transfer_id 的文件传输错误不在此路径：仅当数据本身携带传输上下文才转文件层。
+     if (!message.data?.transfer_id) {
+      const errText =
+       (message as any).error?.message ??
+       (typeof message.data === "object" && message.data !== null && message.data.message)
+        ? (message.data as any).message
+        : "服务器错误";
+      this.meetingHandler?.("error", message);
+      alertUseMUI(String(errText), 3000, { kind: "error" });
+      return;
+     }
+     const actualData = message.data?.transfer_id ? message.data : message;
+     this.serverFileTransfer?.handleFileTransferMessage(message.type, actualData);
+     return;
+    }
+    // 会议(SFU)直发隧道接收：服务器回发的 meeting:*（type=外层法，data=内层 payload）
+    // 与 membership:* 均经服务器会话 key 定向到本端，外包 type 在 message.data 之上。
+    if (typeof message.type === "string" && message.type.startsWith("meeting:")) {
+     this.meetingHandler?.(message.type, message.data);
+     return;
+    }
+    if (message.event === "membership:snapshot") {
+     const payload = message.data ?? message;
+     this.handleMembershipSnapshot(payload);
+     this.meetingHandler?.("membership:snapshot", payload);
+     return;
+    }
+    if (message.event === "membership:changed") {
+     const payload = message.data ?? message;
+     this.handleMembershipChanged(payload);
+     this.meetingHandler?.("membership:changed", payload);
+     return;
     }
    });
    console.debug(`[ColabLib] 文件传输消息回调已设置`);
@@ -847,6 +882,47 @@ export class RealTimeColab {
   this.connectionManager.broadcastSignal(signal);
  }
 
+ /**
+  * 会议(SFU)信令直发隧道：绕过 publish，直接构造 Type=meeting:* 的原始 WS 帧。
+  * 服务器 switch message.Type 按 meeting:join/leave/sdp/ice 路由（websocket.go:359），
+  * broadcastSignal 只会产出 {Type:"publish"}，到不了这些 case，故必须直发。
+  * 仅自定义服务器走此隧道（Ably 不支持）。
+  */
+ public sendMeetingMessage(type: string, data: any, channel?: string): void {
+  if (this.connectionManager.getConnectionType() !== "custom") return;
+  if (!this.connectionManager.isConnected()) return;
+  // channel 由会议 Manager 显式传入会议号；缺省时回退到当前文件房间号（兼容旧调用）。
+  const roomId = channel ?? (settingsStore.get("roomId") ?? "");
+  this.connectionManager.send({
+   type,
+   channel: roomId,
+   event: "signal:all",
+   data,
+  });
+ }
+
+ /**
+  * 订阅一个"额外房间"（会议号房间）。服务器按 UserID 定向回发 meeting:* / membership:* 时，
+  * 要求该客户端在目标房间的成员表内（client.Rooms[会议号]），否则回包会被服务器丢弃。
+  * 会议号与文件传输房间号不同，故需单独订阅会议号房间。Ably 不支持。
+  *
+  * 只订阅 signal:all 即可：membership 广播与会议信令定向发送均不按专属 event 过滤。
+  * 每次 subscribe 服务器都会广播一次 join 事件，重复 subscribe 会让其它成员收到重复
+  * 成员添加通知（members 重复计数）。
+  */
+ public subscribeMeetingRoom(roomId: string): void {
+  if (this.connectionManager.getConnectionType() !== "custom") return;
+  if (!this.connectionManager.isConnected() || !roomId) return;
+  this.connectionManager.send({ type: "subscribe", channel: roomId, event: "signal:all" });
+ }
+
+ /** 取消订阅会议号房间。 */
+ public unsubscribeMeetingRoom(roomId: string): void {
+  if (this.connectionManager.getConnectionType() !== "custom") return;
+  if (!this.connectionManager.isConnected() || !roomId) return;
+  this.connectionManager.send({ type: "unsubscribe", channel: roomId, event: "signal:all" });
+ }
+
  public getStatesMemorable(): {
   memorable: {
    userId: string | null;
@@ -890,6 +966,14 @@ export class RealTimeColab {
    "memorableState",
    JSON.stringify({ memorable: updated })
   );
+ }
+
+ /** 会议(SFU)信令转发：meetingManager 等注册后，收到 meeting:* / membership:* 时回调（避免循环依赖）。 */
+ private meetingHandler: ((type: string, data: any) => void) | null = null;
+
+ /** 注册会议信令/成员表转发处理器（由 meetingManager 在初始化时调用）。 */
+ public registerMeetingHandler(fn: (type: string, data: any) => void): void {
+  this.meetingHandler = fn;
  }
 
  public getUniqId(): string | null {
@@ -1121,12 +1205,18 @@ export class RealTimeColab {
      case "membership:snapshot":
       // 服务器权威成员快照（uniqId[]）：presence 中心化，替换客户端互发现的初始状态
       this.handleMembershipSnapshot(data);
+      this.meetingHandler?.("membership:snapshot", data);
       break;
      case "membership:changed":
       // 服务器权威成员增删（join/leave）：presence 中心化的增量通知
       this.handleMembershipChanged(data);
+      this.meetingHandler?.("membership:changed", data);
       break;
      default:
+      if (typeof data.type === "string" && data.type.startsWith("meeting:")) {
+       this.meetingHandler?.(data.type, signalData);
+       break;
+      }
       if (typeof data.type === "string" && data.type.startsWith("call:")) {
        this.handleCallSignal(signalData);
        break;
