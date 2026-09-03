@@ -15,17 +15,19 @@ const DEFAULT_SETTINGS = {
   micDeviceId: "",        // 首选麦克风 deviceId（"" = 系统默认）
   speakerDeviceId: "",    // 首选扬声器 deviceId（"" = 系统默认）
   audioContentHint: "speech" as "speech" | "music", // Opus 编码模式倾向：speech=人声优化，music=音乐模式
-  speakerVolume: 1 as number, // 音量 0..1（远端播放音量，1 = 100%）
+  speakerVolume: 1 as number, // 音量 0..2（远端播放音量；1 = 100%，>1 为 Web Audio 增益增强，上限 2 = 200%；0..1 仅元素音量，>1 走音频管线）
   echoCancelType: "browser" as "browser" | "system", // 回声消除引擎：browser=浏览器 AEC3（默认），system=OS 级 AEC（部分设备更好；不支持时浏览器忽略）
   noiseSuppression: true as boolean, // 浏览器噪声抑制开关（关=保真/音乐场景，也为端侧 RNNoise 预留）
   nsMode: "browser" as "off" | "browser" | "rnnoise" | "gtcrn", // 降噪模式：off=关 / browser=浏览器内置 / rnnoise=RNNoise 实验 / gtcrn=GTCRN 实验室新算法
+  voiceClarityEnabled: true as boolean,   // 语音增强（清晰度）：远端播放管线 高通 100Hz + 高频搁架 2.8kHz +3dB
+  spatialAudioEnabled: false as boolean,  // 空间音频扩展：Haas 效应立体声展宽（单侧 ~15ms 延迟）
   videoDeviceId: "",        // 首选摄像头 deviceId（"" = 系统默认）
   videoQuality: "720p30" as "480p30" | "720p30" | "1080p30" | "720p60" | "1080p60", // 视频分辨率/帧率档位
   videoMaxBitrate: "2000" as "auto" | "2000" | "1500" | "1000" | "750" | "500", // 视频码率上限 kbps（默认 2000=2Mbps 压缩上限，浏览器自适应压码率；auto=不设上限）
   videoCodecPriority: "auto" as "auto" | "h264" | "vp8" | "vp9" | "av1", // 视频编码器优先次序（协商前生效，通话中切换下次生效）
   videoBackground: "off" as "off" | "blur", // 背景模糊（Chromium 118+ 原生约束，不支持时自动降级）
   videoDegradation: "maintain-framerate" as "balanced" | "maintain-framerate" | "maintain-resolution", // 网络差时浏览器降级策略：默认帧率优先（流畅 > 码率/清晰度）
-  version: "3.6.14",
+  version: "3.7.0",
   isNewUser: true
 };
 export type SettingsKey = keyof typeof DEFAULT_SETTINGS;
@@ -34,6 +36,8 @@ const DEFAULT_UNRMB = {
   settingsPageState: false,
   isConnectedToServer: false,
   staticIp:"",
+  /** 用户连接状态（对标 Discord）：connecting 连接中 / connected 已连接 / reconnecting 重连中 / disconnected 已断开 */
+  serverConnState: "disconnected" as "disconnected" | "connecting" | "connected" | "reconnecting",
 };
 
 type UnrmbKey = keyof typeof DEFAULT_UNRMB;

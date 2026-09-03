@@ -277,12 +277,29 @@ const sharedMalayTranslation = {
             noiseSuppression: "Peredam bising",
             nsMode: "Peredam bising",
             nsOff: "Matikan",
-            nsBrowser: "Standard (pelayar)",
-            nsRnnoise: "RNNoise (eksperimen)",
-            nsGtcrn: "GTCRN (makmal)",
+            nsBrowser: "Penyahbisingan standard",
+            nsRnnoise: "Makmal RNNoise",
+            nsGtcrn: "Makmal GTCRN",
+            peerOffline: "Pihak lain di luar talian, tidak dapat memanggil sekarang",
+            reconnecting: "Rangkaian tidak stabil, sedang menyambung semula…",
+            noAnswer: "Tiada jawapan daripada pihak lain",
+            busy: "Pihak lain sibuk",
+            volumeHint: "Lebih 100% ialah perolehan (pemampat menghalang pecahan; hanya tersedia melalui paip Web Audio)",
+            voiceClarity: "Peningkatan suara · Kejelasan",
+            spatialAudio: "Audio ruang · Pelebaran stereo",
+                        groupDevices: "Peranti",
+            groupSound: "Bunyi",
+            groupLab: "Makmal Audio",
+            groupInput: "Input",
             qualityTooltipDelay: "Latensi",
             qualityTooltipJitter: "Jitter",
             qualityTooltipLoss: "Paket hilang"
+        },
+        conn: {
+            connecting: "Menyambung…",
+            connected: "Disambungkan",
+            reconnecting: "Menyambung semula…",
+            disconnected: "Terputus"
         }
     }
 }
@@ -567,12 +584,29 @@ export const resources = {
                 noiseSuppression: "Noise suppression",
                 nsMode: "Noise suppression",
                 nsOff: "Off",
-                nsBrowser: "Standard (browser)",
-                nsRnnoise: "RNNoise (experimental)",
-                nsGtcrn: "GTCRN (lab)",
+                nsBrowser: "Standard noise reduction",
+                nsRnnoise: "RNNoise Lab",
+                nsGtcrn: "GTCRN Lab",
+                peerOffline: "Peer is offline — cannot call right now",
+                reconnecting: "Unstable network — reconnecting…",
+                noAnswer: "No answer",
+                busy: "Peer is busy",
+                volumeHint: "Above 100% is gain boost (compressor prevents clipping; available on the Web Audio pipeline)",
+                voiceClarity: "Voice enhancement · Clarity",
+                spatialAudio: "Spatial audio · Stereo widening",
+                                groupDevices: "Devices",
+                groupSound: "Sound",
+                groupLab: "Audio Lab",
+                groupInput: "Input",
                 qualityTooltipDelay: "Delay",
                 qualityTooltipJitter: "Jitter",
                 qualityTooltipLoss: "Loss"
+            },
+            conn: {
+                connecting: "Connecting…",
+                connected: "Connected",
+                reconnecting: "Reconnecting…",
+                disconnected: "Disconnected"
             }
         }
     },
@@ -857,12 +891,29 @@ export const resources = {
                 noiseSuppression: "降噪",
                 nsMode: "降噪",
                 nsOff: "关闭",
-                nsBrowser: "标准（浏览器）",
-                nsRnnoise: "RNNoise（实验）",
-                nsGtcrn: "GTCRN（实验室）",
+                nsBrowser: "标准降噪",
+                nsRnnoise: "RNNoise 实验室",
+                nsGtcrn: "GTCRN 实验室",
+                peerOffline: "对方已离线，暂无法呼叫",
+                reconnecting: "网络不稳定，正在重连…",
+                noAnswer: "对方未接听",
+                busy: "对方忙线中",
+                volumeHint: "超过 100% 为增益增强（压缩器防爆音，仅 Web Audio 管线可用）",
+                voiceClarity: "语音增强 · 清晰度",
+                spatialAudio: "空间音频 · 立体声展宽",
+                                groupDevices: "设备",
+                groupSound: "声音",
+                groupLab: "音频实验室",
+                groupInput: "输入",
                 qualityTooltipDelay: "延迟",
                 qualityTooltipJitter: "抖动",
                 qualityTooltipLoss: "丢包"
+            },
+            conn: {
+                connecting: "连接中…",
+                connected: "已连接",
+                reconnecting: "重连中…",
+                disconnected: "已断开"
             }
 
         }

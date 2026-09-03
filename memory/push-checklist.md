@@ -15,5 +15,6 @@ metadata:
 3. SW 缓存名只在缓存策略变化时改（见 [[sw-cache-version-bump]]）。
 4. CI 对齐：`.github/workflows/ci.yml` pnpm=11 要求 Node >=22.13（依赖 node:sqlite）。
 5. push 后 `gh run list` 验 CI（需 `HTTPS_PROXY=http://127.0.0.1:7897`）；外网直测用 `curl.exe --noproxy "*"`（本机 Clash 代理 env 会干扰直连）。
-6. PowerShell 5.1 改文件用 `[System.IO.File]::WriteAllText` + `UTF8Encoding($false)`——`Set-Content -Encoding UTF8` 会写 BOM，打崩 vite-plugin-pwa 的 JSON.parse。
-7. 服务器端口归属（ECS）：nginx `:80`（letshare.fun 静态回源，**禁 301**，CDN 回源跟随会死循环）+ `:18081`（备用）；Go `:8080`（HTTP→HTTPS 跳转）+ `:443`（TLS）+ `:3478`（TURN）。nginx 模板：`scripts/letshare-static.nginx.conf`；全程记录：`Harness/project/2026-09-02-letshare-cdn-origin-ecs.md`。
+6. **本机直连 GitHub 已不通（连接被重置）**：仓库已设 `http.proxy=http://127.0.0.1:7897`（`verge-mihomo` 实际监听 7897；**7898 未监听**，用户曾提 7898 但实测不通）。`gh` CLI 不吃 http.proxy，仍需显式 `HTTPS_PROXY=http://127.0.0.1:7897`。
+7. PowerShell 5.1 改文件用 `[System.IO.File]::WriteAllText` + `UTF8Encoding($false)`——`Set-Content -Encoding UTF8` 会写 BOM，打崩 vite-plugin-pwa 的 JSON.parse。
+8. 服务器端口归属（ECS）：nginx `:80`（letshare.fun 静态回源，**禁 301**，CDN 回源跟随会死循环）+ `:18081`（备用）；Go `:8080`（HTTP→HTTPS 跳转）+ `:443`（TLS）+ `:3478`（TURN）。nginx 模板：`scripts/letshare-static.nginx.conf`；全程记录：`Harness/project/2026-09-02-letshare-cdn-origin-ecs.md`。

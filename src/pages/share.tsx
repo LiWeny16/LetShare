@@ -55,7 +55,7 @@ import { isApp } from "@App/libs/capacitor/user";
 import { Trans, useTranslation } from "react-i18next";
 import { CallManager } from "@App/libs/call/callManager";
 import type { CallQualitySample } from "@App/libs/call/callSession";
-import { startRingtone, stopRingtone, playDisconnectTone } from "@App/libs/call/ringtone";
+import { startRingtone, stopRingtone, startRingbackTone, stopRingbackTone, stopAllCallTones, playDisconnectTone } from "@App/libs/call/ringtone";
 import { acquireCallAudio, mergedAudioConstraints } from "@App/libs/call/audioCapture";
 import { buildVideoConstraintAttempts, acquireCallVideo, type VideoCaptureOpts } from "@App/libs/call/videoCapture";
 import { nsPipeline } from "@App/libs/call/noiseSuppression";
@@ -259,14 +259,14 @@ const Share = observer(() => {
   const activeCallRef = React.useRef<typeof activeCall>(null);
   React.useEffect(() => { activeCallRef.current = activeCall; }, [activeCall]);
 
-  // 来电铃声：incomingCall 出现播放、消失（接听/拒绝/超时）停止
+  // 来电铃声：incomingCall 出现播放、消失（接听/拒绝/超时）停止；卸载时统一停掉所有提示音
   React.useEffect(() => {
     if (incomingCall) {
       startRingtone();
     } else {
       stopRingtone();
     }
-    return () => stopRingtone();
+    return () => stopAllCallTones();
   }, [incomingCall]);
 
   const clearSelectedFiles = () => {
@@ -290,6 +290,8 @@ const Share = observer(() => {
         broadcast: (signal: object) => realTimeColab.broadcastSignal(signal as never),
         getSelfId: () => realTimeColab.getUniqId(),
         connection: realTimeColab.getConnectionManager(),
+        // 3.7.0：信令通道不可用时拒绝拨号（避免创建必然失败的通话挂在界面）
+        isConnected: () => realTimeColab.isConnected(),
         // 视频能力偏好（编码器优先/码率上限）：从设置实时读取，每次建会话生效
         videoPrefs: () => ({
           videoCodec: settingsStore.get("videoCodecPriority") ?? "auto",
@@ -314,6 +316,13 @@ const Share = observer(() => {
           // 停端侧降噪管线 —— 会话层无法停止管线持有的原始流轨与 AudioContext，
           // 必须在此释放，否则麦克风持续被占用；stop() 幂等，无管线时无副作用
           if (state === "ended") nsPipeline.stop();
+          // 拨号回铃：caller 在 outgoing（去电等待接听）期间播放；接通或结束即停。
+          // 来电方走 incoming→connecting→active，不进入 outgoing，故不会误触回铃。
+          if (state === "outgoing") {
+            startRingbackTone();
+          } else if (state === "active" || state === "ended") {
+            stopRingbackTone();
+          }
           // 函数式更新：同一批次内多个事件（如 onRemoteStream 后紧跟 state=active）
           // 依赖 activeCallRef.current 会互相覆盖，必须链式基于最新 state 合并
           setActiveCall((prev) => (prev && prev.peerId === peerId ? { ...prev, state } : prev));
@@ -344,9 +353,15 @@ const Share = observer(() => {
         onTransportChange: (peerId, transport) => {
           setActiveCall((prev) => (prev && prev.peerId === peerId ? { ...prev, transport } : prev));
         },
-        onCallEnded: (peerId) => {
+        onCallEnded: (peerId, reason) => {
           // 对端挂断/通话中断：自动关闭面板 + Discord 式"嘟"提示音（自动关闭已由置 null 承担）
           playDisconnectTone();
+          // 3.7.0 结束原因文案：去电超时/对方未接听/忙线 给出明确提示（对标 Discord）
+          if (reason === "timeout" || reason === "declined") {
+            alertUseMUI(t("call.noAnswer", "对方未接听"), 2500, { kind: "info" });
+          } else if (reason === "busy") {
+            alertUseMUI(t("call.busy", "对方忙线中"), 2500, { kind: "info" });
+          }
           setActiveCall((prev) => (prev && prev.peerId === peerId ? null : prev));
           setIncomingCall((prev) => (prev && prev.from === peerId ? null : prev));
         },
@@ -373,6 +388,13 @@ const Share = observer(() => {
     if (!manager) return;
     if (manager.isInCall(peerId)) {
       alertUseMUI(t("call.alreadyInCall", "该用户已在通话中"), 2000, { kind: "info" });
+      return;
+    }
+    // 3.8.x：拨号前探测对端 WS 在线（统一在线状态，通话与文件传输共用）。
+    // 离线用户不发 invite、不占麦克风，直接提示。
+    const online = await realTimeColab.isPeerOnline(peerId, 2500).catch(() => false);
+    if (!online) {
+      alertUseMUI(t("call.peerOffline", "对方已离线，暂无法呼叫"), 2200, { kind: "info" });
       return;
     }
     try {

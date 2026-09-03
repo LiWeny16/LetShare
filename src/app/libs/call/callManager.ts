@@ -23,7 +23,7 @@ import {
   type CallKind,
   type CallSignal,
 } from "./callSignaling";
-import { CallSession, type CallSessionState, type CallTransport, type CallQualitySample } from "./callSession";
+import { CallSession, type CallSessionState, type CallSessionEvents, type CallTransport, type CallQualitySample } from "./callSession";
 import type { VideoCodecPrioritySetting } from "./videoCapture";
 import {
   DEFAULT_POLICY_CONFIG,
@@ -34,7 +34,10 @@ import {
   type TrackQuality,
   type TransportDecision,
 } from "./transportPolicy";
-import { fetchTurnCredentials, type TurnIceServer } from "../connection/proUpgrade";
+import { fetchTurnCredentials, type TurnCredentialsResponse, type TurnIceServer } from "../connection/proUpgrade";
+
+/** 通话结束原因（onCallEnded 携带；timeout/declined/busy 供 UI 区分提示文案） */
+export type CallEndReason = "hangup" | "error" | "timeout" | "left-room" | "declined" | "busy";
 
 export type CallManagerEvents = {
   /** 收到来电（等待 UI 决策 accept/decline） */
@@ -48,7 +51,7 @@ export type CallManagerEvents = {
   /** 轨道切换（UI 显示 P2P/公网状态） */
   onTransportChange: (peerId: string, transport: CallTransport) => void;
   /** 通话结束（所有结束路径统一收口：UI 清理横幅/面板；对端断开且 bye 丢失时也会触发） */
-  onCallEnded: (peerId: string) => void;
+  onCallEnded: (peerId: string, reason?: CallEndReason) => void;
 };
 
 type ConnectionManagerLike = {
@@ -66,6 +69,10 @@ export type CallManagerDeps = {
    * 避免本模块（node 单测环境）静态依赖浏览器存储。缺省 = 浏览器自动。
    */
   videoPrefs?: () => { videoCodec: VideoCodecPrioritySetting; videoMaxBitrateKbps: number | null };
+  /** 服务器连接是否可用（拨号前守卫；未提供则跳过检查）。 */
+  isConnected?: () => boolean;
+  /** TURN 凭据拉取（单测注入用；缺省走 proUpgrade.fetchTurnCredentials）。 */
+  fetchTurn?: () => Promise<TurnCredentialsResponse>;
 };
 
 const RTC_CONFIG: RTCConfiguration = {
@@ -102,6 +109,24 @@ function buildRtcConfig(turnServers: TurnIceServer[]): RTCConfiguration {
 }
 
 const INCOMING_TIMEOUT_MS = 30_000;
+/** 去电无人接听超时（对齐 Discord 振铃时限；对端接受/媒体建立后不再触发） */
+const OUTGOING_TIMEOUT_MS = 60_000;
+/** caller ICE restart 重试间隔（reconnecting 态驱动，兼作信令补发，覆盖 WS 刚恢复的窗口） */
+const RECOVERY_RETRY_MS = 5_000;
+/** TURN 凭据到期前续期余量 */
+const TURN_REFRESH_MARGIN_MS = 60_000;
+/** TURN 续期失败后的重试冷却（端点限流 30 次/分，勿轰击） */
+const TURN_RETRY_COOLDOWN_MS = 30_000;
+
+/**
+ * 由 TTL 计算下次续期延迟：到期前 60s，且不超过 TTL 的一半（短 TTL 更早刷新，
+ * 保证刷新时凭据剩余有效期充足）；下限 30s。纯函数供单测。
+ */
+export function turnRefreshDelayMs(ttlSeconds: number): number {
+  if (!Number.isFinite(ttlSeconds) || ttlSeconds <= 0) return 0;
+  const ms = ttlSeconds * 1000;
+  return Math.max(Math.min(ms - TURN_REFRESH_MARGIN_MS, ms / 2), 30_000);
+}
 
 /** 环境无关的 setTimeout（浏览器/Node 通用），返回可清除的句柄。 */
 type TimerHandle = number | ReturnType<typeof setTimeout> | null;
@@ -128,6 +153,10 @@ type ActiveCall = {
   lastSwitch: { at: number; from: TransportDecision; to: TransportDecision } | null;
   statsTimer: TimerHandle;
   incomingTimeout: TimerHandle;
+  /** 去电无人接听超时（caller 专用；接通/恢复中清除） */
+  outgoingTimeout: TimerHandle;
+  /** reconnecting 恢复驱动定时器（caller 每 5s ICE restart；active/ended 清除） */
+  recoveryTimer: TimerHandle;
 };
 
 export class CallManager {
@@ -136,6 +165,12 @@ export class CallManager {
   private policy: PolicyConfig = DEFAULT_POLICY_CONFIG;
   /** 短效 TURN 凭据缓存（异步拉取，失败则退化为纯 STUN） */
   private turnServers: TurnIceServer[] = [];
+  /** 凭据过期时间戳（epoch ms；0 = 无凭据/TURN 未启用） */
+  private turnExpiresAt = 0;
+  private turnLastFetchAt = 0;
+  private turnRefreshTimer: TimerHandle = null;
+  /** 去重并发拉取（构造函数预拉与拨号拉取可能重叠） */
+  private turnFetching: Promise<void> | null = null;
 
   constructor(
     private readonly deps: CallManagerDeps,
@@ -155,13 +190,8 @@ export class CallManager {
     });
 
     // 异步预拉 TURN 凭据：失败静默降级为纯 STUN，不阻塞通话发起。
-    void fetchTurnCredentials()
-      .then((servers) => {
-        this.turnServers = servers;
-      })
-      .catch(() => {
-        // TURN 不可用时不致命，保留纯 STUN 配置
-      });
+    // 缓存含过期时间，续期定时器在到期前 60s 拉新凭据并热更新活跃会话（3.7.0）。
+    void this.refreshTurn();
   }
 
   setPolicy(partial: Partial<PolicyConfig>): void {
@@ -183,9 +213,16 @@ export class CallManager {
   async startCall(peerId: string, media: CallKind, localStream: MediaStream): Promise<string> {
     const selfId = this.deps.getSelfId();
     if (!selfId) throw new Error("not in room");
+    // 服务器信令通道不可用时拒绝拨号（3.7.0）：避免创建必然失败的通话挂在界面上
+    if (this.deps.isConnected && !this.deps.isConnected()) throw new Error("not connected to server");
     if (this.byPeer.has(peerId)) throw new Error("already in a call with this peer");
 
     const callId = `c_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    // 拨号前确保 TURN 凭据新鲜（页面开窗超过 TTL 后不刷新也能正常拨号）；2.5s 上限，失败静默降级
+    await Promise.race([
+      this.ensureTurnFresh(),
+      new Promise<void>((r) => scheduleTimeout(r, 2500)),
+    ]);
     const prefs = this.videoPrefs();
     const session = new CallSession(
       {
@@ -205,19 +242,13 @@ export class CallManager {
           this.broadcastLocalSdp(callId);
         },
       },
-      {
-        onStateChange: (state, info) => {
-          this.events.onCallState(peerId, state, info);
-          if (state === "ended") this.cleanup(callId);
-        },
-        onLocalStream: (stream) => this.events.onLocalStream(peerId, stream),
-        onRemoteStream: (stream, kind) => this.events.onRemoteStream(peerId, stream, kind),
-        onTrack: () => undefined,
-        onTransportChange: (transport) => this.events.onTransportChange(peerId, transport),
-      },
+      this.sessionEvents(callId, peerId),
     );
 
-    const call: ActiveCall = { session, peerId, role: "caller", lastSwitch: null, statsTimer: null, incomingTimeout: null };
+    const call: ActiveCall = {
+      session, peerId, role: "caller", lastSwitch: null,
+      statsTimer: null, incomingTimeout: null, outgoingTimeout: null, recoveryTimer: null,
+    };
     this.calls.set(callId, call);
     this.byPeer.set(peerId, callId);
 
@@ -228,11 +259,23 @@ export class CallManager {
       await session.startOutgoing();
     } catch (err) {
       this.deps.broadcast(buildBye(callId, "error"));
-      this.cleanup(callId);
+      this.cleanup(callId, "error");
       throw err;
     }
 
     this.startStatsLoop(call);
+
+    // 去电无人接听超时（对齐 Discord）：60s 内未接通且未进入恢复流程 → 取消并通知
+    call.outgoingTimeout = scheduleTimeout(() => {
+      const cur = this.calls.get(callId);
+      if (!cur) return;
+      const st = cur.session.getState();
+      // 已接通 / 协商中 / 断线自愈中不触发（严格只在"还在振铃"时取消）
+      if (st === "active" || st === "connecting" || st === "reconnecting") return;
+      this.deps.broadcast(buildBye(callId, "timeout"));
+      this.cleanup(callId, "timeout");
+    }, OUTGOING_TIMEOUT_MS);
+
     return callId;
   }
 
@@ -264,8 +307,10 @@ export class CallManager {
           role: "callee",
           lastSwitch: null,
           statsTimer: null,
+          outgoingTimeout: null,
+          recoveryTimer: null,
           incomingTimeout: scheduleTimeout(() => {
-            // 超时未接听 → 通知发起方
+            // 超时未接听 → 通知发起方；本端静默收尾（不 toast，对端收到 decline 自行提示）
             this.deps.broadcast(buildDecline(callId, "timeout"));
             this.cleanup(callId);
           }, INCOMING_TIMEOUT_MS),
@@ -284,17 +329,23 @@ export class CallManager {
       case "call:decline": {
         const call = this.calls.get(callId);
         if (!call) return;
+        const reason: CallEndReason = signal.reason === "busy" ? "busy" : "declined";
         if (call.role === "caller") {
           this.deps.broadcast(buildBye(callId, "hangup"));
         }
-        this.cleanup(callId);
+        this.cleanup(callId, reason);
         return;
       }
       case "call:bye": {
         const call = this.calls.get(callId);
         if (!call) return;
+        // 对端结束原因透传：timeout（对端未接听的取消）/ left-room 等由 UI 区分文案
+        const reason: CallEndReason | undefined =
+          signal.reason === "timeout" ? "timeout"
+            : signal.reason === "left-room" ? "left-room"
+              : signal.reason === "error" ? "error" : undefined;
         // onCallEnded 由 cleanup 统一收口，见 cleanup()
-        this.cleanup(callId);
+        this.cleanup(callId, reason);
         return;
       }
       case "call:sdp": {
@@ -328,9 +379,22 @@ export class CallManager {
       await call.session.accept();
     } catch (err) {
       this.deps.broadcast(buildBye(callId, "error"));
-      this.cleanup(callId);
+      this.cleanup(callId, "error");
       throw err;
     }
+    // 凭据热续期：invite 时构建的会话用的可能是临期凭据，accept 后刷新并应用（peer 已建才生效）
+    void (async () => {
+      try {
+        await Promise.race([
+          this.ensureTurnFresh(),
+          new Promise<void>((r) => scheduleTimeout(r, 2500)),
+        ]);
+        const cur = this.calls.get(callId);
+        await cur?.session.updateIceServers(buildRtcConfig(this.turnServers));
+      } catch {
+        // 续期失败不阻断接通；中继场景由后续 refreshTurn 的 restartIce 兜底
+      }
+    })();
     this.startStatsLoop(call);
   }
 
@@ -340,7 +404,7 @@ export class CallManager {
     if (!call) return;
     this.deps.broadcast(buildDecline(callId, reason));
     this.deps.broadcast(buildBye(callId, "hangup"));
-    this.cleanup(callId);
+    this.cleanup(callId, reason === "busy" ? "busy" : "declined");
   }
 
   /** 挂断（双方均可）。 */
@@ -349,7 +413,7 @@ export class CallManager {
     if (!call) return;
     this.deps.broadcast(buildBye(callId, "hangup"));
     // onCallEnded 由 cleanup 统一收口，见 cleanup()
-    this.cleanup(callId);
+    this.cleanup(callId, "hangup");
   }
 
   /** 信令层通知：对端离开房间（页面关闭/刷新广播 leave）。
@@ -360,7 +424,7 @@ export class CallManager {
     if (!callId) return;
     const call = this.calls.get(callId);
     if (!call) return;
-    this.cleanup(callId);
+    this.cleanup(callId, "left-room");
   }
 
   /** 本端离开房间：结束所有通话。 */
@@ -369,7 +433,7 @@ export class CallManager {
       const call = this.calls.get(callId);
       if (call) this.deps.broadcast(buildBye(callId, "left-room"));
     }
-    for (const callId of [...this.calls.keys()]) this.cleanup(callId);
+    for (const callId of [...this.calls.keys()]) this.cleanup(callId, "left-room");
   }
 
   // ─── UI 控制 ─────────────────────────────────────────────────────
@@ -464,17 +528,159 @@ export class CallManager {
           this.broadcastLocalSdp(callId);
         },
       },
-      {
-        onStateChange: (state, info) => {
-          this.events.onCallState(peerId, state, info);
-          if (state === "ended") this.cleanup(callId);
-        },
-        onLocalStream: (stream) => this.events.onLocalStream(peerId, stream),
-        onRemoteStream: (stream, kind) => this.events.onRemoteStream(peerId, stream, kind),
-        onTrack: () => undefined,
-        onTransportChange: (transport) => this.events.onTransportChange(peerId, transport),
-      },
+      this.sessionEvents(callId, peerId),
     );
+  }
+
+  /** 会话事件闭包（startCall 与 createPendingSession 共用；编排恢复流程与去电超时）。 */
+  private sessionEvents(callId: string, peerId: string): CallSessionEvents {
+    return {
+      onStateChange: (state, info) => this.handleSessionStateChange(callId, peerId, state, info),
+      onLocalStream: (stream) => this.events.onLocalStream(peerId, stream),
+      onRemoteStream: (stream, kind) => this.events.onRemoteStream(peerId, stream, kind),
+      onTrack: () => undefined,
+      onTransportChange: (transport) => this.events.onTransportChange(peerId, transport),
+    };
+  }
+
+  /** 会话状态迁移统一收口：上抛 UI 事件 + 挂载/停止恢复编排与去电超时清理。 */
+  private handleSessionStateChange(callId: string, peerId: string, state: CallSessionState, info?: { error?: string }): void {
+    this.events.onCallState(peerId, state, info);
+    const call = this.calls.get(callId);
+    if (!call) return;
+    if (state === "active" || state === "ended") {
+      this.clearOutgoingTimeout(call);
+    }
+    if (state === "active") {
+      this.stopRecovery(call);
+    }
+    if (state === "reconnecting") {
+      this.beginRecovery(call);
+    }
+    if (state === "ended") {
+      this.cleanup(callId);
+    }
+  }
+
+  // ─── 断线自愈编排（3.7.0）────────────────────────────────────────
+
+  /** 进入 reconnecting：caller 立即 ICE restart（先确保 TURN 凭据新鲜），每 RECOVERY_RETRY_MS
+   *  重试（兼作信令补发，覆盖 WS 刚恢复的窗口）。callee 仅等待（caller 发起的重启经 call:sdp 到达）。 */
+  private beginRecovery(call: ActiveCall): void {
+    if (call.recoveryTimer != null) return;
+    // 断连期间凭据可能已过期：先拉新凭据并热更新（中继场景 restartIce 重建 allocation）
+    void this.ensureTurnFresh().then(() => this.applyTurnToActiveCalls());
+    if (call.role === "caller") {
+      void call.session.restartIce();
+    }
+    const tick = (): void => {
+      const cur = this.calls.get(call.session.getCallId());
+      if (!cur || cur.session.getState() !== "reconnecting") {
+        call.recoveryTimer = null;
+        return;
+      }
+      if (cur.role === "caller") void cur.session.restartIce();
+      call.recoveryTimer = scheduleTimeout(tick, RECOVERY_RETRY_MS);
+    };
+    call.recoveryTimer = scheduleTimeout(tick, RECOVERY_RETRY_MS);
+  }
+
+  /** 恢复成功/通话结束：停止恢复重试循环。 */
+  private stopRecovery(call: ActiveCall): void {
+    if (call.recoveryTimer == null) return;
+    clearScheduledTimeout(call.recoveryTimer);
+    call.recoveryTimer = null;
+  }
+
+  private clearOutgoingTimeout(call: ActiveCall): void {
+    if (call.outgoingTimeout == null) return;
+    clearScheduledTimeout(call.outgoingTimeout);
+    call.outgoingTimeout = null;
+  }
+
+  // ─── TURN 凭据生命周期（3.7.0）───────────────────────────────────
+
+  /** 实际拉取（deps 可注入，单测不走网络）。 */
+  private fetchTurnImpl(): Promise<TurnCredentialsResponse> {
+    return this.deps.fetchTurn ? this.deps.fetchTurn() : fetchTurnCredentials();
+  }
+
+  /** 拉取并缓存新凭据：成功后调度下一轮续期 + 热更新活跃会话；失败保旧凭据（尚未过期仍可用）。 */
+  private async refreshTurn(): Promise<void> {
+    if (this.turnFetching) return this.turnFetching;
+    this.turnFetching = (async () => {
+      this.turnLastFetchAt = Date.now();
+      try {
+        const resp = await this.fetchTurnImpl();
+        this.turnServers = resp.ice_servers ?? [];
+        this.turnExpiresAt = resp.ttl_seconds > 0 ? Date.now() + resp.ttl_seconds * 1000 : 0;
+        this.scheduleTurnRefresh(resp.ttl_seconds);
+        this.applyTurnToActiveCalls();
+        console.log(`[Call] TURN 凭据已更新 ttl=${resp.ttl_seconds}s servers=${this.turnServers.length}`);
+      } catch (err) {
+        console.warn("[Call] TURN 凭据拉取失败（保留旧凭据/纯 STUN）:", err);
+        if (this.turnExpiresAt === 0) {
+          this.turnServers = [];
+        }
+        this.scheduleTurnRetry();
+      } finally {
+        this.turnFetching = null;
+      }
+    })();
+    return this.turnFetching;
+  }
+
+  /** 调度下一轮续期：到期前 TURN_REFRESH_MARGIN_MS 触发（由 TTL 计算，见 turnRefreshDelayMs）。 */
+  private scheduleTurnRefresh(ttlSeconds: number): void {
+    if (this.turnRefreshTimer != null) {
+      clearScheduledTimeout(this.turnRefreshTimer);
+      this.turnRefreshTimer = null;
+    }
+    const delay = turnRefreshDelayMs(ttlSeconds);
+    if (delay <= 0) return;
+    this.turnRefreshTimer = scheduleTimeout(() => {
+      this.turnRefreshTimer = null;
+      void this.refreshTurn();
+    }, delay);
+  }
+
+  /** 拉取失败后的冷却重试：仅在存在活跃通话时继续尝试（避免端点挂掉时无限空转轰击）。 */
+  private scheduleTurnRetry(): void {
+    if (this.turnRefreshTimer != null) return;
+    this.turnRefreshTimer = scheduleTimeout(() => {
+      this.turnRefreshTimer = null;
+      if (!this.isInCall()) return;
+      void this.refreshTurn();
+    }, TURN_RETRY_COOLDOWN_MS);
+  }
+
+  /** 凭据是否临近过期/缺失（拨号与恢复前检查用）。 */
+  private turnIsStale(): boolean {
+    return this.turnExpiresAt === 0 || Date.now() > this.turnExpiresAt - TURN_REFRESH_MARGIN_MS;
+  }
+
+  /** 确保凭据新鲜：临期/缺失才重拉（30s 冷却防抖；拨号路径经 2.5s 上限保护）。 */
+  private async ensureTurnFresh(): Promise<void> {
+    if (!this.turnIsStale()) return;
+    if (Date.now() - this.turnLastFetchAt < TURN_RETRY_COOLDOWN_MS && this.turnFetching == null && this.turnServers.length > 0) {
+      // 刚拉过且已有凭据（还算新鲜的路上）：不重复轰击端点
+      return;
+    }
+    await this.refreshTurn();
+  }
+
+  /** 新凭据热应用到所有活跃会话：setConfiguration 保未来协商；中继会话须 restartIce 重建 allocation
+   *  （仅 setConfiguration 救不活已建立的 TURN allocation —— 续期必做的关键一步）。 */
+  private applyTurnToActiveCalls(): void {
+    const config = buildRtcConfig(this.turnServers);
+    for (const call of this.calls.values()) {
+      void call.session.updateIceServers(config);
+      if (call.role === "caller" && call.session.getState() !== "reconnecting") {
+        void call.session.isRelayed().then((relay) => {
+          if (relay) void call.session.restartIce();
+        });
+      }
+    }
   }
 
   private broadcastLocalSdp(callId: string): void {
@@ -499,6 +705,11 @@ export class CallManager {
       (globalThis as { __lsReanchor?: unknown }).__lsReanchor = call.session.reanchorAudioSenders.bind(call.session);
       (globalThis as { __lsFreshen?: unknown }).__lsFreshen = call.session.freshenAudio.bind(call.session);
       (globalThis as { __lsRenegotiate?: unknown }).__lsRenegotiate = call.session.renegotiate.bind(call.session);
+      (globalThis as { __lsTurnState?: unknown }).__lsTurnState = () => ({
+        servers: this.turnServers.length,
+        expiresAt: this.turnExpiresAt,
+        ttlMs: this.turnExpiresAt > 0 ? this.turnExpiresAt - Date.now() : 0,
+      });
     }
     const loop = async (): Promise<void> => {
       // 自递归：每次调度前先检查是否已被清理，避免通话结束后循环自我续期
@@ -531,7 +742,7 @@ export class CallManager {
     call.statsTimer = scheduleTimeout(loop, 5000);
   }
 
-  private cleanup(callId: string): void {
+  private cleanup(callId: string, reason?: CallEndReason): void {
     const call = this.calls.get(callId);
     if (!call) return;
     // 先从 map 移除：正在执行的 stats 循环迭代会在末尾检查 calls.has 后停止自续期
@@ -545,10 +756,12 @@ export class CallManager {
       clearScheduledTimeout(call.incomingTimeout);
       call.incomingTimeout = null;
     }
+    this.clearOutgoingTimeout(call);
+    this.stopRecovery(call);
     call.session.hangup("hangup");
     // 统一收口：所有结束路径（bye / decline / 来电超时 / 会话错误 / 对端离开 / 主动挂断）
     // 都经此上抛 onCallEnded，UI 才能清理面板/横幅 —— 否则对端断开且 bye 丢失时，
     // 通话残留在界面（session.hangup 的 onStateChange("ended") 已同步完成，此处只触发一次）
-    this.events.onCallEnded(call.peerId);
+    this.events.onCallEnded(call.peerId, reason);
   }
 }

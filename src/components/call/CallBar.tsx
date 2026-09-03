@@ -10,14 +10,17 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Box,
+  Divider,
   FormControl,
   IconButton,
   InputLabel,
+  Menu,
   MenuItem,
+  Paper,
   Popover,
   Select,
   Slider,
-  Paper,
+  Switch,
   Tooltip,
   Typography,
   Fade,
@@ -33,13 +36,103 @@ import MicOffIcon from "@mui/icons-material/MicOff";
 import CallEndIcon from "@mui/icons-material/CallEnd";
 import PersonIcon from "@mui/icons-material/Person";
 import TuneIcon from "@mui/icons-material/Tune";
+import VolumeUpIcon from "@mui/icons-material/VolumeUp";
+import HearingIcon from "@mui/icons-material/Hearing";
+import ScienceIcon from "@mui/icons-material/Science";
+import SurroundSoundIcon from "@mui/icons-material/SurroundSound";
+import GraphicEqIcon from "@mui/icons-material/GraphicEq";
+import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 import CloseIcon from "@mui/icons-material/Close";
 import SignalCellularAltIcon from "@mui/icons-material/SignalCellularAlt";
 import SignalCellularAlt1BarIcon from "@mui/icons-material/SignalCellularAlt1Bar";
 import SignalCellularAlt2BarIcon from "@mui/icons-material/SignalCellularAlt2Bar";
 import { useTranslation } from "react-i18next";
 import settingsStore from "@App/libs/mobx/mobx";
+
+/**
+ * 设备形态检测（手机 / 平板 / 桌面）：视频展示策略依据。
+ * Chromium 优先 userAgentData.mobile（权威）；回退 UA + 触屏 + 窗口尺寸组合。
+ * iPadOS 13+ 桌面模式 UA 不含 iPad，靠 userAgentData / 触屏宽窗兜底。
+ */
+function detectFormFactor(): "mobile" | "tablet" | "desktop" {
+  if (typeof navigator === "undefined" || typeof window === "undefined") return "desktop";
+  const ua = navigator.userAgent || "";
+  const uaData = (navigator as { userAgentData?: { mobile?: boolean } }).userAgentData;
+  const isTouch = navigator.maxTouchPoints > 0;
+  const coarse = window.matchMedia?.("(pointer: coarse)").matches ?? false;
+  const mobileUA = /Android|iPhone|iPod|webOS|BlackBerry|IEMobile|Opera Mini/i.test(ua);
+  const tabletUA = /iPad|Tablet|PlayBook|Silk|Nexus 7/i.test(ua) || (/Android/i.test(ua) && !/Mobile/i.test(ua));
+  const smallScreen = Math.min(window.innerWidth, window.innerHeight) < 640;
+
+  if (uaData?.mobile === true) return "mobile";
+  if (uaData) return isTouch ? "tablet" : "desktop"; // 明确非手机：宽触屏按平板
+  if (mobileUA && isTouch) return "mobile";
+  if (tabletUA && isTouch) return "tablet";
+  if (isTouch && coarse && smallScreen) return "mobile"; // 无 UA 线索时按"触屏窄窗"兜底
+  return "desktop";
+}
+
+/** 视频展示模式：触屏形态（手机/平板）完整显示防截断；桌面铺满（cover 是既得交互）。 */
+const formFactor = detectFormFactor();
+const mainFit = formFactor === "desktop" ? "cover" : "contain";
+const isMobileForm = formFactor === "mobile";
+
+/**
+ * Apple 式设置行（iOS Settings 分组列表风）：
+ * 图标块 + 标题 + 右侧当前值/控件 + chevron（可点击行），hover 有轻反馈。
+ */
+function AudioRow(props: {
+  icon: React.ReactNode;
+  title: string;
+  value?: string;
+  onClick?: (e: React.MouseEvent<HTMLElement>) => void;
+  children?: React.ReactNode;
+}): React.ReactNode {
+  const theme = useTheme();
+  return (
+    <Box
+      onClick={props.onClick}
+      sx={{
+        display: "flex",
+        alignItems: "center",
+        gap: 1.5,
+        px: 1.5,
+        py: 1.05,
+        minHeight: 44,
+        cursor: props.onClick ? "pointer" : "default",
+        ...(props.onClick ? { "&:hover": { bgcolor: alpha(theme.palette.divider, 0.45) } } : {}),
+      }}
+    >
+      <Box
+        sx={{
+          width: 30,
+          height: 30,
+          borderRadius: 2,
+          flexShrink: 0,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          // Apple 式中性灰图标，无底色块（用户明确：不要蓝色背景）
+          color: theme.palette.text.secondary,
+        }}
+      >
+        {props.icon}
+      </Box>
+      <Typography variant="body2" sx={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        {props.title}
+      </Typography>
+      {props.value != null && (
+        <Typography variant="body2" color="text.secondary" sx={{ fontSize: 13, maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flexShrink: 1 }}>
+          {props.value}
+        </Typography>
+      )}
+      {props.children}
+      {props.onClick && <ChevronRightIcon fontSize="small" sx={{ color: "text.disabled", flexShrink: 0 }} />}
+    </Box>
+  );
+}
 import { createInputLevelMeter, createRemoteSpeakingDetector, listAudioDevices } from "@App/libs/call/audioCapture";
+import { RemoteAudioPipeline, clampSpeakerVolume, SPEAKER_VOLUME_MAX } from "@App/libs/call/remoteAudioPipeline";
 import {
   listVideoDevices,
   VIDEO_QUALITY_OPTIONS,
@@ -236,20 +329,65 @@ export function ActiveCallPanel(props: ActiveCallProps) {
   // 面板非 observer，不订阅 mobx：UI 值用本地 state（挂载时从 settingsStore 播种），改动写回持久化。
   const [audioPanelAnchor, setAudioPanelAnchor] = useState<HTMLElement | null>(null);
   const audioPanelOpen = Boolean(audioPanelAnchor);
+  // Apple 式设置行：设备/处理选项改用行 + Menu 触发（Select 弹出视觉换成列表）
+  const [micMenuEl, setMicMenuEl] = useState<HTMLElement | null>(null);
+  const [spkMenuEl, setSpkMenuEl] = useState<HTMLElement | null>(null);
+  const [echoMenuEl, setEchoMenuEl] = useState<HTMLElement | null>(null);
+  const [nsMenuEl, setNsMenuEl] = useState<HTMLElement | null>(null);
   const [devices, setDevices] = useState<{ mics: MediaDeviceInfo[]; speakers: MediaDeviceInfo[] }>({ mics: [], speakers: [] });
   const [micId, setMicId] = useState<string>(() => settingsStore.get("micDeviceId") ?? "");
   const [speakerId, setSpeakerId] = useState<string>(() => settingsStore.get("speakerDeviceId") ?? "");
   const [volume, setVolume] = useState<number>(() => {
     const v = settingsStore.get("speakerVolume");
-    return Math.round((typeof v === "number" && v >= 0 && v <= 1 ? v : 1) * 100);
+    return Math.round((typeof v === "number" && v >= 0 && v <= SPEAKER_VOLUME_MAX ? v : 1) * 100);
   });
+  const [voiceClarity, setVoiceClarity] = useState<boolean>(() => settingsStore.get("voiceClarityEnabled") ?? true);
+  const [spatialAudio, setSpatialAudio] = useState<boolean>(() => settingsStore.get("spatialAudioEnabled") ?? false);
   const [echoCancelType, setEchoCancelType] = useState<"browser" | "system">(() => settingsStore.get("echoCancelType") ?? "browser");
   const [nsMode, setNsMode] = useState<NsModeSetting>(() => settingsStore.get("nsMode") ?? "browser");
   const levelBarRef = useRef<HTMLDivElement>(null);
+  const pipelineRef = useRef<RemoteAudioPipeline | null>(null);
+  useEffect(() => () => {
+    pipelineRef.current?.detach();
+    pipelineRef.current = null;
+  }, []);
 
-  /** 应用扬声器/音量到远端 audio 元素（setSinkId 浏览器不支持时跳过；volume clamp 到 0..1）。 */
+  // ── Apple 式设置行的当前值显示（空设备 = "系统默认"，不空白）──
+  const micLabel =
+    micId && devices.mics.some((d) => d.deviceId === micId)
+      ? devices.mics.find((d) => d.deviceId === micId)!.label || micId
+      : t("call.deviceDefault", "系统默认");
+  const spkLabel =
+    speakerId && devices.speakers.some((d) => d.deviceId === speakerId)
+      ? devices.speakers.find((d) => d.deviceId === speakerId)!.label || speakerId
+      : t("call.deviceDefault", "系统默认");
+  const echoLabel =
+    echoCancelType === "system" ? t("call.echoSystem", "系统级（实验）") : t("call.echoBrowser", "浏览器（默认）");
+  const nsLabel =
+    nsMode === "off" ? t("call.nsOff", "关闭")
+      : nsMode === "browser" ? t("call.nsBrowser", "标准降噪")
+        : nsMode === "rnnoise" ? t("call.nsRnnoise", "RNNoise 实验室")
+          : t("call.nsGtcrn", "GTCRN 实验室");
+
+  /** 应用扬声器/音量到远端发声通道（管线优先，元素路径兜底 clamp 0..1）。 */
   const applySpeakerSettings = useCallback((): void => {
     const el = audioRef.current;
+    const vol = clampSpeakerVolume(Number(settingsStore.get("speakerVolume") ?? 1));
+    const pipeline = pipelineRef.current;
+    if (pipeline?.isActive) {
+      // 管线接管发声：热更增益 + 扬声器选择；元素静音防双路出声
+      pipeline.update({ volume: vol });
+      const sinkId = settingsStore.get("speakerDeviceId");
+      if (sinkId && el) {
+        void pipeline.setSinkId(sinkId).then((ok) => {
+          if (!ok && el && typeof el.setSinkId === "function") {
+            try { void el.setSinkId(sinkId).catch(() => undefined); } catch { /* ignore */ }
+          }
+        });
+      }
+      if (el) el.volume = 0;
+      return;
+    }
     if (!el) return;
     const sinkId = settingsStore.get("speakerDeviceId");
     if (sinkId && typeof el.setSinkId === "function") {
@@ -259,8 +397,8 @@ export function ActiveCallPanel(props: ActiveCallProps) {
         console.warn("[CallBar] setSinkId failed:", err);
       }
     }
-    const vol = settingsStore.get("speakerVolume");
-    if (typeof vol === "number") el.volume = Math.min(1, Math.max(0, vol));
+    // 元素路径上限仍是 1（浏览器约束增强音量只能经 Web Audio 管线）
+    el.volume = Math.min(1, Math.max(0, Math.min(vol, 1)));
   }, []);
 
   useEffect(() => {
@@ -281,8 +419,19 @@ export function ActiveCallPanel(props: ActiveCallProps) {
     // 独立 audio 元素同样绑定远端流，保证纯语音通话（video display:none）也能出声
     if (audioRef.current && props.remoteStream) {
       audioRef.current.srcObject = props.remoteStream;
+      // 3.7.0 Web Audio 播放管线：音量 0..200% 增益 + 清晰度 + 空间展宽。
+      // 管线接管发声时元素静音防双路；管线不可用自动回退元素路径（clamp 0..1）。
+      const pipeline = (pipelineRef.current ??= new RemoteAudioPipeline());
+      const pipelineActive = pipeline.attach(props.remoteStream, {
+        volume: clampSpeakerVolume(Number(settingsStore.get("speakerVolume") ?? 1)),
+        clarity: settingsStore.get("voiceClarityEnabled") ?? true,
+        widen: settingsStore.get("spatialAudioEnabled") ?? false,
+      });
+      if (pipelineActive) {
+        pipeline.resume(); // 接听/拨打手势链内补一次 resume（自动播放策略兜底）
+      }
       applySpeakerSettings(); // srcObject 换绑后补设扬声器/音量（元素属性不随流变化，此处幂等兜底）
-      console.log("[CallBar] audio element srcObject set, autoplay=", audioRef.current.autoplay, "audioTracks=", props.remoteStream.getAudioTracks().map(t => ({ enabled: t.enabled, readyState: t.readyState })));
+      console.log("[CallBar] audio element srcObject set, pipeline=", pipelineActive, "autoplay=", audioRef.current.autoplay, "audioTracks=", props.remoteStream.getAudioTracks().map(t => ({ enabled: t.enabled, readyState: t.readyState })));
     } else if (audioRef.current) {
       audioRef.current.srcObject = null;
     }
@@ -616,6 +765,15 @@ export function ActiveCallPanel(props: ActiveCallProps) {
             {t("call.connecting", "连接中…")}
           </Typography>
         )}
+        {props.state === "reconnecting" && (
+          <Typography
+            variant="caption"
+            data-testid="call-reconnecting"
+            sx={{ color: theme.palette.warning.main, fontWeight: 600, animation: "pulse 1.6s ease-in-out infinite" }}
+          >
+            {t("call.reconnecting", "网络不稳定，正在重连…")}
+          </Typography>
+        )}
         <Box sx={{ flex: 1 }} />
         {props.transport && (
           <Typography variant="caption" sx={{ color: theme.palette.primary.main, fontWeight: 600, px: 1, py: 0.25, borderRadius: 1, border: `1px solid ${theme.palette.primary.main}` }}>
@@ -669,8 +827,9 @@ export function ActiveCallPanel(props: ActiveCallProps) {
           playsInline
           style={{
             width: "100%", height: "100%",
-            // cover 铺满主区域（微信式；竖屏远端画面不再留两侧黑边），竖屏人物头部可能裁切边缘
-            objectFit: "cover",
+            // 触屏形态（手机/平板）contain 完整显示，杜绝"屏幕被硬生生截断"；
+            // 桌面保留 cover 铺满（微信式，消灭两侧黑边）
+            objectFit: mainFit,
             display: mainVideoVisible ? "block" : "none",
             // 本地画面在主窗时镜像（微信同款）；远端说话反馈描边跟随远端所在元素
             transform: pipSwapped ? "scaleX(-1)" : "none",
@@ -709,15 +868,16 @@ export function ActiveCallPanel(props: ActiveCallProps) {
             position: "absolute",
             top: 0,
             left: 0,
-            width: 140,
-            aspectRatio: "16/9",
+            // 手机形态小窗改竖条 9:16（微信式），桌面/平板保持 16:9 横条
+            width: isMobileForm ? 92 : 140,
+            aspectRatio: isMobileForm ? "9/16" : "16/9",
             borderRadius: 2,
             border: `2px solid ${alpha(theme.palette.primary.main, 0.5)}`,
             // 拖拽位置经 CSS 变量注入（React 重渲染不覆盖）；本地画面镜像，远端不镜像
             transform: `translate(var(--pip-x, 20px), var(--pip-y, 20px))${pipSwapped ? "" : " scaleX(-1)"}`,
             display: pipVideoVisible ? "block" : "none",
             overflow: "hidden",
-            bgcolor: "background.paper",
+            bgcolor: alpha(theme.palette.background.paper, 0.95),
             touchAction: "none",
             cursor: "grab",
             "&:active": { cursor: "grabbing" },
@@ -726,7 +886,7 @@ export function ActiveCallPanel(props: ActiveCallProps) {
             outlineOffset: -2,
           }}
         >
-          <video ref={pipVideoRef} autoPlay muted playsInline style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+          <video ref={pipVideoRef} autoPlay muted playsInline style={{ width: "100%", height: "100%", objectFit: mainFit, display: "block" }} />
         </Box>
       </Box>
 
@@ -825,104 +985,184 @@ export function ActiveCallPanel(props: ActiveCallProps) {
         // 音频设置 Popover 必须盖过通话面板根层（zIndex 2500），否则鼠标不可点。
         sx={{ zIndex: 2600 }}
       >
-        <Box sx={{ p: 2, display: "flex", flexDirection: "column", gap: 2, width: 260 }}>
-          <FormControl size="small">
-            <InputLabel>{t("call.microphone", "麦克风")}</InputLabel>
-            <Select
-              value={micId}
-              label={t("call.microphone", "麦克风")}
-              onChange={(e) => handleMicSelect(String(e.target.value))}
-              // Select 下拉菜单是独立 portal（默认 zIndex 1300），必须与外层 Popover 同层（2600），
-              // 否则被 Popover 根层遮挡 → 鼠标不可点（同根因：面板 2500 > Popover 1300）。
-              MenuProps={{ sx: { zIndex: 2600 } }}
-            >
-              <MenuItem value="">{t("call.deviceDefault", "系统默认")}</MenuItem>
-              {devices.mics.map((d, i) => (
-                <MenuItem key={d.deviceId || `mic-${i}`} value={d.deviceId}>
-                  {d.label || `${t("call.microphone", "麦克风")} ${i + 1}`}
-                </MenuItem>
-              ))}
-            </Select>
-          </FormControl>
-
-          <FormControl size="small">
-            <InputLabel>{t("call.speaker", "扬声器")}</InputLabel>
-            <Select
-              value={speakerId}
-              label={t("call.speaker", "扬声器")}
-              onChange={(e) => handleSpeakerSelect(String(e.target.value))}
-              MenuProps={{ sx: { zIndex: 2600 } }}
-            >
-              <MenuItem value="">{t("call.deviceDefault", "系统默认")}</MenuItem>
-              {devices.speakers.map((d, i) => (
-                <MenuItem key={d.deviceId || `spk-${i}`} value={d.deviceId}>
-                  {d.label || `${t("call.speaker", "扬声器")} ${i + 1}`}
-                </MenuItem>
-              ))}
-            </Select>
-          </FormControl>
-
-          <FormControl size="small">
-            <InputLabel>{t("call.echoCancelType", "回声消除")}</InputLabel>
-            <Select
-              value={echoCancelType}
-              label={t("call.echoCancelType", "回声消除")}
-              onChange={(e) => handleEchoCancelChange(String(e.target.value) as "browser" | "system")}
-              MenuProps={{ sx: { zIndex: 2600 } }}
-            >
-              <MenuItem value="browser">{t("call.echoBrowser", "浏览器（默认）")}</MenuItem>
-              <MenuItem value="system">{t("call.echoSystem", "系统级（实验）")}</MenuItem>
-            </Select>
-          </FormControl>
-
-          <FormControl size="small">
-            <InputLabel>{t("call.nsMode", "降噪")}</InputLabel>
-            <Select
-              value={nsMode}
-              label={t("call.nsMode", "降噪")}
-              onChange={(e) => handleNsModeChange(String(e.target.value) as NsModeSetting)}
-              MenuProps={{ sx: { zIndex: 2600 } }}
-            >
-              <MenuItem value="off">{t("call.nsOff", "关闭")}</MenuItem>
-              <MenuItem value="browser">{t("call.nsBrowser", "标准（浏览器）")}</MenuItem>
-              <MenuItem value="rnnoise">{t("call.nsRnnoise", "RNNoise（实验）")}</MenuItem>
-              <MenuItem value="gtcrn">{t("call.nsGtcrn", "GTCRN（实验室）")}</MenuItem>
-            </Select>
-          </FormControl>
-
-          <Box sx={{ px: 1 }}>
-            <Typography variant="caption" color="text.secondary">
-              {t("call.volume", "音量")}
+        <Box sx={{ width: 330, p: 1.25, display: "flex", flexDirection: "column", gap: 1.25 }}>
+          {/* ── 设备 ── */}
+          <Box>
+            <Typography variant="caption" sx={{ px: 1.5, color: "text.secondary", fontWeight: 600, letterSpacing: "0.04em" }}>
+              {t("call.groupDevices", "设备")}
             </Typography>
-            <Slider
-              value={volume}
-              min={0}
-              max={100}
-              step={1}
-              valueLabelDisplay="auto"
-              aria-label={t("call.volume", "音量")}
-              onChange={(_, val) => {
-                const v = Array.isArray(val) ? val[0] : val;
-                setVolume(v);
-                settingsStore.update("speakerVolume", v / 100); // 持久化 0..1
-                if (audioRef.current) audioRef.current.volume = v / 100;
-              }}
-            />
+            <Paper elevation={0} sx={{ mt: 0.5, borderRadius: 3, overflow: "hidden", border: "1px solid", borderColor: alpha(theme.palette.divider, 0.7), bgcolor: "background.paper" }}>
+              <AudioRow
+                icon={<MicIcon sx={{ fontSize: 18 }} />}
+                title={t("call.microphone", "麦克风")}
+                value={micLabel}
+                onClick={(e) => setMicMenuEl(e.currentTarget)}
+              />
+              <Divider />
+              <AudioRow
+                icon={<VolumeUpIcon sx={{ fontSize: 18 }} />}
+                title={t("call.speaker", "扬声器")}
+                value={spkLabel}
+                onClick={(e) => setSpkMenuEl(e.currentTarget)}
+              />
+            </Paper>
           </Box>
 
-          <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-            <Typography variant="caption" color="text.secondary" sx={{ flexShrink: 0 }}>
-              {t("call.inputLevel", "输入电平")}
+          {/* ── 声音 ── */}
+          <Box>
+            <Typography variant="caption" sx={{ px: 1.5, color: "text.secondary", fontWeight: 600, letterSpacing: "0.04em" }}>
+              {t("call.groupSound", "声音")}
             </Typography>
-            <Box sx={{ width: 64, height: 6, borderRadius: 3, overflow: "hidden", bgcolor: alpha(theme.palette.text.primary, 0.15), flexShrink: 0 }}>
-              <Box
-                ref={levelBarRef}
-                sx={{ width: "0%", height: "100%", borderRadius: 3, bgcolor: "success.main", transition: "width 80ms linear" }}
+            <Paper elevation={0} sx={{ mt: 0.5, borderRadius: 3, overflow: "hidden", border: "1px solid", borderColor: alpha(theme.palette.divider, 0.7), bgcolor: "background.paper" }}>
+              <Box sx={{ px: 1.5, py: 1.1 }}>
+                <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", mb: 0.25 }}>
+                  <Typography variant="body2">{t("call.volume", "音量")}</Typography>
+                  <Box
+                    sx={{
+                      px: 1, py: 0.1, borderRadius: 999, fontSize: 12, fontWeight: 600,
+                      color: "text.secondary",
+                      fontVariantNumeric: "tabular-nums", lineHeight: 1.6,
+                    }}
+                  >
+                    {volume}%
+                  </Box>
+                </Box>
+                <Slider
+                  size="small"
+                  value={volume}
+                  min={0}
+                  max={SPEAKER_VOLUME_MAX * 100}
+                  step={1}
+                  aria-label={t("call.volume", "音量")}
+                  onChange={(_, val) => {
+                    const v = Array.isArray(val) ? val[0] : val;
+                    setVolume(v);
+                    settingsStore.update("speakerVolume", v / 100); // 持久化 0..2（>1 = 增益增强）
+                    applySpeakerSettings();
+                    pipelineRef.current?.resume(); // 手势内补 resume（自动播放策略兜底）
+                  }}
+                />
+                <Typography variant="caption" color="text.secondary" sx={{ lineHeight: 1.5, display: "block" }}>
+                  {t("call.volumeHint", "超过 100% 为增益增强，可放大细微语音、防爆音")}
+                </Typography>
+              </Box>
+              <Divider />
+              <AudioRow icon={<HearingIcon sx={{ fontSize: 18 }} />} title={t("call.voiceClarity", "语音增强 · 清晰度")}>
+                <Switch
+                  size="small"
+                  checked={voiceClarity}
+                  onChange={(e) => {
+                    const on = e.target.checked;
+                    setVoiceClarity(on);
+                    settingsStore.update("voiceClarityEnabled", on);
+                    pipelineRef.current?.update({ clarity: on });
+                  }}
+                />
+              </AudioRow>
+              <Divider />
+              <AudioRow icon={<SurroundSoundIcon sx={{ fontSize: 18 }} />} title={t("call.spatialAudio", "空间音频 · 立体声展宽")}>
+                <Switch
+                  size="small"
+                  checked={spatialAudio}
+                  onChange={(e) => {
+                    const on = e.target.checked;
+                    setSpatialAudio(on);
+                    settingsStore.update("spatialAudioEnabled", on);
+                    pipelineRef.current?.update({ widen: on });
+                  }}
+                />
+              </AudioRow>
+            </Paper>
+          </Box>
+
+          {/* ── 音频实验室 ── */}
+          <Box>
+            <Typography variant="caption" sx={{ px: 1.5, color: "text.secondary", fontWeight: 600, letterSpacing: "0.04em" }}>
+              {t("call.groupLab", "音频实验室")}
+            </Typography>
+            <Paper elevation={0} sx={{ mt: 0.5, borderRadius: 3, overflow: "hidden", border: "1px solid", borderColor: alpha(theme.palette.divider, 0.7), bgcolor: "background.paper" }}>
+              <AudioRow
+                icon={<TuneIcon sx={{ fontSize: 18 }} />}
+                title={t("call.echoCancelType", "回声消除")}
+                value={echoLabel}
+                onClick={(e) => setEchoMenuEl(e.currentTarget)}
               />
-            </Box>
+              <Divider />
+              <AudioRow
+                icon={<ScienceIcon sx={{ fontSize: 18 }} />}
+                title={t("call.nsMode", "降噪")}
+                value={nsLabel}
+                onClick={(e) => setNsMenuEl(e.currentTarget)}
+              />
+            </Paper>
+          </Box>
+
+          {/* ── 输入 ── */}
+          <Box>
+            <Typography variant="caption" sx={{ px: 1.5, color: "text.secondary", fontWeight: 600, letterSpacing: "0.04em" }}>
+              {t("call.groupInput", "输入")}
+            </Typography>
+            <Paper elevation={0} sx={{ mt: 0.5, borderRadius: 3, overflow: "hidden", border: "1px solid", borderColor: alpha(theme.palette.divider, 0.7), bgcolor: "background.paper" }}>
+              <AudioRow icon={<GraphicEqIcon sx={{ fontSize: 18 }} />} title={t("call.inputLevel", "输入电平")}>
+                <Box sx={{ flex: 1, height: 6, borderRadius: 999, overflow: "hidden", bgcolor: alpha(theme.palette.text.primary, 0.12) }}>
+                  <Box
+                    ref={levelBarRef}
+                    sx={{
+                      width: "0%", height: "100%", borderRadius: 999,
+                      background: `linear-gradient(90deg, ${theme.palette.primary.light}, ${theme.palette.success.main})`,
+                      transition: "width 80ms linear",
+                    }}
+                  />
+                </Box>
+              </AudioRow>
+            </Paper>
           </Box>
         </Box>
       </Popover>
+
+      {/* 设备/处理选项选择菜单（zIndex 须高于面板 2600，否则被遮挡） */}
+      <Menu open={Boolean(micMenuEl)} anchorEl={micMenuEl} onClose={() => setMicMenuEl(null)} sx={{ zIndex: 2800 }}>
+        <MenuItem selected={micId === ""} onClick={() => { handleMicSelect(""); setMicMenuEl(null); }}>
+          {t("call.deviceDefault", "系统默认")}
+        </MenuItem>
+        {devices.mics.map((d, i) => (
+          <MenuItem key={d.deviceId || `mic-${i}`} selected={d.deviceId === micId} onClick={() => { handleMicSelect(d.deviceId); setMicMenuEl(null); }}>
+            {d.label || `${t("call.microphone", "麦克风")} ${i + 1}`}
+          </MenuItem>
+        ))}
+      </Menu>
+      <Menu open={Boolean(spkMenuEl)} anchorEl={spkMenuEl} onClose={() => setSpkMenuEl(null)} sx={{ zIndex: 2800 }}>
+        <MenuItem selected={speakerId === ""} onClick={() => { handleSpeakerSelect(""); setSpkMenuEl(null); }}>
+          {t("call.deviceDefault", "系统默认")}
+        </MenuItem>
+        {devices.speakers.map((d, i) => (
+          <MenuItem key={d.deviceId || `spk-${i}`} selected={d.deviceId === speakerId} onClick={() => { handleSpeakerSelect(d.deviceId); setSpkMenuEl(null); }}>
+            {d.label || `${t("call.speaker", "扬声器")} ${i + 1}`}
+          </MenuItem>
+        ))}
+      </Menu>
+      <Menu open={Boolean(echoMenuEl)} anchorEl={echoMenuEl} onClose={() => setEchoMenuEl(null)} sx={{ zIndex: 2800 }}>
+        <MenuItem selected={echoCancelType === "browser"} onClick={() => { handleEchoCancelChange("browser"); setEchoMenuEl(null); }}>
+          {t("call.echoBrowser", "浏览器（默认）")}
+        </MenuItem>
+        <MenuItem selected={echoCancelType === "system"} onClick={() => { handleEchoCancelChange("system"); setEchoMenuEl(null); }}>
+          {t("call.echoSystem", "系统级（实验）")}
+        </MenuItem>
+      </Menu>
+      <Menu open={Boolean(nsMenuEl)} anchorEl={nsMenuEl} onClose={() => setNsMenuEl(null)} sx={{ zIndex: 2800 }}>
+        <MenuItem selected={nsMode === "off"} onClick={() => { handleNsModeChange("off"); setNsMenuEl(null); }}>
+          {t("call.nsOff", "关闭")}
+        </MenuItem>
+        <MenuItem selected={nsMode === "browser"} onClick={() => { handleNsModeChange("browser"); setNsMenuEl(null); }}>
+          {t("call.nsBrowser", "标准降噪")}
+        </MenuItem>
+        <MenuItem selected={nsMode === "rnnoise"} onClick={() => { handleNsModeChange("rnnoise"); setNsMenuEl(null); }}>
+          {t("call.nsRnnoise", "RNNoise 实验室")}
+        </MenuItem>
+        <MenuItem selected={nsMode === "gtcrn"} onClick={() => { handleNsModeChange("gtcrn"); setNsMenuEl(null); }}>
+          {t("call.nsGtcrn", "GTCRN 实验室")}
+        </MenuItem>
+      </Menu>
 
       {/* 视频设置面板：摄像头 / 背景 / 分辨率帧率 / 码率 / 编码器 / 降级策略（视频通话时可用） */}
       <Popover

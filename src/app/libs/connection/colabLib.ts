@@ -12,6 +12,7 @@ import settingsStore from "../mobx/mobx";
 import i18n from "../i18n/i18n";
 import { ConnectionConfig } from "./providers/IConnectionProvider";
 import { ConnectionManager } from "./providers/ConnectionManager";
+import { reconnectDelayMs } from "./reconnectPolicy";
 import { SecureMessageWrapper } from "../security/SecureMessageWrapper";
 import { UserKeyInfo } from "../security/SimpleE2EEncryption";
 import mitt from 'mitt';
@@ -271,6 +272,12 @@ export class RealTimeColab {
 
  private lastPingTimes: Map<string, number> = new Map();
  private lastPongTimes: Map<string, number> = new Map();
+ /** 3.8.x 在线探活（Discord 式）：服务器层 ping/pong，对端最近一次 pong 的时间戳 */
+ private userServerPongTs: Map<string, number> = new Map();
+ /** 3.8.x 连续探活失败计数（≥3 ≈ 15s 无 pong → 判定离线移除） */
+ private userProbeFails: Map<string, number> = new Map();
+ /** 后台省流定时器断开后，回前台应自动重连（区别于用户主动离开） */
+ private pendingRejoin = false;
  private heartbeatIntervals = new Map<
   string,
   ReturnType<typeof setInterval>
@@ -598,13 +605,18 @@ export class RealTimeColab {
     }
    }
   }, CONFIG.USER_CHECK_INTERVAL);
+
+  // 3.8.x 在线探活（用户全局统一状态）：对"无活跃 P2P data channel"的用户
+  // 走服务器层 ping 探活；连续无 pong → 判定离线并从 userList 移除（通话/文件传输
+  // 统一消费同一份在线状态，UI 同步消失、不可拨不可传）。
+  this.startPresenceProbe();
  }
 
  /**
   * @description Connect To Server@jServer
   */
  // In RealTimeColab
- public async connectToServer(): Promise<boolean> {
+ public async connectToServer(opts?: { silent?: boolean }): Promise<boolean> {
   // 原来的 connectToServer
   const roomId = settingsStore.get("roomId");
   if (!validateRoomName(roomId).isValid) {
@@ -612,16 +624,32 @@ export class RealTimeColab {
    return false;
   }
 
+  // 3.7.0：发起新连接前清除失败锁（maxFailures=1 会让一次失败后的所有重试被 ConnectionManager
+  // 直接拒绝 —— "不刷新页面就连不上"的第二根因）。同时停止自动重连调度、标记本次为主动连接。
+  this.connectionManager.resetFailureCount();
+  this.cancelReconnect();
+  this.pendingRejoin = false;
+  this.autoReconnectAllowed = true;
+  settingsStore.updateUnrmb("serverConnState", "connecting");
+
   // 重要：必须在连接之前设置所有回调！
-  
+
   // 设置信号处理器
   this.connectionManager.onSignalReceived(this.handleSignal.bind(this));
-  
+
   // 注册 WebSocket 断连回调, 确保 UI 状态与实际连接同步
   this.connectionManager.onDisconnected?.((reason) => {
    settingsStore.updateUnrmb("isConnectedToServer", false);
    this.lastConnectedProToken = null;
    console.warn(`[ColabLib] WebSocket 连接丢失, 已更新 UI 状态: ${reason}`);
+   // 3.7.0 断线自愈：仅意外断开（网络/服务器）自动重连；
+   // 主动 disconnect()（后台省流定时器等）置 autoReconnectAllowed=false，不再重连。
+   if (this.autoReconnectAllowed) {
+    settingsStore.updateUnrmb("serverConnState", "reconnecting");
+    this.scheduleReconnect();
+   } else {
+    settingsStore.updateUnrmb("serverConnState", "disconnected");
+   }
   });
 
   // 设置文件传输消息处理器
@@ -652,6 +680,8 @@ export class RealTimeColab {
   const success = await this.connectionManager.connect(roomId!);
   if (success) {
    settingsStore.updateUnrmb("isConnectedToServer", true);
+   settingsStore.updateUnrmb("serverConnState", "connected");
+   this.reconnectAttempt = 0;
    this.lastConnectedProToken =
     this.connectionManager.getConnectionType() === "custom"
      ? getProToken()
@@ -663,12 +693,22 @@ export class RealTimeColab {
     publicKeys: myPublicKeys // 在discover信号中包含公钥
    });
   } else {
-   alertUseMUI(t("alert.serverConnectionFailed"), 2000, { kind: "error" });
+   if (!opts?.silent) {
+    alertUseMUI(t("alert.serverConnectionFailed"), 2000, { kind: "error" });
+   }
+   // 连接失败：自动重连路径下进入退避队列（页面加载/手动搜索的首次失败也允许自动补连）
+   settingsStore.updateUnrmb("serverConnState", "disconnected");
+   if (this.autoReconnectAllowed) this.scheduleReconnect();
   }
   return success;
  }
 
  public async disconnect(soft?: boolean, sendLeave?: boolean): Promise<void> {
+  // 主动断开（离开房间/切换设置/后台省流定时器）：关闭自动重连语义，绝不静默重连
+  this.autoReconnectAllowed = false;
+  this.cancelReconnect();
+  settingsStore.updateUnrmb("serverConnState", "disconnected");
+
   // 在断开连接前广播离开消息（仅在明确指定时）
   if (sendLeave && this.connectionManager.isConnected()) {
    console.debug(`[LEAVE] Broadcasting leave message before disconnect`);
@@ -756,6 +796,7 @@ export class RealTimeColab {
      return;
     }
     settingsStore.updateUnrmb("isConnectedToServer", true);
+    settingsStore.updateUnrmb("serverConnState", "connected");
    }
 
    // 等待一小段时间确保连接完全建立，然后广播discover信号
@@ -933,6 +974,99 @@ export class RealTimeColab {
    return this.callActivityProvider?.() ?? false;
   }
 
+  // ─── WS 自动重连（3.7.0：断线自愈，对标 Discord）──────────────────
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private reconnectAttempt = 0;
+  /** 意外断开才自动重连；主动 disconnect()（后台省流等）置 false 后永不静默重连 */
+  private autoReconnectAllowed = false;
+
+  /** 指数退避调度（1/2/4/8/16/30s 封顶 + 校验房间）——只服务意外断开场景。 */
+  private scheduleReconnect(): void {
+   if (!this.autoReconnectAllowed || this.reconnectTimer != null) return;
+   const delay = reconnectDelayMs(this.reconnectAttempt);
+   this.reconnectAttempt += 1;
+   settingsStore.updateUnrmb("serverConnState", "reconnecting");
+   console.debug(`[ColabLib] 自动重连 ${delay}ms 后（第 ${this.reconnectAttempt} 次）`);
+   this.reconnectTimer = setTimeout(() => {
+    this.reconnectTimer = null;
+    void this.attemptReconnect();
+   }, delay);
+  }
+
+  private cancelReconnect(): void {
+   if (this.reconnectTimer == null) return;
+   clearTimeout(this.reconnectTimer);
+   this.reconnectTimer = null;
+  }
+
+  private async attemptReconnect(): Promise<void> {
+   if (!this.autoReconnectAllowed) return;
+   const roomId = settingsStore.get("roomId");
+   if (!roomId || !validateRoomName(roomId).isValid) return; // 无有效房间不空转
+   // silent：失败不弹 toast、不打扰，返回值经 connectToServer 内部再次 schedule（退避递增）
+   await this.connectToServer({ silent: true });
+  }
+
+  // ─── 在线探活 / 拨号前探测（3.8.x，通话与文件传输统一消费同一份状态）──────────
+  /**
+   * 周期性探活：对"非 disconnected、且未建立活跃 P2P data channel"的用户
+   * 每 5s 发一次服务器层 ping；连续 ≥3 次（≈15s）无 pong → 判定离线，
+   * 走 handleUserLeave 从 userList 移除（UI 随 updateUI 消失，通话/传输同时失效）。
+   * 有活跃 P2P 通道的用户用通道心跳（现有机制）即可，不重复探测。
+   */
+  private startPresenceProbe(): void {
+   const PROBE_INTERVAL = 5_000;
+   const PONG_TIMEOUT = 15_000;
+   const MAX_FAILS = 3;
+   const probe = (): void => {
+    for (const [id, user] of this.userList.entries()) {
+     if (user.status === "disconnected") continue;
+     // 已有活跃 P2P data channel 的用户：走通道心跳（现有 lastPing/lastPong），不重复 WS 探活
+     const channel = this.dataChannels.get(id);
+     const peer = RealTimeColab.peers.get(id);
+     if (channel?.readyState === "open" && peer?.connectionState === "connected") {
+      this.userProbeFails.set(id, 0);
+      continue;
+     }
+     this.broadcastSignal({ type: "ping", to: id, ts: Date.now() });
+     const lastPong = this.userServerPongTs.get(id) ?? 0;
+     if (Date.now() - lastPong <= PONG_TIMEOUT) {
+      this.userProbeFails.set(id, 0);
+      continue;
+     }
+     const fails = (this.userProbeFails.get(id) ?? 0) + 1;
+     this.userProbeFails.set(id, fails);
+     if (fails >= MAX_FAILS) {
+      this.userProbeFails.delete(id);
+      this.userServerPongTs.delete(id);
+      console.warn(`[PRESENCE] ${id} 探活连续 ${fails} 次无回应，判定离线`);
+      this.handleUserLeave({ from: id });
+     }
+    }
+   };
+   setInterval(probe, PROBE_INTERVAL);
+  }
+
+  /**
+   * 拨号前探测：对端 WS 是否在线（发 ping 等 pong，带 2.5s 超时）。
+   * - userList 已无此人 → 直接离线；
+   * - 10s 内刚收到过 pong → 免往返直接在线；
+   * - 否则发 ping 轮询 userServerPongTs，超时判离线。
+   * 通话与文件传输统一用此判定（同一 userServerPongTs）。
+   */
+  async isPeerOnline(peerId: string, timeoutMs = 2500): Promise<boolean> {
+   if (!this.userList.has(peerId)) return false;
+   const before = this.userServerPongTs.get(peerId) ?? 0;
+   if (Date.now() - before < 10_000) return true;
+   this.broadcastSignal({ type: "ping", to: peerId, ts: Date.now() });
+   const t0 = Date.now();
+   while (Date.now() - t0 < timeoutMs) {
+    if ((this.userServerPongTs.get(peerId) ?? 0) > before) return true;
+    await new Promise((r) => setTimeout(r, 100));
+   }
+   return false;
+  }
+
   private handleCallSignal(data: any): void {
    const fromId = data.from;
    if (!fromId || fromId === this.getUniqId()) return;
@@ -971,6 +1105,18 @@ export class RealTimeColab {
      break;
      case "leave":
       this.handleUserLeave(data);
+      break;
+     case "ping":
+      // 在线探活（Discord 式）：仅 to 指向本端才回 pong；其余端忽略
+      if (signalData.to && signalData.to === this.getUniqId() && signalData.from) {
+       this.broadcastSignal({ type: "pong", to: signalData.from, ts: Date.now() });
+      }
+      break;
+     case "pong":
+      // 仅认 to 指向本端的 pong（防止他人应答串扰）
+      if (signalData.to && signalData.to !== this.getUniqId()) break;
+      this.userServerPongTs.set(signalData.from, Date.now());
+      this.userProbeFails.set(signalData.from, 0);
       break;
      default:
       if (typeof data.type === "string" && data.type.startsWith("call:")) {
@@ -3620,6 +3766,8 @@ private isLetShareZip(file: File): boolean {
     const serverActiveCount =
      this.serverFileTransfer?.getActiveTransferCount() ?? 0;
     if (serverActiveCount === 0) {
+     // 后台省流主动断开：标记"回前台应重连"，区别于用户主动离开
+     this.pendingRejoin = true;
      void runTransferHandlerSafely(
       () => this.disconnect(),
       (error) => console.warn("Background disconnect failed:", error)
@@ -3637,6 +3785,8 @@ private isLetShareZip(file: File): boolean {
      ),
      3000
     );
+    // 后台省流主动断开：标记"回前台应重连"
+    this.pendingRejoin = true;
     void runTransferHandlerSafely(
      () => this.disconnect(),
      (error) => console.warn("Background disconnect failed:", error)
@@ -3658,6 +3808,17 @@ private isLetShareZip(file: File): boolean {
      this.serverFileTransfer?.cancelAllSendingSessions();
      this.setFileTransferProgress(null);
      this.setFileTransferStatus(null, "info");
+     // 3.7.0：回前台且连接因意外断开丢失 → 取消退避等待，立即重连
+     if (this.autoReconnectAllowed) {
+      this.cancelReconnect();
+      void this.attemptReconnect();
+     }
+     // 3.8.x：后台省流（主动断开）后回前台 → 自动重连（区别于用户主动离开房间）
+     if (this.pendingRejoin) {
+      this.pendingRejoin = false;
+      console.debug("[ColabLib] 回前台：省流断开，自动重连");
+      void this.connectToServer({ silent: true });
+     }
     }
    }
   });

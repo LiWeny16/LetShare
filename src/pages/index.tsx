@@ -8,25 +8,6 @@ import { HashRouter, Navigate, Route, Routes } from "react-router-dom"
 const Share = lazy(() => import("../pages/share"))
 const PayNowComponent = lazy(() => import("./paynow"))
 
-function FullScreenFallback() {
- return (
-  <div
-   style={{
-    position: "fixed",
-    inset: 0,
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    fontFamily: "system-ui, sans-serif",
-    color: "#888",
-    fontSize: "15px",
-   }}
-  >
-    Loading…
-  </div>
- )
-}
-
 export default function Index() {
  return (
   <HashRouter>
@@ -34,7 +15,10 @@ export default function Index() {
     <Route
      path="/"
      element={
-      <Suspense fallback={<FullScreenFallback />}>
+      // fallback={null}：懒加载 chunk 下载期间 root 保持无子节点，
+      // index.html 的 #app-loading 骨架屏得以延续显示（不出现第二层 Loading…），
+      // 真实页面挂载后骨架屏由 MutationObserver 统一隐藏。
+      <Suspense fallback={null}>
        <Share />
       </Suspense>
      }
@@ -42,7 +26,7 @@ export default function Index() {
     <Route
      path="/paynow"
      element={
-      <Suspense fallback={<FullScreenFallback />}>
+      <Suspense fallback={null}>
        <PayNowComponent />
       </Suspense>
      }

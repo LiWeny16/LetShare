@@ -68,7 +68,9 @@ class FakeRTCPeerConnection {
   /** sender.setParameters 调用记录（码率上限热更新断言用） */
   paramCalls: unknown[] = [];
   addTransceiver(_kind: string, _init?: RTCRtpTransceiverInit) { return {} as RTCRtpTransceiver; }
-  async createOffer(_opts?: RTCOfferAnswerOptions) { return { type: "offer", sdp: "fake-offer" }; }
+  /** createOffer 入参记录（ICE restart 断言用：iceRestart flag） */
+  createOfferOpts: (RTCOfferAnswerOptions | undefined)[] = [];
+  async createOffer(opts?: RTCOfferAnswerOptions) { this.createOfferOpts.push(opts); return { type: "offer", sdp: "fake-offer" }; }
   async createAnswer(_opts?: RTCOfferAnswerOptions) { this.createAnswerCount += 1; return { type: "answer", sdp: "fake-answer" }; }
   async setLocalDescription(desc: RTCSessionDescriptionInit) { this.localDescription = { type: desc.type, sdp: desc.sdp } as RTCSessionDescription; return null; }
   async setRemoteDescription(desc: RTCSessionDescriptionInit) {
@@ -81,6 +83,9 @@ class FakeRTCPeerConnection {
   getSenders() { return this.senders; }
   getReceivers() { return []; }
   async getStats() { return []; }
+  /** 3.7.0 TURN 续期：setConfiguration 调用记录（新凭据热更新断言） */
+  setConfigurationCalls: RTCConfiguration[] = [];
+  setConfiguration(config: RTCConfiguration) { this.setConfigurationCalls.push(config); }
   close() { this.connectionState = "closed"; }
 }
 
@@ -693,7 +698,7 @@ function makeSession(events: Record<string, unknown> = {}) {
   );
 }
 
-test("CallSession: disconnected 后宽限期内未恢复 → hangup(error) 判定中断", async () => {
+test("CallSession: disconnected 后自愈窗口内未恢复 → hangup(error) 判定中断（3.7.0）", async () => {
   await withFakeRTC(async () => {
     mock.timers.enable({ apis: ["setTimeout"] });
     try {
@@ -704,10 +709,11 @@ test("CallSession: disconnected 后宽限期内未恢复 → hangup(error) 判�
 
       pc.connectionState = "disconnected";
       pc.onconnectionstatechange?.();
-      assert.equal(session.getState(), "outgoing", "宽限期内不应立即结束");
+      assert.equal(session.getState(), "reconnecting", "3.7.0 断开进入自愈态，不再立即结束");
+      assert.ok(states.includes("reconnecting"));
 
-      mock.timers.tick(11_000);
-      assert.equal(session.getState(), "ended", "宽限期超时应判定通话中断");
+      mock.timers.tick(26_000);
+      assert.equal(session.getState(), "ended", "自愈窗口超时应判定通话中断");
       assert.ok(states.includes("ended"));
     } finally {
       mock.timers.reset();
@@ -715,7 +721,7 @@ test("CallSession: disconnected 后宽限期内未恢复 → hangup(error) 判�
   });
 });
 
-test("CallSession: disconnected 后及时恢复 connected → 取消宽限，通话保留", async () => {
+test("CallSession: disconnected 后及时恢复 connected → 回 active，通话保留（3.7.0）", async () => {
   await withFakeRTC(async () => {
     mock.timers.enable({ apis: ["setTimeout"] });
     try {
@@ -726,12 +732,13 @@ test("CallSession: disconnected 后及时恢复 connected → 取消宽限，通
 
       pc.connectionState = "disconnected";
       pc.onconnectionstatechange?.();
-      // 网络抖动恢复
+      assert.equal(session.getState(), "reconnecting");
+      // 网络抖动恢复 / ICE restart 完成
       pc.connectionState = "connected";
       pc.onconnectionstatechange?.();
 
-      mock.timers.tick(15_000);
-      assert.equal(session.getState(), "outgoing", "恢复连接后宽限应取消，通话保留");
+      mock.timers.tick(30_000);
+      assert.equal(session.getState(), "active", "恢复连接后自愈窗口应取消，通话保留");
       assert.equal(states.includes("ended"), false);
     } finally {
       mock.timers.reset();

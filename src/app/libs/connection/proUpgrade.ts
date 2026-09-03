@@ -97,21 +97,24 @@ export interface TurnCredentialsResponse {
 
 /**
  * 获取短效 TURN 凭据（由 Go 后端签发，RFC 5766 use-auth-secret 模式）。
- * 返回的 iceServers 直接并入 RTCPeerConnection 的 iceServers 配置。
- * 后端未启用 TURN 时（404）返回空数组，调用方按无 TURN 降级处理。
+ * 返回完整响应（ice_servers + ttl_seconds）：调用方按 ttl 调度到期前续期。
+ * 后端未启用 TURN 时（404）返回空凭据与 ttl=0，调用方按无 TURN 降级处理。
  */
-export async function fetchTurnCredentials(): Promise<TurnIceServer[]> {
+export async function fetchTurnCredentials(): Promise<TurnCredentialsResponse> {
 	// Node（单测）环境：与"TURN 未启用"同路降级，测试不发真实网络请求
 	// （注意 Node 24 也有全局 fetch，须用 window 判定浏览器环境）
-	if (typeof window === "undefined") return [];
+	if (typeof window === "undefined") return { ice_servers: [], ttl_seconds: 0 };
 	const resp = await fetch(`${turnApiBase()}/api/turn-credentials`);
 	if (resp.status === 404) {
 		// TURN 服务未启用：降级为纯 STUN，不影响通话发起
-		return [];
+		return { ice_servers: [], ttl_seconds: 0 };
 	}
 	if (!resp.ok) {
 		throw new Error("获取 TURN 凭据失败");
 	}
 	const data = (await resp.json()) as TurnCredentialsResponse;
-	return data.ice_servers ?? [];
+	return {
+		ice_servers: data.ice_servers ?? [],
+		ttl_seconds: typeof data.ttl_seconds === "number" ? data.ttl_seconds : 0,
+	};
 }

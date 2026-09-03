@@ -40,7 +40,8 @@ export type CallDeclinePayload = {
 export type CallByePayload = {
   type: "call:bye";
   callId: string;
-  reason?: "hangup" | "error" | "left-room";
+  /** hangup=主动挂断 / error=异常结束 / left-room=离开房间 / timeout=呼叫无响应（去电超时，3.7.0） */
+  reason?: "hangup" | "error" | "left-room" | "timeout";
 };
 
 export type CallSdpPayload = {
@@ -94,7 +95,7 @@ export function buildDecline(callId: string, reason?: "busy" | "declined" | "tim
   return { type: "call:decline", callId, reason };
 }
 
-export function buildBye(callId: string, reason?: "hangup" | "error" | "left-room"): CallByePayload {
+export function buildBye(callId: string, reason?: "hangup" | "error" | "left-room" | "timeout"): CallByePayload {
   return { type: "call:bye", callId, reason };
 }
 

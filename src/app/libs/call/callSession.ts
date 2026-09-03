@@ -6,7 +6,9 @@
  *   idle → incoming（收到 invite，等待本地 accept 决策）
  *   outgoing/incoming → connecting（accept 后开始 SDP/ICE 协商）
  *   connecting → active（协商完成、媒体流建立）
- *   active/connecting → ended（bye / 错误 / 超时 / 断连宽限超时）
+ *   active → reconnecting（ICE disconnected/failed：进入自愈窗口，caller 侧 ICE restart 尝试恢复）
+ *   reconnecting → active（ICE 恢复连接到 connected）
+ *   active/reconnecting/connecting → ended（bye / 错误 / 超时 / 自愈窗口耗尽）
  *
  * 轨道：
  *   p2p    — 媒体走本 peer 的 RTCPeerConnection（DTLS-SRTP 天然 E2E 加密）
@@ -22,16 +24,17 @@ import {
 } from "./callSignaling";
 import { orderVideoCodecs, type VideoCodecPrioritySetting } from "./videoCapture";
 
-export type CallSessionState = "idle" | "incoming" | "outgoing" | "connecting" | "active" | "ended";
+export type CallSessionState = "idle" | "incoming" | "outgoing" | "connecting" | "active" | "reconnecting" | "ended";
 export type MediaKind = "audio" | "video";
 export type CallTransport = "p2p" | "public";
 
 /**
- * connectionState === "disconnected" 后的宽限毫秒数：对端静默消失（断网/关页未发 bye）
- * 时 ICE 先进入 disconnected；宽限期内恢复 connected 则取消，超时判定通话中断。
- * 浏览器检测到断连本身需数秒，故合计约 15~20s 内收尾（避免 UI 永远残留通话）。
+ * ICE 自愈窗口（reconnecting 态存活时长）：disconnected/failed 后在此期间内由
+ * caller 侧反复 ICE restart 尝试恢复（信令经现有 call:sdp/ice 通道），超时判定通话中断。
+ * 浏览器检测到断连本身需数秒，故合计约 15~25s 内见分晓（太短无法覆盖重启协商，
+ * 太长会让用户等着一场已死的通话；Discord 类似窗口约 30s）。
  */
-const DISCONNECT_GRACE_MS = 10_000;
+const RECONNECT_WINDOW_MS = 25_000;
 
 /** 连接质量采样（UI 质量徽标用）：单次 getStats 快照，取不到的字段为 null */
 export type CallQualitySample = {
@@ -63,6 +66,8 @@ type RTCPeerConnectionLike = {
   getSenders(): RTCRtpSender[];
   getReceivers(): RTCRtpReceiver[];
   getStats(): Promise<unknown>;
+  /** 热更新 RTC 配置（TURN 凭据续期等；Chrome 支持对已建连接调用，后续协商生效） */
+  setConfiguration(config: RTCConfiguration): void;
   close(): void;
   connectionState: string;
   remoteDescription: RTCSessionDescription | null;
@@ -139,8 +144,8 @@ export class CallSession {
   private pendingRemoteOffer: RTCSessionDescriptionInit | null = null;
   /** 早到 ICE 缓冲：remoteDescription 未就绪前收到的候选（FIFO，remoteDescription 就绪后立即 flush） */
   private pendingIce: RTCIceCandidateInit[] = [];
-  /** ICE disconnected 宽限定时器：到时判定通话中断（见 onconnectionstatechange） */
-  private disconnectGraceTimer: number | ReturnType<typeof setTimeout> | null = null;
+  /** ICE 断开/失败 → reconnecting 自愈窗口定时器：到时判定通话中断（见 onconnectionstatechange） */
+  private recoveryTimer: number | ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     private readonly opts: CallSessionOptions,
@@ -343,24 +348,33 @@ export class CallSession {
       }
       console.log(`[Call] ontrack kind=${kind} trackState=${ev.track.readyState} tracks=${stream.getTracks().map(t => t.kind)}`);
       this.bindRemoteStream(stream, kind);
-      if (this.state === "connecting") this.setState("active");
+      // 3.7.0 修复：caller 会话在 startOutgoing 后状态一直是 "outgoing"（而非 connecting），
+      // 旧代码只认 connecting → caller 侧永远进不了 active（track.onended 误杀守卫因此失效）。
+      if (this.state === "connecting" || this.state === "outgoing") this.setState("active");
     };
     peer.onconnectionstatechange = () => {
       if (!this.peer) return;
       const st = this.peer.connectionState;
-      console.log(`[Call] connectionState=${st}`);
+      console.log(`[Call] connectionState=${st} sessionState=${this.state} callId=${this.opts.callId}`);
       if (st === "connected") {
-        // 恢复连接：取消断开宽限（可能短暂 disconnected —— 网络抖动已恢复）
-        this.clearDisconnectGrace();
-        if (this.state === "connecting") {
+        // 连接恢复（含 ICE restart 自愈成功）：取消自愈窗口，回 active
+        this.clearRecoveryWindow();
+        if (this.state === "connecting" || this.state === "outgoing" || this.state === "reconnecting") {
           this.setState("active");
         }
-      } else if (st === "disconnected") {
-        // 对端静默消失（断网/关页未发 bye）的第一信号：进入宽限期，
-        // 宽限期内恢复 connected 则取消；超时未恢复判定通话中断（UI 不残留）。
-        if (this.state !== "ended") this.armDisconnectGrace();
-      } else if (["failed", "closed"].includes(st) && this.state !== "ended") {
-        this.clearDisconnectGrace();
+      } else if (st === "disconnected" || st === "failed") {
+        // ICE 自愈（3.7.0）：不再立即判定通话中断——进入 reconnecting 恢复窗口，
+        // caller 侧由 CallManager 驱动 ICE restart（新 TURN 凭据 + 新候选），
+        // 窗口内恢复 connected 则回 active；超时未恢复才结束通话。
+        // connecting/outgoing 阶段（首次建连）也进 reconnecting：建连中 failed
+        // 常见于 NAT 打洞失败，重启一次往往能借 TURN 中继建立（对齐 Discord 重试）。
+        if (this.state !== "reconnecting" && !this.ended) {
+          this.setState("reconnecting");
+        }
+        this.armRecoveryWindow();
+      } else if (st === "closed" && this.state !== "ended") {
+        // closed 是本端主动 close() 后的终态，不可逆、不自救
+        this.clearRecoveryWindow();
         this.hangup("error");
       }
     };
@@ -488,6 +502,64 @@ export class CallSession {
     }
   }
 
+  // ─── ICE 自愈 / TURN 续期（3.7.0）────────────────────────────────
+
+  /**
+   * ICE restart：以 iceRestart 重新收集候选（TURN 续期后重建 allocation；断线恢复重协商）。
+   * 复用现有 call:sdp 通道广播新 offer（callee 端 handleRemoteSdp 天然应答 active 态 offer），
+   * 新候选经由 onicecandidate → call:ice 自动流转。仅应由 caller 侧发起（避免 glare）。
+   */
+  async restartIce(): Promise<boolean> {
+    if (!this.peer || this.ended) return false;
+    try {
+      const offer = await this.peer.createOffer({ iceRestart: true, offerToReceiveVideo: this.localVideoEnabled });
+      await this.setLocalDesc(offer);
+      await this.opts.onNegotiationNeeded();
+      return true;
+    } catch (err) {
+      console.warn("[CallSession] restartIce failed:", err);
+      return false;
+    }
+  }
+
+  /** TURN 凭据热续期：更新 peer 的 iceServers（新配置对后续协商/allocation 生效）。
+   *  对已建立的直连（host/srflx）连接无感；中继连接必须配合 restartIce 重建 allocation。 */
+  async updateIceServers(config: RTCConfiguration): Promise<void> {
+    if (!this.peer) return;
+    try {
+      this.peer.setConfiguration(config);
+    } catch (err) {
+      console.warn("[CallSession] setConfiguration failed:", err);
+    }
+  }
+
+  /** 当前选中候选对是否走 TURN 中继：getStats 找 nominated/selected candidate-pair，
+   *  查其 local candidate 的 candidateType === "relay"。取不到/无 peer 返回 false（按直连对待）。 */
+  async isRelayed(): Promise<boolean> {
+    if (!this.peer) return false;
+    try {
+      const stats = (await this.peer.getStats()) as unknown as Iterable<
+        [string, { type: string; id?: string; nominated?: boolean; selected?: boolean; localCandidateId?: string; candidateType?: string }]
+      >;
+      const reports = new Map<string, { type: string; candidateType?: string }>();
+      let pairLocalId: string | null = null;
+      for (const [, report] of stats) {
+        reports.set(report.id ?? "", report);
+        if (
+          report.type === "candidate-pair" &&
+          (report.nominated === true || report.selected === true) &&
+          report.localCandidateId
+        ) {
+          pairLocalId = report.localCandidateId;
+        }
+      }
+      if (!pairLocalId) return false;
+      return reports.get(pairLocalId)?.candidateType === "relay";
+    } catch {
+      return false;
+    }
+  }
+
   // ─── 协商（由 CallManager 分发信令后调用）────────────────────────
 
   async handleRemoteSdp(sdp: RTCSessionDescriptionInit): Promise<void> {
@@ -500,6 +572,8 @@ export class CallSession {
       return;
     }
     await this.peer.setRemoteDescription(sdp);
+    // 自愈中收到对端信令（restart offer/answer）：信令通道活性证明，延长窗口等 ICE 收敛
+    if (this.state === "reconnecting") this.extendRecoveryWindow();
     if (sdp.type === "offer") {
       const answer = await this.peer.createAnswer();
       await this.setLocalDesc(answer);
@@ -789,30 +863,36 @@ export class CallSession {
 
   // ─── 挂断 / 清理 ─────────────────────────────────────────────────
 
-  /** 武装断连宽限定时器：disconnected 后未在宽限期内恢复连接 → 判定通话中断。幂等（已武装则忽略）。 */
-  private armDisconnectGrace(): void {
-    if (this.disconnectGraceTimer != null) return;
-    console.log(`[Call] connection disconnected — grace ${DISCONNECT_GRACE_MS}ms before end (callId=${this.opts.callId})`);
+  /** 武装自愈窗口定时器：reconnecting 未在窗口内恢复连接 → 判定通话中断。幂等（已武装则忽略）。 */
+  private armRecoveryWindow(): void {
+    if (this.recoveryTimer != null) return;
+    console.log(`[Call] recovering — window ${RECONNECT_WINDOW_MS}ms before end (callId=${this.opts.callId})`);
     const g = globalThis as { setTimeout: (fn: () => void, ms: number) => number | ReturnType<typeof setTimeout> };
-    this.disconnectGraceTimer = g.setTimeout(() => {
-      this.disconnectGraceTimer = null;
-      console.log(`[Call] disconnect grace expired — ending call (callId=${this.opts.callId})`);
+    this.recoveryTimer = g.setTimeout(() => {
+      this.recoveryTimer = null;
+      console.log(`[Call] recovery window expired — ending call (callId=${this.opts.callId})`);
       this.hangup("error");
-    }, DISCONNECT_GRACE_MS);
+    }, RECONNECT_WINDOW_MS);
   }
 
-  /** 取消断连宽限定时器（恢复 connected 或已挂断时）。 */
-  private clearDisconnectGrace(): void {
-    if (this.disconnectGraceTimer == null) return;
+  /** 取消自愈窗口定时器（恢复 connected 或已挂断时）。 */
+  private clearRecoveryWindow(): void {
+    if (this.recoveryTimer == null) return;
     const g = globalThis as { clearTimeout: (h: number | ReturnType<typeof setTimeout>) => void };
-    g.clearTimeout(this.disconnectGraceTimer as number | ReturnType<typeof setTimeout>);
-    this.disconnectGraceTimer = null;
+    g.clearTimeout(this.recoveryTimer as number | ReturnType<typeof setTimeout>);
+    this.recoveryTimer = null;
+  }
+
+  /** 自愈期间收到对端信令（restart offer/answer/ice）→ 信号通道是活的，延长窗口等 ICE 收敛。 */
+  private extendRecoveryWindow(): void {
+    this.clearRecoveryWindow();
+    this.armRecoveryWindow();
   }
 
   hangup(reason?: "hangup" | "error" | "left-room"): void {
     if (this.ended) return;
     this.ended = true;
-    this.clearDisconnectGrace();
+    this.clearRecoveryWindow();
     if (this.peer) {
       this.peer.onicecandidate = null;
       this.peer.onnegotiationneeded = null;
