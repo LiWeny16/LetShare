@@ -1118,6 +1118,14 @@ export class RealTimeColab {
       this.userServerPongTs.set(signalData.from, Date.now());
       this.userProbeFails.set(signalData.from, 0);
       break;
+     case "membership:snapshot":
+      // 服务器权威成员快照（uniqId[]）：presence 中心化，替换客户端互发现的初始状态
+      this.handleMembershipSnapshot(data);
+      break;
+     case "membership:changed":
+      // 服务器权威成员增删（join/leave）：presence 中心化的增量通知
+      this.handleMembershipChanged(data);
+      break;
      default:
       if (typeof data.type === "string" && data.type.startsWith("call:")) {
        this.handleCallSignal(signalData);
@@ -1128,6 +1136,54 @@ export class RealTimeColab {
   } catch (err) {
    console.error(" Failed to parse WebSocket message:", event.data, err);
   }
+ }
+
+ /**
+  * membership:snapshot —— 服务器权威成员快照（members: uniqId[]）。
+  * presence 中心化：订阅房间后收到服务器下发的权威在线者，据此建立 userList 条目。
+  * discover 仍负责交换公钥与具体连接能力（membership 不携带）；对旧服务器/端保持 discover 兜底。
+  */
+ private handleMembershipSnapshot(data: any): void {
+  const members: string[] = data?.members ?? [];
+  const now = Date.now();
+  for (const id of members) {
+   if (!id || id === this.getUniqId()) continue;
+   this.ensureMembershipUser(id, now);
+  }
+  this.updateConnectedUsers(this.userList);
+ }
+
+ /**
+  * membership:changed —— 服务器权威成员增减（type: join|leave, userId: uniqId）。
+  */
+ private handleMembershipChanged(data: any): void {
+  const id = data?.userId;
+  if (!id || id === this.getUniqId()) return;
+  if (data?.type === "join") {
+   this.ensureMembershipUser(id, Date.now());
+   this.updateConnectedUsers(this.userList);
+  } else if (data?.type === "leave") {
+   this.handleUserLeave({ from: id });
+  }
+ }
+
+ /** 确保某权威在线成员在 userList 有最小条目（text-only，discover 到达后升级）。 */
+ private ensureMembershipUser(id: string, now: number): void {
+  const existing = this.userList.get(id);
+  if (existing) {
+   if (existing.status === "disconnected") {
+    existing.status = "text-only";
+    existing.attempts = 0;
+   }
+   existing.lastSeen = now;
+   return;
+  }
+  this.userList.set(id, {
+   status: "text-only",
+   attempts: 0,
+   lastSeen: now,
+   userType: getDeviceType(),
+  });
  }
 
  /**
