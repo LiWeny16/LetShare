@@ -1,0 +1,1 @@
+import{r as e}from"./share-kv_T04dz.js";export{e as readClipboard};

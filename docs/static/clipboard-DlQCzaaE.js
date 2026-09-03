@@ -1,0 +1,1 @@
+import{r as e}from"./share-DBVjr349.js";export{e as readClipboard};
