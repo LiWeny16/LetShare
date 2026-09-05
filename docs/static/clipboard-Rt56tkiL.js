@@ -1,0 +1,1 @@
+import{t as e}from"./share-ChC_NsuU.js";export{e as readClipboard};
