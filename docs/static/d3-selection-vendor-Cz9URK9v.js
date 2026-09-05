@@ -1,0 +1,1 @@
+import{m as e,p as t}from"./d3-brush-vendor-DxYRqXFO.js";function n(n){return typeof n==`string`?new t([[document.querySelector(n)]],[document.documentElement]):new t([[n]],e)}export{n as t};

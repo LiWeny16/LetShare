@@ -1,0 +1,1 @@
+import{Et as e,St as t,Tt as n}from"./excalidraw-vendor-Jq0rm-NR.js";var r=(t,r)=>e.lang.round(n.parse(t)[r]),i=(e,n)=>t(e,`a`,-n);export{r as n,i as t};

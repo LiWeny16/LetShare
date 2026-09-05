@@ -1,0 +1,1 @@
+import{t as e}from"./modulepreload-polyfill-oNGqn6W8.js";import{a as t}from"./mobx-react-lite-vendor-D3DhKuQY.js";var n=e((e=>{var n=t();e.createRoot=n.createRoot,e.hydrateRoot=n.hydrateRoot}));export{n as t};
