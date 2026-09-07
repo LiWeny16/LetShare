@@ -1,0 +1,1 @@
+import{t as e}from"./share-BPPgIcpD.js";export{e as readClipboard};
