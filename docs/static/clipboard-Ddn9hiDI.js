@@ -1,0 +1,1 @@
+import{t as e}from"./share-C3-fM6ci.js";export{e as readClipboard};
