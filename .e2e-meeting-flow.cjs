@@ -42,13 +42,18 @@ async function main() {
   // 点击“开始会议”
   await dialog.locator('button').filter({ hasText: "开始会议" }).first().click({ force: true });
   await a.waitForTimeout(2500);
+  const creationResultText = await a.locator('[role="dialog"]').last().innerText().catch(() => "");
+  log.push(`[A] creationResult=${JSON.stringify({ hasMeetingId: /会议号/.test(creationResultText), hasInviteLink: /邀请链接/.test(creationResultText), hasEnter: /进入会议/.test(creationResultText) })}`);
+  // 3.8: 创建后先展示会议号/邀请链接，再由用户明确点击进入会议。
+  await a.locator('[role="dialog"]').last().locator('button').last().click({ force: true });
   const urlA = await waitMeetingUrl(a);
   const roomId = (urlA.match(/room=(\d{4})/) || [])[1] || "";
   log.push(`[A] created url=${urlA} roomId=${roomId}`);
+  await a.waitForTimeout(1200);
   const bodyA = await a.locator("body").innerText().catch(() => "");
   const linesA = bodyA.split("\n").filter(Boolean);
   log.push(`[A] top=${JSON.stringify(linesA.slice(0, 6))}`);
-  log.push(`[A] hasSharePanel=${/邀请他人加入会议/.test(bodyA)} hasMeetingId=${/复制会议号/.test(bodyA)} hasCopyLink=${/复制链接/.test(bodyA)}`);
+  log.push(`[A] meetingSurface=${JSON.stringify({ hasStage: /会议舞台/.test(bodyA), hasChat: /聊天/.test(bodyA), hasLeave: /离开/.test(bodyA) })}`);
   await a.screenshot({ path: ".e2e-flow-A.png", fullPage: false });
 
   // ============ B: 用分享链接加入 ============
@@ -65,9 +70,8 @@ async function main() {
 
   // ============ A 应看到成员数 2 ============
   await a.waitForTimeout(1500);
-  const bodyA2 = await a.locator("body").innerText().catch(() => "");
-  const peopleA2 = bodyA2.split("\n").filter((l) => /👥/.test(l));
-  log.push(`[A-afterB] people=${JSON.stringify(peopleA2)}`);
+  const memberCountA2 = await a.evaluate(() => (window).__meeting?.getState?.().members?.length + 1).catch(() => -1);
+  log.push(`[A-afterB] participantCount=${memberCountA2}`);
 
   // ============ C: 加入不存在的会议号(负例) ============
   const ctxC = await browser.newContext({ permissions: ["camera", "microphone"] });

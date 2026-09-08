@@ -126,7 +126,9 @@ function cdnRefresh() {
 function deployFrontend() {
   log("▶", "打包 docs/ → 上传 ECS nginx 回源口(18081)...");
   // tar（纯归档，无压缩）：GNU tar 不支持 zip 容器，纯 tar 跨平台确定可解（服务器 tarfile 解压）
-  const toPosix = (p) => (process.platform === "win32" ? p.replace(/\\/g, "/").replace(/^([A-Za-z]):/, "/$1") : p);
+  // Windows bsdtar accepts drive-qualified paths (C:/...), but does not
+  // resolve MSYS-style /C/... paths when invoked from Node on Windows.
+  const toPosix = (p) => (process.platform === "win32" ? p.replace(/\\/g, "/") : p);
   run(`tar -cf "${toPosix(TMP_ZIP)}" -C "${toPosix(FRONTEND_DIST)}" .`, { stdio: "pipe" });
   fs.writeFileSync(TMP_UNZ, EXTRACTOR);
   scp(TMP_ZIP, "/tmp/letshare-docs.zip");

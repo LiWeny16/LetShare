@@ -8,6 +8,7 @@ import {
   Backdrop,
   Button,
   Checkbox,
+  Chip,
   Collapse,
   Dialog,
   DialogContent,
@@ -835,10 +836,17 @@ export default function DownloadDrawerSlide({
     <>
       <Backdrop
         open={open}
-        onClick={onClose}
+        data-testid="download-drawer-backdrop"
+        onMouseDown={(event) => {
+          if (event.target === event.currentTarget) onClose();
+        }}
+        onClick={(event) => {
+          if (event.target === event.currentTarget) onClose();
+        }}
         sx={{
-          zIndex: theme.zIndex.modal,
+          zIndex: theme.zIndex.modal + 1,
           backgroundColor: "rgba(0, 0, 0, 0.4)",
+          pointerEvents: "auto",
         }}
       />
 
@@ -859,7 +867,7 @@ export default function DownloadDrawerSlide({
             display: "flex",
             justifyContent: "center",
             pointerEvents: "none",
-            zIndex: theme.zIndex.modal,
+            zIndex: theme.zIndex.modal + 2,
           }}
         >
           <Box
@@ -1029,9 +1037,24 @@ export default function DownloadDrawerSlide({
                       gap: 1,
                     }}
                   >
-                    <Typography variant="body2" color="text.secondary">
+                    <Typography variant="body2" color="text.secondary" sx={{ display: "flex", alignItems: "center", gap: 0.75, flexWrap: "wrap" }}>
                       {/* Sending file */}
                       <><UploadFileIcon sx={{ mr: 0.5, verticalAlign: 'middle', fontSize: '1.1em' }} /><Trans i18nKey="transfer.sending" values={{ name: targetUserId?.split(":")[0] ?? "未知用户" }} components={{ strong: <strong /> }} /></>
+                      {/* 3.8.2：真实传输路由标签（P2P 直连 / 公网中转，随自动切换更新） */}
+                      {outgoingStats && (
+                        <Chip
+                          size="small"
+                          data-testid="transfer-route"
+                          label={
+                            outgoingStats.transport === "p2p"
+                              ? t("transfer.routeP2P", "P2P 直连")
+                              : t("transfer.routeRelay", "公网中转")
+                          }
+                          color={outgoingStats.transport === "p2p" ? "success" : "info"}
+                          variant="outlined"
+                          sx={{ height: 22, fontSize: "0.7rem", borderRadius: 1.5 }}
+                        />
+                      )}
                     </Typography>
                     <Box
                       sx={{

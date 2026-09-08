@@ -23,9 +23,9 @@ export default defineConfig({
           // 最小化拆分包 — 但把很小的包合并，避免请求数爆炸
           if (id.includes("node_modules")) {
             // 兼容 / 和 \ 两种路径分隔符（跨平台 id 混用）
-            const seg = id.split(/node_modules[\/\\]/);
+            const seg = id.split(/node_modules[/\\]/);
             const pkgName = seg[seg.length - 1]
-              .split(/[\/\\]/)[0]
+              .split(/[/\\]/)[0]
               .toString()
               .replace(/^[.@]/, "") // 去掉 pnpm(.pnpm) 的 dot 前缀 / npm(@scope) 的 @ 前缀
             // 小体积包合并到 common-vendor，减少 modulepreload 请求数
@@ -89,6 +89,11 @@ export default defineConfig({
         // 立即激活新的 Service Worker
         clientsClaim: true,
         skipWaiting: true,
+        // Excalidraw is intentionally loaded as a real editor and its vendor
+        // chunk is larger than Workbox's 2 MiB default. Keep the install
+        // manifest complete so a fresh client does not miss the meeting board
+        // chunk and fail during a cold start.
+        maximumFileSizeToCacheInBytes: 8 * 1024 * 1024,
         // 设置检查更新的间隔(毫秒)
         cleanupOutdatedCaches: true,
         // Don't precache index.html — stale HTML from SW cache is the #1 source

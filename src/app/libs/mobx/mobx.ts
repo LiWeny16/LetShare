@@ -3,6 +3,17 @@ import { makeAutoObservable, reaction, runInAction } from 'mobx';
 
 const STORAGE_KEY = 'user_settings';
 
+/** Migrate legacy BCP-47 values before they reach MUI Select/i18next. */
+function normalizeLanguage(value: unknown): LanguageType {
+  if (value === 'zh-CN' || value === 'zh-TW' || value === 'zh-HK') return 'zh';
+  if (value === 'en-US' || value === 'en-GB') return 'en';
+  if (value === 'ms-MY') return 'ms';
+  if (value === 'id-ID') return 'id';
+  return value === 'system' || value === 'en' || value === 'zh' || value === 'ms' || value === 'id'
+    ? value
+    : 'en';
+}
+
 const DEFAULT_SETTINGS = {
   roomId: '',
   userTheme: 'light' as ThemeKey,
@@ -27,7 +38,9 @@ const DEFAULT_SETTINGS = {
   videoCodecPriority: "auto" as "auto" | "h264" | "vp8" | "vp9" | "av1", // 视频编码器优先次序（协商前生效，通话中切换下次生效）
   videoBackground: "off" as "off" | "blur", // 背景模糊（Chromium 118+ 原生约束，不支持时自动降级）
   videoDegradation: "maintain-framerate" as "balanced" | "maintain-framerate" | "maintain-resolution", // 网络差时浏览器降级策略：默认帧率优先（流畅 > 码率/清晰度）
-  version: "3.8.0",
+  meetingCameraDefaultOn: false as boolean,
+  meetingMicrophoneDefaultOn: false as boolean,
+  version: "3.8.4",
   isNewUser: true
 };
 export type SettingsKey = keyof typeof DEFAULT_SETTINGS;
@@ -140,7 +153,11 @@ class SettingsStore {
           if (parsed.noiseSuppression === false && parsed.nsMode === undefined) {
             parsed.nsMode = 'off';
           }
-          this.settings = { ...DEFAULT_SETTINGS, ...parsed };
+          this.settings = {
+            ...DEFAULT_SETTINGS,
+            ...parsed,
+            userLanguage: normalizeLanguage(parsed.userLanguage),
+          };
         });
       } else {
         throw new Error('无效配置或字段缺失，已重置为默认值');

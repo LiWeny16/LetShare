@@ -79,7 +79,7 @@ export function VideoWall({ tiles, focusedUniqId, onSelectFocus, formFactor }: V
           key={tile.tileKey}
           tile={tile}
           isFocused={tile.tileKey === focusedUniqId}
-          onFocus={() => onSelectFocus(tile.uniqId)}
+          onFocus={() => onSelectFocus(tile.tileKey)}
         />
       ))}
     </Box>

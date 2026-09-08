@@ -98,22 +98,34 @@ export class CustomConnectionProvider implements IConnectionProvider {
   }
 
   async disconnect(soft?: boolean): Promise<void> {
-    if (this.ws) {
+    // Keep a stable reference across the async unsubscribe. Meeting exit can
+    // trigger disconnect from both the room manager and the route cleanup;
+    // a second caller must not dereference a socket already cleared by the
+    // first caller or reset a newer connection.
+    const ws = this.ws;
+    if (ws) {
       // 先取消订阅
-      if (this.isSubscribed && this.currentRoomId) {
+      if (this.ws === ws && this.isSubscribed && this.currentRoomId) {
         await this.unsubscribeFromRoom();
       }
 
       if (soft) {
         // 软关闭：只取消订阅，保留 WebSocket 连接用于重连
-        this.isSubscribed = false;
-        this.currentRoomId = null;
+        if (this.ws === ws) {
+          this.isSubscribed = false;
+          this.currentRoomId = null;
+        }
         return;
       }
 
-      this.ws.onclose = null;
-      this.ws.close();
-      this.ws = null;
+      ws.onclose = null;
+      ws.close();
+      if (this.ws === ws) {
+        this.ws = null;
+        this.isSubscribed = false;
+        this.currentRoomId = null;
+      }
+      return;
     }
     this.isSubscribed = false;
     this.currentRoomId = null;

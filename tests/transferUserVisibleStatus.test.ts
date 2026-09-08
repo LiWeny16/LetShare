@@ -205,10 +205,11 @@ test("P2P file metadata rejection reasons remain visible", () => {
 
   assertBranchPublishesReasonStatus(branch, "alert.metadataInvalid", statusPattern);
   assertBranchPublishesReasonStatus(branch, "alert.alreadyReceiving", statusPattern);
-  assert.match(branch, /this\.queueDirectDiskReceive\(id,\s*channel,\s*normalizedMeta\)/);
+  // 3.8.2：direct-to-disk 入口携带 hash 上下文（expectedHash/hashPending）继续转发
+  assert.match(branch, /this\.queueDirectDiskReceive\(\s*id,\s*channel,\s*\{\s*\.\.\.normalizedMeta,/);
   assert.match(
     branch,
-    /const cacheLimitMessage = this\.getReceivedCacheLimitMessage\(cacheGuard\);[\s\S]*this\.queueDirectDiskReceive\(id,\s*channel,\s*normalizedMeta,\s*cacheLimitMessage\)/,
+    /const cacheLimitMessage = this\.getReceivedCacheLimitMessage\(cacheGuard\);[\s\S]*this\.queueDirectDiskReceive\(\s*id,\s*channel,\s*\{\s*\.\.\.normalizedMeta,/,
     "P2P cache overflow should route to direct-to-disk with the visible cache limit reason"
   );
   assertBranchPublishesReasonStatus(branch, "alert.insufficientMemory", statusPattern);

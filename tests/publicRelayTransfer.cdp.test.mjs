@@ -37,6 +37,10 @@ test(
         ...process.env,
         MODE: "local",
         LETSHARE_SERVER_PORT: String(SERVER_PORT),
+        // The local config enables its embedded TURN listener by default.
+        // This CDP test exercises the WebSocket relay and must not collide
+        // with a developer/server TURN listener on UDP 3478.
+        LETSHARE_TURN_ENABLED: "false",
         GIN_MODE: "release",
       },
     });

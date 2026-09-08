@@ -357,8 +357,8 @@ class ChatIntegration {
             this.emitter.emit('history-updated', { userId: targetUserId });
 
             // 3. Start the actual file transfer
-            // Progress updates will come through colabLib's file-progress events
-            await realTimeColab.sendFileToUser(targetUserId, file);
+            // 统一发送入口：P2P（probe 验证后）→ 失败/卡死自动切公网 relay
+            await realTimeColab.sendFileAuto(targetUserId, file);
 
             // 4. After transfer completes, the 'file-sent' event will update the message
             //    (handled by handleFileSent above)

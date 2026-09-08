@@ -7,7 +7,7 @@ const repoRoot = process.cwd();
 const colabLibSource = readFileSync(
   join(repoRoot, "src", "app", "libs", "connection", "colabLib.ts"),
   "utf8"
-);
+).replace(/\r\n/g, "\n");
 const proUpgradeSource = readFileSync(
   join(repoRoot, "src", "app", "libs", "connection", "proUpgrade.ts"),
   "utf8"

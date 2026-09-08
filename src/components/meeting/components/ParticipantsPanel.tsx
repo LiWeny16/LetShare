@@ -1,8 +1,9 @@
-/**
- * meeting/ParticipantsPanel — 成员面板（右侧）：成员列表 + 房主徽章 + 房主踢人。
- */
+/** Meeting participant list with host actions and a direct private-chat entry. */
 import { useState } from "react";
-import { Avatar, IconButton, List, ListItem, ListItemAvatar, ListItemText, Tooltip, Typography } from "@mui/material";
+import { alpha, Avatar, Button, Divider, IconButton, List, ListItem, ListItemAvatar, ListItemText, Stack, Tooltip, Typography, useTheme } from "@mui/material";
+import ChatBubbleOutlineIcon from "@mui/icons-material/ChatBubbleOutline";
+import MicOffIcon from "@mui/icons-material/MicOff";
+import CampaignIcon from "@mui/icons-material/Campaign";
 import PersonIcon from "@mui/icons-material/Person";
 import PersonRemoveIcon from "@mui/icons-material/PersonRemove";
 import StarIcon from "@mui/icons-material/Star";
@@ -12,58 +13,114 @@ import { meetingManager } from "@App/libs/meeting/meetingManager";
 import type { MeetingState } from "@App/libs/meeting/meetingManager";
 import { displayNameOf } from "../types";
 
-export function ParticipantsPanel({ state }: { state: MeetingState }) {
+export function ParticipantsPanel({
+  state,
+  onStartPrivateChat,
+}: {
+  state: MeetingState;
+  onStartPrivateChat?: (uniqId: string) => void;
+}) {
   const { t } = useTranslation();
+  const theme = useTheme();
   const [kicking, setKicking] = useState<string | null>(null);
   const selfId = realTimeColab.getUniqId() ?? "";
   const amHost = !!state.hostId && state.hostId === selfId;
 
-  // 成员表不含自己（快照过滤），面板需展示：自己 + 房主置顶
-  const rows = [
-    { uniqId: selfId },
-    ...state.members,
-  ].sort((a, b) => {
+  const rows = [{ uniqId: selfId }, ...state.members].sort((a, b) => {
     if (a.uniqId === state.hostId) return -1;
     if (b.uniqId === state.hostId) return 1;
     return 0;
   });
 
   return (
-    <List dense sx={{ overflowY: "auto", flex: 1, minHeight: 0, px: 0.5 }}>
-      {rows.map((m) => {
-        const isHost = m.uniqId === state.hostId;
-        const isSelf = m.uniqId === selfId;
+    <Stack sx={{ flex: 1, minHeight: 0 }}>
+      {amHost && (
+        <Stack spacing={1} sx={{ px: 1.25, py: 1.25, bgcolor: alpha(theme.palette.primary.main, 0.035) }}>
+          <Typography sx={{ px: 0.5, color: "text.secondary", fontSize: "0.72rem", fontWeight: 750 }}>
+            {t("meeting.hostControls", "主持人控制")}
+          </Typography>
+          <Stack direction="row" spacing={0.75}>
+            <Button
+              fullWidth
+              size="small"
+              variant="outlined"
+              startIcon={<MicOffIcon sx={{ fontSize: 17 }} />}
+              onClick={() => meetingManager.muteAll()}
+              sx={{ minHeight: 38, borderRadius: 2, textTransform: "none", fontSize: "0.72rem", fontWeight: 700, whiteSpace: "nowrap" }}
+            >
+              {t("meeting.muteAll", "全员静音")}
+            </Button>
+            <Button
+              fullWidth
+              size="small"
+              variant="outlined"
+              startIcon={<CampaignIcon sx={{ fontSize: 17 }} />}
+              onClick={() => meetingManager.requestEveryoneUnmute()}
+              sx={{ minHeight: 38, borderRadius: 2, textTransform: "none", fontSize: "0.72rem", fontWeight: 700, whiteSpace: "nowrap" }}
+            >
+              {t("meeting.requestUnmute", "请求开麦")}
+            </Button>
+          </Stack>
+        </Stack>
+      )}
+      {amHost && <Divider />}
+      <List dense sx={{ overflowY: "auto", flex: 1, minHeight: 0, px: 0.5, py: 0.75 }}>
+      {rows.map((member) => {
+        const isHost = member.uniqId === state.hostId;
+        const isSelf = member.uniqId === selfId;
+        const name = displayNameOf(member.uniqId);
         return (
           <ListItem
-            key={m.uniqId}
-            secondaryAction={
-              isHost ? (
-                <Tooltip title={t("meeting.hostBadge", "房主")}>
-                  <StarIcon sx={{ fontSize: 16, color: "warning.main" }} />
-                </Tooltip>
-              ) : amHost && !isSelf ? (
-                <Tooltip title={t("meeting.kick", "移出会议")}>
-                  <IconButton
-                    size="small"
-                    edge="end"
-                    color="error"
-                    disabled={kicking === m.uniqId}
-                    onClick={() => { setKicking(m.uniqId); meetingManager.kick(m.uniqId); setTimeout(() => setKicking(null), 1200); }}
-                  >
-                    <PersonRemoveIcon sx={{ fontSize: 17 }} />
-                  </IconButton>
-                </Tooltip>
-              ) : undefined
-            }
-            sx={{ borderRadius: 2 }}
+            key={member.uniqId}
+            secondaryAction={isSelf ? undefined : (
+              <Stack direction="row" spacing={0.25} alignItems="center">
+                {onStartPrivateChat && (
+                  <Tooltip title={t("meeting.sendMessage", "发送消息")}>
+                    <IconButton
+                      size="small"
+                      edge="end"
+                      aria-label={`${t("meeting.sendMessage", "发送消息")} ${name}`}
+                      onClick={() => onStartPrivateChat(member.uniqId)}
+                      sx={{ width: 40, height: 40, color: "primary.main" }}
+                    >
+                      <ChatBubbleOutlineIcon sx={{ fontSize: 18 }} />
+                    </IconButton>
+                  </Tooltip>
+                )}
+                {isHost ? (
+                  <Tooltip title={t("meeting.hostBadge", "房主")}>
+                    <StarIcon sx={{ fontSize: 16, color: "warning.main", mx: 0.5 }} />
+                  </Tooltip>
+                ) : amHost ? (
+                  <Tooltip title={t("meeting.kick", "移出会议")}>
+                    <IconButton
+                      size="small"
+                      edge="end"
+                      color="error"
+                      aria-label={`${t("meeting.kick", "移出会议")} ${name}`}
+                      disabled={kicking === member.uniqId}
+                      onClick={() => {
+                        setKicking(member.uniqId);
+                        meetingManager.kick(member.uniqId);
+                        setTimeout(() => setKicking(null), 1200);
+                      }}
+                      sx={{ width: 40, height: 40 }}
+                    >
+                      <PersonRemoveIcon sx={{ fontSize: 17 }} />
+                    </IconButton>
+                  </Tooltip>
+                ) : undefined}
+              </Stack>
+            )}
+            sx={{ borderRadius: 2, pr: isSelf ? 1 : 10 }}
           >
             <ListItemAvatar sx={{ minWidth: 40 }}>
-              <Avatar sx={{ width: 30, height: 30, fontSize: 14, bgcolor: isHost ? "warning.main" : "primary.main" }}>
-                {displayNameOf(m.uniqId, "?").slice(0, 1).toUpperCase() || <PersonIcon />}
+              <Avatar sx={{ width: 32, height: 32, fontSize: 14, bgcolor: isHost ? alpha(theme.palette.primary.main, 0.13) : theme.palette.action.hover, color: isHost ? theme.palette.primary.main : theme.palette.text.secondary, fontWeight: 750 }}>
+                {name.slice(0, 1).toUpperCase() || <PersonIcon />}
               </Avatar>
             </ListItemAvatar>
             <ListItemText
-              primary={isSelf ? `${displayNameOf(m.uniqId, t("meeting.you", "我"))}（${t("meeting.you", "我")}）` : displayNameOf(m.uniqId)}
+              primary={isSelf ? `${name} (${t("meeting.you", "我")})` : name}
               primaryTypographyProps={{ fontSize: "0.85rem", noWrap: true }}
             />
           </ListItem>
@@ -74,6 +131,7 @@ export function ParticipantsPanel({ state }: { state: MeetingState }) {
           {t("meeting.noMembers", "暂无其他成员")}
         </Typography>
       )}
-    </List>
+      </List>
+    </Stack>
   );
 }

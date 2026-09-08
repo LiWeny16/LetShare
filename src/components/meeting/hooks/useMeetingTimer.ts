@@ -21,7 +21,6 @@ export function useMeetingTimer(stage: MeetingStage): number {
     }
     startRef.current = null;
     setElapsed(0);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stage]);
 
   return elapsed;

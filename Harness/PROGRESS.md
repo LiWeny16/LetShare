@@ -4,13 +4,15 @@ Global task index. Load at session start to see what is active and what was done
 
 ## Active Task
 
-- 无（task-meeting-production 已完成：会议功能生产级 3.8.0 上线，线上全功能 25/25 验证通过）
+- task-meeting-3-8-3-enterprise-readiness - 按 Zoom/飞书/钉钉/Excalidraw 基线审计并修复会议核心、媒体、协作与 UI；当前线上基线 3.8.4
 
 ## Task Index
 
 | ID | Goal | Phase | Closed |
 |----|------|-------|--------|
 | task-meeting-production | 会议功能生产级：画板/聊天/踢人/分组/结束会议/资源回收/屏幕共享重协商 + 线上部署验证 | Done | 2026-09-04 |
+| task-meeting-3-8-2-collab-hardening | WF-Max：3.8.2 会议可靠性与协作能力修复/新增/审核 | Planned | |
+| task-meeting-3-8-3-enterprise-readiness | 企业级会议平台逐项对标、修复、真实验收与 3.8.4 线上维护 | Verified | |
 | task-fix-oneway-call-audio | Fix one-way audio: callee never decodes offerer stream (root-caused to app signaling/negotiation orchestration) | root-caused | |
 | pro-public-relay-auth-sync | Fix PRO/public relay authorization sync and sender channel selection behavior | Verified | |
 | server-relay-reset-stale-client | Fix deterministic server relay transfer failure after stale/reset receiver websocket writes | Verified | 2026-07-27 |

@@ -24,6 +24,10 @@ export function MemberTile({ tile, isFocused, onFocus }: MemberTileProps) {
     if (videoRef.current) {
       if (tile.videoStream) {
         videoRef.current.srcObject = tile.videoStream;
+        // 会议音频由父级唯一的隐藏 audio sink 统一播放；视频 tile 必须静音，
+        // 否则远端视频会被浏览器 autoplay policy 卡在 readyState=0。
+        videoRef.current.muted = true;
+        void videoRef.current.play().catch(() => undefined);
       } else {
         videoRef.current.srcObject = null;
       }
@@ -34,12 +38,21 @@ export function MemberTile({ tile, isFocused, onFocus }: MemberTileProps) {
 
   return (
     <Box
+      role="button"
+      tabIndex={0}
+      aria-label={tile.name}
       onClick={onFocus}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onFocus();
+        }
+      }}
       sx={{
         position: "relative",
         borderRadius: 2,
         overflow: "hidden",
-        bgcolor: "#0b1220",
+        bgcolor: "#000000",
         aspectRatio: tile.isScreen ? "auto" : "16 / 9",
         height: tile.isScreen ? "100%" : undefined,
         outline: isFocused
@@ -48,6 +61,7 @@ export function MemberTile({ tile, isFocused, onFocus }: MemberTileProps) {
         outlineOffset: -2,
         boxShadow: isFocused ? `0 0 0 4px ${alpha(theme.palette.primary.main, 0.18)}` : "none",
         cursor: "pointer",
+        "&:focus-visible": { outline: `2px solid ${theme.palette.primary.main}`, outlineOffset: 2 },
       }}
     >
       {showVideo ? (
@@ -55,8 +69,8 @@ export function MemberTile({ tile, isFocused, onFocus }: MemberTileProps) {
           ref={videoRef}
           autoPlay
           playsInline
-          muted={tile.isSelf}
-          style={{ width: "100%", height: "100%", objectFit: tile.isScreen ? "contain" : "cover", display: "block", background: "#0b1220" }}
+          muted
+          style={{ width: "100%", height: "100%", objectFit: tile.isScreen ? "contain" : "cover", display: "block", background: "#000000" }}
         />
       ) : (
         <Box
@@ -66,7 +80,7 @@ export function MemberTile({ tile, isFocused, onFocus }: MemberTileProps) {
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-            bgcolor: "#1a2233",
+            bgcolor: "#000000",
           }}
         >
           <Avatar sx={{ width: 56, height: 56, bgcolor: theme.palette.primary.main, fontSize: 24 }}>

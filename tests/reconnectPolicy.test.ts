@@ -64,3 +64,16 @@ test("ConnectionManager: resetFailureCount 仍导出（防误删；自动重连�
   const src = readFileSync(repoPath("src/app/libs/connection/providers/ConnectionManager.ts"), "utf8");
   assert.match(src, /resetFailureCount\s*\(\):\s*void/);
 });
+
+test("colabLib: 换房间后的连接仍复用完整服务器消息路由", () => {
+  const src = readFileSync(repoPath("src/app/libs/connection/colabLib.ts"), "utf8");
+  const callbackRegistrations = [...src.matchAll(/onMessageReceived\(([^\n]+)\)/g)].map((match) => match[1]);
+  assert.ok(callbackRegistrations.length >= 2, "初始连接和换房间都必须注册消息回调");
+  assert.ok(callbackRegistrations.every((registration) => registration.includes("handleServerMessage")), "不能在换房间时退化成只处理文件的回调");
+  assert.match(src, /private handleServerMessage\(message: any\)/);
+  assert.match(src, /meetingHandler\?\.\("error", message, message\.channel\)/, "错误转发携带 channel（会议层按局部/致命分类）");
+  assert.match(src, /event === "membership:snapshot"/);
+  assert.match(src, /private meetingChannels = new Set<string>\(\)/);
+  assert.match(src, /!this\.meetingChannels\.has\(message\.channel\)/, "会议成员事件不能污染文件/文本在线名单");
+  assert.match(src, /for \(const meetingRoomId of this\.meetingChannels\)/, "重连后必须恢复会议额外订阅");
+});

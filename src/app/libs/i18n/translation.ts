@@ -228,6 +228,7 @@ const sharedMalayTranslation = {
             zipTooLarge: "Fail ZIP agak besar, dikekalkan sebagai ZIP untuk kurangkan penggunaan memori",
             zipTooManyFiles: "Bilangan fail agak banyak, dikekalkan sebagai ZIP untuk kurangkan penggunaan memori",
             receiverNoAck: "Penerima tidak mengesahkan penyelesaian, tugas semasa dihentikan, sila cuba lagi",
+            hashMismatch: "Integriti fail tidak sepadan semasa pengesahan hash, pemindahan dibatalkan, sila cuba lagi",
             senderCanceled: "Penghantar membatalkan pemindahan",
             userCancelReceive: "Pengguna membatalkan penerimaan",
             serverRejectTimeout: "Penerima tidak membalas permintaan pemindahan, sila cuba lagi",
@@ -300,6 +301,32 @@ const sharedMalayTranslation = {
             connected: "Disambungkan",
             reconnecting: "Menyambung semula…",
             disconnected: "Terputus"
+        },
+        meeting: {
+            invite: "Jemput ahli",
+            inviteTitle: "Jemput ahli",
+            inviteMeetingId: "ID Mesyuarat",
+            inviteEmptyRoom: "Tiada pengguna lain dalam talian di bilik asal",
+            inviteSending: "Menghantar…",
+            inviteSent: "Menunggu respons",
+            inviteAccepted: "Diterima",
+            inviteRejected: "Ditolak",
+            inviteExpired: "Tamat tempoh",
+            inviteAction: "Jemput",
+            inviteInMeeting: "Dalam mesyuarat",
+            inviteOnline: "Dalam talian",
+            inviteCopyLink: "Salin pautan mesyuarat",
+            copied: "Disalin",
+            inviteDone: "Selesai",
+            invIncomingTitle: "Jemputan Mesyuarat",
+            invClose: "Tutup",
+            invIncomingMeetingId: "ID Mesyuarat",
+            invExpiredBadge: "Jemputan telah tamat tempoh",
+            invCountdown: "Tamat tempat dalam {{count}}s",
+            invAccept: "Terima",
+            invDecline: "Tolak",
+            inviteAcceptedToast: "{{name}} menerima jemputan",
+            inviteRejectedToast: "{{name}} menolak jemputan"
         }
     }
 }
@@ -381,7 +408,9 @@ export const resources = {
                 savedToDiskFiles: "Saved to disk",
                 directSavedNoBrowserHistory: "Files saved directly to disk are not stored in browser IndexedDB or download history. Keep the saved disk copy and clear cached received files when browser storage is high.",
                 awaitingConfirmation: "Waiting for receiver confirmation...",
-                noTasks: "No active tasks"
+                noTasks: "No active tasks",
+                routeP2P: "P2P direct",
+                routeRelay: "Relay"
             },
             // Settings
             settings: {
@@ -535,6 +564,7 @@ export const resources = {
                 zipTooLarge: "ZIP file is large, kept as ZIP to reduce memory usage",
                 zipTooManyFiles: "Many files in archive, kept as ZIP to reduce memory usage",
                 receiverNoAck: "Receiver did not confirm completion, current task stopped, please try again",
+                hashMismatch: "File integrity hash mismatch, transfer aborted, please try again",
                 senderCanceled: "Sender cancelled the transfer",
                 userCancelReceive: "User cancelled receiving",
                 serverRejectTimeout: "Receiver did not respond to transfer request, please try again",
@@ -571,7 +601,7 @@ export const resources = {
                 p2pTooltip: "Direct P2P connection is available for faster transfer.",
                 connectingTooltip: "Trying to establish a direct P2P connection.",
                 connecting: "Connecting",
-                connected: "Connected", 
+                connected: "Connected",
                 disconnected: "Disconnected"
             },
             background: {
@@ -607,6 +637,39 @@ export const resources = {
                 connected: "Connected",
                 reconnecting: "Reconnecting…",
                 disconnected: "Disconnected"
+            },
+            meeting: {
+                invite: "Invite members",
+                inviteTitle: "Invite members",
+                inviteMeetingId: "Meeting ID",
+                inviteEmptyRoom: "No other online users in the original room",
+                inviteSending: "Sending…",
+                inviteSent: "Waiting for response",
+                inviteAccepted: "Accepted",
+                inviteRejected: "Declined",
+                inviteExpired: "Expired",
+                inviteAction: "Invite",
+                inviteInMeeting: "In meeting",
+                inviteOnline: "Online",
+                inviteCopyLink: "Copy meeting link",
+                copied: "Copied",
+                inviteDone: "Done",
+                invIncomingTitle: "Meeting invitation",
+                invClose: "Close",
+                invIncomingMeetingId: "Meeting ID",
+                invExpiredBadge: "Invitation expired",
+                invCountdown: "Expires in {{count}}s",
+                invAccept: "Accept",
+                invDecline: "Decline",
+                inviteAcceptedToast: "{{name}} accepted the invitation",
+                inviteRejectedToast: "{{name}} declined the invitation",
+                chatToAll: "Everyone (public)",
+                chatTarget: "Message recipient",
+                chatNoMembers: "No other members yet",
+                chatPickMemberFirst: "Select a member first to send a targeted file",
+                chatSendFile: "Send file to this member",
+                chatPrivatePlaceholder: "Private to {{name}}…",
+                chatPrivateTag: "Private message"
             }
         }
     },
@@ -686,7 +749,9 @@ export const resources = {
                 savedToDiskFiles: "已保存到磁盘的文件",
                 directSavedNoBrowserHistory: "直接保存到磁盘的文件不会存入浏览器 IndexedDB 或下载历史。请保留磁盘副本，浏览器存储较高时及时清理已接收缓存文件。",
                 awaitingConfirmation: "等待接收方确认完成...",
-                noTasks: "没有进行中的任务"
+                noTasks: "没有进行中的任务",
+                routeP2P: "P2P 直连",
+                routeRelay: "公网中转"
             },
             // Settings
             settings: {
@@ -842,6 +907,7 @@ export const resources = {
                 zipTooLarge: "压缩包较大，已保留为 ZIP 以降低内存占用",
                 zipTooManyFiles: "文件数量较多，已保留为 ZIP 以降低内存占用",
                 receiverNoAck: "接收方未确认完成，已停止当前任务，请重试",
+                hashMismatch: "文件完整性校验失败（hash 不匹配），传输已终止，请重试",
                 senderCanceled: "发送方取消了传输",
                 userCancelReceive: "用户取消接收",
                 serverRejectTimeout: "对方未响应文件传输请求，请重试",
@@ -914,6 +980,39 @@ export const resources = {
                 connected: "已连接",
                 reconnecting: "重连中…",
                 disconnected: "已断开"
+            },
+            meeting: {
+                invite: "邀请成员",
+                inviteTitle: "邀请成员",
+                inviteMeetingId: "会议号",
+                inviteEmptyRoom: "当前原始房间暂无其他在线用户",
+                inviteSending: "发送中…",
+                inviteSent: "等待回应",
+                inviteAccepted: "已接受",
+                inviteRejected: "已拒绝",
+                inviteExpired: "已过期",
+                inviteAction: "邀请",
+                inviteInMeeting: "已在会议中",
+                inviteOnline: "在线",
+                inviteCopyLink: "复制会议链接",
+                copied: "已复制",
+                inviteDone: "完成",
+                invIncomingTitle: "会议邀请",
+                invClose: "关闭",
+                invIncomingMeetingId: "会议号",
+                invExpiredBadge: "邀请已过期",
+                invCountdown: "{{count}} 秒后过期",
+                invAccept: "接受",
+                invDecline: "拒绝",
+                inviteAcceptedToast: "{{name}} 已接受邀请",
+                inviteRejectedToast: "{{name}} 已拒绝邀请",
+                chatToAll: "所有人（公聊）",
+                chatTarget: "消息接收者",
+                chatNoMembers: "暂无其他成员",
+                chatPickMemberFirst: "先选择成员，再发送定向文件",
+                chatSendFile: "发送文件给该成员",
+                chatPrivatePlaceholder: "私聊 {{name}}…",
+                chatPrivateTag: "私聊"
             }
 
         }

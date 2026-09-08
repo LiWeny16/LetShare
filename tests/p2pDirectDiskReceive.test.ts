@@ -41,7 +41,8 @@ test("oversized P2P metadata queues direct-to-disk receive instead of aborting i
   assert.notEqual(oversizedEnd, -1);
 
   const branch = colabLibSource.slice(oversizedStart, oversizedEnd);
-  assert.match(branch, /this\.queueDirectDiskReceive\(id,\s*channel,\s*normalizedMeta\)/);
+  // 3.8.2：direct-to-disk 入口携带 hash 上下文（spread normalizedMeta + hash 字段）
+  assert.match(branch, /this\.queueDirectDiskReceive\(\s*id,\s*channel,\s*\{\s*\.\.\.normalizedMeta,/);
   assert.doesNotMatch(branch, /type:\s*"abort"/);
 });
 
@@ -88,7 +89,8 @@ test("P2P browser cache overflow routes to direct-to-disk instead of rejecting w
   assert.notEqual(cacheOverflowEnd, -1);
 
   const branch = colabLibSource.slice(cacheOverflowStart, cacheOverflowEnd);
-  assert.match(branch, /this\.queueDirectDiskReceive\(id,\s*channel,\s*normalizedMeta,\s*cacheLimitMessage\)/);
+  // 3.8.2：overflow 分支同样携带 hash 上下文，并保留可见的缓存上限原因
+  assert.match(branch, /this\.queueDirectDiskReceive\(\s*id,\s*channel,\s*\{\s*\.\.\.normalizedMeta,[\s\S]*cacheLimitMessage\s*\)/);
   assert.doesNotMatch(branch, /type:\s*"abort"/);
 });
 

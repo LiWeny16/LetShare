@@ -73,8 +73,11 @@ test("received files drawer layout adapts to narrow widths", () => {
   assert.match(downloadSource, /overflowWrap:\s*"anywhere"/);
 });
 
-test("download drawer outside area passes clicks through to the backdrop", () => {
-  assert.match(downloadSource, /<Backdrop[\s\S]*onClick=\{onClose\}/);
+test("download drawer closes when the dimmed backdrop is clicked", () => {
+  assert.match(downloadSource, /<Backdrop[\s\S]*onMouseDown=\{\(event\) =>/);
+  assert.match(downloadSource, /<Backdrop[\s\S]*onClick=\{\(event\) =>/);
+  assert.match(downloadSource, /event\.target === event\.currentTarget/);
+  assert.match(downloadSource, /<Backdrop[\s\S]*pointerEvents:\s*"auto"/);
   assert.match(downloadSource, /pointerEvents:\s*"none"/);
   assert.match(downloadSource, /pointerEvents:\s*"auto"/);
 });

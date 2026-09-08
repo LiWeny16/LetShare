@@ -2,6 +2,7 @@
 import React, { useEffect, useRef, useState } from "react";
 // const url = "ws://192.168.1.13:9000";
 import CachedIcon from '@mui/icons-material/Cached';
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import WifiOffIcon from '@mui/icons-material/WifiOff';
 import DownloadIcon from "@mui/icons-material/Download";
 import AddIcon from "@mui/icons-material/Add";
@@ -33,6 +34,8 @@ import {
   Paper,
   Menu,
   MenuItem,
+  Stack,
+  alpha,
 } from "@mui/material";
 import realTimeColab, { UserInfo, UserStatus } from "@App/libs/connection/colabLib";
 import { meetingManager } from "@App/libs/meeting/meetingManager";
@@ -46,6 +49,8 @@ import AlertPortal from "../components/Alert";
 import { Footer } from "../components/Footer";
 import EditableUserId from "../components/UserId";
 import DownloadDrawer from "../components/Download";
+import MeetingPrejoinPreview from "../components/meeting/components/MeetingPrejoinPreview";
+import MeetingCreateDialog from "../components/meeting/components/MeetingCreateDialog";
 import ChatPanel from "../components/Chat/ChatPanel";
 import SelectedFileStrip from '../components/SelectedFileStrip';
 import ChatIntegration from "@App/libs/chat/ChatIntegration";
@@ -747,16 +752,9 @@ const Share = observer(() => {
       alertUseMUI(t('toast.zipFailed'), 2000, { kind: "error" });
       return;
     }
-    const transferPriority = settingsStore.get('transferPriority') as 'p2p' | 'server';
     try {
-      if (transferPriority === 'server') {
-        await realTimeColab.sendFileViaServer(targetUserId, fileToSend);
-      } else if (realTimeColab.canSendFileToUser(targetUserId)) {
-        await realTimeColab.sendFileToUser(targetUserId, fileToSend);
-      } else {
-        alertUseMUI(t('toast.serverTransferMode'), 2000, { kind: "info" });
-        await realTimeColab.sendFileViaServer(targetUserId, fileToSend);
-      }
+      // 3.8.2 统一发送入口：P2P（probe 验证后）→ 失败/卡死自动切公网 relay
+      await realTimeColab.sendFileAuto(targetUserId, fileToSend);
       alertUseMUI(
         t('toast.droppedSending', { name: targetUserId.split(':')[0], count: files.length }),
         2000,
@@ -809,9 +807,36 @@ const Share = observer(() => {
   const [meetingRoomIdInput, setMeetingRoomIdInput] = useState("");
   const [meetingTitleInput, setMeetingTitleInput] = useState("");
   const [meetingCreating, setMeetingCreating] = useState(false);
+  const [createdMeeting, setCreatedMeeting] = useState<{ id: string; title: string } | null>(null);
+  const [copied, setCopied] = useState("");
+  const meetingCreateRequestRef = useRef(0);
+
+  const copyText = async (text: string, label: string) => {
+    if (await writeClipboard(text)) {
+      setCopied(label);
+      window.setTimeout(() => setCopied(""), 1500);
+    }
+  };
+
+  const prepareMeeting = () => {
+    const requestId = ++meetingCreateRequestRef.current;
+    setMeetingCreating(true);
+    void meetingManager.createMeeting("").then((id) => {
+      if (requestId !== meetingCreateRequestRef.current) return;
+      setCreatedMeeting({ id, title: "" });
+    }).catch((error) => {
+      if (requestId !== meetingCreateRequestRef.current) return;
+      alertUseMUI(error instanceof Error ? error.message : String(error), 2000, { kind: "error" });
+    }).finally(() => {
+      if (requestId === meetingCreateRequestRef.current) setMeetingCreating(false);
+    });
+  };
 
   const openMeetingDialog = (mode: "create" | "join") => {
+    // Invalidate an older create request before switching the dialog mode.
+    meetingCreateRequestRef.current += 1;
     setMeetingDialogMode(mode);
+    setCreatedMeeting(null);
     if (mode === "join") {
       setMeetingRoomIdInput(settingsStore.get("roomId") ?? "");
     } else {
@@ -819,6 +844,11 @@ const Share = observer(() => {
       setMeetingTitleInput("");
     }
     setMeetingDialogOpen(true);
+    if (mode === "create") {
+      // Image 1 的 Meeting Pass 在准备页就可见：房间由后端真实预留，
+      // 点击“开始会议”只负责进入已预留的房间，不再二次创建。
+      prepareMeeting();
+    }
   };
   const confirmMeeting = async () => {
     if (meetingDialogMode === "join") {
@@ -832,18 +862,31 @@ const Share = observer(() => {
       navigator(`/meeting?room=${encodeURIComponent(roomId)}`);
       return;
     }
-    // 创建：向服务器申请 4 位会议号，再跳转到创建者视角（owner=1 触发分享页）
-    setMeetingDialogOpen(false);
-    setMeetingCreating(true);
-    try {
-      const id = await meetingManager.createMeeting(meetingTitleInput);
-      navigator(`/meeting?room=${encodeURIComponent(id)}&owner=1`);
-    } catch (e) {
-      alertUseMUI(e instanceof Error ? e.message : String(e), 2000, { kind: "error" });
-    } finally {
-      setMeetingCreating(false);
+    // 创建页打开时会议号已经由后端预留；这里仅进入会议，避免重复创建房间。
+    if (meetingCreating) return;
+    if (!createdMeeting) {
+      prepareMeeting();
+      return;
     }
+    enterCreatedMeeting();
   };
+  const enterCreatedMeeting = () => {
+    if (!createdMeeting) return;
+    const id = createdMeeting.id;
+    meetingManager.updateMeetingTitle(meetingTitleInput);
+    setCreatedMeeting(null);
+    setMeetingDialogOpen(false);
+    navigator(`/meeting?room=${encodeURIComponent(id)}&owner=1`);
+  };
+  const closeMeetingFlow = () => {
+    if (meetingCreating) return;
+    meetingCreateRequestRef.current += 1;
+    setMeetingDialogOpen(false);
+    setCreatedMeeting(null);
+  };
+  const createdInviteLink = createdMeeting
+    ? `${window.location.origin}${window.location.pathname}#/meeting?room=${encodeURIComponent(createdMeeting.id)}`
+    : "";
   const handleStartScreenShare = () => {
     setFabMenuAnchor(null);
     // 即时屏幕共享：也进入会议路由并自动发起共享（同一条 SFU 上行）
@@ -1015,6 +1058,28 @@ const Share = observer(() => {
             receivedChunkCount: fileInfo.receivedChunkCount,
             totalChunks: fileInfo.totalChunks,
           })),
+        receivingFiles: Array.from(
+          (((realTimeColab as any).receivingFiles ?? new Map()).entries()) as Iterable<[string, any]>
+        ).map(([peerId, fileInfo]: [string, any]) => ({
+          peerId,
+          transferId: fileInfo.transferId,
+          name: fileInfo.name,
+          size: fileInfo.size,
+          receivedSize: fileInfo.receivedSize,
+          receivedChunkCount: fileInfo.receivedChunkCount,
+          totalChunks: fileInfo.totalChunks,
+          storageMode: fileInfo.storageMode,
+        })),
+        p2pChannels: Array.from(realTimeColab.dataChannels.entries()).map(([peerId, channel]) => ({
+          peerId,
+          readyState: channel.readyState,
+          bufferedAmount: channel.bufferedAmount,
+          maxPacketLifeTime: channel.maxPacketLifeTime,
+          maxRetransmits: channel.maxRetransmits,
+        })),
+        probeVerifiedPeers: Array.from(
+          (((realTimeColab as any).channelVerified ?? new Set()) as Set<string>)
+        ),
         fileTransferStatus: realTimeColab.fileTransferStatus,
         selectedButton,
         selectedFileName: selectedFile?.name ?? null,
@@ -1027,6 +1092,14 @@ const Share = observer(() => {
       }),
       broadcastDiscover: () => {
         realTimeColab.broadcastSignal({ type: "discover", userType: getDeviceType() });
+      },
+      // Dev-only fault injection for the transfer acceptance test. Production
+      // never exposes this hook because the surrounding effect is DEV-gated.
+      closeP2P: (peerId: string): boolean => {
+        const channel = realTimeColab.dataChannels.get(peerId);
+        if (!channel) return false;
+        channel.close();
+        return true;
       },
     };
 
@@ -1142,8 +1215,6 @@ const Share = observer(() => {
   };
   const handleClickOtherClients = async (_e: any, targetUserId: string) => {
     try {
-      // 检查是否可以发送文件（需要P2P连接）
-      const canSendFile = realTimeColab.canSendFileToUser(targetUserId);
       const canSendMessage = realTimeColab.canSendMessageToUser(targetUserId);
 
       // 如果是文本操作但无法发送消息
@@ -1167,15 +1238,8 @@ const Share = observer(() => {
           console.log(" 用户偏好公网传输，使用服务器转发文件");
           await realTimeColab.sendFileViaServer(targetUserId, selectedFile);
         } else {
-          // 默认：优先 P2P，不可用时自动使用服务器转发
-          if (canSendFile) {
-            console.log(" 使用P2P方式发送文件");
-            await realTimeColab.sendFileToUser(targetUserId, selectedFile);
-          } else {
-            console.log(" P2P不可用，使用服务器转发文件");
-            alertUseMUI(t('toast.serverTransferMode'), 2000, { kind: "info" });
-            await realTimeColab.sendFileViaServer(targetUserId, selectedFile);
-          }
+          // 3.8.2 统一发送入口：probe 验证后走 P2P；探针失败/ACK 卡死自动切公网 relay
+          await realTimeColab.sendFileAuto(targetUserId, selectedFile);
         }
       } else if (selectedButton === "text" && selectedText) {
         await realTimeColab.sendMessageToUser(targetUserId, selectedText);
@@ -1848,10 +1912,10 @@ const Share = observer(() => {
 
       {/* 创建/加入会议对话框 */}
       <Dialog
-        open={meetingDialogOpen}
-        onClose={() => setMeetingDialogOpen(false)}
+        open={false}
+        onClose={closeMeetingFlow}
         fullWidth
-        maxWidth="xs"
+        maxWidth="md"
         BackdropProps={{
           sx: {
             backgroundColor: 'rgba(0,0,0,0.4)',
@@ -1859,17 +1923,101 @@ const Share = observer(() => {
         }}
         PaperProps={{
           sx: {
-            borderRadius: '20px',
-            boxShadow: '0 12px 48px rgba(0,0,0,0.14), 0 4px 16px rgba(0,0,0,0.06)',
+            borderRadius: { xs: "24px", sm: "30px" },
+            boxShadow: '0 24px 80px rgba(19, 48, 106, 0.2), 0 4px 18px rgba(0,0,0,0.06)',
             overflow: 'hidden',
           },
         }}
       >
         <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1, pt: 2.5, pb: 0, px: 3, fontSize: '1.1rem', fontWeight: 590, letterSpacing: '-0.02em' }}>
           <MeetingRoomIcon sx={{ mr: 0.5, verticalAlign: 'middle', fontSize: '1.1em', color: 'primary.main', opacity: 0.8 }} />
-          {meetingDialogMode === "create" ? t('meeting.create', '创建会议') : t('meeting.join', '加入会议')}
+          {createdMeeting ? t("meeting.createdTitle", "会议已创建") : meetingDialogMode === "create" ? t('meeting.create', '创建会议') : t('meeting.join', '加入会议')}
         </DialogTitle>
-        <DialogContent sx={{ px: 3, pt: 2 }}>
+        {createdMeeting ? (
+          <>
+            <DialogContent
+              sx={{
+                px: { xs: 2.5, sm: 4 },
+                pt: 1.25,
+                display: "grid",
+                gridTemplateColumns: { xs: "1fr", sm: "minmax(280px, 0.9fr) minmax(320px, 1.1fr)" },
+                columnGap: { sm: 4 },
+                alignItems: "start",
+                minHeight: { sm: 390 },
+                "& > [data-prejoin-preview]": {
+                  gridColumn: { xs: "1", sm: "1" },
+                  gridRow: { xs: "auto", sm: "1 / span 2" },
+                  minWidth: 0,
+                  p: { xs: 1, sm: 1.5 },
+                  borderRadius: { xs: 3, sm: 4 },
+                  border: "1px solid rgba(44, 111, 232, 0.12)",
+                  background: "linear-gradient(145deg, #f7faff 0%, #eef3f9 100%)",
+                },
+                "& > :not([data-prejoin-preview])": {
+                  gridColumn: { xs: "1", sm: "2" },
+                  minWidth: 0,
+                },
+              }}
+            >
+              <Box data-prejoin-preview>
+                <MeetingPrejoinPreview />
+              </Box>
+              <DialogContentText sx={{ mb: 2.5, color: "text.secondary" }}>
+                {createdMeeting.title
+                  ? `${createdMeeting.title} · ${t("meeting.createdSub", "把链接发给同事，准备好后进入会议")}`
+                  : t("meeting.createdSub", "把链接发给同事，准备好后进入会议")}
+              </DialogContentText>
+              <Stack spacing={2}>
+                <Box sx={{ p: 2.25, borderRadius: 3, bgcolor: (th) => alpha(th.palette.primary.main, 0.07), border: (th) => `1px solid ${alpha(th.palette.primary.main, 0.16)}` }}>
+                  <Typography sx={{ color: "text.secondary", fontSize: "0.75rem", mb: 0.5 }}>{t("meeting.meetingId", "会议号")}</Typography>
+                  <Stack direction="row" alignItems="center" justifyContent="space-between" gap={1}>
+                    <Typography sx={{ fontSize: { xs: "2.3rem", sm: "2.8rem" }, lineHeight: 1, fontWeight: 850, letterSpacing: "0.2em", fontVariantNumeric: "tabular-nums" }}>
+                      {createdMeeting.id}
+                    </Typography>
+                    <Button size="small" variant="outlined" startIcon={<ContentCopyIcon />} onClick={() => copyText(createdMeeting.id, "created-id")} sx={{ borderRadius: 2, textTransform: "none", whiteSpace: "nowrap" }}>
+                      {copied === "created-id" ? t("meeting.copied", "已复制") : t("meeting.copyId", "复制会议号")}
+                    </Button>
+                  </Stack>
+                </Box>
+                <Box>
+                  <Typography sx={{ color: "text.secondary", fontSize: "0.75rem", mb: 0.75 }}>{t("meeting.inviteLink", "邀请链接")}</Typography>
+                  <Stack direction={{ xs: "column", sm: "row" }} spacing={1} alignItems={{ sm: "center" }} sx={{ p: 1, pl: 1.5, borderRadius: 2.5, bgcolor: "action.hover" }}>
+                    <Typography sx={{ flex: 1, minWidth: 0, color: "text.secondary", fontSize: "0.8rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{createdInviteLink}</Typography>
+                    <Button size="small" variant="contained" startIcon={<ContentCopyIcon />} onClick={() => copyText(createdInviteLink, "created-link")} sx={{ borderRadius: 1.75, textTransform: "none", alignSelf: { xs: "stretch", sm: "auto" } }}>
+                      {copied === "created-link" ? t("meeting.copied", "已复制") : t("meeting.copyLink", "复制链接")}
+                    </Button>
+                  </Stack>
+                </Box>
+              </Stack>
+            </DialogContent>
+            <DialogActions sx={{ px: { xs: 2.5, sm: 4 }, pb: 3, pt: 1.5 }}>
+              <Button onClick={closeMeetingFlow} sx={{ textTransform: "none", color: "text.secondary" }}>{t("button.cancel", "稍后进入")}</Button>
+              <Button variant="contained" startIcon={<VideocamIcon />} onClick={enterCreatedMeeting} sx={{ minHeight: 44, px: 2.5, borderRadius: 2.25, textTransform: "none", fontWeight: 750, boxShadow: (th) => `0 6px 16px ${alpha(th.palette.primary.main, 0.25)}` }}>
+                {t("meeting.enterNow", "进入会议")}
+              </Button>
+            </DialogActions>
+          </>
+        ) : (
+          <>
+        <DialogContent sx={{ p: 0 }}>
+          <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", sm: "minmax(260px, 0.95fr) minmax(300px, 1.05fr)" }, minHeight: { sm: 310 } }}>
+            <Box
+              sx={{
+                m: { xs: 2, sm: 2.5 },
+                minHeight: { xs: 190, sm: 270 },
+                borderRadius: { xs: 4, sm: 5 },
+                bgcolor: "#f1f3f6",
+                position: "relative",
+                display: "flex",
+                alignItems: "stretch",
+                justifyContent: "center",
+                overflow: "hidden",
+                background: "radial-gradient(circle at 50% 30%, #ffffff 0%, #f1f3f6 58%, #e8ebf0 100%)",
+              }}
+            >
+              <MeetingPrejoinPreview />
+            </Box>
+            <Box sx={{ px: { xs: 3, sm: 4 }, pt: { xs: 0, sm: 2 }, pb: 2 }}>
           <DialogContentText sx={{ fontSize: '0.85rem', mb: 1.5, color: 'text.secondary' }}>
             {meetingDialogMode === "create" ? t('meeting.dialogCreateSub', '发起多人协作会议，开始后将生成 4 位会议号') : t('meeting.dialogJoinSub', '输入 4 位会议号加入')}
           </DialogContentText>
@@ -1928,8 +2076,10 @@ const Share = observer(() => {
               }}
             />
           )}
+            </Box>
+          </Box>
         </DialogContent>
-        <DialogActions sx={{ px: 3, pb: 2.5, gap: 1.5 }}>
+        <DialogActions sx={{ px: 3, pb: 2.5, gap: 1.5, minHeight: 72, boxSizing: "border-box" }}>
           <Button
             onClick={() => setMeetingDialogOpen(false)}
             sx={{ color: 'text.secondary', fontWeight: 520, fontSize: '0.875rem', letterSpacing: '-0.01em', borderRadius: '12px', px: 2, textTransform: 'none' }}
@@ -1942,12 +2092,31 @@ const Share = observer(() => {
             autoFocus
             disabled={meetingCreating}
             startIcon={meetingDialogMode === "create" ? <VideocamIcon /> : <VideoCallIcon />}
-            sx={{ fontWeight: 590, fontSize: '0.875rem', letterSpacing: '-0.01em', borderRadius: '12px', px: 3, textTransform: 'none', boxShadow: (t: any) => `0 2px 8px ${t.palette.primary.main}30` }}
+            sx={{ fontWeight: 590, fontSize: '0.875rem', letterSpacing: '-0.01em', borderRadius: '12px', px: 3, minWidth: { xs: 132, sm: 148 }, minHeight: 44, justifyContent: 'center', whiteSpace: 'nowrap', textTransform: 'none', boxShadow: (t: any) => `0 2px 8px ${t.palette.primary.main}30` }}
           >
             {meetingCreating ? t('meeting.creating', '创建中…') : meetingDialogMode === "create" ? t('meeting.startNow', '开始会议') : t('meeting.joinNow', '加入会议')}
           </Button>
         </DialogActions>
+          </>
+        )}
       </Dialog>
+
+      <MeetingCreateDialog
+        open={meetingDialogOpen}
+        mode={meetingDialogMode}
+        creating={meetingCreating}
+        createdMeeting={createdMeeting}
+        meetingTitle={meetingTitleInput}
+        meetingRoomId={meetingRoomIdInput}
+        inviteLink={createdInviteLink}
+        copied={copied}
+        onClose={closeMeetingFlow}
+        onConfirm={confirmMeeting}
+        onEnter={enterCreatedMeeting}
+        onCopy={copyText}
+        onTitleChange={setMeetingTitleInput}
+        onRoomIdChange={setMeetingRoomIdInput}
+      />
 
       <Dialog
         open={openDialog}
@@ -2264,18 +2433,23 @@ const Share = observer(() => {
 });
 
 
+const SYSTEM_FONT_FAMILY = '-apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", Inter, ui-sans-serif, system-ui, sans-serif';
+
 const themes = {
   light: createTheme({
+    typography: { fontFamily: SYSTEM_FONT_FAMILY },
     palette: {
       mode: 'light',
     },
   }),
   dark: createTheme({
+    typography: { fontFamily: SYSTEM_FONT_FAMILY },
     palette: {
       mode: 'dark',
     },
   }),
   blue: createTheme({
+    typography: { fontFamily: SYSTEM_FONT_FAMILY },
     palette: {
       mode: 'light',
       primary: { main: '#1976d2' },
@@ -2287,6 +2461,7 @@ const themes = {
     },
   }),
   green: createTheme({
+    typography: { fontFamily: SYSTEM_FONT_FAMILY },
     palette: {
       mode: 'light',
       primary: { main: '#388e3c' },
@@ -2298,6 +2473,7 @@ const themes = {
     },
   }),
   sunset: createTheme({
+    typography: { fontFamily: SYSTEM_FONT_FAMILY },
     palette: {
       mode: 'light',
       primary: { main: '#f57c00' },
@@ -2309,6 +2485,7 @@ const themes = {
     },
   }),
   coolGray: createTheme({
+    typography: { fontFamily: SYSTEM_FONT_FAMILY },
     palette: {
       mode: 'dark',
       primary: { main: '#90a4ae' },

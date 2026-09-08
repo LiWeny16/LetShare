@@ -69,20 +69,21 @@ export class PeerManager {
   peer.ondatachannel = (event) => {
    this.rtc.setupDataChannel(event.channel, id);
   };
-  peer.onconnectionstatechange = () => {
-   console.debug(`[CONNECT] ${id} 状态:`, peer.connectionState);
+   peer.onconnectionstatechange = () => {
+    console.debug(`[CONNECT] ${id} 状态:`, peer.connectionState);
 
-   if (peer.connectionState === "connected") {
-    console.debug(`[CONNECT] ${id} 连接成功，取消超时`);
-    const user = this.rtc.userList.get(id);
-    if (user) {
-     // 标记该用户曾经成功建立过P2P连接
-     user.status = "connected";
-     user.hadP2PConnection = true;
-     this.rtc.userList.set(id, user);
+    if (peer.connectionState === "connected") {
+     console.debug(`[CONNECT] ${id} ICE connected，取消超时`);
+     // 3.8.2：ICE connected ≠ P2P 可用。用户状态保持 connecting，
+     // 等 DataChannel open + probe 双确认（colabLib.startChannelVerification）
+     // 才升级 connected —— 否则会把「ICE 通了但 SCTP 数据不通」显示成 P2P 成功。
+     const user = this.rtc.userList.get(id);
+     if (user && user.status !== "connected") {
+      user.status = "connecting";
+      this.rtc.userList.set(id, user);
+     }
+     clearTimeout(this.rtc.connectionTimeouts.get(id));
     }
-    clearTimeout(this.rtc.connectionTimeouts.get(id));
-   }
 
    if (["failed", "disconnected", "closed"].includes(peer.connectionState)) {
     console.warn(`[CONNECT] ${id} 连接失败或断开`);

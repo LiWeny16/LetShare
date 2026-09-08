@@ -13,7 +13,7 @@ import { mock } from "node:test";
 
 import { CallManager, turnRefreshDelayMs, type CallManagerDeps } from "../src/app/libs/call/callManager";
 import {
-  buildInvite, buildAccept, buildBye, buildDecline, buildSdp, buildIce,
+  buildInvite, buildBye, buildDecline, buildSdp, buildIce,
   type CallByePayload,
 } from "../src/app/libs/call/callSignaling";
 import type { TurnCredentialsResponse } from "../src/app/libs/connection/proUpgrade";
