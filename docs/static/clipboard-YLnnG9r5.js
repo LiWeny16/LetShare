@@ -1,0 +1,1 @@
+import{t as e}from"./share-Dtz2Fibr.js";export{e as readClipboard};
