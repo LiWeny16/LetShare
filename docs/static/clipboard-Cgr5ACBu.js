@@ -1,0 +1,1 @@
+import{t as e}from"./share-DO_rZING.js";export{e as readClipboard};
