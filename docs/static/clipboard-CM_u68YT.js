@@ -1,0 +1,1 @@
+import{t as e}from"./share-DK7ulml2.js";export{e as readClipboard};
