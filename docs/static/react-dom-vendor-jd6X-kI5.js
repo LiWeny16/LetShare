@@ -1,0 +1,1 @@
+import{t as e}from"./modulepreload-polyfill-oNGqn6W8.js";import{Mt as t}from"./excalidraw-vendor-BOBLTkx2.js";var n=e((e=>{var n=t();e.createRoot=n.createRoot,e.hydrateRoot=n.hydrateRoot}));export{n as t};
