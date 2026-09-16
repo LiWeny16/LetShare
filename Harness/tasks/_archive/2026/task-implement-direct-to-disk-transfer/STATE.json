@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "taskId": "task-implement-direct-to-disk-transfer",
+  "status": "archived",
+  "mode": "wf",
+  "tier": "WF-Full",
+  "phase": "archived",
+  "gate": "VERIFICATION-GATE",
+  "updatedAt": "2026-09-15T05:17:07.739Z",
+  "activeQuestion": null,
+  "nextAction": "No remaining acceptance work. Native save-dialog content verification is optional follow-up evidence.",
+  "acceptance": [
+    "AC-001",
+    "AC-002",
+    "AC-003",
+    "AC-004",
+    "AC-005"
+  ],
+  "queues": {
+    "ready": [],
+    "running": [],
+    "blocked": [],
+    "done": [
+      "planner",
+      "docs-research",
+      "source-map",
+      "sink-helper-tests",
+      "p2p-direct-disk-implementation",
+      "build-verification",
+      "full-frontend-tests",
+      "server-tests",
+      "relay-cdp-browser-e2e",
+      "edge-chrome-room-123-relay-e2e",
+      "edge-chrome-room-123-p2p-direct-disk-prompt-e2e",
+      "visible-edge-chrome-room-123-p2p-small-file",
+      "visible-edge-chrome-room-123-10gb-direct-save-persistence",
+      "final-review"
+    ]
+  },
+  "decisions": [
+    "Use File System Access for supported desktop browser large P2P receives.",
+    "Keep existing in-memory TransferReceiveBuffer for files within the safe limit and unsupported browsers.",
+    "Do not persist 10GB completed files into IndexedDB."
+  ],
+  "risks": [
+    "File picker must be opened from a user gesture; incoming P2P metadata arrives asynchronously, so this may require an explicit save-picker prompt before sender proceeds.",
+    "Browser support varies; unsupported browsers need clear fallback behavior.",
+    "Native File System Access save-dialog completion still needs manual confirmation if full saved-file contents evidence is required."
+  ],
+  "artifacts": [
+    "src/app/libs/connection/transferReliability.ts",
+    "src/app/libs/connection/colabLib.ts",
+    "src/components/Download.tsx",
+    "tests/p2pDirectDiskReceive.test.ts"
+  ],
+  "dispatchLedger": []
+}

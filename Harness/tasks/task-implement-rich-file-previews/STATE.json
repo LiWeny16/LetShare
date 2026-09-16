@@ -1,20 +1,41 @@
 {
   "schemaVersion": 1,
   "taskId": "task-implement-rich-file-previews",
-  "status": "active",
+  "status": "in_progress",
   "mode": "wf",
   "tier": "WF-Standard",
-  "phase": "verified",
+  "phase": "verify",
   "gate": "VERIFICATION-GATE",
-  "updatedAt": "2026-07-29T08:00:00+08:00",
+  "updatedAt": "2026-09-13T13:00:14.899Z",
   "activeQuestion": null,
   "nextAction": "Manual browser verification of PDF, MP4/WebM, .md, and multiple selected files at mobile/desktop widths. Then dispatch haiku reviewer.",
-  "acceptance": ["AC1", "AC2", "AC3", "AC4"],
+  "acceptance": [
+    "AC1",
+    "AC2",
+    "AC3",
+    "AC4"
+  ],
   "queues": {
-    "ready": ["review"],
+    "ready": [
+      "review"
+    ],
     "running": [],
     "blocked": [],
-    "done": ["source-exploration", "planning", "implement-a-filepreviewdialog", "implement-b-selectedfilestrip", "implement-c-filebubble-chatpanel", "implement-d-download", "implement-e-share", "test-writer", "typecheck", "lint", "existing-tests", "new-tests", "build"]
+    "done": [
+      "source-exploration",
+      "planning",
+      "implement-a-filepreviewdialog",
+      "implement-b-selectedfilestrip",
+      "implement-c-filebubble-chatpanel",
+      "implement-d-download",
+      "implement-e-share",
+      "test-writer",
+      "typecheck",
+      "lint",
+      "existing-tests",
+      "new-tests",
+      "build"
+    ]
   },
   "decisions": [
     "FilePreviewDialog accepts File not fileKey — decouples from FileBlobStore, works for both ChatPanel and Download",
@@ -36,5 +57,6 @@
     "src/pages/share.tsx",
     "tests/filePreview.test.ts",
     "src/app/libs/i18n/translation.ts"
-  ]
+  ],
+  "dispatchLedger": []
 }

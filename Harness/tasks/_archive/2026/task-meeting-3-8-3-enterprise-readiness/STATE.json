@@ -1,0 +1,71 @@
+{
+  "schemaVersion": 1,
+  "taskId": "task-meeting-3-8-3-enterprise-readiness",
+  "status": "archived",
+  "mode": "wf",
+  "tier": "wf-full",
+  "phase": "archived",
+  "gate": "RELEASE-VERIFIED",
+  "updatedAt": "2026-09-13T13:00:32.013Z",
+  "activeQuestion": null,
+  "nextAction": "Optional physical-device/media-permission acceptance; prejoin media handoff fix is verified and deployed as 3.8.17.",
+  "acceptance": [
+    "M-01",
+    "M-02",
+    "M-03",
+    "M-04",
+    "M-05",
+    "M-06",
+    "M-07",
+    "M-08",
+    "M-09",
+    "M-10",
+    "M-11",
+    "M-12"
+  ],
+  "queues": {
+    "ready": [
+      "optional-physical-device-acceptance"
+    ],
+    "running": [],
+    "blocked": [],
+    "done": [
+      "intent-capture",
+      "state-ownership-contract",
+      "acceptance-plan",
+      "W0-baseline-rerun",
+      "W1-red-coverage-audit",
+      "W2-backend-state-convergence",
+      "W3-identity-meeting-projection",
+      "W4-chat-files-invites",
+      "W5-responsive-visual-ux",
+      "W6-local-full-verification",
+      "10-cycle-critical-e2e",
+      "independent-read-only-review",
+      "version-bump-build-deploy",
+      "production-meeting-e2e",
+      "production-call-voice-video-e2e"
+    ]
+  },
+  "dispatchLedger": [],
+  "decisions": [
+    "Use WF-Full because the change crosses identity, WebSocket state, WebRTC media, file transfer, responsive UI and production deployment.",
+    "Global identity and low-level infrastructure are shared; Meeting lifecycle and runtime state are independently owned.",
+    "GitHub audit: retain current Go/Pion/custom signaling and reuse LiveKit/Jitsi layout/state patterns; keep Excalidraw package; do not migrate to LiveKit/mediasoup in this wave.",
+    "Do not bump or deploy until local repeated E2E and read-only review pass; this gate is now satisfied."
+  ],
+  "risks": [
+    "Dirty shared worktree contains pre-existing user/agent changes.",
+    "Interrupted parallel E2E batch has no trustworthy result and must be rerun.",
+    "A single passing E2E run is insufficient to establish media/state reliability; the critical journey now passed 10/10 cycles.",
+    "Frontend depends on newly added Meeting message types, so backend must deploy first.",
+    "Go race tests require a C compiler unavailable on this machine; run them in CI or a gcc-enabled release environment.",
+    "Local TURN is intentionally disabled; production credential endpoint and relay configuration were verified online."
+  ],
+  "artifacts": [
+    "artifacts/meeting-visual-ux-mobile.png",
+    "artifacts/meeting-visual-ux-mobile-focused.png",
+    "artifacts/meeting-settings-mobile-320.png",
+    "artifacts/meeting-attachment-received-desktop.png"
+  ]
+}

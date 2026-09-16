@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "taskId": "task-meeting-ai-minutes",
+  "status": "in_progress",
+  "mode": "direct",
+  "tier": "none",
+  "phase": "verify",
+  "gate": "VERIFICATION-GATE",
+  "updatedAt": "2026-09-13T19:10:00+08:00",
+  "activeQuestion": null,
+  "nextAction": "Complete and verify the real Whisper WASM runtime, or explicitly split it into a follow-up scope.",
+  "acceptance": ["consent", "distributed-final-segments", "browser-speech-e2e", "summary-provider-contract"],
+  "queues": { "ready": [], "running": [], "blocked": ["whisper-wasm-runtime"], "done": ["meeting-minutes-protocol", "consent-flow", "browser-speech-e2e"] },
+  "dispatchLedger": [],
+  "decisions": [],
+  "risks": ["Whisper WASM currently has model download/recommendation only; do not present it as a working transcription source."],
+  "artifacts": ["tests/e2e/meeting-ai-minutes.e2e.mts", "src/app/libs/meeting/meetingAi.ts"]
+}

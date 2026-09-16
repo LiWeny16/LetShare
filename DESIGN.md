@@ -1,32 +1,152 @@
-# LetShare AI 会议纪要设计系统
+# LetShare AI 会议纪要设计规范
 
-## 1. Visual Theme & Atmosphere
+> 定调：AI 纪要是一份正在自动生长的专业会议文档，不是展示模型能力的 AI 控制台。
 
-Airy, calm, and work-focused. The meeting surface remains white and quiet; AI configuration is presented as a focused rounded workspace rather than a technical settings page. The primary action is blue and obvious, while provider and privacy details stay secondary.
+## 1. 产品目标
 
-## 2. Color Palette & Roles
+会议舞台优先，纪要安静地工作。用户在会中只需要知道当前议题、刚刚形成的结论和自己要做的事；需要完整回顾时，再主动进入文档工作台。
 
-- LetShare Blue (`#1677FF`): primary action, active tab, focus ring, and live status.
-- Ink (`#172033`): headings and important meeting content.
-- Mist (`#F4F7FB`): page canvas and non-primary grouping surface.
-- Soft Card (`#EEF4FC`): provider cards and meeting-pass style information panels.
-- Quiet Gray (`#687386`): helper text, timestamps, and unavailable states.
-- Success Green (`#2E7D32`): consented, connected, and completed states.
-- Warning Amber (`#C88700`): network-backed or quota-limited states.
-- Danger Red (`#D32F2F`): permission, provider, or quota failures.
+AI 负责整理内容，不抢夺会议控制权，不暴露 JSON、endpoint、协议实现或服务商技术细节。
 
-## 3. Typography Rules
+## 2. 页面模式
 
-Use the existing system stack: `-apple-system`, `BlinkMacSystemFont`, `SF Pro Text`, `Inter`, and `system-ui`. Headings use 700–800 weight with balanced wrapping; body text uses 400–600 weight. Dynamic timers and quotas use tabular numerals.
+### 2.1 会议舞台模式
 
-## 4. Component Stylings
+- 舞台只负责视频、屏幕共享和白板。
+- 底部「AI 会议纪要」打开右侧面板，不改变舞台布局。
+- 右侧面板可以切换聊天、成员和 AI 纪要。
 
-- Buttons: generously rounded (`12px`), 44px minimum height, blue only for the primary action, and a restrained `scale(0.96)` press state.
-- Cards: 16–24px outer radius with concentric inner radii, 1px structural borders, and whisper-soft shadows.
-- Inputs: white or `#F7F9FC` surfaces, quiet borders, clear focus ring, and no layout shift while loading.
-- Provider marks: one compact, colored mark per provider with `currentColor` icon treatment where available; never use unlabeled empty icon buttons.
-- Status: pair every color with text such as “已连接”, “等待授权”, or “已停止”.
+### 2.2 右侧速览模式
 
-## 5. Layout Principles
+右侧 AI 面板只回答五个问题：
 
-The dialog uses a stable two-column desktop grid: live transcript and summary on the left, configuration and consent on the right; it collapses to one column on mobile. The bottom action row is sticky inside the dialog. API keys are clearly marked session-only and are never shown as persisted settings.
+1. 现在讨论什么？
+2. 到目前为止形成了什么共识？
+3. 刚刚新增了哪些决策、行动项和待确认问题？
+4. 最近的原始发言是什么？
+5. 如何进入完整纪要？
+
+允许的内容：运行状态、当前议题、会议进行至今、最近变化、最新转写、查看完整纪要、模型设置和导出。
+
+禁止的内容：完整脉络图、发言分布统计、空统计卡、完整逐字稿、Base URL、JSON 说明、Logo 墙和模型技术介绍。
+
+### 2.3 完整纪要模式
+
+只有点击「查看完整纪要」或展开按钮后，纪要才占用舞台。
+
+- 左侧：会议脉络和四个文档入口。
+- 中间：概要、时间线、结构图、逐字稿。
+- 右侧：自动恢复聊天/成员面板，不重复显示 AI 纪要。
+- 顶部只保留一个关闭/返回会议动作；停止记录是独立动作。
+- 移动端隐藏左侧导航，使用顶部 Tabs；所有内容不产生横向滚动。
+
+### 2.4 配置模式
+
+模型配置是右侧 AI 面板内的子页面，不使用居中大弹窗、不使用长期常驻的设置抽屉。
+
+- 主持人配置整场纪要生成模型。
+- 成员只配置本机转写来源、语言和本机密钥。
+- 服务商使用下拉选择；只有选择自定义时才展示 Base URL 和兼容协议。
+- Mimo 只展示标准 API 和 Token Plan 两个允许的地址选项。
+- 主按钮叫「测试并连接」或「保存本机设置」，不要使用含义不清的「启用会议纪要」。
+
+## 3. 状态机与边界
+
+右侧 AI 面板至少支持以下状态：
+
+| 状态 | 用户看到的内容 | 可执行动作 |
+| --- | --- | --- |
+| 未连接且未转写 | 尚未开始记录；连接后整理重点 | 连接模型、仅开始实时转写 |
+| 仅实时转写 | 最新转写；提示连接模型后可生成重点 | 连接模型、查看完整逐字稿 |
+| 已连接未开始 | 准备就绪；说明开始后会整理什么 | 开始记录、模型设置 |
+| 正在记录 | 当前议题、会议进行至今、最近变化 | 停止记录、查看完整纪要 |
+| 正在生成 | 正在整理最终纪要 | 等待，不重复发起请求 |
+| 已完成 | 纪要已生成、可查看和导出 | 查看完整纪要、导出 |
+| 连接失败 | 真实错误原因和下一步 | 返回修改、重新测试 |
+
+边界规则：
+
+- 模型未连接不得阻塞本机实时转写。
+- 主持人才能开始/停止整场纪要和生成最终摘要。
+- 成员只能贡献自己的最终转写片段，并可以关闭本机转写。
+- 没有内容时不用虚构会议议题、发言人、时间段或统计数字。
+- 任何请求失败都保留当前转写，不能让舞台、聊天或纪要白屏。
+- 进入完整纪要后，会议右侧不能同时出现第二份 AI 纪要。
+
+## 4. 信息架构
+
+```text
+会议舞台
+├── 聊天
+├── 成员
+└── AI 纪要（会中速览）
+    ├── 当前议题
+    ├── 会议进行至今
+    ├── 最近决策 / 行动 / 待确认
+    ├── 最新转写
+    ├── 查看完整纪要
+    └── ··· 模型设置 / 导出 / 数据说明
+
+完整纪要
+├── 概要
+├── 时间线
+├── 结构图
+└── 逐字稿
+```
+
+## 5. 文案规范
+
+优先描述用户结果：
+
+- 「实时整理会议重点」
+- 「密钥只在当前标签页使用」
+- 「点击时间回看原话」
+- 「连接失败，请检查密钥或服务地址」
+
+删除或隐藏这些面向开发者的文案：
+
+- JSON 输出
+- 前端结构化渲染
+- AI 总结后端
+- endpoint、server unique ID、Base URL（除非在高级设置）
+- 服务商技术 Logo 墙
+
+## 6. 视觉规范
+
+- 页面背景：`#F6F8FB`
+- 内容背景：`#FFFFFF`
+- 主色：`#1677FF`
+- 正文：`#172033`
+- 次级文字：`#667085`
+- 边框：`#E4E7EC`
+- 语义色：确认 `#16805B`、行动 `#A66A00`、待确认 `#667085`、错误 `#D92D20`
+- 圆角：6 / 8 / 12px；避免大面积 16–24px 气泡化卡片
+- 间距：4 / 8 / 12 / 16 / 24 / 32px
+- 禁止渐变、玻璃拟态和大面积阴影
+- 星光图标全页面最多出现两次，语义信息使用语义图标
+- 同一内容区域最多一层卡片；决策、行动项和转写优先用行式布局
+- 所有图标按钮必须有 aria-label 和 Tooltip
+- 主操作最小触控高度 40px；手机端避免密集的并排按钮
+
+## 7. 组件职责
+
+| 区域 | 负责 | 不负责 |
+| --- | --- | --- |
+| 会议舞台 | 视频、共享、白板 | 完整纪要 |
+| 右侧 AI 栏 | 会中速览、最新变化、模型入口 | 复杂图表、完整配置 |
+| 完整纪要 | 总结、时间线、结构图、逐字稿 | 重复显示 AI 侧栏 |
+| 模型设置 | 服务商、密钥、模型、协议 | 开始/停止会议记录 |
+| 会后页面 | 导出、回顾、任务闭环 | 会中控制 |
+
+## 8. 验收标准
+
+- 用户 3 秒内能找到当前议题。
+- 用户 5 秒内能找到最近决策和行动项。
+- 模型未连接时仍能开始实时转写。
+- 连接模型最多需要服务商、模型、密钥三个主要输入。
+- 右侧栏没有横向滚动，且在手机上仍可操作。
+- 完整纪要展开时右侧自动恢复聊天/成员，不出现重复 AI 内容。
+- 所有空状态都简短、可行动，不使用大面积 Demo 式插画。
+- AI 结论和行动项必须能回到对应的原始发言或时间节点。
+- 连接失败、模型无响应、成员拒绝转写时，会议舞台和聊天仍正常工作。
+- E2E 覆盖：仅转写、配置模型、主持人控制、成员同意、停止后生成、展开/关闭完整纪要。

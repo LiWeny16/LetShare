@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "taskId": "task-integrate-meeting-frontend",
+  "status": "archived",
+  "mode": "direct",
+  "tier": "none",
+  "phase": "archived",
+  "gate": "RELEASE-VERIFIED",
+  "updatedAt": "2026-09-13T13:00:32.010Z",
+  "activeQuestion": null,
+  "nextAction": "Closed; meeting route, SFU media, prejoin handoff, and production meeting E2E are verified.",
+  "acceptance": [
+    "compile",
+    "build",
+    "meeting-flow",
+    "production-media"
+  ],
+  "queues": {
+    "ready": [],
+    "running": [],
+    "blocked": [],
+    "done": [
+      "frontend-integration",
+      "local-e2e",
+      "production-e2e"
+    ]
+  },
+  "dispatchLedger": [],
+  "decisions": [],
+  "risks": [],
+  "artifacts": [
+    "tests/e2e/meeting-p0.e2e.mts",
+    "tests/e2e/meeting-prejoin.e2e.mts",
+    "tests/e2e/meeting-media-visibility.e2e.mts"
+  ]
+}

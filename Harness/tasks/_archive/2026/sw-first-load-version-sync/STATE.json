@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "taskId": "sw-first-load-version-sync",
+  "status": "archived",
+  "mode": "direct",
+  "tier": "none",
+  "phase": "archived",
+  "gate": "CLOSEOUT",
+  "updatedAt": "2026-09-13T13:00:31.998Z",
+  "activeQuestion": null,
+  "nextAction": "Closed; version sentinel, coherent docs build and live 3.8.17 artifact are verified.",
+  "acceptance": [],
+  "queues": {
+    "ready": [],
+    "running": [],
+    "blocked": [],
+    "done": []
+  },
+  "dispatchLedger": [],
+  "decisions": [],
+  "risks": [],
+  "artifacts": []
+}

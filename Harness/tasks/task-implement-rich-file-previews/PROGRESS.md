@@ -2,6 +2,7 @@
 
 ## Status
 
+- Phase: Validation
 - **Phase**: intake-exploration
 - **Gate**: PLAN-GATE
 - **Tier**: WF-Standard
@@ -24,3 +25,4 @@ Dispatched 5 haiku codebase-explorers in parallel:
 | Time | Event |
 |------|-------|
 | start | 5x haiku explorers dispatched. Waiting for results. |
+- Current disposition (2026-09-13): implementation and source/unit/build gates are complete, but the task remains open for real browser verification of PDF, MP4/WebM, Markdown, and multi-file selection at desktop/mobile widths.

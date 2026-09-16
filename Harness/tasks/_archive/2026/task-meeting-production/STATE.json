@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "taskId": "task-meeting-production",
+  "status": "archived",
+  "mode": "direct",
+  "tier": "none",
+  "phase": "archived",
+  "gate": null,
+  "updatedAt": "2026-09-15T05:17:07.803Z",
+  "activeQuestion": null,
+  "nextAction": "None; task closed after production verification.",
+  "acceptance": [],
+  "queues": {
+    "ready": [],
+    "running": [],
+    "blocked": [],
+    "done": []
+  },
+  "dispatchLedger": [],
+  "decisions": [],
+  "risks": [],
+  "artifacts": []
+}

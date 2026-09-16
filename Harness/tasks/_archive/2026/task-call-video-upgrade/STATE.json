@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "taskId": "task-call-video-upgrade",
+  "status": "archived",
+  "mode": "direct",
+  "tier": "none",
+  "phase": "archived",
+  "gate": "RELEASE-VERIFIED",
+  "updatedAt": "2026-09-13T13:00:32.002Z",
+  "activeQuestion": null,
+  "nextAction": "Closed; video capture, codec/bitrate controls, and production voice/video regression are verified.",
+  "acceptance": [
+    "video-capture",
+    "video-controls",
+    "video-regression"
+  ],
+  "queues": {
+    "ready": [],
+    "running": [],
+    "blocked": [],
+    "done": [
+      "implementation",
+      "unit-tests",
+      "build",
+      "production-call-e2e"
+    ]
+  },
+  "dispatchLedger": [],
+  "decisions": [],
+  "risks": [
+    "Physical-device acceptance is optional follow-up; fake-device production E2E passed with real RTP/ontrack."
+  ],
+  "artifacts": [
+    "tests/videoCapture.test.ts",
+    "tests/e2e/call-prod-video.test.ts"
+  ]
+}

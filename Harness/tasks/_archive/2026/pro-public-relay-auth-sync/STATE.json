@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "taskId": "pro-public-relay-auth-sync",
+  "status": "archived",
+  "mode": "direct",
+  "tier": "none",
+  "phase": "archived",
+  "gate": "CLOSEOUT",
+  "updatedAt": "2026-09-13T13:00:31.991Z",
+  "activeQuestion": null,
+  "nextAction": "Closed for the custom public-relay scope; provider-mode and expired-token UX remain future hardening.",
+  "acceptance": [],
+  "queues": {
+    "ready": [],
+    "running": [],
+    "blocked": [],
+    "done": []
+  },
+  "dispatchLedger": [],
+  "decisions": [],
+  "risks": [],
+  "artifacts": []
+}
