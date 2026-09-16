@@ -2,6 +2,7 @@
 import { validateRoomName } from "../../tools/tools";
 import settingsStore from "../../mobx/mobx";
 import { getProToken } from "../proUpgrade";
+import { resolveCustomServerAuthToken } from "../publicServerAuth";
 
 export class CustomConnectionProvider implements IConnectionProvider {
   private ws: WebSocket | null = null;
@@ -12,25 +13,33 @@ export class CustomConnectionProvider implements IConnectionProvider {
   private binaryCallback: ((data: ArrayBuffer) => void) | null = null;
   private disconnectedCallback: ((reason?: string) => void) | null = null;
   private isSubscribed: boolean = false;
+  private transportOnly: boolean = false;
 
   constructor(config: ConnectionConfig) {
     this.config = config;
   }
 
-  async connect(roomId: string): Promise<boolean> {
-    if (!validateRoomName(roomId).isValid) {
+  async connect(roomId: string, options?: { transportOnly?: boolean }): Promise<boolean> {
+    const transportOnly = options?.transportOnly === true;
+    if (!transportOnly && !validateRoomName(roomId).isValid) {
       return false;
     }
 
     try {
-      const authToken = settingsStore.get("authToken");
+      const serverUrl = String(settingsStore.get("customServerUrl") || "").trim();
+      const configuredAuthToken = settingsStore.get("authToken");
+      const authToken = resolveCustomServerAuthToken(serverUrl, configuredAuthToken);
       if (!authToken) {
         console.error(" 缺少认证Token，请在设置中配置");
         return false;
       }
 
-      const serverUrl = settingsStore.get("customServerUrl");
-      let url = `${serverUrl}?token=${authToken}&userId=${this.config.uniqId}`;
+      const params = new URLSearchParams({
+        token: authToken,
+        uniqId: this.config.uniqId,
+        userName: this.config.userName,
+      });
+      let url = `${serverUrl}?${params.toString()}`;
       const proToken = getProToken();
       if (proToken) {
         url += `&pro_token=${encodeURIComponent(proToken)}`;
@@ -38,6 +47,7 @@ export class CustomConnectionProvider implements IConnectionProvider {
 
       this.ws = new WebSocket(url);
       this.ws.binaryType = "arraybuffer";
+      this.transportOnly = transportOnly;
 
       return new Promise((resolve, reject) => {
         if (!this.ws) {
@@ -52,9 +62,13 @@ export class CustomConnectionProvider implements IConnectionProvider {
         this.ws.onopen = async () => {
           clearTimeout(timeout);
           console.debug(" 已连接自定义服务器");
-          
-          // 连接成功后订阅房间
-          await this.subscribeToRoom(roomId);
+
+          // Meeting uses the same authenticated transport but owns its room
+          // membership separately. Do not subscribe the ordinary LetShare
+          // room when the meeting route was opened directly.
+          if (!transportOnly) {
+            await this.subscribeToRoom(roomId);
+          }
           resolve(true);
         };
 
@@ -124,11 +138,13 @@ export class CustomConnectionProvider implements IConnectionProvider {
         this.ws = null;
         this.isSubscribed = false;
         this.currentRoomId = null;
+        this.transportOnly = false;
       }
       return;
     }
     this.isSubscribed = false;
     this.currentRoomId = null;
+    this.transportOnly = false;
   }
 
   broadcastSignal(signal: any): void {
@@ -136,6 +152,7 @@ export class CustomConnectionProvider implements IConnectionProvider {
       const fullSignal = {
         ...signal,
         from: this.config.uniqId,
+        userName: this.config.userName,
       };
 
       // 构建发布消息
@@ -159,7 +176,7 @@ export class CustomConnectionProvider implements IConnectionProvider {
   }
 
   isConnected(): boolean {
-    return this.ws !== null && this.ws.readyState === WebSocket.OPEN && this.isSubscribed;
+    return this.ws !== null && this.ws.readyState === WebSocket.OPEN && (this.isSubscribed || this.transportOnly);
   }
 
   async switchRoom(newRoomId: string): Promise<void> {
@@ -212,6 +229,10 @@ export class CustomConnectionProvider implements IConnectionProvider {
     return this.config.uniqId;
   }
 
+  setUserName(userName: string): void {
+    this.config.userName = userName;
+  }
+
   private async subscribeToRoom(roomId: string): Promise<void> {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       throw new Error("WebSocket未连接");
@@ -237,6 +258,7 @@ export class CustomConnectionProvider implements IConnectionProvider {
             clearTimeout(timeout);
             this.currentRoomId = roomId;
             this.isSubscribed = true;
+            this.transportOnly = false;
             
             // 恢复原始消息处理器
             if (this.ws === ws) {
@@ -294,6 +316,7 @@ export class CustomConnectionProvider implements IConnectionProvider {
 
     this.isSubscribed = false;
     this.currentRoomId = null;
+    this.transportOnly = false;
   }
 
   private handleMessage(event: MessageEvent): void {

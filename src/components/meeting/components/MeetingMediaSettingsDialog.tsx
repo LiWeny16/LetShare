@@ -16,6 +16,8 @@ import {
   Switch,
   Slider,
   Typography,
+  useMediaQuery,
+  useTheme,
 } from "@mui/material";
 import MicIcon from "@mui/icons-material/Mic";
 import VideocamIcon from "@mui/icons-material/Videocam";
@@ -53,13 +55,34 @@ export interface MeetingMediaSettingsDialogProps {
 
 function SettingRow({ icon, title, description, children }: { icon: React.ReactNode; title: string; description?: string; children: React.ReactNode }) {
   return (
-    <Box sx={{ display: "flex", alignItems: "center", gap: 1.25, px: 1.5, py: 1.25 }}>
+    <Box
+      sx={{
+        display: "grid",
+        gridTemplateColumns: { xs: "34px minmax(0, 1fr)", sm: "34px minmax(0, 1fr) auto" },
+        alignItems: "center",
+        columnGap: 1.25,
+        rowGap: { xs: 0.75, sm: 0 },
+        px: { xs: 1.1, sm: 1.5 },
+        py: 1.25,
+      }}
+    >
       <Box sx={{ width: 34, height: 34, borderRadius: 2, display: "grid", placeItems: "center", color: "text.secondary", bgcolor: "action.hover", flexShrink: 0 }}>{icon}</Box>
       <Box sx={{ minWidth: 0, flex: 1 }}>
         <Typography sx={{ fontSize: "0.86rem", fontWeight: 700 }}>{title}</Typography>
         {description && <Typography sx={{ mt: 0.2, color: "text.secondary", fontSize: "0.72rem", lineHeight: 1.4 }}>{description}</Typography>}
       </Box>
-      {children}
+      <Box
+        sx={{
+          gridColumn: { xs: "1 / -1", sm: "auto" },
+          minWidth: 0,
+          pl: { xs: 5.25, sm: 0 },
+          display: "flex",
+          alignItems: "center",
+          justifyContent: { xs: "flex-start", sm: "flex-end" },
+        }}
+      >
+        {children}
+      </Box>
     </Box>
   );
 }
@@ -75,6 +98,8 @@ function Group({ title, children }: { title: string; children: React.ReactNode }
 
 export default function MeetingMediaSettingsDialog({ open, onClose, onMediaSettingsChanged, onSettingsChanged }: MeetingMediaSettingsDialogProps) {
   const { t } = useTranslation();
+  const theme = useTheme();
+  const isMobile = useMediaQuery(theme.breakpoints.down("sm"));
   const [, redraw] = useState(0);
   const [devices, setDevices] = useState<DeviceLists>({ mics: [], speakers: [], cameras: [] });
   const [applying, setApplying] = useState(false);
@@ -140,12 +165,23 @@ export default function MeetingMediaSettingsDialog({ open, onClose, onMediaSetti
       open={open}
       onClose={onClose}
       fullWidth
+      fullScreen={isMobile}
       maxWidth="sm"
       scroll="paper"
       data-testid="meeting-media-settings-dialog"
-      PaperProps={{ sx: { borderRadius: 4, m: 1.5, maxHeight: "min(860px, calc(100vh - 32px))" } }}
+      PaperProps={{
+        sx: {
+          display: "flex",
+          flexDirection: "column",
+          borderRadius: { xs: 0, sm: 4 },
+          m: { xs: 0, sm: 1.5 },
+          maxHeight: { xs: "100dvh", sm: "calc(100dvh - 32px)" },
+          bgcolor: "background.paper",
+          backgroundImage: "none",
+        },
+      }}
     >
-      <DialogTitle sx={{ pb: 1.2 }}>
+      <DialogTitle sx={{ pb: 1.2, bgcolor: "background.paper", flexShrink: 0 }}>
         <Stack direction="row" alignItems="center" spacing={1.25}>
           <Box sx={{ width: 38, height: 38, borderRadius: 2.5, display: "grid", placeItems: "center", color: "primary.main", bgcolor: "primary.main", backgroundColor: "action.selected" }}><SettingsSuggestIcon /></Box>
           <Box>
@@ -154,7 +190,32 @@ export default function MeetingMediaSettingsDialog({ open, onClose, onMediaSetti
           </Box>
         </Stack>
       </DialogTitle>
-      <DialogContent dividers sx={{ display: "flex", flexDirection: "column", gap: 2, bgcolor: "background.default" }}>
+      <DialogContent
+        dividers
+        sx={{
+          display: "flex",
+          flexDirection: "column",
+          gap: 2,
+          bgcolor: "background.default",
+          minHeight: 0,
+          overflowY: "auto",
+          overscrollBehavior: "contain",
+          WebkitOverflowScrolling: "touch",
+        }}
+      >
+        <Paper elevation={0} sx={{ position: "sticky", top: 0, zIndex: 3, border: "1px solid", borderColor: "divider", borderRadius: 3, overflow: "hidden", bgcolor: "background.paper" }}>
+          <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ px: 1.5, pt: 1.15 }}>
+            <Box>
+              <Typography sx={{ fontSize: "0.82rem", fontWeight: 800 }}>{t("meeting.mediaTuning", "媒体调优")}</Typography>
+              <Typography sx={{ mt: 0.2, color: "text.secondary", fontSize: "0.7rem" }}>{t("meeting.mediaTuningHint", "按场景快速切换音频处理或视频画质、编码器与效果")}</Typography>
+            </Box>
+            {applying && <Chip color="primary" size="small" label={t("meeting.applyingMedia", "正在应用媒体设置…")} />}
+          </Stack>
+          <Stack direction="row" spacing={0.75} sx={{ mt: 1, px: 1, pb: 1 }}>
+            <Chip icon={<MicIcon sx={{ fontSize: 17 }} />} label={t("meeting.settingsAudioTab", "音频处理")} size="small" sx={{ flex: 1, justifyContent: "flex-start", fontWeight: 750 }} />
+            <Chip icon={<VideocamIcon sx={{ fontSize: 17 }} />} label={t("meeting.settingsVideoTab", "视频画面")} size="small" sx={{ flex: 1, justifyContent: "flex-start", fontWeight: 750 }} />
+          </Stack>
+        </Paper>
         <Group title={t("meeting.settingsDefaults", "加入会议默认状态")}>
           <SettingRow icon={<VideocamIcon fontSize="small" />} title={t("meeting.defaultCamera", "默认开启摄像头")} description={t("meeting.defaultCameraHint", "新加入会议时的初始状态，可在底部随时开启")}>
             <Switch data-testid="meeting-default-camera" checked={cameraDefault} onChange={(event) => void update("meetingCameraDefaultOn", event.target.checked)} />
@@ -175,7 +236,7 @@ export default function MeetingMediaSettingsDialog({ open, onClose, onMediaSetti
                 max={200}
                 step={1}
                 aria-label={t("call.volume", "扬声器音量")}
-                sx={{ width: 130, mr: 0.5 }}
+                sx={{ width: { xs: "100%", sm: 130 }, mr: { xs: 0, sm: 0.5 } }}
                 onChange={(_, value) => void update("speakerVolume", (Array.isArray(value) ? value[0] : value) / 100)}
               />
             </SettingRow>
@@ -247,13 +308,13 @@ export default function MeetingMediaSettingsDialog({ open, onClose, onMediaSetti
             </FormControl>
             <FormControl fullWidth size="small">
               <InputLabel>{t("call.videoBitrate", "码率上限")}</InputLabel>
-              <Select value={bitrate} label={t("call.videoBitrate", "码率上限")} disabled={applying} onChange={(event) => void update("videoMaxBitrate", String(event.target.value) as VideoBitrateSetting, true)}>
+              <Select data-testid="meeting-video-bitrate" value={bitrate} label={t("call.videoBitrate", "码率上限")} disabled={applying} onChange={(event) => void update("videoMaxBitrate", String(event.target.value) as VideoBitrateSetting, true)}>
                 {VIDEO_BITRATE_OPTIONS.map((value) => <MenuItem key={value} value={value}>{value === "auto" ? t("call.bitrateAuto", "自动") : `${value} kbps`}</MenuItem>)}
               </Select>
             </FormControl>
             <FormControl fullWidth size="small">
               <InputLabel>{t("call.videoDegradation", "网络降级策略")}</InputLabel>
-              <Select value={degradation} label={t("call.videoDegradation", "网络降级策略")} disabled={applying} onChange={(event) => void update("videoDegradation", String(event.target.value) as VideoDegradationSetting, true)}>
+              <Select data-testid="meeting-video-degradation" value={degradation} label={t("call.videoDegradation", "网络降级策略")} disabled={applying} onChange={(event) => void update("videoDegradation", String(event.target.value) as VideoDegradationSetting, true)}>
                 <MenuItem value="maintain-framerate">{t("call.degradeFrame", "帧率优先")}</MenuItem>
                 <MenuItem value="balanced">{t("call.degradeBalanced", "自动平衡")}</MenuItem>
                 <MenuItem value="maintain-resolution">{t("call.degradeResolution", "分辨率优先")}</MenuItem>
@@ -261,14 +322,14 @@ export default function MeetingMediaSettingsDialog({ open, onClose, onMediaSetti
             </FormControl>
             <FormControl fullWidth size="small">
               <InputLabel>{t("call.videoBackground", "视频背景")}</InputLabel>
-              <Select value={background} label={t("call.videoBackground", "视频背景")} disabled={applying} onChange={(event) => void update("videoBackground", String(event.target.value) as VideoBackgroundSetting, true)}>
+              <Select data-testid="meeting-video-background" value={background} label={t("call.videoBackground", "视频背景")} disabled={applying} onChange={(event) => void update("videoBackground", String(event.target.value) as VideoBackgroundSetting, true)}>
                 <MenuItem value="off">{t("call.bgOff", "原画")}</MenuItem>
                 <MenuItem value="blur">{t("call.bgBlur", "背景模糊")}</MenuItem>
               </Select>
             </FormControl>
             <FormControl fullWidth size="small">
               <InputLabel>{t("call.videoCodec", "视频编码器")}</InputLabel>
-              <Select value={codec} label={t("call.videoCodec", "视频编码器")} onChange={(event) => void update("videoCodecPriority", String(event.target.value) as VideoCodecPrioritySetting)}>
+              <Select data-testid="meeting-video-codec" value={codec} label={t("call.videoCodec", "视频编码器")} onChange={(event) => void update("videoCodecPriority", String(event.target.value) as VideoCodecPrioritySetting)}>
                 {VIDEO_CODEC_OPTIONS.map((value) => <MenuItem key={value} value={value}>{value === "auto" ? t("call.codecAuto", "自动") : value.toUpperCase()}</MenuItem>)}
               </Select>
             </FormControl>
@@ -278,9 +339,8 @@ export default function MeetingMediaSettingsDialog({ open, onClose, onMediaSetti
             </Stack>
           </Box>
         </Group>
-        {applying && <Chip color="primary" size="small" label={t("meeting.applyingMedia", "正在应用媒体设置…")} sx={{ alignSelf: "flex-start" }} />}
       </DialogContent>
-      <DialogActions sx={{ px: 3, py: 1.75 }}>
+      <DialogActions sx={{ px: { xs: 1.5, sm: 3 }, py: 1.5, gap: 1, flexShrink: 0 }}>
         <Typography sx={{ mr: "auto", color: "text.secondary", fontSize: "0.7rem" }}>{t("meeting.settingsSaved", "设置会自动保存")}</Typography>
         <Box component="button" type="button" onClick={onClose} sx={{ border: 0, borderRadius: 2.5, px: 2, py: 1, bgcolor: "primary.main", color: "primary.contrastText", font: "inherit", fontWeight: 750, cursor: "pointer" }}>{t("meeting.done", "完成")}</Box>
       </DialogActions>

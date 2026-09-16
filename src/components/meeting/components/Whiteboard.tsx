@@ -19,7 +19,6 @@ import AutoFixNormalIcon from "@mui/icons-material/AutoFixNormal";
 import UndoIcon from "@mui/icons-material/Undo";
 import RedoIcon from "@mui/icons-material/Redo";
 import DeleteSweepIcon from "@mui/icons-material/DeleteSweep";
-import CloseIcon from "@mui/icons-material/Close";
 import { useTranslation } from "react-i18next";
 import { meetingManager } from "@App/libs/meeting/meetingManager";
 import {
@@ -34,7 +33,7 @@ import {
 const PALETTE = ["#ff4d4f", "#faad14", "#52c41a", "#1677ff", "#ffffff"];
 const CHUNK_MS = 70;
 
-export function Whiteboard({ onClose, canClose = true }: { onClose: () => void; canClose?: boolean }) {
+export function Whiteboard(_: { onClose?: () => void; canClose?: boolean }) {
   const { t } = useTranslation();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
@@ -442,17 +441,6 @@ export function Whiteboard({ onClose, canClose = true }: { onClose: () => void; 
             <DeleteSweepIcon sx={{ fontSize: 17 }} />
           </IconButton>
         </Tooltip>
-        {canClose && (
-          <Tooltip title={t("meeting.wbClose", "关闭画板")}>
-            <IconButton
-              size="small" onClick={onClose}
-              aria-label={t("meeting.wbClose", "关闭画板")}
-              sx={{ color: "#415168", width: 40, height: 40 }}
-            >
-              <CloseIcon sx={{ fontSize: 17 }} />
-            </IconButton>
-          </Tooltip>
-        )}
       </Paper>
       <Box sx={{ position: "absolute", bottom: 8, left: 14 }}>
         <Typography sx={{ color: "#718096", fontSize: "0.68rem" }}>

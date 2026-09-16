@@ -1,6 +1,6 @@
 /** Meeting participant list with host actions and a direct private-chat entry. */
-import { useState } from "react";
-import { alpha, Avatar, Button, Divider, IconButton, List, ListItem, ListItemAvatar, ListItemText, Stack, Tooltip, Typography, useTheme } from "@mui/material";
+import { useRef, useState } from "react";
+import { alpha, Avatar, Button, Divider, IconButton, List, ListItem, ListItemAvatar, ListItemText, Menu, MenuItem, Stack, Tooltip, Typography, useTheme } from "@mui/material";
 import ChatBubbleOutlineIcon from "@mui/icons-material/ChatBubbleOutline";
 import MicOffIcon from "@mui/icons-material/MicOff";
 import CampaignIcon from "@mui/icons-material/Campaign";
@@ -23,10 +23,25 @@ export function ParticipantsPanel({
   const { t } = useTranslation();
   const theme = useTheme();
   const [kicking, setKicking] = useState<string | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ left: number; top: number; uniqId: string; name: string } | null>(null);
+  const longPressTimer = useRef<number | null>(null);
   const selfId = realTimeColab.getUniqId() ?? "";
   const amHost = !!state.hostId && state.hostId === selfId;
 
-  const rows = [{ uniqId: selfId }, ...state.members].sort((a, b) => {
+  const clearLongPress = () => {
+    if (longPressTimer.current !== null) {
+      window.clearTimeout(longPressTimer.current);
+      longPressTimer.current = null;
+    }
+  };
+
+  const openContextMenu = (event: React.MouseEvent | React.PointerEvent, uniqId: string, name: string) => {
+    if (!amHost || uniqId === selfId || uniqId === state.hostId) return;
+    event.preventDefault();
+    setContextMenu({ left: event.clientX, top: event.clientY, uniqId, name });
+  };
+
+  const rows = [{ uniqId: selfId, name: realTimeColab.getUserName() ?? undefined }, ...state.members].sort((a, b) => {
     if (a.uniqId === state.hostId) return -1;
     if (b.uniqId === state.hostId) return 1;
     return 0;
@@ -68,10 +83,19 @@ export function ParticipantsPanel({
       {rows.map((member) => {
         const isHost = member.uniqId === state.hostId;
         const isSelf = member.uniqId === selfId;
-        const name = displayNameOf(member.uniqId);
+        const name = member.name || (isSelf ? realTimeColab.getUserName() : undefined) || displayNameOf(member.uniqId);
         return (
           <ListItem
             key={member.uniqId}
+            onContextMenu={(event) => openContextMenu(event, member.uniqId, name)}
+            onPointerDown={(event) => {
+              if (event.pointerType === "mouse" || !amHost || isSelf || isHost) return;
+              clearLongPress();
+              longPressTimer.current = window.setTimeout(() => openContextMenu(event, member.uniqId, name), 550);
+            }}
+            onPointerUp={clearLongPress}
+            onPointerCancel={clearLongPress}
+            onPointerLeave={clearLongPress}
             secondaryAction={isSelf ? undefined : (
               <Stack direction="row" spacing={0.25} alignItems="center">
                 {onStartPrivateChat && (
@@ -132,6 +156,34 @@ export function ParticipantsPanel({
         </Typography>
       )}
       </List>
+      <Menu
+        open={contextMenu !== null}
+        onClose={() => setContextMenu(null)}
+        anchorReference="anchorPosition"
+        anchorPosition={contextMenu ? { top: contextMenu.top, left: contextMenu.left } : undefined}
+        slotProps={{ paper: { sx: { minWidth: 180 } } }}
+      >
+        <MenuItem
+          onClick={() => {
+            if (contextMenu) meetingManager.setHost(contextMenu.uniqId);
+            setContextMenu(null);
+          }}
+        >
+          {t("meeting.setHost", "设置为主持人")}
+        </MenuItem>
+        <MenuItem
+          onClick={() => {
+            if (contextMenu) {
+              setKicking(contextMenu.uniqId);
+              meetingManager.kick(contextMenu.uniqId);
+              setTimeout(() => setKicking(null), 1200);
+            }
+            setContextMenu(null);
+          }}
+        >
+          {t("meeting.kick", "移出会议")}
+        </MenuItem>
+      </Menu>
     </Stack>
   );
 }

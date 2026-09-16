@@ -74,10 +74,20 @@ test("received files drawer layout adapts to narrow widths", () => {
 });
 
 test("download drawer closes when the dimmed backdrop is clicked", () => {
-  assert.match(downloadSource, /<Backdrop[\s\S]*onMouseDown=\{\(event\) =>/);
-  assert.match(downloadSource, /<Backdrop[\s\S]*onClick=\{\(event\) =>/);
-  assert.match(downloadSource, /event\.target === event\.currentTarget/);
+  assert.match(downloadSource, /<Backdrop[\s\S]*onClick=\{handleDrawerBackdropClick\}/);
+  assert.match(downloadSource, /event\.target !== event\.currentTarget/);
   assert.match(downloadSource, /<Backdrop[\s\S]*pointerEvents:\s*"auto"/);
   assert.match(downloadSource, /pointerEvents:\s*"none"/);
   assert.match(downloadSource, /pointerEvents:\s*"auto"/);
+});
+
+test("download drawer keeps preview lifecycle independent from drawer backdrop", () => {
+  assert.doesNotMatch(downloadSource, /isPreviewOpen/);
+  assert.doesNotMatch(downloadSource, /onMouseDown=\{handleDrawerBackdropClick\}/);
+  assert.match(downloadSource, /setNonImagePreview\(null\)/);
+  assert.match(downloadSource, /setPreviewUrl\(null\)/);
+});
+
+test("closing the drawer does not unmount the preview layer", () => {
+  assert.doesNotMatch(downloadSource, /if \(!visible && !open\) return null;/);
 });

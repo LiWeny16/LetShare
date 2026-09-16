@@ -830,19 +830,18 @@ export default function DownloadDrawerSlide({
     !!browserDownloadNotice ||
     !!statusMessage;
 
-  if (!visible && !open) return null;
+  // The drawer backdrop only closes the drawer; preview state stays independent.
+  const handleDrawerBackdropClick = (event: React.MouseEvent<HTMLElement>) => {
+    if (event.target !== event.currentTarget) return;
+    onClose();
+  };
 
   return (
     <>
       <Backdrop
         open={open}
         data-testid="download-drawer-backdrop"
-        onMouseDown={(event) => {
-          if (event.target === event.currentTarget) onClose();
-        }}
-        onClick={(event) => {
-          if (event.target === event.currentTarget) onClose();
-        }}
+        onClick={handleDrawerBackdropClick}
         sx={{
           zIndex: theme.zIndex.modal + 1,
           backgroundColor: "rgba(0, 0, 0, 0.4)",

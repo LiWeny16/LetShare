@@ -22,7 +22,7 @@ import CheckIcon from "@mui/icons-material/Check";
 import CloseIcon from "@mui/icons-material/Close";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import LinkIcon from "@mui/icons-material/Link";
-import VideocamIcon from "@mui/icons-material/Videocam";
+import GroupsIcon from "@mui/icons-material/Groups";
 import WorkspacePremiumOutlinedIcon from "@mui/icons-material/WorkspacePremiumOutlined";
 import { useTranslation } from "react-i18next";
 import realTimeColab from "@App/libs/connection/colabLib";
@@ -120,7 +120,7 @@ export default function MeetingInviteDialog({ open, onClose, meetingId, title }:
         <Stack direction="row" alignItems="center" justifyContent="space-between" gap={2} sx={{ px: { xs: 2.5, sm: 3 }, pt: 2.25, pb: 1.75 }}>
           <Stack direction="row" alignItems="center" gap={1.25} minWidth={0}>
             <Box sx={{ width: 34, height: 34, borderRadius: 2.25, bgcolor: "primary.main", color: "common.white", display: "grid", placeItems: "center", flexShrink: 0, boxShadow: (theme) => `0 5px 12px ${alpha(theme.palette.primary.main, 0.2)}` }}>
-              <VideocamIcon sx={{ fontSize: 18 }} />
+              <GroupsIcon sx={{ fontSize: 18 }} />
             </Box>
             <Box minWidth={0}>
               <Typography sx={{ fontSize: { xs: "1.18rem", sm: "1.3rem" }, lineHeight: 1.2, fontWeight: 800 }}>
@@ -179,11 +179,15 @@ export default function MeetingInviteDialog({ open, onClose, meetingId, title }:
             {rows.map((row) => {
               const status: HostInviteStatus | undefined = snapshot.inviteStates[row.uniqId]?.status;
               const inMeeting = memberIds.has(row.uniqId);
+              const inviteInFlight = status === "sending" || status === "sent";
               return (
                 <ListItem key={row.uniqId} data-testid={`meeting-invite-user-${row.uniqId}`} sx={{ px: 0.75, py: 0.65, borderRadius: 2, bgcolor: "rgba(247,249,252,.8)", mb: 0.75 }} secondaryAction={
                   inMeeting ? <Chip label={t("meeting.inviteInMeeting", "已在会议中")} size="small" variant="outlined" sx={{ fontSize: "0.72rem" }} />
-                    : status ? <Chip data-testid={`meeting-invite-status-${row.uniqId}`} label={statusLabel(status)} size="small" color={status === "accepted" ? "success" : status === "rejected" || status === "expired" ? "default" : "primary"} variant={status === "accepted" ? "filled" : "outlined"} sx={{ fontSize: "0.72rem", fontWeight: 700 }} />
-                      : <Button size="small" variant="outlined" data-testid={`meeting-invite-button-${row.uniqId}`} onClick={() => meetingManager.sendInvite(row.uniqId, inviteUrl)} sx={{ textTransform: "none", fontWeight: 700, borderRadius: 2 }}>{t("meeting.inviteAction", "邀请")}</Button>
+                    : inviteInFlight ? <Chip data-testid={`meeting-invite-status-${row.uniqId}`} label={statusLabel(status)} size="small" color="primary" variant="outlined" sx={{ fontSize: "0.72rem", fontWeight: 700 }} />
+                      : <Stack direction="row" alignItems="center" spacing={0.75}>
+                        {status && <Chip data-testid={`meeting-invite-status-${row.uniqId}`} label={statusLabel(status)} size="small" color={status === "accepted" ? "success" : "default"} variant={status === "accepted" ? "filled" : "outlined"} sx={{ fontSize: "0.72rem", fontWeight: 700 }} />}
+                        <Button size="small" variant="outlined" data-testid={`meeting-invite-button-${row.uniqId}`} onClick={() => meetingManager.sendInvite(row.uniqId, inviteUrl)} sx={{ textTransform: "none", fontWeight: 700, borderRadius: 2 }}>{status ? t("meeting.inviteAgain", "再次邀请") : t("meeting.inviteAction", "邀请")}</Button>
+                      </Stack>
                 }>
                   <ListItemAvatar sx={{ minWidth: 42 }}><Avatar sx={{ width: 32, height: 32, fontSize: "0.8rem", bgcolor: "#e3edff", color: "#1354d8", fontWeight: 700 }}>{(row.name || "?").slice(0, 1).toUpperCase()}</Avatar></ListItemAvatar>
                   <ListItemText primary={row.name} secondary={`${row.uniqId} · ${t("meeting.inviteOnline", "在线")}`} primaryTypographyProps={{ fontSize: "0.86rem", fontWeight: 700, noWrap: true }} secondaryTypographyProps={{ fontSize: "0.7rem", noWrap: true }} sx={{ pr: 10 }} />

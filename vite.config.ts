@@ -69,6 +69,16 @@ export default defineConfig({
     // },
     open: true, // 设置服务启动时是否自动打开浏览器
     cors: true, // 允许跨域
+    // Keep browser-side API calls on the same origin during local E2E. The
+    // Go server deliberately returns JSON 404 when TURN is disabled; without
+    // this narrow proxy Vite's SPA fallback returns index.html and the client
+    // reports a misleading JSON parse error instead of a clean STUN fallback.
+    proxy: {
+      "/api/turn-credentials": {
+        target: process.env.LETSHARE_DEV_BACKEND_HTTP ?? "http://localhost:18080",
+        changeOrigin: true,
+      },
+    },
     // port: 8080,
     host: "0.0.0.0",
   },

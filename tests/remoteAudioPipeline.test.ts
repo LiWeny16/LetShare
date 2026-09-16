@@ -49,7 +49,7 @@ function makeNode(kind: string, params: Record<string, number> = {}): FakeNode &
   }) as unknown as FakeNode & AudioNode;
 }
 
-function makeFakeCtx(opts: { channelCount?: number; suspended?: boolean } = {}) {
+function makeFakeCtx(opts: { channelCount?: number; suspended?: boolean; resumeSucceeds?: boolean } = {}) {
   const nodes: (FakeNode & AudioNode)[] = [];
   let source: (FakeNode & AudioNode) | null = null;
   const ctx = {
@@ -57,7 +57,7 @@ function makeFakeCtx(opts: { channelCount?: number; suspended?: boolean } = {}) 
     destination: makeNode("destination"),
     resumeCalls: 0,
     closeCalls: 0,
-    async resume() { this.resumeCalls += 1; this.state = "running"; },
+    async resume() { this.resumeCalls += 1; if (opts.resumeSucceeds !== false) this.state = "running"; },
     async close() { this.closeCalls += 1; },
     createMediaStreamSource() {
       source = makeNode("source");
@@ -191,5 +191,13 @@ test("suspended ctx: attach 时补 resume（自动播放策略兜底）", () => 
   const pipeline = new RemoteAudioPipeline(() => ctx as unknown as AudioContext);
   pipeline.attach(makeFakeStream());
   assert.ok((ctx as unknown as { resumeCalls: number }).resumeCalls >= 1);
+  pipeline.detach();
+});
+
+test("suspended ctx that cannot resume: attach reports fallback instead of claiming active playback", () => {
+  const { ctx } = makeFakeCtx({ suspended: true, resumeSucceeds: false });
+  const pipeline = new RemoteAudioPipeline(() => ctx as unknown as AudioContext);
+  assert.equal(pipeline.attach(makeFakeStream()), false);
+  assert.equal((ctx as unknown as { state: string }).state, "suspended");
   pipeline.detach();
 });

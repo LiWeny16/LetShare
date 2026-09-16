@@ -25,7 +25,7 @@ async function until(desc: string, cond: () => Promise<boolean>, timeoutMs = 30_
   throw new Error(`timeout waiting: ${desc}`);
 }
 
-test("生产环境：视频通话（音视频同轨）经嵌入式 TURN 强制 relay", async (t) => {
+test("生产环境：视频通话（音视频同轨）经 SFU", async (t) => {
   const sentinel = await (await fetch(`${SITE}/version.json`, { cache: "no-store" })).json() as { v: string };
   assert.ok(sentinel.v >= EXPECTED_BUILD, `生产前端为旧构建（${sentinel.v}），需 >= ${EXPECTED_BUILD}`);
 
@@ -41,7 +41,7 @@ test("生产环境：视频通话（音视频同轨）经嵌入式 TURN 强制 r
   async function newClient(name: string) {
     const ctx = await browser.newContext({ permissions: ["microphone", "camera"] });
     await ctx.addInitScript((n: string) => {
-      localStorage.setItem("ls_force_relay", "1");
+      localStorage.setItem("ls_debug_stats", "1");
       const s = {
         roomId: "prode2ev", userTheme: "light", userLanguage: "zh-CN", serverMode: "custom",
         customServerUrl: "wss://ecs.letshare.fun/", authToken: "98d9a399675116e5256e9082c192bc06eb6434937af99f201252e9424c7a5652",
@@ -95,32 +95,28 @@ test("生产环境：视频通话（音视频同轨）经嵌入式 TURN 强制 r
     btn.click();
   });
 
-  // 断言：relay 候选 + 音频与视频字节均递增（同一条中继通道承载两种媒体）
-  type Stats = { audioBytes: number; videoBytes: number; relay: boolean | null };
+  // 断言：SFU + 音频与视频字节均递增（同一会话承载两种媒体）
+  type Stats = { audioBytes: number; videoBytes: number; sfu: boolean };
   async function sampleStats(page: import("playwright").Page): Promise<Stats> {
     return page.evaluate(async () => {
       const getStats = (window as unknown as { __lsCallStats?: () => Promise<Map<string, Record<string, unknown>>> }).__lsCallStats;
-      if (!getStats) return { audioBytes: -1, videoBytes: -1, relay: null };
+      const getDebug = (window as unknown as { __lsPc?: () => Record<string, unknown> }).__lsPc;
+      if (!getStats || !getDebug) return { audioBytes: -1, videoBytes: -1, sfu: false };
       const stats = await getStats();
       let audioBytes = 0;
       let videoBytes = 0;
-      let relay: boolean | null = null;
       for (const [, r] of stats) {
         if (r.type === "inbound-rtp" && r.kind === "audio") audioBytes += Number(r.bytesReceived ?? 0);
         if (r.type === "inbound-rtp" && r.kind === "video") videoBytes += Number(r.bytesReceived ?? 0);
-        if (r.type === "candidate-pair" && (r.state === "succeeded" || r.nominated === true)) {
-          const local = stats.get(String(r.localCandidateId ?? "")) as { candidateType?: string } | undefined;
-          if (local?.candidateType) relay = local.candidateType === "relay";
-        }
       }
-      return { audioBytes, videoBytes, relay };
+      return { audioBytes, videoBytes, sfu: getDebug().transport === "sfu" };
     });
   }
 
   for (const [i, page] of pages.entries()) {
-    await until(`client${i} 视频通话经生产 TURN 中继连通`, async () => {
+    await until(`client${i} 视频通话经生产 SFU 连通`, async () => {
       const s = await sampleStats(page);
-      return s.audioBytes >= 0 && s.videoBytes > 0 && s.relay === true;
+      return s.sfu && s.audioBytes > 0 && s.videoBytes > 0;
     }, 90_000);
   }
 

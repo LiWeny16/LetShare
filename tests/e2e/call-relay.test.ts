@@ -1,12 +1,12 @@
 /**
- * E2E：双客户端经本地 Go 后端（WS 信令 + 嵌入式 TURN）完成语音通话。
+ * E2E：双客户端经本地 Go 后端（WS 信令 + SFU）完成语音通话。
  *
  * 链路：Playwright 双 browserContext（隔离 localStorage，--use-fake-device-for-media-stream
  * 假麦克风）→ vite build + preview 伺服前端 → 本地 Go 服务器（MODE=local，pion/turn UDP/TCP 3478）。
- * 验证（强制 relay，ls_force_relay=1）：
+ * 验证普通通话固定走 SFU 媒体链路：
  *   1. bob 收到来电横幅并接听，双端 ICE connected；
  *   2. 双端 audio inbound-rtp bytesReceived 严格递增（音频字节真的在流动）；
- *   3. selected candidate pair local candidateType === "relay"（媒体经嵌入式 TURN）；
+ *   3. 两端调试信息明确 transport === "sfu"；
  *
  * 运行：pnpm test:e2e:call
  */
@@ -24,6 +24,7 @@ const GO_SERVER = join(ROOT, "server");
 const GO_PORT = 18080; // 避开常用 8080
 const VITE_PORT = 15173; // 避开常用 5173
 const ROOM = "e2ecall";
+const REUSE_DEV = process.env.LETSHARE_E2E_REUSE_DEV === "1";
 
 let goProc: ChildProcess | null = null;
 let viteProc: ChildProcess | null = null;
@@ -79,7 +80,8 @@ async function waitHttp(url: string, timeoutMs = 30_000): Promise<void> {
   }, timeoutMs);
 }
 
-test("双客户端经 Go 后端 + 嵌入式 TURN 完成语音通话（强制 relay）", async (t) => {
+test("双客户端经 Go 后端 + SFU 完成语音通话", async (t) => {
+ if (!REUSE_DEV) {
   // 清理上一轮残留（Windows 树杀不彻底会让 strictPort 端口被占）
   await freePort(GO_PORT, "go-server");
   await freePort(VITE_PORT, "vite-preview");
@@ -113,8 +115,8 @@ test("双客户端经 Go 后端 + 嵌入式 TURN 完成语音通话（强制 rel
   t.after(() => { killTree(goProc); });
   goProc.stdout?.on("data", (d: Buffer) => {
     const line = d.toString();
-    // TURN 认证/分配日志（排查 relay 不通）
-    if (/turn|TURN|auth|Auth|alloc|Alloc|relay|Relay/.test(line)) console.log("[go]", line.trim().slice(0, 300));
+    // 保留 TURN/relay 认证日志，便于本地 ICE 配置故障定位。
+    if (/turn|TURN|auth|Auth|alloc|Alloc|relay|Relay/.test(line)) console.log("[go]", line.trim().slice(0, 500));
   });
 
   await waitHttp(`http://127.0.0.1:${GO_PORT}/api/turn-credentials`);
@@ -171,6 +173,10 @@ test("双客户端经 Go 后端 + 嵌入式 TURN 完成语音通话（强制 rel
     throw e;
   }
   // ── 3. 浏览器与双客户端（隔离 context，假麦克风，自动授权）─────────
+ } else {
+  await waitHttp(`http://127.0.0.1:${GO_PORT}/api/turn-credentials`);
+  await waitHttp(`http://127.0.0.1:${VITE_PORT}/`);
+ }
   browser = await chromium.launch({
     args: [
       "--use-fake-device-for-media-stream",
@@ -182,11 +188,11 @@ test("双客户端经 Go 后端 + 嵌入式 TURN 完成语音通话（强制 rel
 
   async function newClient(name: string) {
     const ctx = await browser!.newContext({ permissions: ["microphone"] });
-    // 测试钩子注入（须在页面加载前）：强制 relay + TURN API 指向本地 Go + 服务器指向本地 WS
+    // 测试钩子注入（须在页面加载前）：调试 SFU stats + TURN API 指向本地 Go + 服务器指向本地 WS
     const initArgs = [name, GO_PORT];
     await ctx.addInitScript((args: [string, number]) => {
       const [n, goPort] = args;
-      localStorage.setItem("ls_force_relay", "1");
+      localStorage.setItem("ls_debug_stats", "1");
       localStorage.setItem("ls_turn_api", `http://127.0.0.1:${goPort}`);
       const s = {
         roomId: "e2ecall", userTheme: "light", userLanguage: "zh-CN", serverMode: "custom",
@@ -249,38 +255,33 @@ test("双客户端经 Go 后端 + 嵌入式 TURN 完成语音通话（强制 rel
     btn.click();
   });
 
-  // ── 5. 断言：active + 音频字节流动 + 走 relay ────────────────────
+  // ── 5. 断言：SFU 媒体连接建立 + 音频字节流动 ────────────────────
   type Stats = {
     audioBytes: number;
-    relay: boolean | null;
+    sfu: boolean;
   };
   async function sampleStats(page: import("playwright").Page): Promise<Stats> {
     return page.evaluate(async () => {
       const getStats = (window as unknown as { __lsCallStats?: () => Promise<Map<string, Record<string, unknown>>> }).__lsCallStats;
-      if (!getStats) return { audioBytes: -1, relay: null };
+      const getDebug = (window as unknown as { __lsPc?: () => Record<string, unknown> }).__lsPc;
+      if (!getStats || !getDebug) return { audioBytes: -1, sfu: false };
       const stats = await getStats();
       let audioBytes = 0;
-      let relay: boolean | null = null;
       for (const [, r] of stats) {
         if (r.type === "inbound-rtp" && r.kind === "audio") audioBytes += Number(r.bytesReceived ?? 0);
-        if (r.type === "candidate-pair" && (r.state === "succeeded" || r.nominated === true)) {
-          const localId = String(r.localCandidateId ?? "");
-          const local = stats.get(localId) as { candidateType?: string } | undefined;
-          if (local?.candidateType) relay = local.candidateType === "relay";
-        }
       }
-      return { audioBytes, relay };
+      return { audioBytes, sfu: getDebug().transport === "sfu" };
     });
   }
 
   for (const [i, page] of pages.entries()) {
-    await until(`client${i} stats 就绪且走 relay`, async () => {
+    await until(`client${i} SFU stats 就绪且有音频`, async () => {
       const s = await sampleStats(page);
-      return s.audioBytes >= 0 && s.relay === true;
+      return s.sfu && s.audioBytes > 0;
     }, 60_000);
   }
 
-  // 音频字节递增（真有数据流过 TURN）
+  // 音频字节递增（真有数据流过 SFU）
   for (const [i, page] of pages.entries()) {
     const a = await sampleStats(page);
     await new Promise((r) => setTimeout(r, 2000));

@@ -122,6 +122,10 @@ export default function MeetingPrejoinPreview({ compact = false, isHost = false 
         track.enabled = true;
         track.contentHint = settingsStore.get("audioContentHint") ?? "speech";
       });
+      // The preview stream is intentionally released when the dialog closes.
+      // Persist the user's choice so MeetingManager's fresh join capture uses
+      // the same initial microphone state instead of reverting to muted.
+      settingsStore.update("meetingMicrophoneDefaultOn", true);
       setMicOn(true);
       setError("");
       await refreshDevices();
@@ -148,6 +152,9 @@ export default function MeetingPrejoinPreview({ compact = false, isHost = false 
       stopStream(videoStream);
       setVideoStream(next);
       next.getVideoTracks().forEach((track) => { track.enabled = true; });
+      // The preview stream is not the publisher stream; carry the selected
+      // camera state into the MeetingManager join that follows this dialog.
+      settingsStore.update("meetingCameraDefaultOn", true);
       setCameraOn(true);
       setError("");
       await refreshDevices();
@@ -166,6 +173,7 @@ export default function MeetingPrejoinPreview({ compact = false, isHost = false 
     }
     const next = !micOn;
     audioStream?.getAudioTracks().forEach((track) => { track.enabled = next; });
+    settingsStore.update("meetingMicrophoneDefaultOn", next);
     setMicOn(next);
   };
 
@@ -176,6 +184,7 @@ export default function MeetingPrejoinPreview({ compact = false, isHost = false 
     }
     const next = !cameraOn;
     videoStream?.getVideoTracks().forEach((track) => { track.enabled = next; });
+    settingsStore.update("meetingCameraDefaultOn", next);
     setCameraOn(next);
   };
 

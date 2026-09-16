@@ -22,6 +22,7 @@ import EmojiIcon from '@mui/icons-material/EmojiEmotions';
 import AddIcon from '@mui/icons-material/Add';
 import CloseIcon from '@mui/icons-material/Close';
 import ImageIcon from '@mui/icons-material/Image';
+import FolderIcon from '@mui/icons-material/Folder';
 import ContentPasteIcon from '@mui/icons-material/ContentPaste';
 import RedeemIcon from '@mui/icons-material/Redeem';
 import VideocamIcon from '@mui/icons-material/Videocam';
@@ -32,8 +33,9 @@ import realTimeColab from '@App/libs/connection/colabLib';
 import FileBubble from './FileBubble';
 import ImageBubble from './ImageBubble';
 import FilePreviewDialog from '../FilePreviewDialog';
-import type { FileChatMessage } from '@App/libs/chat/ChatHistoryManager';
+import type { FileChatMessage, FileMetadata, TextChatMessage } from '@App/libs/chat/ChatHistoryManager';
 import { buildRedPacket, parseRedPacket, type RedPacketPayload } from '@App/libs/chat/redpacket';
+import { bundleTransferEntries, collectDroppedTransferEntries, type TransferEntry } from '@App/libs/chat/fileBundle';
 
 interface ChatPanelProps {
     open: boolean;
@@ -54,7 +56,123 @@ const redpacketPop = keyframes`
   100% { transform: scale(1); opacity: 1; }
 `;
 
-const ChatPanel: React.FC<ChatPanelProps> = ({ open, onClose, targetUserId, targetUserName, onVideoCall }) => {
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === 'object' && value !== null;
+}
+
+function toSafeMessageText(value: unknown): string {
+    if (typeof value === 'string') return value;
+    if (value === null || value === undefined) return '';
+    if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') {
+        return String(value);
+    }
+    try {
+        const serialized = JSON.stringify(value);
+        return serialized ?? '';
+    } catch {
+        return '';
+    }
+}
+
+function toSafeMessageId(value: unknown, index: number): string {
+    const id = toSafeMessageText(value).trim();
+    return id || `unsupported-message-${index}`;
+}
+
+function toSafeTimestamp(value: unknown): number {
+    return typeof value === 'number' && Number.isFinite(value) ? value : Date.now();
+}
+
+function hasFileMetadata(value: unknown): value is FileMetadata {
+    if (!isRecord(value)) return false;
+    return (
+        typeof value.fileName === 'string' &&
+        typeof value.fileSize === 'number' &&
+        Number.isFinite(value.fileSize) &&
+        typeof value.mimeType === 'string' &&
+        typeof value.fileCategory === 'string' &&
+        typeof value.transferStatus === 'string' &&
+        typeof value.transferProgress === 'number' &&
+        Number.isFinite(value.transferProgress)
+    );
+}
+
+function normalizeTextMessage(record: Record<string, unknown>, index: number): TextChatMessage {
+    return {
+        id: toSafeMessageId(record.id, index),
+        senderId: toSafeMessageText(record.senderId),
+        receiverId: toSafeMessageText(record.receiverId),
+        content: toSafeMessageText(record.content),
+        timestamp: toSafeTimestamp(record.timestamp),
+        type: 'text',
+        isRead: record.isRead === true,
+    };
+}
+
+function normalizeFileMessage(
+    record: Record<string, unknown>,
+    index: number,
+): FileChatMessage | null {
+    if (!hasFileMetadata(record.fileMetadata)) return null;
+    return {
+        id: toSafeMessageId(record.id, index),
+        senderId: toSafeMessageText(record.senderId),
+        receiverId: toSafeMessageText(record.receiverId),
+        content: toSafeMessageText(record.content) || record.fileMetadata.fileName,
+        timestamp: toSafeTimestamp(record.timestamp),
+        type: record.type === 'image' ? 'image' : 'file',
+        isRead: record.isRead === true,
+        fileMetadata: record.fileMetadata,
+    };
+}
+
+class ChatPanelErrorBoundary extends React.Component<
+    { children: React.ReactNode; onClose: () => void },
+    { hasError: boolean }
+> {
+    state = { hasError: false };
+
+    static getDerivedStateFromError() {
+        return { hasError: true };
+    }
+
+    componentDidCatch(error: unknown, errorInfo: React.ErrorInfo) {
+        console.error('[CHAT PANEL] Render error captured:', error, errorInfo.componentStack);
+    }
+
+    render() {
+        if (!this.state.hasError) return this.props.children;
+        return (
+            <Box
+                data-testid="chat-render-fallback"
+                sx={{
+                    position: 'fixed',
+                    inset: 0,
+                    zIndex: 1500,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    p: 2,
+                    bgcolor: 'rgba(23, 32, 51, 0.42)',
+                }}
+            >
+                <Box sx={{ width: 'min(420px, 100%)', p: 3, borderRadius: 3, bgcolor: '#fff', boxShadow: 8 }}>
+                    <Typography variant="h6" sx={{ fontWeight: 700, color: '#172033', mb: 1 }}>
+                        聊天暂时无法显示
+                    </Typography>
+                    <Typography variant="body2" sx={{ color: '#667085', mb: 2 }}>
+                        这条消息格式暂不兼容，聊天窗口仍然可以安全关闭。
+                    </Typography>
+                    <Button variant="contained" onClick={this.props.onClose} sx={{ minHeight: 44 }}>
+                        关闭聊天
+                    </Button>
+                </Box>
+            </Box>
+        );
+    }
+}
+
+const ChatPanelContent: React.FC<ChatPanelProps> = ({ open, onClose, targetUserId, targetUserName, onVideoCall }) => {
     const { t } = useTranslation();
     const theme = useTheme();
     const [visible, setVisible] = useState(open);
@@ -71,8 +189,12 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ open, onClose, targetUserId, targ
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const imageInputRef = useRef<HTMLInputElement>(null);
+    const folderInputRef = useRef<HTMLInputElement>(null);
+    const dragDepthRef = useRef(0);
     // 「+」功能面板（微信式）
     const [plusPanelOpen, setPlusPanelOpen] = useState(false);
+    const [isFileDragActive, setIsFileDragActive] = useState(false);
+    const [transferNotice, setTransferNotice] = useState<string | null>(null);
     // 红包：待发送金额 + 已打开的红包消息 id 集合
     const [redPacketDraft, setRedPacketDraft] = useState<RedPacketPayload | null>(null);
     const [openedRedPackets, setOpenedRedPackets] = useState<Set<string>>(new Set());
@@ -239,21 +361,75 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ open, onClose, targetUserId, targ
         }
     };
 
+    const showTransferNotice = (message: string) => {
+        setTransferNotice(message);
+        window.setTimeout(() => setTransferNotice(null), 3200);
+    };
+
+    const sendChatTransferEntries = async (entries: readonly TransferEntry[]) => {
+        const validEntries = entries.filter(({ file }) => Boolean(file));
+        if (validEntries.length === 0) {
+            showTransferNotice('空文件无法发送');
+            return;
+        }
+
+        setPlusPanelOpen(false);
+        try {
+            const fileToSend = await bundleTransferEntries(validEntries);
+            console.log('[CHAT PANEL] Sending transfer:', fileToSend.name, fileToSend.size, validEntries.length);
+            const result = await ChatIntegration.sendFileMessage(targetUserId, fileToSend);
+            if (result.error) {
+                console.error('[CHAT PANEL] Failed to send file:', result.error);
+                showTransferNotice('文件发送失败，请重试');
+                return;
+            }
+            showTransferNotice(
+                validEntries.length > 1
+                    ? `已打包发送 ${validEntries.length} 个文件，接收端会保留文件夹路径`
+                    : '文件已发送'
+            );
+        } catch (error) {
+            console.error('[CHAT PANEL] File bundle/send error:', error);
+            showTransferNotice('文件打包失败，请重试');
+        }
+    };
+
     const handleFileSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
         const files = event.target.files;
         if (!files || files.length === 0) return;
-        const file = files[0];
-        // Reset input so same file can be selected again
+        const entries = Array.from(files).map((file) => ({
+            file,
+            relativePath: file.webkitRelativePath || undefined,
+        }));
         event.target.value = '';
-        console.log('[CHAT PANEL] Sending file:', file.name, file.size, file.type);
-        try {
-            const result = await ChatIntegration.sendFileMessage(targetUserId, file);
-            if (result.error) {
-                console.error('[CHAT PANEL] Failed to send file:', result.error);
-            }
-        } catch (error) {
-            console.error('[CHAT PANEL] File send error:', error);
-        }
+        await sendChatTransferEntries(entries);
+    };
+
+    const handleChatDragEnter = (event: React.DragEvent<HTMLElement>) => {
+        event.preventDefault();
+        dragDepthRef.current += 1;
+        setIsFileDragActive(true);
+    };
+
+    const handleChatDragOver = (event: React.DragEvent<HTMLElement>) => {
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'copy';
+        setIsFileDragActive(true);
+    };
+
+    const handleChatDragLeave = (event: React.DragEvent<HTMLElement>) => {
+        event.preventDefault();
+        dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+        if (dragDepthRef.current === 0) setIsFileDragActive(false);
+    };
+
+    const handleChatDrop = async (event: React.DragEvent<HTMLElement>) => {
+        event.preventDefault();
+        event.stopPropagation();
+        dragDepthRef.current = 0;
+        setIsFileDragActive(false);
+        const entries = await collectDroppedTransferEntries(event.dataTransfer);
+        await sendChatTransferEntries(entries);
     };
 
     /** 相册多选（微信式）：input multiple，逐个发送选中图片 */
@@ -331,8 +507,11 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ open, onClose, targetUserId, targ
             }
             if (file) {
                 const msg = chatHistory?.messages.find(
-                    (m): m is FileChatMessage =>
-                        m.type === 'file' && (m as FileChatMessage).fileMetadata?.fileKey === fileKey
+                    (m): m is FileChatMessage => {
+                        if (!isRecord(m) || (m.type !== 'file' && m.type !== 'image')) return false;
+                        const normalized = normalizeFileMessage(m, 0);
+                        return normalized?.fileMetadata.fileKey === fileKey;
+                    }
                 );
                 setPreviewState({
                     file,
@@ -374,6 +553,7 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ open, onClose, targetUserId, targ
 
     const formatTime = (timestamp: number) => {
         const date = new Date(timestamp);
+        if (Number.isNaN(date.getTime())) return '--:--';
         const now = new Date();
         const isToday = date.toDateString() === now.toDateString();
 
@@ -386,10 +566,11 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ open, onClose, targetUserId, targ
     };
 
     /** 微信式时间分隔：与上条消息同天且间隔 <5 分钟则不重复显示 */
-    const shouldShowTimeSeparator = (prev: ChatMessage | undefined, msg: ChatMessage): boolean => {
-        if (!prev) return true;
-        const gap = msg.timestamp - prev.timestamp;
-        const sameDay = new Date(msg.timestamp).toDateString() === new Date(prev.timestamp).toDateString();
+    const shouldShowTimeSeparator = (prev: unknown, msgTimestamp: number): boolean => {
+        const previousTimestamp = isRecord(prev) ? toSafeTimestamp(prev.timestamp) : null;
+        if (!previousTimestamp) return true;
+        const gap = msgTimestamp - previousTimestamp;
+        const sameDay = new Date(msgTimestamp).toDateString() === new Date(previousTimestamp).toDateString();
         return !sameDay || gap > 5 * 60 * 1000;
     };
 
@@ -438,14 +619,16 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ open, onClose, targetUserId, targ
 
     /** 红包拆开弹层 */
     const renderRedPacketDialog = () => {
-        const openedMsg = chatHistory?.messages.find((m) => openedRedPackets.has(m.id));
-        if (!openedMsg) return null;
+        const openedMsg = chatHistory?.messages
+            .map((message, index) => isRecord(message) ? normalizeTextMessage(message, index) : null)
+            .find((message) => message && openedRedPackets.has(message.id));
+        if (!openedMsg || openedMsg.type !== 'text') return null;
         const payload = parseRedPacket(openedMsg.content);
         if (!payload) return null;
         return (
             <Backdrop open onClick={() => setOpenedRedPackets((prev) => { const n = new Set(prev); n.delete(openedMsg.id); return n; })} sx={{ zIndex: 1600, backgroundColor: 'rgba(0,0,0,0.65)' }}>
                 <Box
-                    onClick={(e) => e.stopPropagation()}
+                            onClick={(e) => e.stopPropagation()}
                     sx={{
                         width: 280, borderRadius: 3, py: 4, px: 3, textAlign: 'center',
                         background: 'linear-gradient(180deg, #fdecea 0%, #f7d9d2 100%)',
@@ -472,17 +655,33 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ open, onClose, targetUserId, targ
         );
     };
 
-    const renderMessage = (message: ChatMessage, index: number, all: ChatMessage[]) => {
+    const renderMessage = (rawMessage: unknown, index: number, all: unknown[]) => {
+        const record = isRecord(rawMessage) ? rawMessage : {};
+        const messageId = toSafeMessageId(record.id, index);
+        const senderId = toSafeMessageText(record.senderId);
+        const timestamp = toSafeTimestamp(record.timestamp);
         const currentUserId = getCurrentUserId();
-        const isMyMessage = message.senderId === currentUserId;
+        const isMyMessage = senderId === currentUserId;
         // 红包消息（带前缀的文本）优先渲染红包气泡
-        const redPacket = parseRedPacket(message.content);
-        if (redPacket && message.type === 'text') {
-            return renderRedPacket(message, redPacket, isMyMessage);
+        if (record.type === 'text') {
+            const textMessage = normalizeTextMessage(record, index);
+            const redPacket = parseRedPacket(textMessage.content);
+            if (redPacket) {
+                return renderRedPacket(textMessage, redPacket, isMyMessage);
+            }
         }
 
-        if (message.type === 'file' || message.type === 'image') {
-            const fileMsg = message as FileChatMessage;
+        if (record.type === 'file' || record.type === 'image') {
+            const fileMsg = normalizeFileMessage(record, index);
+            if (!fileMsg) {
+                return (
+                    <Box key={messageId} sx={{ display: 'flex', justifyContent: isMyMessage ? 'flex-end' : 'flex-start', mb: 1 }}>
+                        <Box sx={{ maxWidth: '82%', px: 1.5, py: 1, borderRadius: 2, bgcolor: '#f4f7fb', border: '1px dashed #cbd5e1', color: '#667085' }}>
+                            <Typography variant="caption" sx={{ fontWeight: 700 }}>暂不支持的文件消息</Typography>
+                        </Box>
+                    </Box>
+                );
+            }
             const handleFileBubbleDownload = async (fileKey?: string) => {
                 if (!fileKey) return;
                 const FileBlobStore = (await import('@App/libs/chat/FileBlobStore')).default;
@@ -506,10 +705,10 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ open, onClose, targetUserId, targ
                 console.warn('[CHAT PANEL] Retry requested for sent file, but original file not available.');
             };
 
-            if (message.type === 'image' && fileMsg.fileMetadata.fileKey) {
+            if (fileMsg.type === 'image' && fileMsg.fileMetadata.fileKey) {
                 return (
                     <ImageBubble
-                        key={message.id}
+                        key={messageId}
                         message={fileMsg}
                         isMyMessage={isMyMessage}
                         onDownload={handleFileBubbleDownload}
@@ -519,7 +718,7 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ open, onClose, targetUserId, targ
             }
             return (
                 <FileBubble
-                    key={message.id}
+                    key={messageId}
                     message={fileMsg}
                     isMyMessage={isMyMessage}
                     onDownload={handleFileBubbleDownload}
@@ -530,13 +729,28 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ open, onClose, targetUserId, targ
         }
 
         // 微信式时间分隔（居中灰字，仅在跨天/间隔>5min 显示）
-        const showTime = shouldShowTimeSeparator(all[index - 1], message);
+        if (record.type !== 'text') {
+            const fallbackText = toSafeMessageText(record.content);
+            return (
+                <Box key={messageId} sx={{ display: 'flex', justifyContent: isMyMessage ? 'flex-end' : 'flex-start', mb: 1 }}>
+                    <Box sx={{ maxWidth: '82%', px: 1.5, py: 1, borderRadius: 2, bgcolor: '#f4f7fb', border: '1px dashed #cbd5e1', color: '#667085' }}>
+                        <Typography variant="caption" sx={{ display: 'block', fontWeight: 700, mb: fallbackText ? 0.5 : 0 }}>
+                            暂不支持的消息
+                        </Typography>
+                        {fallbackText && <Typography variant="body2" sx={{ overflowWrap: 'anywhere' }}>{fallbackText}</Typography>}
+                    </Box>
+                </Box>
+            );
+        }
+
+        const textMessage = normalizeTextMessage(record, index);
+        const showTime = shouldShowTimeSeparator(all[index - 1], timestamp);
         const avatarText = isMyMessage ? t('chat.self', '我') : targetUserName.charAt(0).toUpperCase();
         return (
-            <Box key={message.id} sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', mb: 0.5 }}>
+            <Box key={messageId} sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', mb: 0.5 }}>
                 {showTime && (
                     <Typography variant="caption" sx={{ color: '#b2b2b2', fontSize: '0.68rem', my: 1 }}>
-                        {formatTime(message.timestamp)}
+                        {formatTime(timestamp)}
                     </Typography>
                 )}
                 <Box sx={{ display: 'flex', flexDirection: isMyMessage ? 'row-reverse' : 'row', alignItems: 'flex-start', gap: 1, width: '100%' }}>
@@ -553,7 +767,7 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ open, onClose, targetUserId, targ
                             boxShadow: '0 1px 1px rgba(0,0,0,0.05)',
                             wordBreak: 'break-word',
                         }}>
-                            <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>{message.content}</Typography>
+                            <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{textMessage.content}</Typography>
                         </Box>
                     </Box>
                 </Box>
@@ -609,28 +823,41 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ open, onClose, targetUserId, targ
                     >
                         <Box
                             onClick={(e) => e.stopPropagation()} // 阻止事件冒泡，防止点击面板内容时关闭
+                            onDragEnter={handleChatDragEnter}
+                            onDragOver={handleChatDragOver}
+                            onDragLeave={handleChatDragLeave}
+                            onDrop={handleChatDrop}
                             sx={{
-                                width: {
-                                    xs: "88%",
-                                    sm: "80%",
-                                    md: "60%",
-                                    lg: "50%",
-                                },
-                                height: '70vh',
-                                backgroundColor: theme.palette.background.paper,
-                                borderTopLeftRadius: 19,
-                                borderTopRightRadius: 19,
-                                boxShadow: 3,
+                                width: { xs: '100%', sm: 'min(560px, calc(100vw - 32px))', md: 'min(620px, calc(100vw - 48px))' },
+                                height: { xs: 'min(88dvh, 760px)', sm: 'min(78dvh, 720px)' },
+                                backgroundColor: '#fff',
+                                borderRadius: { xs: '24px 24px 0 0', sm: 3 },
+                                boxShadow: '0 24px 80px rgba(23,32,51,0.22)',
                                 display: 'flex',
                                 flexDirection: 'column',
                                 position: 'relative', // 确保内部定位正确
                                 overflow: 'hidden', // 约束内部滚动，防止红包选择器等撑破面板
                                 transform: dragY > 0 ? `translateY(${dragY}px)` : undefined,
                                 transition: dragY > 0 ? 'none' : 'transform 0.25s ease',
-                                touchAction: 'none', // 拖拽手势不触发页面滚动
+                                touchAction: 'auto',
                             }}
                         >
                             {/* 下拉收起把手（微信抽屉式）：鼠标/触摸下滑超过阈值收起 */}
+                            {isFileDragActive && (
+                                <Box
+                                    data-testid="chat-file-drop-overlay"
+                                    sx={{
+                                        position: 'absolute', inset: 8, zIndex: 10, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                        border: '2px dashed #1677ff', borderRadius: 3, bgcolor: 'rgba(22,119,255,0.08)', pointerEvents: 'none',
+                                    }}
+                                >
+                                    <Box sx={{ textAlign: 'center', px: 3, py: 2, borderRadius: 3, bgcolor: '#fff', boxShadow: 3 }}>
+                                        <FolderIcon sx={{ fontSize: 36, color: '#1677ff', mb: 0.5 }} />
+                                        <Typography sx={{ fontWeight: 700, color: '#172033' }}>松开即可发送</Typography>
+                                        <Typography variant="caption" sx={{ color: '#667085' }}>多文件和文件夹会自动打包并保留路径</Typography>
+                                    </Box>
+                                </Box>
+                            )}
                             <Box
                                 onPointerDown={handleDragStart}
                                 onPointerMove={handleDragMove}
@@ -649,11 +876,11 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ open, onClose, targetUserId, targ
                                     display: 'flex',
                                     alignItems: 'center',
                                     justifyContent: 'space-between',
-                                    px: 3,
-                                    py: 2,
+                                    px: { xs: 2, sm: 2.5 },
+                                    py: 1.5,
                                     borderBottom: `1px solid ${theme.palette.divider}`,
-                                    borderTopLeftRadius: 19,
-                                    borderTopRightRadius: 19,
+                                    borderTopLeftRadius: { xs: 24, sm: 12 },
+                                    borderTopRightRadius: { xs: 24, sm: 12 },
                                 }}
                             >
                                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
@@ -702,7 +929,7 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ open, onClose, targetUserId, targ
                                     flex: 1,
                                     minHeight: 0, // flex 收缩约束，让输入区滚动生效
                                     overflowY: 'auto',
-                                    px: 3,
+                                    px: { xs: 1.5, sm: 2.5 },
                                     py: 2,
                                     display: 'flex',
                                     flexDirection: 'column',
@@ -733,7 +960,7 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ open, onClose, targetUserId, targ
                             {/* 输入区域（含「+」面板；红包选择器为上方浮层） */}
                             <Box
                                 sx={{
-                                    px: 3,
+                                    px: { xs: 1.5, sm: 2.5 },
                                     py: 2,
                                     borderTop: `1px solid ${theme.palette.divider}`,
                                     display: 'flex',
@@ -743,11 +970,16 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ open, onClose, targetUserId, targ
                                 }}
                             >
                                 {/* 「+」功能面板（微信式 4×2 网格） */}
+                                {transferNotice && (
+                                    <Typography variant="caption" sx={{ color: '#1769aa', bgcolor: '#eef6ff', borderRadius: 2, px: 1.5, py: 0.75 }}>
+                                        {transferNotice}
+                                    </Typography>
+                                )}
                                 {plusPanelOpen && (
                                     <Box
                                         sx={{
                                             display: 'grid',
-                                            gridTemplateColumns: 'repeat(4, 1fr)',
+                                            gridTemplateColumns: 'repeat(3, 1fr)',
                                             gap: 1,
                                             px: 0.5,
                                             py: 1.5,
@@ -756,6 +988,7 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ open, onClose, targetUserId, targ
                                         }}
                                     >
                                         {[
+                                            { key: 'folder', icon: <FolderIcon sx={{ fontSize: 26 }} />, label: '文件夹', action: () => { blurTrigger2(); setTimeout(() => folderInputRef.current?.click(), 0); } },
                                             {key: 'file', icon: <AttachFileIcon sx={{ fontSize: 26 }} />, label: t('chat.menuFile', '文件'), action: () => { blurTrigger2(); setTimeout(() => fileInputRef.current?.click(), 0); } },
                                             { key: 'image', icon: <ImageIcon sx={{ fontSize: 26 }} />, label: t('chat.menuImage', '图片'), action: () => { blurTrigger2(); setTimeout(() => imageInputRef.current?.click(), 0); } },
                                             { key: 'clipboard', icon: <ContentPasteIcon sx={{ fontSize: 26 }} />, label: t('chat.menuClipboard', '剪贴板'), action: () => void handleSendClipboard() },
@@ -767,7 +1000,7 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ open, onClose, targetUserId, targ
                                                 onClick={item.action}
                                                 sx={{
                                                     display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0.5,
-                                                    py: 1.5, borderRadius: 2, cursor: 'pointer', userSelect: 'none',
+                                                    minHeight: 68, py: 1.25, borderRadius: 2, cursor: 'pointer', userSelect: 'none',
                                                     bgcolor: '#fff', boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
                                                     '&:hover': { bgcolor: '#fafafa' },
                                                 }}
@@ -872,6 +1105,7 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ open, onClose, targetUserId, targ
 
                                     <input
                                         type="file"
+                                        multiple
                                         ref={fileInputRef}
                                         style={{ display: 'none' }}
                                         onChange={handleFileSelect}
@@ -883,6 +1117,13 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ open, onClose, targetUserId, targ
                                         ref={imageInputRef}
                                         style={{ display: 'none' }}
                                         onChange={handleImageSelect}
+                                    />
+                                    <input
+                                        type="file"
+                                        ref={folderInputRef}
+                                        style={{ display: 'none' }}
+                                        onChange={handleFileSelect}
+                                        {...({ webkitdirectory: '', directory: '' } as Record<string, string>)}
                                     />
                                     {/* 附件入口（保留原行为：blur 后触发文件选择） */}
                                     <IconButton
@@ -991,5 +1232,11 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ open, onClose, targetUserId, targ
         </>
     );
 };
+
+const ChatPanel: React.FC<ChatPanelProps> = (props) => (
+    <ChatPanelErrorBoundary key={props.targetUserId} onClose={props.onClose}>
+        <ChatPanelContent {...props} />
+    </ChatPanelErrorBoundary>
+);
 
 export default ChatPanel;

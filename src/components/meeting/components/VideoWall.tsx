@@ -45,7 +45,7 @@ export function VideoWall({ tiles, focusedUniqId, onSelectFocus, formFactor }: V
     const [focus, ...rest] = sorted;
     return (
       <Stack direction="column" spacing={1.5} sx={{ height: "100%" }}>
-        {focus && <MemberTile tile={focus} isFocused onFocus={() => onSelectFocus(focus.tileKey)} />}
+        {focus && <MemberTile tile={focus} isFocused={focus.tileKey === focusedUniqId} onFocus={() => onSelectFocus(focus.tileKey)} />}
         {rest.length > 0 && (
           <Stack
             direction="row"

@@ -92,6 +92,19 @@ export interface FileTransferProgress {
  percentage: number;
 }
 
+export interface FileTransferUiUpdate {
+ transferId: string;
+ direction: "send" | "receive";
+ peerId: string;
+ roomName: string;
+ fileName: string;
+ fileSize: number;
+ fileType: string;
+ progress: number;
+ status: "pending" | "transferring" | "completed" | "cancelled" | "error";
+ file?: File;
+}
+
 export interface FileTransferChunk {
  transfer_id: string;
  chunk_index: number;
@@ -215,6 +228,7 @@ export class ServerFileTransfer {
  private onTransferStatusChange: ((message: string | null, kind: TransferStatusKind) => void) | null = null;
  private receivedFileCacheCandidatesCallback: (() => Array<{ size: number }>) | null = null;
  private onFileSavedToDiskCallback: ((fileName: string, fileSize: number, fromUserId: string) => void) | null = null;
+ private onTransferUiUpdateCallback: ((update: FileTransferUiUpdate) => void) | null = null;
  private pendingDirectSaveRequests = new Map<string, ServerDirectSaveRequest>();
  private pendingDirectSaveRequest: ServerDirectSaveRequest | null = null;
 
@@ -238,6 +252,40 @@ export class ServerFileTransfer {
   */
  public setFileReceivedCallback(callback: (file: File, fromUserId: string) => void) {
   this.onFileReceivedCallback = callback;
+ }
+
+ public setTransferUiUpdateCallback(callback: (update: FileTransferUiUpdate) => void) {
+  this.onTransferUiUpdateCallback = callback;
+ }
+
+ private emitSendingUpdate(session: TransferSession, status: FileTransferUiUpdate["status"], progress: number) {
+  this.onTransferUiUpdateCallback?.({
+   transferId: session.transferId,
+   direction: "send",
+   peerId: session.toUserId,
+   roomName: session.roomName,
+   fileName: session.file.name,
+   fileSize: session.file.size,
+   fileType: session.file.type || "application/octet-stream",
+   progress,
+   status,
+   file: session.file,
+  });
+ }
+
+ private emitReceivingUpdate(session: ReceiveSession, status: FileTransferUiUpdate["status"], progress: number, file?: File) {
+  this.onTransferUiUpdateCallback?.({
+   transferId: session.transferId,
+   direction: "receive",
+   peerId: session.fromUserId,
+   roomName: session.roomName,
+   fileName: session.fileName,
+   fileSize: session.fileSize,
+   fileType: session.fileType || "application/octet-stream",
+   progress,
+   status,
+   ...(file ? { file } : {}),
+  });
  }
 
  /**
@@ -571,8 +619,9 @@ export class ServerFileTransfer {
   session.resendAttempts = 0;
   this.maybeSendReceiverAck(session, chunkIndex);
 
-  const progress = (session.receivedCount / session.totalChunks) * 100;
-  this.onProgressCallback?.(progress);
+   const progress = (session.receivedCount / session.totalChunks) * 100;
+   this.onProgressCallback?.(progress);
+   this.emitReceivingUpdate(session, "transferring", progress);
 
   if (session.receivedCount % 50 === 0 || session.receivedCount === session.totalChunks) {
    console.debug(`[ServerFileTransfer] Chunk ${session.receivedCount}/${session.totalChunks} (${progress.toFixed(1)}%)`);
@@ -773,6 +822,7 @@ export class ServerFileTransfer {
   messageType: string = FILE_TRANSFER_MESSAGE_TYPES.CANCEL
  ): void {
   session.status = "error";
+  this.emitReceivingUpdate(session, "error", 0);
   if (session.directSink) {
    void session.directSink.abort(reason).catch((error) => {
     console.warn(`[ServerFileTransfer] direct file sink abort failed: ${session.transferId}`, error);
@@ -1000,6 +1050,7 @@ export class ServerFileTransfer {
   };
   this.sendingSessions.set(transferId, session);
   this.currentSendingTransferId = transferId;
+  this.emitSendingUpdate(session, "pending", 0);
 
   // 按照服务器期望的 WebSocketMessage 格式发送
   const requestMessage = {
@@ -1150,6 +1201,7 @@ export class ServerFileTransfer {
   };
   this.receivingSessions.set(request.transfer_id, session);
   this.unknownBinaryTransferIssueKeys.delete(request.transfer_id);
+  this.emitReceivingUpdate(session, "pending", 0);
 
   if (session.storageMode === "direct-to-disk") {
    this.queueDirectDiskReceive(session, session.directSaveReason);
@@ -1339,6 +1391,7 @@ export class ServerFileTransfer {
 
   session.status = "receiving";
   this.refreshReceiveTimeout(transferId);
+  this.emitReceivingUpdate(session, "transferring", 0);
 
   // 显示下载界面
   this.onFileMetaInfoChange?.(session.fileName);
@@ -1526,16 +1579,13 @@ export class ServerFileTransfer {
   return Math.max(session.sentChunks - session.ackedChunks, 0);
  }
 
- private async waitForReceiverAckWindow(
-  session: TransferSession,
-  maxInFlightChunks = this.RELAY_ACK_WINDOW_CHUNKS
- ): Promise<void> {
+ private async waitForReceiverAckWindow(session: TransferSession): Promise<void> {
   if (!session.flowControl) {
    return;
   }
 
   const startedAt = Date.now();
-  while (this.getUnackedChunkCount(session) >= maxInFlightChunks) {
+  while (this.getUnackedChunkCount(session) >= this.RELAY_ACK_WINDOW_CHUNKS) {
    this.ensureSendingSessionActive(session);
    if (Date.now() - startedAt > this.RELAY_ACK_STALL_TIMEOUT_MS) {
     throw new TransferTimeoutError(t('alert.transferInterrupted'));
@@ -1598,6 +1648,7 @@ export class ServerFileTransfer {
    if (!session.flowControl) {
     const progress = Math.min((session.sentChunks / session.totalChunks) * 100, 99);
     this.onProgressCallback?.(progress);
+    this.emitSendingUpdate(session, "transferring", progress);
    }
   }
 
@@ -1607,6 +1658,7 @@ export class ServerFileTransfer {
 
  private async startSending(session: TransferSession) {
   session.status = "transferring";
+  this.emitSendingUpdate(session, "transferring", 0);
   
   // 显示上传进度界面
   this.onFileMetaInfoChange?.(session.file.name);
@@ -1653,6 +1705,7 @@ export class ServerFileTransfer {
   console.debug(`[ServerFileTransfer] File sending completed and receiver confirmed: ${session.transferId}`);
   alertUseMUI(t('toast.fileSent'), 2000, { kind: "success" });
   this.onProgressCallback?.(100);
+  this.emitSendingUpdate(session, "completed", 100);
   this.setTransferStatus(t('alert.serverTransferComplete'), "success");
   this.resolveSendCompletion(session.transferId);
   
@@ -1748,6 +1801,7 @@ export class ServerFileTransfer {
   session.ackedChunks = Math.max(session.ackedChunks, normalized.ack.receivedChunks);
   const progress = Math.min((session.ackedChunks / session.totalChunks) * 100, 99);
   this.onProgressCallback?.(progress);
+  this.emitSendingUpdate(session, "transferring", progress);
   console.debug(
    `[ServerFileTransfer] Receiver ACK ${session.ackedChunks}/${session.totalChunks} transfer=${session.transferId}`
   );
@@ -1766,6 +1820,7 @@ export class ServerFileTransfer {
    sendingSession.ackedChunks = Math.max(sendingSession.ackedChunks, serverAcceptedChunks);
    const progress = Math.min((sendingSession.ackedChunks / sendingSession.totalChunks) * 100, 99);
    this.onProgressCallback?.(progress);
+   this.emitSendingUpdate(sendingSession, "transferring", progress);
   }
 
   if (data.status === "interrupted") {
@@ -1861,9 +1916,11 @@ export class ServerFileTransfer {
   const shouldRejectAck = !!sendingSession && sendingSession.status !== "pending";
   if (sendingSession) {
    sendingSession.status = "cancelled";
+   this.emitSendingUpdate(sendingSession, "cancelled", 0);
   }
   if (receivingSession) {
    receivingSession.status = "cancelled";
+   this.emitReceivingUpdate(receivingSession, "cancelled", 0);
    if (receivingSession.directSink) {
     void receivingSession.directSink.abort(data.reason).catch((error) => {
      console.warn(`[ServerFileTransfer] direct file sink abort failed: ${receivingSession.transferId}`, error);
@@ -1907,6 +1964,8 @@ export class ServerFileTransfer {
   if (this.completedTransferIds.has(data.transfer_id)) { return; } // 传输已完成，忽略迟到 error
   const sendingSession = this.sendingSessions.get(data.transfer_id);
   const receivingSession = this.receivingSessions.get(data.transfer_id);
+  if (sendingSession) this.emitSendingUpdate(sendingSession, "error", 0);
+  if (receivingSession) this.emitReceivingUpdate(receivingSession, "error", 0);
   if (sendingSession && sendingSession.status !== "pending") {
    this.completionAcks.reject(
     data.transfer_id,
@@ -1967,7 +2026,8 @@ export class ServerFileTransfer {
     const elapsed = (performance.now() - startTime).toFixed(0);
     console.debug(`[ServerFileTransfer] Direct file saved in ${elapsed}ms: ${session.fileName} (${session.fileSize} bytes)`);
 
-    this.onFileSavedToDiskCallback?.(session.fileName, session.fileSize, session.fromUserId);
+     this.onFileSavedToDiskCallback?.(session.fileName, session.fileSize, session.fromUserId);
+     this.emitReceivingUpdate(session, "completed", 100);
    } else {
     let file: File;
     if (session.receivedChunks && session.receivedChunks.length > 0) {
@@ -1989,7 +2049,8 @@ export class ServerFileTransfer {
     const elapsed = (performance.now() - startTime).toFixed(0);
     console.debug(`[ServerFileTransfer] File ready in ${elapsed}ms: ${file.name} (${file.size} bytes)`);
 
-    this.onFileReceivedCallback?.(file, session.fromUserId);
+     this.onFileReceivedCallback?.(file, session.fromUserId);
+     this.emitReceivingUpdate(session, "completed", 100, file);
    }
    this.sendTransferCompleteMessage(session.transferId, session.roomName);
    this.completedTransferIds.add(session.transferId);
@@ -2032,12 +2093,33 @@ export class ServerFileTransfer {
  /**
   * 取消当前传输
   */
+ public cancelReceivingTransfer(transferId: string): boolean {
+  const session = this.receivingSessions.get(transferId);
+  if (!session || session.status === "completed" || session.status === "cancelled") return false;
+  const reason = t('alert.userCancelReceive');
+  session.status = "cancelled";
+  this.emitReceivingUpdate(session, "cancelled", 0);
+  if (session.directSink) void session.directSink.abort(reason).catch(() => undefined);
+  session.directSink = null;
+  session.buffer = null;
+  session.receivedChunks = [];
+  this.sendTransferControlMessage(FILE_TRANSFER_MESSAGE_TYPES.CANCEL, transferId, reason, session.roomName);
+  this.receivingSessions.delete(transferId);
+  this.clearPendingDirectSaveRequest(transferId);
+  this.clearReceiveTimeout(transferId);
+  this.onProgressCallback?.(null);
+  return true;
+ }
+
  public cancelCurrentTransfer() {
   let cancelled = false;
   if (this.currentSendingTransferId) {
    const session = this.sendingSessions.get(this.currentSendingTransferId);
    if (session) {
     const reason = t('alert.userCancelReceive');
+    const wasPending = session.status === "pending";
+    session.status = "cancelled";
+    this.emitSendingUpdate(session, "cancelled", 0);
     this.sendTransferControlMessage(
      FILE_TRANSFER_MESSAGE_TYPES.CANCEL,
      this.currentSendingTransferId,
@@ -2045,7 +2127,7 @@ export class ServerFileTransfer {
      session.roomName
     );
 
-    if (session.status !== "pending") {
+    if (!wasPending) {
      this.completionAcks.reject(this.currentSendingTransferId, new Error(reason));
     } else {
      this.completionAcks.cancel(this.currentSendingTransferId);
@@ -2064,6 +2146,7 @@ export class ServerFileTransfer {
    }
    const reason = t('alert.userCancelReceive');
    session.status = "cancelled";
+   this.emitReceivingUpdate(session, "cancelled", 0);
    if (session.directSink) {
     void session.directSink.abort(reason).catch((error) => {
      console.warn(`[ServerFileTransfer] direct file sink abort failed: ${session.transferId}`, error);

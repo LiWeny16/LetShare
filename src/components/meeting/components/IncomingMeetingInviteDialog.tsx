@@ -21,45 +21,101 @@ import {
   IconButton,
   Typography,
 } from "@mui/material";
-import VideocamIcon from "@mui/icons-material/Videocam";
+import GroupsIcon from "@mui/icons-material/Groups";
 import CallIcon from "@mui/icons-material/Call";
 import CallEndIcon from "@mui/icons-material/CallEnd";
 import CloseIcon from "@mui/icons-material/Close";
 import { useTranslation } from "react-i18next";
+import realTimeColab from "@App/libs/connection/colabLib";
 import { meetingManager } from "@App/libs/meeting/meetingManager";
 import { meetingInviteBus, type MeetingInviteIncoming } from "@App/libs/meeting/meetingInviteBus";
+import settingsStore from "@App/libs/mobx/mobx";
+import alertUseMUI from "@App/libs/tools/alert";
 
 const RING_BLUE = "#1677ff";
 
 export default function IncomingMeetingInviteDialog() {
   const { t } = useTranslation();
-  const [invite, setInvite] = useState<MeetingInviteIncoming | null>(null);
+  // The dialog is mounted once outside the route tree, but the route can still
+  // be replaced while an invite is in flight.  Derive the current invite from
+  // MeetingManager as well as the event bus so a remount/reconnect cannot lose
+  // an invite that was already accepted by the manager.
+  const [invite, setInvite] = useState<MeetingInviteIncoming | null>(() => meetingManager.getState().pendingInvite);
   const [serverExpired, setServerExpired] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const countdownRef = useRef<number | undefined>(undefined);
   /** 当前弹窗 inviteId 的 ref：status 回执按 inviteId 匹配，避免房间主行回执误伤本弹窗。 */
   const inviteIdRef = useRef<string>("");
 
+  const enterMeeting = (meetingId: string, sourceRoomId: string) => {
+    if (!meetingId) return;
+    if (meetingManager.getState().inMeeting) {
+      void meetingManager.switchMeeting(meetingId);
+      return;
+    }
+    window.location.hash = `#/meeting?room=${encodeURIComponent(meetingId)}&source=${encodeURIComponent(sourceRoomId)}`;
+  };
+
   useEffect(() => {
+    const syncManagerState = (state: { pendingInvite: MeetingInviteIncoming | null }) => {
+      if (state.pendingInvite) {
+        inviteIdRef.current = state.pendingInvite.inviteId;
+        setInvite(state.pendingInvite);
+        setServerExpired(false);
+        setNow(Date.now());
+      } else {
+        inviteIdRef.current = "";
+        setInvite(null);
+        setServerExpired(false);
+      }
+    };
     const onIncoming = (inv: MeetingInviteIncoming) => {
       inviteIdRef.current = inv.inviteId;
       setInvite(inv);
       setServerExpired(false);
       setNow(Date.now());
     };
-    const onStatus = (msg: { inviteId?: string; userId: string; action: string }) => {
+    const onStatus = (msg: { inviteId?: string; uniqId: string; action: string }) => {
       if (msg.action === "expired" && msg.inviteId && msg.inviteId === inviteIdRef.current) {
         setServerExpired(true);
         setNow(Date.now());
       }
     };
+    const unsubscribe = meetingManager.subscribe(syncManagerState);
+    const unsubscribeEvents = meetingManager.onEvent((event) => {
+      if (event.type !== "meeting:apply-status") return;
+      const selfId = realTimeColab.getUniqId() ?? "";
+      // The host receives the same status so its applicant list can be cleaned up.
+      // Only the applicant is allowed to navigate into the meeting. The fallback
+      // keeps old servers safe: a host processing an application is already in a meeting.
+      const isApplicant = event.data.applicantId
+        ? event.data.applicantId === selfId
+        : !meetingManager.getState().inMeeting;
+      if (event.data.action === "approved" && isApplicant) {
+        alertUseMUI(t("meeting.applyApprovedToast", "入会申请已通过，正在进入会议"), 3000, { kind: "success" });
+        enterMeeting(event.data.meetingId, event.data.sourceRoomId || settingsStore.get("roomId") || "");
+        return;
+      }
+      const message = event.data.action === "rejected"
+        ? t("meeting.applyRejectedToast", "主持人已拒绝你的入会申请")
+        : event.data.action === "approved"
+          ? t("meeting.applyApprovedHostToast", "入会申请已通过")
+          : event.data.action === "failed"
+            ? t("meeting.applyFailedToast", "入会申请处理失败，请重新申请")
+            : event.data.action === "expired"
+              ? t("meeting.applyExpiredToast", "入会申请已过期")
+              : "";
+      if (message) alertUseMUI(message, 3000, { kind: event.data.action === "approved" ? "success" : "info" });
+    });
     meetingInviteBus.on("invite-incoming", onIncoming);
     meetingInviteBus.on("invite-status", onStatus);
     return () => {
+      unsubscribe();
+      unsubscribeEvents();
       meetingInviteBus.off("invite-incoming", onIncoming);
       meetingInviteBus.off("invite-status", onStatus);
     };
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     if (!invite) return;
@@ -109,7 +165,7 @@ export default function IncomingMeetingInviteDialog() {
       PaperProps={{ "data-testid": "meeting-invite-dialog", sx: { borderRadius: 3 } }}
     >
       <DialogTitle sx={{ display: "flex", alignItems: "center", gap: 1, fontWeight: 800, pr: 1.5 }}>
-        <VideocamIcon sx={{ color: RING_BLUE }} />
+        <GroupsIcon sx={{ color: RING_BLUE }} />
         <Box sx={{ flex: 1 }}>{t("meeting.invIncomingTitle", "会议邀请")}</Box>
         <IconButton aria-label={t("meeting.invClose", "关闭")} data-testid="meeting-invite-close" onClick={onClose} size="small">
           <CloseIcon />

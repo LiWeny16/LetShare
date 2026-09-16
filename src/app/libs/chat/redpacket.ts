@@ -18,7 +18,8 @@ export function buildRedPacket(payload: RedPacketPayload): string {
 }
 
 /** 解析红包消息文本；非红包消息返回 null。 */
-export function parseRedPacket(content: string): RedPacketPayload | null {
+export function parseRedPacket(content: unknown): RedPacketPayload | null {
+  if (typeof content !== "string") return null;
   if (!content.startsWith(REDPACKET_PREFIX)) return null;
   try {
     const raw = JSON.parse(content.slice(REDPACKET_PREFIX.length)) as Partial<RedPacketPayload>;

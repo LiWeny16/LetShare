@@ -8,9 +8,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Box,
-  Chip,
+  Button,
   IconButton,
   InputBase,
+  LinearProgress,
   MenuItem,
   Paper,
   Select,
@@ -25,9 +26,19 @@ import AttachFileIcon from "@mui/icons-material/AttachFile";
 import LockIcon from "@mui/icons-material/Lock";
 import GroupsIcon from "@mui/icons-material/Groups";
 import PersonIcon from "@mui/icons-material/Person";
+import CancelIcon from "@mui/icons-material/Cancel";
+import DownloadIcon from "@mui/icons-material/Download";
+import InsertDriveFileIcon from "@mui/icons-material/InsertDriveFile";
+import SelectAllIcon from "@mui/icons-material/SelectAll";
 import { useTranslation } from "react-i18next";
 import { meetingManager } from "@App/libs/meeting/meetingManager";
+import {
+  appendMeetingChatHistory,
+  clearMeetingChatHistory,
+  getMeetingChatHistory,
+} from "@App/libs/meeting/meetingChatStore";
 import realTimeColab from "@App/libs/connection/colabLib";
+import type { FileTransferUiUpdate } from "@App/libs/connection/ServerFileTransfer";
 import { displayNameOf } from "../types";
 
 type ChatMsg = {
@@ -38,7 +49,16 @@ type ChatMsg = {
   /** 私聊目标（仅收发双方可见） */
   to?: string;
   /** 定向文件消息（复用旧传输引擎；面板内只做行内展示） */
-  file?: { name: string; size: number };
+  file?: {
+    transferId: string;
+    name: string;
+    size: number;
+    type: string;
+    direction: "send" | "receive";
+    progress: number;
+    status: "pending" | "transferring" | "completed" | "cancelled" | "error";
+    url?: string;
+  };
 };
 
 const MAX_MSGS = 200;
@@ -62,10 +82,24 @@ export function MeetingChat({ initialTarget }: { initialTarget?: string | null }
   const listRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const clientIdRef = useRef<string>("");
+  const roomIdRef = useRef<string>(meetingManager.getState().roomId ?? "");
+  const attachmentUrlsRef = useRef(new Set<string>());
+
+  const historyMessages = (roomId: string, clientId = clientIdRef.current): ChatMsg[] =>
+    getMeetingChatHistory(roomId).map((message) => ({
+      ...message,
+      self: message.from === clientId,
+    }));
 
   useEffect(() => {
     clientIdRef.current = realTimeColab.getUniqId() ?? "";
+    setMsgs(historyMessages(roomIdRef.current, clientIdRef.current));
     const unsubState = meetingManager.subscribe((s) => {
+      const nextRoomId = s.roomId ?? "";
+      if (nextRoomId !== roomIdRef.current) {
+        roomIdRef.current = nextRoomId;
+        setMsgs(historyMessages(nextRoomId));
+      }
       setMembers(s.members.filter((m) => m.uniqId !== clientIdRef.current));
     });
     return () => {
@@ -74,12 +108,19 @@ export function MeetingChat({ initialTarget }: { initialTarget?: string | null }
   }, []);
 
   useEffect(() => {
-    return meetingManager.onEvent((ev) => {
+    const unsubscribe = meetingManager.onEvent((ev) => {
       if (ev.type === "meeting:chat") {
         const { from, text, ts, to } = ev.data;
         if (!from || !text) return;
         // 私聊只显示收发双方可见的副本（服务器已定向投递，双保险）
         if (to && to !== clientIdRef.current && from !== clientIdRef.current) return;
+        const history = getMeetingChatHistory(roomIdRef.current);
+        const alreadyPresent = history.some((item) => item.from === from && item.text === text && item.ts === ts && item.to === (to || undefined));
+        appendMeetingChatHistory(roomIdRef.current, { from, text, ts, ...(to ? { to } : {}) });
+        if (alreadyPresent) {
+          setMsgs(historyMessages(roomIdRef.current));
+          return;
+        }
         setMsgs((prev) => {
           const next = [...prev, {
             from,
@@ -93,25 +134,57 @@ export function MeetingChat({ initialTarget }: { initialTarget?: string | null }
         });
       } else if (ev.type === "meeting:breakout") {
         // 切换房间（进入分组/召回）：清空聊天，避免跨房间残留（分组私密讨论）
-        setMsgs([]);
+        setMsgs(historyMessages(roomIdRef.current));
+      } else if (ev.type === "meeting:ended" || ev.type === "meeting:kicked") {
+        clearMeetingChatHistory(ev.data.roomId);
+        if (ev.data.roomId === roomIdRef.current) setMsgs([]);
       }
     });
+    meetingManager.requestChatHistory();
+    return unsubscribe;
   }, []);
 
   useEffect(() => {
     // 定向文件：接收端在会议面板内也可见（文件本体走既有 Download/房间聊天通道）
-    const onFileReceived = ({ from, fileName, fileSize }: { from: string; fileName: string; fileSize: number }) => {
-      if (!from || from === clientIdRef.current) return;
+    const onTransferUpdate = (update: FileTransferUiUpdate) => {
+      if (!update.transferId || update.roomName !== roomIdRef.current) return;
       setMsgs((prev) => {
-        const next = [...prev, { from, text: fileName, ts: Date.now(), self: false, file: { name: fileName, size: fileSize } }];
+        const index = prev.findIndex((message) => message.file?.transferId === update.transferId);
+        const previous = index >= 0 ? prev[index] : undefined;
+        let url = previous?.file?.url;
+        if (!url && update.file) {
+          url = URL.createObjectURL(update.file);
+          attachmentUrlsRef.current.add(url);
+        }
+        const nextMessage: ChatMsg = {
+          from: update.direction === "send" ? clientIdRef.current : update.peerId,
+          text: update.fileName,
+          ts: previous?.ts ?? Date.now(),
+          self: update.direction === "send",
+          ...(update.direction === "send" ? { to: update.peerId } : {}),
+          file: {
+            transferId: update.transferId,
+            name: update.fileName,
+            size: update.fileSize,
+            type: update.fileType,
+            direction: update.direction,
+            progress: update.progress,
+            status: update.status,
+            ...(url ? { url } : {}),
+          },
+        };
+        const next = index >= 0
+          ? prev.map((message, messageIndex) => messageIndex === index ? nextMessage : message)
+          : [...prev, nextMessage];
         return next.length > MAX_MSGS ? next.slice(next.length - MAX_MSGS) : next;
       });
     };
-    realTimeColab.emitter.on("file-received", onFileReceived);
-    realTimeColab.emitter.on("file-saved-to-disk", onFileReceived);
+    realTimeColab.emitter.on("file-transfer-ui", onTransferUpdate);
+    const attachmentUrls = attachmentUrlsRef.current;
     return () => {
-      realTimeColab.emitter.off("file-received", onFileReceived);
-      realTimeColab.emitter.off("file-saved-to-disk", onFileReceived);
+      realTimeColab.emitter.off("file-transfer-ui", onTransferUpdate);
+      for (const url of attachmentUrls) URL.revokeObjectURL(url);
+      attachmentUrls.clear();
     };
   }, []);
 
@@ -138,12 +211,25 @@ export function MeetingChat({ initialTarget }: { initialTarget?: string | null }
     const text = input.trim();
     if (!text || sending) return;
     const to = target !== PRIVATE_ALL ? target : undefined;
+    const ts = Date.now();
     meetingManager.sendChat(text, to);
+    appendMeetingChatHistory(roomIdRef.current, { from: clientIdRef.current, text, ts, ...(to ? { to } : {}) });
     setMsgs((prev) => {
-      const next = [...prev, { from: clientIdRef.current, text, ts: Date.now(), self: true, to }];
+      const next = [...prev, { from: clientIdRef.current, text, ts, self: true, to }];
       return next.length > MAX_MSGS ? next.slice(next.length - MAX_MSGS) : next;
     });
     setInput("");
+  };
+
+  const selectAllMessages = () => {
+    const element = listRef.current;
+    if (!element || typeof window === "undefined") return;
+    const selection = window.getSelection();
+    if (!selection) return;
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    selection.removeAllRanges();
+    selection.addRange(range);
   };
 
   const pickFile = () => {
@@ -161,18 +247,7 @@ export function MeetingChat({ initialTarget }: { initialTarget?: string | null }
     setSending(true);
     try {
       // 复用统一传输引擎：P2P（probe 验证）→ 失败/卡死自动切公网 relay
-      await realTimeColab.sendFileAuto(to, file);
-      setMsgs((prev) => {
-        const next = [...prev, {
-          from: clientIdRef.current,
-          text: file.name,
-          ts: Date.now(),
-          self: true,
-          to,
-          file: { name: file.name, size: file.size },
-        }];
-        return next.length > MAX_MSGS ? next.slice(next.length - MAX_MSGS) : next;
-      });
+      await realTimeColab.sendFileAuto(to, file, roomIdRef.current);
     } catch (error) {
       console.warn("[MeetingChat] 定向文件发送失败:", error);
     } finally {
@@ -191,7 +266,7 @@ export function MeetingChat({ initialTarget }: { initialTarget?: string | null }
       <Box
         ref={listRef}
         sx={{
-          flex: 1, minHeight: 0, overflowY: "auto", px: 1.5, py: 1,
+          flex: 1, minHeight: 0, overflowY: "auto", px: 1.5, py: 1, userSelect: "text",
           "&::-webkit-scrollbar": { width: 5 }, "&::-webkit-scrollbar-thumb": { borderRadius: 3, bgcolor: "action.selected" },
         }}
       >
@@ -209,24 +284,26 @@ export function MeetingChat({ initialTarget }: { initialTarget?: string | null }
               {" · "}
               {new Date(m.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
             </Typography>
-            <Paper
-              elevation={0}
-              sx={{
-                px: 1.25, py: 0.75, borderRadius: 2, maxWidth: "88%",
-                bgcolor: m.self ? "primary.main" : theme.palette.mode === "dark" ? alpha("#fff", 0.07) : alpha("#000", 0.05),
-                color: m.self ? "primary.contrastText" : "text.primary",
-                fontSize: "0.82rem", lineHeight: 1.45, wordBreak: "break-word", whiteSpace: "pre-wrap",
-              }}
-            >
-              {m.text}
-            </Paper>
-            {m.file && (
-              <Chip
-                size="small"
-                icon={<AttachFileIcon sx={{ fontSize: "0.9rem !important" }} />}
-                label={`${m.file.name} · ${formatSize(m.file.size)}`}
-                sx={{ mt: 0.5, fontSize: "0.7rem", maxWidth: "88%" }}
+            {m.file ? (
+              <AttachmentBubble
+                attachment={m.file}
+                onCancel={() => {
+                  if (m.file?.direction === "send") realTimeColab.abortFileTransferToUser();
+                  else if (m.file) realTimeColab.cancelReceivingServerTransfer(m.file.transferId);
+                }}
               />
+            ) : (
+              <Paper
+                elevation={0}
+                sx={{
+                  px: 1.25, py: 0.75, borderRadius: 2, maxWidth: "88%",
+                  bgcolor: m.self ? "primary.main" : theme.palette.mode === "dark" ? alpha("#fff", 0.07) : alpha("#000", 0.05),
+                  color: m.self ? "primary.contrastText" : "text.primary",
+                  fontSize: "0.82rem", lineHeight: 1.45, wordBreak: "break-word", whiteSpace: "pre-wrap",
+                }}
+              >
+                {m.text}
+              </Paper>
             )}
           </Box>
         ))}
@@ -255,7 +332,7 @@ export function MeetingChat({ initialTarget }: { initialTarget?: string | null }
             </MenuItem>
             {members.map((m) => (
               <MenuItem key={m.uniqId} value={m.uniqId} sx={{ fontSize: "0.8rem" }}>
-                {displayNameOf(m.uniqId)}
+                {m.name || displayNameOf(m.uniqId)}
               </MenuItem>
             ))}
           </Select>
@@ -304,13 +381,24 @@ export function MeetingChat({ initialTarget }: { initialTarget?: string | null }
             onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
             placeholder={
               privateTarget
-                ? t("meeting.chatPrivatePlaceholder", "私聊 {{name}}…", { name: displayNameOf(privateTarget.uniqId) })
+                ? t("meeting.chatPrivatePlaceholder", "私聊 {{name}}…", { name: privateTarget.name || displayNameOf(privateTarget.uniqId) })
                 : t("meeting.chatPlaceholder", "发送消息…")
             }
             multiline
             maxRows={4}
             sx={{ flex: 1, fontSize: "0.85rem", py: 0.75, px: 0.5 }}
           />
+          <Tooltip title={t("meeting.chatSelectAll", "全选聊天内容")}>
+            <IconButton
+              size="small"
+              onClick={selectAllMessages}
+              aria-label={t("meeting.chatSelectAll", "全选聊天内容")}
+              data-testid="meeting-chat-select-all"
+              sx={{ width: 40, height: 40 }}
+            >
+              <SelectAllIcon sx={{ fontSize: 19 }} />
+            </IconButton>
+          </Tooltip>
           <IconButton
             size="small"
             onClick={send}
@@ -324,5 +412,84 @@ export function MeetingChat({ initialTarget }: { initialTarget?: string | null }
         </Paper>
       </Box>
     </Stack>
+  );
+}
+
+function AttachmentBubble({
+  attachment,
+  onCancel,
+}: {
+  attachment: NonNullable<ChatMsg["file"]>;
+  onCancel: () => void;
+}) {
+  const isActive = attachment.status === "pending" || attachment.status === "transferring";
+  const isImage = attachment.type.startsWith("image/");
+  const statusLabel = attachment.status === "completed"
+    ? "已完成"
+    : attachment.status === "cancelled"
+      ? "已取消"
+      : attachment.status === "error"
+        ? "传输失败"
+        : attachment.status === "pending"
+          ? "等待接收"
+          : `传输中 ${Math.round(attachment.progress)}%`;
+
+  return (
+    <Paper
+      data-testid={`meeting-attachment-${attachment.transferId}`}
+      data-status={attachment.status}
+      data-direction={attachment.direction}
+      elevation={0}
+      sx={{ width: "min(248px, 88vw)", overflow: "hidden", borderRadius: 2, border: "1px solid", borderColor: "divider", bgcolor: "background.paper" }}
+    >
+      {isImage && attachment.url && (
+        <Box
+          component="a"
+          href={attachment.url}
+          download={attachment.name}
+          aria-label={`下载图片 ${attachment.name}`}
+          sx={{ display: "block", bgcolor: "action.hover" }}
+        >
+          <Box
+            component="img"
+            data-testid="meeting-attachment-image"
+            src={attachment.url}
+            alt={attachment.name}
+            sx={{ display: "block", width: "100%", maxHeight: 180, objectFit: "cover" }}
+          />
+        </Box>
+      )}
+      <Stack spacing={0.75} sx={{ p: 1.1 }}>
+        <Stack direction="row" spacing={1} alignItems="center">
+          <InsertDriveFileIcon sx={{ color: "primary.main", flexShrink: 0 }} />
+          <Box sx={{ flex: 1, minWidth: 0 }}>
+            <Typography noWrap sx={{ fontSize: "0.78rem", fontWeight: 750 }}>{attachment.name}</Typography>
+            <Typography sx={{ fontSize: "0.68rem", color: "text.secondary" }}>{formatSize(attachment.size)}</Typography>
+          </Box>
+          {attachment.status === "completed" && attachment.url && (
+            <Button
+              component="a"
+              href={attachment.url}
+              download={attachment.name}
+              size="small"
+              startIcon={<DownloadIcon />}
+              aria-label={`下载文件 ${attachment.name}`}
+              sx={{ minWidth: 44, minHeight: 40, px: 1, textTransform: "none" }}
+            >
+              下载
+            </Button>
+          )}
+          {isActive && (
+            <IconButton onClick={onCancel} aria-label={`取消传输 ${attachment.name}`} sx={{ width: 40, height: 40 }}>
+              <CancelIcon fontSize="small" />
+            </IconButton>
+          )}
+        </Stack>
+        {isActive && <LinearProgress variant="determinate" value={Math.max(0, Math.min(100, attachment.progress))} aria-label={`${attachment.name} 传输进度`} />}
+        <Typography sx={{ fontSize: "0.68rem", color: attachment.status === "error" ? "error.main" : "text.secondary" }}>
+          {statusLabel}
+        </Typography>
+      </Stack>
+    </Paper>
   );
 }

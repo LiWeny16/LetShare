@@ -28,10 +28,12 @@ import {
 import { IncrementalSha256 } from "./sha256";
 import { SecureMessageWrapper } from "../security/SecureMessageWrapper";
 import { UserKeyInfo } from "../security/SimpleE2EEncryption";
+import { initializeIdentity, updateIdentityUserName } from "../identity/identity";
 import mitt from 'mitt';
 import {
  ServerFileTransfer,
  type ServerDirectSaveRequest,
+ type FileTransferUiUpdate,
 } from "./ServerFileTransfer";
 import {
 	getProToken,
@@ -125,6 +127,7 @@ type ColabEvents = {
  'file-received': { from: string; fileName: string; fileSize: number; file: File };
  'file-saved-to-disk': { from: string; fileName: string; fileSize: number };
  'file-progress': { to: string; progress: number };
+ 'file-transfer-ui': FileTransferUiUpdate;
  'transfer-record': TransferRecord;
 };
 
@@ -159,6 +162,8 @@ export interface UserInfo {
  attempts: number;
  lastSeen: number;
  userType: UserType;
+ userName?: string;
+ meetingRoom?: string;
  hadP2PConnection?: boolean; // 标记该用户是否曾经成功建立过P2P连接
 }
 
@@ -240,6 +245,8 @@ export class RealTimeColab {
  private static instance: RealTimeColab | null = null;
  private static isCreating = false; // 防止并发创建
  private static userId: string | null = null;
+ private static userName: string | null = null;
+ private static userNameExplicit = false;
  private static uniqId: string | null = null;
  public static peers: Map<string, RTCPeerConnection> = new Map();
  public emitter = mitt<ColabEvents>(); // 实例化事件发射器
@@ -249,25 +256,18 @@ export class RealTimeColab {
  private activeChatUserId: string | null = null;
 
  private constructor() {
-  const state = this.getStatesMemorable();
-  let userId = state.memorable.userId;
-  let uniqId = state.memorable.uniqId;
+  const identity = initializeIdentity();
+  const { userId, userName, userNameExplicit, uniqId } = identity;
   this.peerManager = new PeerManager(this);
 
-  if (!userId) {
-   userId = this.generateUUID();
-   this.changeStatesMemorable({ memorable: { userId } });
-  }
-
-  if (!uniqId) {
-   uniqId = `${userId}:${this.generateUUID()}`;
-   this.changeStatesMemorable({ memorable: { uniqId } });
-  }
-
   RealTimeColab.userId = userId;
+  RealTimeColab.userName = userName;
+  RealTimeColab.userNameExplicit = userNameExplicit;
   RealTimeColab.uniqId = uniqId;
   const config: ConnectionConfig = {
    roomId: settingsStore.get("roomId") || "default-room", // 初始roomId，或在连接时指定
+   userId,
+   userName,
    uniqId: uniqId,
   };
   this.connectionManager = new ConnectionManager(config);
@@ -280,6 +280,8 @@ export class RealTimeColab {
  }
  // In RealTimeColab
  private connectionManager: ConnectionManager;
+ /** True when the active transport is owned by Meeting, not an ordinary room. */
+ private transportOnlyConnection = false;
  
  // 服务器文件传输
  private serverFileTransfer: ServerFileTransfer | null = null;
@@ -573,6 +575,9 @@ export class RealTimeColab {
      this.emitter.emit('file-progress', { to: this.sendingToUserId, progress });
     }
    });
+   this.serverFileTransfer.setTransferUiUpdateCallback((update) => {
+    this.emitter.emit('file-transfer-ui', update);
+   });
    
    this.serverFileTransfer.setFileReceivedCallback((file, fromUserId) => {
     console.debug(`[ColabLib] File received from ${fromUserId}:`, file.name);
@@ -684,10 +689,11 @@ export class RealTimeColab {
   * @description Connect To Server@jServer
   */
  // In RealTimeColab
- public async connectToServer(opts?: { silent?: boolean }): Promise<boolean> {
+ public async connectToServer(opts?: { silent?: boolean; transportOnly?: boolean }): Promise<boolean> {
   // 原来的 connectToServer
-  const roomId = settingsStore.get("roomId");
-  if (!validateRoomName(roomId).isValid) {
+  const transportOnly = opts?.transportOnly ?? this.transportOnlyConnection;
+  const roomId = transportOnly ? "" : settingsStore.get("roomId");
+  if (!transportOnly && !validateRoomName(roomId).isValid) {
    settingsStore.updateUnrmb("settingsPageState", true);
    return false;
   }
@@ -698,6 +704,7 @@ export class RealTimeColab {
   this.cancelReconnect();
   this.pendingRejoin = false;
   this.autoReconnectAllowed = true;
+  this.transportOnlyConnection = transportOnly;
   settingsStore.updateUnrmb("serverConnState", "connecting");
 
   // 重要：必须在连接之前设置所有回调！
@@ -739,7 +746,7 @@ export class RealTimeColab {
   }
 
   // 现在连接到服务器
-  const success = await this.connectionManager.connect(roomId!);
+  const success = await this.connectionManager.connect(roomId!, { transportOnly });
   if (success) {
    settingsStore.updateUnrmb("isConnectedToServer", true);
    settingsStore.updateUnrmb("serverConnState", "connected");
@@ -748,13 +755,8 @@ export class RealTimeColab {
     this.connectionManager.getConnectionType() === "custom"
      ? getProToken()
      : null;
-    // WebSocket 重建后，会议房间的额外订阅不会由 ConnectionManager 自动恢复。
-    // 先通知会议层重建 SFU 会话（服务器已在断线时移除其 participant，旧 PC 全部作废），
-    // 再补订阅 —— 会议层先重发 meeting:join，随后 snapshot 到达时再按新会话订阅成员。
+    // WebSocket 重建后由会议域自己重建 session；会议不再借用普通房间订阅。
     this.meetingHandler?.("meeting:ws-reconnected", null, undefined);
-    for (const meetingRoomId of this.meetingChannels) {
-     this.subscribeMeetingRoom(meetingRoomId);
-    }
    const myPublicKeys = this.userPublicKeys.get(this.getUniqId()!);
    this.broadcastSignal({
     type: "discover",
@@ -792,6 +794,7 @@ export class RealTimeColab {
 
   await this.connectionManager.disconnect(soft);
   this.lastConnectedProToken = null;
+  if (!soft) this.transportOnlyConnection = false;
 
   // 更新连接状态
   settingsStore.updateUnrmb("isConnectedToServer", false);
@@ -855,6 +858,7 @@ export class RealTimeColab {
      });
     }
 
+    this.transportOnlyConnection = false;
     const success = await this.connectionManager.connect(newRoomId!);
     if (!success) {
      alertUseMUI(t("alert.serverConnectionFailed"), 2000, { kind: "error" });
@@ -883,12 +887,16 @@ export class RealTimeColab {
    }
    if (message.type === "error") {
     // 会议错误和无 transfer_id 的普通服务器错误不应被吞掉。
-    if (!message.data?.transfer_id) {
+     if (!message.data?.transfer_id) {
      const errText =
       message.error?.message ??
       message.data?.message ??
       "服务器错误";
-     this.meetingHandler?.("error", message, message.channel);
+     if (typeof message.channel === "string" && message.channel.startsWith("c_")) {
+      this.callSfuHandler?.("error", message, message.channel);
+     } else {
+      this.meetingHandler?.("error", message, message.channel);
+     }
      // 订阅/ICE 级局部错误（meeting:sdp/ice 前缀）：会议层做成员级重试即可，
      // 全局 toast 只会在重试窗口内刷屏并放大级联。
      if (!isTransientMeetingError(String(errText))) {
@@ -902,7 +910,11 @@ export class RealTimeColab {
    }
    if (typeof message.type === "string" && message.type.startsWith("meeting:")) {
     // 携带外层 channel：会议层用其过滤「当前会议频道」，杜绝原始房间/旧会话串扰。
-    this.meetingHandler?.(message.type, message.data, message.channel);
+    if (typeof message.channel === "string" && message.channel.startsWith("c_")) {
+     this.callSfuHandler?.(message.type, message.data, message.channel);
+    } else {
+     this.meetingHandler?.(message.type, message.data, message.channel);
+    }
     return;
    }
    if (message.event === "membership:snapshot") {
@@ -913,7 +925,11 @@ export class RealTimeColab {
     // 转发必须携带 channel：原始房间（share 房间号）与会议号的成员表都可能到达，
     // 会议层只消费当前会议频道的事件（否则原始房间成员被当作会议成员订阅，
     // 触发「房间内不存在发布者」级联 —— share→meeting 路由切换 P0 根因）。
-    this.meetingHandler?.("membership:snapshot", payload, message.channel);
+    if (typeof message.channel === "string" && message.channel.startsWith("c_")) {
+     this.callSfuHandler?.("meeting:membership:snapshot", payload, message.channel);
+    } else {
+     this.meetingHandler?.("membership:snapshot", payload, message.channel);
+    }
     return;
    }
    if (message.event === "membership:changed") {
@@ -921,7 +937,11 @@ export class RealTimeColab {
     if (!this.meetingChannels.has(message.channel)) {
      this.handleMembershipChanged(payload);
     }
-    this.meetingHandler?.("membership:changed", payload, message.channel);
+    if (typeof message.channel === "string" && message.channel.startsWith("c_")) {
+     this.callSfuHandler?.("meeting:membership:changed", payload, message.channel);
+    } else {
+     this.meetingHandler?.("membership:changed", payload, message.channel);
+    }
    }
   }
 
@@ -985,59 +1005,51 @@ export class RealTimeColab {
   });
  }
 
- /**
-  * 订阅一个"额外房间"（会议号房间）。服务器按 UserID 定向回发 meeting:* / membership:* 时，
-  * 要求该客户端在目标房间的成员表内（client.Rooms[会议号]），否则回包会被服务器丢弃。
-  * 会议号与文件传输房间号不同，故需单独订阅会议号房间。Ably 不支持。
-  *
-  * 只订阅 signal:all 即可：membership 广播与会议信令定向发送均不按专属 event 过滤。
-  * 每次 subscribe 服务器都会广播一次 join 事件，重复 subscribe 会让其它成员收到重复
-  * 成员添加通知（members 重复计数）。
-  */
+ /** Meeting membership is registered by meeting:join, never by ordinary room subscribe. */
  public subscribeMeetingRoom(roomId: string): void {
-  if (this.connectionManager.getConnectionType() !== "custom") return;
-  if (!this.connectionManager.isConnected() || !roomId) return;
-  this.meetingChannels.add(roomId);
-  this.connectionManager.send({ type: "subscribe", channel: roomId, event: "signal:all" });
+  if (roomId) this.meetingChannels.add(roomId);
  }
 
- /** 取消订阅会议号房间。 */
+ /** Compatibility shim for callers during the meeting transport migration. */
  public unsubscribeMeetingRoom(roomId: string): void {
   this.meetingChannels.delete(roomId);
-  if (this.connectionManager.getConnectionType() !== "custom") return;
-  if (!this.connectionManager.isConnected() || !roomId) return;
-  this.connectionManager.send({ type: "unsubscribe", channel: roomId, event: "signal:all" });
  }
 
  public getStatesMemorable(): {
   memorable: {
    userId: string | null;
+   userName: string | null;
+   userNameExplicit: boolean | null;
    uniqId: string | null;
   };
  } {
   const stored = localStorage.getItem("memorableState");
   if (!stored) {
-   return { memorable: { userId: null, uniqId: null } };
+   return { memorable: { userId: null, userName: null, userNameExplicit: null, uniqId: null } };
   }
   try {
    const parsed = JSON.parse(stored);
    return {
     memorable: {
      userId: parsed.memorable?.userId ?? null,
+     userName: parsed.memorable?.userName ?? null,
+     userNameExplicit: typeof parsed.memorable?.userNameExplicit === "boolean" ? parsed.memorable.userNameExplicit : null,
      uniqId: parsed.memorable?.uniqId ?? null,
     },
    };
   } catch (e) {
    console.warn(" 解析 localStorage 失败，清理状态");
    localStorage.removeItem("memorableState");
-   return { memorable: { userId: null, uniqId: null } };
+   return { memorable: { userId: null, userName: null, userNameExplicit: null, uniqId: null } };
   }
  }
 
  // 更方便的设置
  public changeStatesMemorable(newState: {
   memorable: {
-   userId?: string;
+    userId?: string;
+   userName?: string;
+   userNameExplicit?: boolean;
    uniqId?: string;
   };
  }) {
@@ -1045,6 +1057,8 @@ export class RealTimeColab {
 
   const updated = {
    userId: newState.memorable.userId ?? current.userId,
+   userName: newState.memorable.userName ?? current.userName,
+   userNameExplicit: newState.memorable.userNameExplicit ?? current.userNameExplicit,
    uniqId: newState.memorable.uniqId ?? current.uniqId,
   };
 
@@ -1056,10 +1070,16 @@ export class RealTimeColab {
 
   /** 会议(SFU)信令转发：meetingManager 等注册后，收到 meeting:* / membership:* 时回调（避免循环依赖）。 */
   private meetingHandler: ((type: string, data: any, channel?: string) => void) | null = null;
+  private callSfuHandler: ((type: string, data: any, channel?: string) => void) | null = null;
 
   /** 注册会议信令/成员表转发处理器（由 meetingManager 在初始化时调用）。 */
   public registerMeetingHandler(fn: (type: string, data: any, channel?: string) => void): void {
    this.meetingHandler = fn;
+  }
+
+  /** 注册普通双人通话的 SFU 信令处理器。 */
+  public registerCallSFUHandler(fn: ((type: string, data: any, channel?: string) => void) | null): void {
+   this.callSfuHandler = fn;
   }
 
  public getUniqId(): string | null {
@@ -1070,21 +1090,32 @@ export class RealTimeColab {
   return RealTimeColab.userId;
  }
 
- public setUserId(id: string) {
-  if (RealTimeColab.userId != id) {
-   RealTimeColab.userId = id;
-   this.changeStatesMemorable({ memorable: { userId: id } });
+ public getUserName(): string | null {
+  return RealTimeColab.userName;
+ }
 
-   // 同时更新 uniqId（重新拼接）
-   const uniqId = `${id}:${this.generateUUID()}`;
-   RealTimeColab.uniqId = uniqId;
-   this.changeStatesMemorable({ memorable: { uniqId } });
+ public hasExplicitUserName(): boolean {
+  return RealTimeColab.userNameExplicit;
+ }
+
+ public setUserId(id: string) {
+  // 兼容旧调用方：旧 userId 编辑入口现在只改变展示名称，不能再污染 uniqId。
+  this.setUserName(id);
+ }
+
+ public setUserName(name: string): void {
+  const identity = updateIdentityUserName(name);
+  RealTimeColab.userName = identity.userName;
+  RealTimeColab.userNameExplicit = identity.userNameExplicit;
+  this.connectionManager.setUserName(identity.userName);
+  if (this.connectionManager.isConnected()) {
+   this.broadcastSignal({ type: "profile:update", userName: identity.userName });
   }
  }
 
- public setUniqId(id: string) {
-  RealTimeColab.uniqId = id;
-  this.changeStatesMemorable({ memorable: { uniqId: id } });
+ /** @deprecated uniqId is initialized once; callers must change userName instead. */
+ public setUniqId(_id: string) {
+  // Kept as a compatibility no-op so legacy callers cannot silently fork identity.
  }
 
  public static getInstance(): RealTimeColab {
@@ -1169,13 +1200,17 @@ export class RealTimeColab {
    this.reconnectTimer = null;
   }
 
-  private async attemptReconnect(): Promise<void> {
+ private async attemptReconnect(): Promise<void> {
    if (!this.autoReconnectAllowed) return;
-   const roomId = settingsStore.get("roomId");
-   if (!roomId || !validateRoomName(roomId).isValid) return; // 无有效房间不空转
+   // A direct Meeting route deliberately has no ordinary LetShare roomId.
+   // Reconnect that authenticated transport independently; otherwise one
+   // transient websocket close permanently kills the meeting session.
+   const transportOnly = this.transportOnlyConnection;
+   const roomId = transportOnly ? "" : settingsStore.get("roomId");
+   if (!transportOnly && (!roomId || !validateRoomName(roomId).isValid)) return; // 无有效房间不空转
    // silent：失败不弹 toast、不打扰，返回值经 connectToServer 内部再次 schedule（退避递增）
-   await this.connectToServer({ silent: true });
-  }
+   await this.connectToServer({ silent: true, transportOnly });
+ }
 
   // ─── 在线探活 / 拨号前探测（3.8.x，通话与文件传输统一消费同一份状态）──────────
   /**
@@ -1242,11 +1277,26 @@ export class RealTimeColab {
    return false;
   }
 
-  private handleCallSignal(data: any): void {
+ private handleCallSignal(data: any): void {
    const fromId = data.from;
    if (!fromId || fromId === this.getUniqId()) return;
    this.callSignalHandler?.(fromId, data);
-  }
+ }
+
+ private handleMeetingPresence(data: any): void {
+   const fromId = data?.from;
+   if (!fromId || fromId === this.getUniqId()) return;
+   const now = Date.now();
+   const inMeeting = data?.inMeeting === true;
+   const meetingRoom = typeof data?.roomId === "string" ? data.roomId : "";
+   this.ensureMembershipUser(fromId, now, data?.userName, meetingRoom, true);
+   const user = this.userList.get(fromId);
+   if (user) {
+    user.meetingRoom = inMeeting && meetingRoom ? meetingRoom : undefined;
+    user.lastSeen = now;
+   }
+   this.updateConnectedUsers(this.userList);
+ }
 
   private async handleSignal(event: MessageEvent): Promise<void> {
   try {
@@ -1261,6 +1311,9 @@ export class RealTimeColab {
    switch (data.type) {
     case "discover":
      await this.handleDiscover(data);
+     break;
+    case "profile:update":
+     this.handleProfileUpdate(data);
      break;
     case "offer":
      await this.handleOffer(data);
@@ -1296,25 +1349,44 @@ export class RealTimeColab {
       break;
      case "membership:snapshot":
       // 服务器权威成员快照（uniqId[]）：presence 中心化，替换客户端互发现的初始状态
-      this.handleMembershipSnapshot(data);
+       const snapshot = data.data ?? data;
+       this.handleMembershipSnapshot(snapshot);
       // 携带 channel（旧服务器可能缺省 → 会议层按「缺频道拒绝」处理）
-      this.meetingHandler?.("membership:snapshot", data, data.channel);
+       if (typeof signalData.channel === "string" && signalData.channel.startsWith("c_")) {
+        this.callSfuHandler?.("meeting:membership:snapshot", snapshot, signalData.channel);
+       } else {
+        this.meetingHandler?.("membership:snapshot", snapshot, signalData.channel);
+       }
       break;
      case "membership:changed":
       // 服务器权威成员增删（join/leave）：presence 中心化的增量通知
-      this.handleMembershipChanged(data);
-      this.meetingHandler?.("membership:changed", data, data.channel);
+       const changed = data.data ?? data;
+       this.handleMembershipChanged(changed);
+       if (typeof signalData.channel === "string" && signalData.channel.startsWith("c_")) {
+        this.callSfuHandler?.("meeting:membership:changed", changed, signalData.channel);
+       } else {
+        this.meetingHandler?.("membership:changed", changed, signalData.channel);
+       }
       break;
-     default:
-      if (typeof data.type === "string" && data.type.startsWith("meeting:")) {
-       this.meetingHandler?.(data.type, signalData, signalData.channel);
-       break;
-      }
-      if (typeof data.type === "string" && data.type.startsWith("call:")) {
-       this.handleCallSignal(signalData);
-       break;
-      }
-      console.warn("Unknown message type", data.type);
+      default:
+        if (typeof data.type === "string" && data.type.startsWith("meeting:")) {
+         const payload = signalData.data ?? signalData;
+         if (typeof signalData.channel === "string" && signalData.channel.startsWith("c_")) {
+          this.callSfuHandler?.(data.type, payload, signalData.channel);
+         } else {
+          this.meetingHandler?.(data.type, payload, signalData.channel);
+         }
+        break;
+       }
+       if (typeof data.type === "string" && data.type.startsWith("call:")) {
+        this.handleCallSignal(signalData);
+        break;
+       }
+       if (typeof data.type === "string" && data.type.startsWith("presence:")) {
+        if (data.type === "presence:meeting") this.handleMeetingPresence(signalData);
+        break;
+       }
+       console.warn("Unknown message type", data.type);
     }
   } catch (err) {
    console.error(" Failed to parse WebSocket message:", event.data, err);
@@ -1327,11 +1399,15 @@ export class RealTimeColab {
   * discover 仍负责交换公钥与具体连接能力（membership 不携带）；对旧服务器/端保持 discover 兜底。
   */
  private handleMembershipSnapshot(data: any): void {
-  const members: string[] = data?.members ?? [];
+  const members: Array<string | { uniqId?: string; userName?: string; meetingRoom?: string }> = data?.members ?? [];
   const now = Date.now();
-  for (const id of members) {
+  for (const member of members) {
+   const id = typeof member === "string" ? member : member?.uniqId;
+   const userName = typeof member === "string" ? undefined : member?.userName;
+   const meetingRoom = typeof member === "string" ? undefined : member?.meetingRoom;
+   const meetingStateKnown = typeof member !== "string" && Object.prototype.hasOwnProperty.call(member, "meetingRoom");
    if (!id || id === this.getUniqId()) continue;
-   this.ensureMembershipUser(id, now);
+    this.ensureMembershipUser(id, now, userName, meetingRoom, meetingStateKnown);
   }
   this.updateConnectedUsers(this.userList);
  }
@@ -1343,7 +1419,7 @@ export class RealTimeColab {
   const id = data?.userId;
   if (!id || id === this.getUniqId()) return;
   if (data?.type === "join") {
-   this.ensureMembershipUser(id, Date.now());
+   this.ensureMembershipUser(id, Date.now(), data.userName);
    this.updateConnectedUsers(this.userList);
   } else if (data?.type === "leave") {
    this.handleUserLeave({ from: id });
@@ -1351,23 +1427,54 @@ export class RealTimeColab {
  }
 
  /** 确保某权威在线成员在 userList 有最小条目（text-only，discover 到达后升级）。 */
- private ensureMembershipUser(id: string, now: number): void {
+  private ensureMembershipUser(id: string, now: number, userName?: string, meetingRoom?: string, meetingStateKnown = false): void {
   const existing = this.userList.get(id);
   if (existing) {
    if (existing.status === "disconnected") {
     existing.status = "text-only";
     existing.attempts = 0;
-   }
-   existing.lastSeen = now;
-   return;
+    }
+    existing.lastSeen = now;
+    if (typeof userName === "string" && userName.trim()) existing.userName = userName.trim();
+    if (meetingStateKnown) existing.meetingRoom = meetingRoom || undefined;
+    return;
   }
   this.userList.set(id, {
    status: "text-only",
    attempts: 0,
-   lastSeen: now,
-   userType: getDeviceType(),
+    lastSeen: now,
+    userType: getDeviceType(),
+    userName: typeof userName === "string" && userName.trim() ? userName.trim() : undefined,
+    meetingRoom: meetingStateKnown ? meetingRoom || undefined : undefined,
   });
  }
+
+ /** Direct-call SFU signaling. It reuses the meeting publish/subscribe
+  * protocol but keeps the short-lived call room outside numbered meetings. */
+ public sendCallSFUMessage(type: string, data: any, channel: string): void {
+  if (this.connectionManager.getConnectionType() !== "custom") return;
+  if (!this.connectionManager.isConnected()) return;
+  if (!/^c_[A-Za-z0-9_-]{3,62}$/.test(channel)) return;
+  this.connectionManager.send({
+   type,
+   channel,
+   event: "signal:all",
+   data,
+  });
+ }
+
+  private handleProfileUpdate(data: any): void {
+   const fromId = data?.from;
+   if (!fromId || fromId === this.getUniqId()) return;
+   const user = this.userList.get(fromId);
+   if (!user) {
+    this.ensureMembershipUser(fromId, Date.now(), data?.userName);
+   } else if (typeof data?.userName === "string" && data.userName.trim()) {
+    user.userName = data.userName.trim();
+    user.lastSeen = Date.now();
+   }
+   this.updateConnectedUsers(this.userList);
+  }
 
  /**
   * @description 处理广播
@@ -1388,12 +1495,14 @@ export class RealTimeColab {
     attempts: 0,
     lastSeen: now,
     userType: data.userType,
+    userName: typeof data.userName === "string" ? data.userName : undefined,
    };
    this.userList.set(fromId, user);
    console.debug(`[DISCOVER] New user ${fromId} joined, status: text-only`);
   } else {
    // 更新现有用户的活跃时间
    user.lastSeen = now;
+   if (typeof data.userName === "string" && data.userName.trim()) user.userName = data.userName.trim();
 
    // 如果用户之前是disconnected状态，恢复为text-only
    if (user.status === "disconnected") {
@@ -3926,7 +4035,8 @@ private isLetShareZip(file: File): boolean {
   */
  public async sendFileViaServer(
   id: string,
-  file: File
+  file: File,
+  roomIdOverride?: string
  ): Promise<void> {
   if (!this.serverFileTransfer) {
    console.error(" 服务器文件传输未初始化");
@@ -3934,7 +4044,7 @@ private isLetShareZip(file: File): boolean {
    return;
   }
 
-  const roomId = settingsStore.get("roomId");
+  const roomId = roomIdOverride || settingsStore.get("roomId");
   if (!roomId) {
    console.error(" 未加入房间");
    alertUseMUI(t('toast.notInRoom'), 2000, { kind: "error" });
@@ -4278,8 +4388,8 @@ private isLetShareZip(file: File): boolean {
     });
     throw err;
    } finally {
-    this.sendingToUserId = null;
-    this.stopP2PAckWatchdog(transferId);
+   this.sendingToUserId = null;
+   this.stopP2PAckWatchdog(transferId);
     if (this.p2pSendContexts.get(id)?.transferId === transferId) {
      this.p2pSendContexts.delete(id);
     }
@@ -4358,7 +4468,13 @@ private isLetShareZip(file: File): boolean {
    * P2P 不可用 / 探针失败 / ACK 卡死 / hash 失败 / 通道断开 → 自动切公网 relay。
    * 用户主动取消不自动重发（不重复发送）；Ably 通道无二进制 relay，无法切换。
    */
-  public async sendFileAuto(id: string, file: File): Promise<void> {
+  public async sendFileAuto(id: string, file: File, meetingRoomId?: string): Promise<void> {
+   // Meeting membership is independent from the old LetShare room. Meeting
+   // attachments therefore use relay with the meeting ID as their context.
+   if (meetingRoomId) {
+    await this.sendFileViaServer(id, file, meetingRoomId);
+    return;
+   }
    const preferServer = settingsStore.get('transferPriority') === 'server';
    if (preferServer || !this.canSendFileToUser(id)) {
     await this.sendFileViaServer(id, file);
@@ -4383,6 +4499,10 @@ private isLetShareZip(file: File): boolean {
     await this.sendFileViaServer(id, file);
    }
   }
+
+ public cancelReceivingServerTransfer(transferId: string): boolean {
+  return this.serverFileTransfer?.cancelReceivingTransfer(transferId) ?? false;
+ }
 
  public generateUUID(): string {
   return Math.random().toString(36).substring(2, 8);

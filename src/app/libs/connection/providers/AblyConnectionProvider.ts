@@ -16,8 +16,9 @@ export class AblyConnectionProvider implements IConnectionProvider {
     this.config = config;
   }
 
-  async connect(roomId: string): Promise<boolean> {
-    if (!validateRoomName(roomId).isValid) {
+  async connect(roomId: string, options?: { transportOnly?: boolean }): Promise<boolean> {
+    const transportOnly = options?.transportOnly === true;
+    if (!transportOnly && !validateRoomName(roomId).isValid) {
       return false;
     }
 
@@ -26,7 +27,7 @@ export class AblyConnectionProvider implements IConnectionProvider {
       return this.connectionPromise;
     }
 
-    this.connectionPromise = this._doConnect(roomId);
+    this.connectionPromise = this._doConnect(roomId, transportOnly);
     try {
       return await this.connectionPromise;
     } finally {
@@ -34,7 +35,7 @@ export class AblyConnectionProvider implements IConnectionProvider {
     }
   }
 
-  private async _doConnect(roomId: string): Promise<boolean> {
+  private async _doConnect(roomId: string, transportOnly: boolean): Promise<boolean> {
     try {
       if (!this.ably) {
         // 动态加载 ably 模块（仅在实际需要时下载 ~179KB）
@@ -75,7 +76,7 @@ export class AblyConnectionProvider implements IConnectionProvider {
         }
       }
 
-      this.subscribeToRoom(roomId);
+      if (!transportOnly) this.subscribeToRoom(roomId);
       return true;
 
     } catch (err) {
@@ -105,6 +106,7 @@ export class AblyConnectionProvider implements IConnectionProvider {
     const fullSignal = {
       ...signal,
       from: this.config.uniqId,
+      userName: this.config.userName,
     };
 
     if (this.ablyChannel) {
@@ -174,5 +176,9 @@ export class AblyConnectionProvider implements IConnectionProvider {
     if (this.signalCallback) {
       this.signalCallback(event);
     }
+  }
+
+  setUserName(userName: string): void {
+    this.config.userName = userName;
   }
 }

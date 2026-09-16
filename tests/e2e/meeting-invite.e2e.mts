@@ -49,7 +49,9 @@ test("WF-008: Host 定向邀请 → 来电弹窗 → 接受入会；第三人无
     const ctx = await browser.newContext({ permissions: ["camera", "microphone"] });
     await ctx.addInitScript((arg: { n: string; token: string; ws: string }) => {
       // 稳定身份（userId/displayName 复用原机制；token 绝不进 URL）
-      localStorage.setItem("memorableState", JSON.stringify({ memorable: { userId: arg.n, uniqId: `${arg.n}:e2e` } }));
+      localStorage.setItem("memorableState", JSON.stringify({ memorable: {
+        userId: arg.n, userName: arg.n, userNameExplicit: true, uniqId: `${arg.n}:e2e`,
+      } }));
       const s = {
         roomId: "e2e-inv-1", userTheme: "light", userLanguage: "zh-CN", serverMode: "custom",
         customServerUrl: arg.ws, authToken: arg.token,
@@ -97,12 +99,11 @@ test("WF-008: Host 定向邀请 → 来电弹窗 → 接受入会；第三人无
   const titleInput = host.getByLabel(/会议名称/);
   await titleInput.waitFor({ timeout: 10_000 });
   await titleInput.fill("邀请测试会议");
-  await host.getByRole("button", { name: /开始会议/ }).click();
+  await host.getByRole("button", { name: /开始会议|进入会议/ }).click();
 
   await until("Host 进入 meeting 路由", async () =>
     (await host.evaluate(() => location.hash))?.includes("/meeting"), 20_000);
-  await until("Host 身份经 meeting:info 确认", async () =>
-    (await host.evaluate(() => (window as any).__meeting?.getState()?.hostId)) === "alice:e2e", 30_000);
+  await until("Host 显示邀请入口", async () => (await host.locator('[data-testid="meeting-invite-open"]').count()) === 1, 30_000);
   console.log("[alice] in meeting as host");
 
   // ── 3. 打开邀请 Dialog（右上角入口，仅 Host 可见）──────────────
@@ -136,7 +137,6 @@ test("WF-008: Host 定向邀请 → 来电弹窗 → 接受入会；第三人无
   await host.locator('[data-testid="meeting-invite-button-bob:e2e"]').click();
   await new Promise((r) => setTimeout(r, 1_500));
   const diagState = await host.evaluate(() => ({
-    inviteStates: (window as any).__meeting?.getState()?.inviteStates,
     dialogChip: document.querySelector('[data-testid="meeting-invite-status-bob:e2e"]')?.textContent ?? null,
     dialogHasButton: !!document.querySelector('[data-testid="meeting-invite-button-bob:e2e"]'),
   }));
@@ -169,31 +169,42 @@ test("WF-008: Host 定向邀请 → 来电弹窗 → 接受入会；第三人无
   await until("bob 跳转 meeting 路由（携带 source）", async () =>
     (await invitee.evaluate(() => location.hash))?.includes("room=") &&
     (await invitee.evaluate(() => location.hash))?.includes("source=e2e-inv-1"), 15_000);
-  // WF-008 责任边界：接受后 ①meeting:join 已发送并完成服务器登记（SFU participant + 成员表广播），
-  // ②Host 成员表/邀请行收到 bob。ICE 媒体连通（stage=in-meeting）受 P0 回归影响
-  // （WS 弹跳后原始房间 membership 无频道过滤转发 → 误订阅非会议成员 → error 帧把 joining 重置 idle；
-  //   属 WF-003/004 lane，本 lane 禁改 P0 SDP/SFU 逻辑）。
-  await until("bob joinMeeting 已启动（roomId 进入 state）", async () =>
-    /^\d{4}$/.test(String(await invitee.evaluate(() => (window as any).__meeting?.getState()?.roomId))), 20_000);
-  const bobJoinedDiag = await invitee.evaluate(() => {
-    const st = (window as any).__meeting?.getState?.() ?? {};
-    return { stage: st.stage, roomId: st.roomId, sourceRoomId: st.sourceRoomId, members: st.members?.length };
-  });
-  console.log("[diag][bob post-accept]", JSON.stringify(bobJoinedDiag));
-  // 注：Host members 表更新被 P0 级联拦截（stage=idle 时 membership:changed 被 meetingManager 丢弃），
-  // 属 WF-003/004 修复范围；WF-008 以「服务器登记（server log meeting:join）+ 邀请行 accepted」为准。
-  await until("Host 邀请行翻转为已接受", async () =>
-    (await host.evaluate(() => (window as any).__meeting?.getState()?.inviteStates?.["bob:e2e"]?.status)) === "accepted", 15_000);
+  // 生产构建不暴露调试 manager；用真实路由和邀请行 UI 验证入会。
+  await until("bob 进入 meeting 路由", async () =>
+    (await invitee.evaluate(() => location.hash))?.includes("/meeting") &&
+    (await invitee.evaluate(() => location.hash))?.includes("room="), 20_000);
+  await until("Host 邀请行显示 bob 已接受或已在会议中", async () => {
+    const text = await host.locator('[data-testid="meeting-invite-user-bob:e2e"]').textContent() ?? "";
+    return /已接受|已在会议中|Accepted|In meeting/i.test(text);
+  }, 15_000);
   console.log("[bob] accepted → joined meeting (server-registered); [alice] accepted ack");
+
+  // ── 5b. bob 离会后，Host 必须能再次邀请同一个 uniqID ─────────────
+  const leaveButton = invitee.locator('button[aria-label="离开"], button[aria-label="Leave"]').last();
+  await until("bob 会议页离开按钮出现", async () => await leaveButton.count() > 0, 15_000);
+  await leaveButton.click();
+  await until("bob 离开会议路由", async () => !(await invitee.evaluate(() => location.hash.includes("/meeting"))), 15_000);
+  await until("Host 收到 bob 离会事件", async () => {
+    const row = host.locator('[data-testid="meeting-invite-user-bob:e2e"]');
+    const text = await row.textContent() ?? "";
+    return (await row.locator('[data-testid="meeting-invite-button-bob:e2e"]').count()) === 1 &&
+      !/已在会议中|In meeting/i.test(text);
+  }, 15_000);
+  await until("Host 邀请行恢复可邀请按钮", async () =>
+    (await host.locator('[data-testid="meeting-invite-button-bob:e2e"]').count()) === 1, 15_000);
+  await host.locator('[data-testid="meeting-invite-button-bob:e2e"]').click();
+  await until("bob 收到同一会议的第二次邀请", async () => await invitee.locator('[data-testid="meeting-invite-dialog"]').isVisible(), 15_000);
+  await invitee.locator('[data-testid="meeting-invite-decline"]').click();
+  console.log("[bob] left → host re-invited same uniqID successfully");
 
   // ── 6. 拒绝链路：carol 收到自己的邀请并拒绝 ────────────────────
   await host.locator('[data-testid="meeting-invite-button-carol:e2e"]').click();
   await until("carol 来电弹窗出现", async () => await bystander.locator('[data-testid="meeting-invite-dialog"]').isVisible(), 15_000);
   await bystander.locator('[data-testid="meeting-invite-decline"]').click();
   await until("Host 行显示 carol 已拒绝", async () =>
-    (await host.evaluate(() => (window as any).__meeting?.getState()?.inviteStates?.["carol:e2e"]?.status)) === "rejected", 15_000);
+    /已拒绝|Rejected/i.test(await host.locator('[data-testid="meeting-invite-user-carol:e2e"]').textContent() ?? ""), 15_000);
   await until("carol 弹窗关闭", async () => !(await bystander.locator('[data-testid="meeting-invite-dialog"]').isVisible()));
-  assert.equal(await bystander.evaluate(() => (window as any).__meeting?.getState()?.inMeeting ?? false), false, "carol 拒绝后不加入会议");
+  assert.equal(await bystander.evaluate(() => location.hash.includes("/meeting")), false, "carol 拒绝后不加入会议");
   console.log("[carol] rejected; host ack rejected");
   console.log(bystanderSawInvite ? "GUARD-FLAG(set during window, recheck)" : "bystander guard clean");
 });

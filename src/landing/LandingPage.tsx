@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { PUBLIC_CUSTOM_SERVER_AUTH_TOKEN, PUBLIC_CUSTOM_SERVER_URL } from "@App/libs/connection/publicServerAuth";
 import gsap from "gsap";
 import { ScrollTrigger } from "gsap/ScrollTrigger";
 import { useGSAP } from "@gsap/react";
@@ -83,10 +84,11 @@ const defaultStoredSettings = {
   userTheme: "light",
   userLanguage: "en",
   serverMode: "auto",
-  customServerUrl: "wss://ecs.letshare.fun/",
-  authToken: "98d9a399675116e5256e9082c192bc06eb6434937af99f201252e9424c7a5652",
+  customServerUrl: PUBLIC_CUSTOM_SERVER_URL,
+  authToken: PUBLIC_CUSTOM_SERVER_AUTH_TOKEN,
   ablyKey: "4TtssQ.e9OvDA:wYBGdtWQNgicbeIKNtgeV_s5XEKmfLKD_Gue5XQrWuw",
-  version: "3.8.4",
+  meetingMicrophoneDefaultOn: false,
+  version: "3.8.30",
   isNewUser: true,
 };
 

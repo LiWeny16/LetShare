@@ -1,8 +1,12 @@
 import { ThemeKey } from '@Com/Theme/ThemeSelector';
 import { makeAutoObservable, reaction, runInAction } from 'mobx';
+import {
+  PUBLIC_CUSTOM_SERVER_AUTH_TOKEN,
+  PUBLIC_CUSTOM_SERVER_URL,
+  resolveCustomServerAuthToken,
+} from '../connection/publicServerAuth';
 
 const STORAGE_KEY = 'user_settings';
-
 /** Migrate legacy BCP-47 values before they reach MUI Select/i18next. */
 function normalizeLanguage(value: unknown): LanguageType {
   if (value === 'zh-CN' || value === 'zh-TW' || value === 'zh-HK') return 'zh';
@@ -19,8 +23,8 @@ const DEFAULT_SETTINGS = {
   userTheme: 'light' as ThemeKey,
   userLanguage: 'en' as LanguageType,
   serverMode: 'custom' as 'ably' | 'custom',
-  customServerUrl: "wss://ecs.letshare.fun/",
-  authToken: "98d9a399675116e5256e9082c192bc06eb6434937af99f201252e9424c7a5652",
+  customServerUrl: PUBLIC_CUSTOM_SERVER_URL,
+  authToken: PUBLIC_CUSTOM_SERVER_AUTH_TOKEN,
   ablyKey: "4TtssQ.e9OvDA:wYBGdtWQNgicbeIKNtgeV_s5XEKmfLKD_Gue5XQrWuw",
   transferPriority: 'p2p' as 'p2p' | 'server',
   micDeviceId: "",        // 首选麦克风 deviceId（"" = 系统默认）
@@ -40,7 +44,7 @@ const DEFAULT_SETTINGS = {
   videoDegradation: "maintain-framerate" as "balanced" | "maintain-framerate" | "maintain-resolution", // 网络差时浏览器降级策略：默认帧率优先（流畅 > 码率/清晰度）
   meetingCameraDefaultOn: false as boolean,
   meetingMicrophoneDefaultOn: false as boolean,
-  version: "3.8.4",
+  version: "3.8.40",
   isNewUser: true
 };
 export type SettingsKey = keyof typeof DEFAULT_SETTINGS;
@@ -64,6 +68,9 @@ class SettingsStore {
     this.loadFromLocalStorage();
     // version 必须始终跟随 app 构建版本，不能被 localStorage 旧值覆盖
     this.settings.version = DEFAULT_SETTINGS.version;
+    // Persist migrations and the current build version immediately. MobX reactions
+    // do not reliably run for the initial load before any observer is attached.
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(this.settings));
 
     // 自动保存 settings 到 localStorage（unrmb 不存）
     reaction(
@@ -153,10 +160,19 @@ class SettingsStore {
           if (parsed.noiseSuppression === false && parsed.nsMode === undefined) {
             parsed.nsMode = 'off';
           }
-          this.settings = {
+          const mergedSettings = {
             ...DEFAULT_SETTINGS,
             ...parsed,
             userLanguage: normalizeLanguage(parsed.userLanguage),
+          };
+          // One-time migration for old builds that persisted a PRO JWT or an
+          // old relay token into the ordinary WebSocket authToken field.
+          mergedSettings.authToken = resolveCustomServerAuthToken(
+            mergedSettings.customServerUrl,
+            mergedSettings.authToken,
+          );
+          this.settings = {
+            ...mergedSettings,
           };
         });
       } else {

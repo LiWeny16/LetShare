@@ -2,20 +2,19 @@ import { useState, useEffect, useRef } from "react";
 import { Typography, TextField } from "@mui/material";
 import realTimeColab from "@App/libs/connection/colabLib";
 import { useTranslation } from "react-i18next";
-import { getDeviceType } from "@App/libs/tools/tools";
 
 const EditableUserId = ({ onEditDone }: { onEditDone?: (newId: string) => void }) => {
   const { t } = useTranslation();
   const [editing, setEditing] = useState(false);
-  const [userId, setUserId] = useState("");
+  const [userName, setUserName] = useState("");
   const [error, setError] = useState(false);
   const originalIdRef = useRef("");
 
   useEffect(() => {
-    const storedId = realTimeColab.getUserId();
-    if (storedId) {
-      setUserId(storedId);
-      originalIdRef.current = storedId;
+    const storedName = realTimeColab.getUserName();
+    if (storedName) {
+      setUserName(storedName);
+      originalIdRef.current = storedName;
     }
 
   }, []);
@@ -25,41 +24,27 @@ const EditableUserId = ({ onEditDone }: { onEditDone?: (newId: string) => void }
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const value = e.target.value;
-    setUserId(value);
+    setUserName(value);
     setError(!validPattern.test(value));
   };
 
   const handleSave = async () => {
-    const cleanId = userId.trim();
+    const cleanId = userName.trim();
 
     if (!validPattern.test(cleanId) || !cleanId) {
-      setUserId(originalIdRef.current);
+      setUserName(originalIdRef.current);
       setError(true);
       setEditing(false);
       return;
     }
     else {
-      // 在改名前发送离开消息，通知其他用户旧身份离开
-      if (realTimeColab.isConnected()) {
-        console.log(`[USER RENAME] Broadcasting leave message before changing name from ${originalIdRef.current} to ${cleanId}`);
-        realTimeColab.broadcastSignal({ 
-          type: "leave", 
-          userType: getDeviceType() 
-        });
-        
-        // 等待消息发送完成
-        await new Promise(resolve => setTimeout(resolve, 300));
-      }
-      
-      // 更新用户ID
-      realTimeColab.setUserId(cleanId);
+      // 改名只更新 userName，稳定 uniqId 继续代表同一个设备/浏览器身份。
+      realTimeColab.setUserName(cleanId);
       originalIdRef.current = cleanId;
       setError(false);
       setEditing(false);
       if (onEditDone) onEditDone(cleanId);
       
-      // 刷新页面重新初始化连接和加密
-      window.location.reload();
     }
   };
 
@@ -67,7 +52,7 @@ const EditableUserId = ({ onEditDone }: { onEditDone?: (newId: string) => void }
     <>
       {editing ? (
         <TextField
-          value={userId}
+          value={userName}
           onChange={handleInputChange}
           onBlur={handleSave}
           onKeyDown={(e) => {
@@ -93,7 +78,7 @@ const EditableUserId = ({ onEditDone }: { onEditDone?: (newId: string) => void }
           sx={{ mt: 2, cursor: "pointer" }}
           onClick={() => setEditing(true)}
         >
-          {t('userId.display')}: {userId}
+          {t('userId.display')}: {userName}
         </Typography>
       )}
     </>

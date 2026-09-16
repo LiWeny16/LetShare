@@ -70,14 +70,29 @@ test("host breakout assignment and recall are real isolated UI flows", async (t)
   await host.locator('button[aria-label="plus"]:visible').first().click();
   await host.getByRole("menuitem", { name: /创建会议/ }).click();
   await host.getByLabel(/会议名称/).fill("Breakout UX 验证");
-  await host.getByRole("button", { name: /开始会议/ }).click();
-  await host.getByRole("button", { name: /进入会议/ }).click();
+  // The create dialog has one footer action that changes from start to enter
+  // after the room reservation. Accept either state so this test checks the
+  // flow rather than coupling to the intermediate render timing.
+  const startButton = host.getByRole("button", { name: /开始会议|Start meeting/ }).last();
+  if (await startButton.isVisible().catch(() => false)) await startButton.click();
+  const enterButton = host.getByRole("button", { name: /进入会议|Enter meeting/ }).last();
+  if (await enterButton.isVisible().catch(() => false)) await enterButton.click();
+  const hostNameGate = host.getByTestId("meeting-name-gate");
+  if (await hostNameGate.waitFor({ state: "visible", timeout: 10_000 }).then(() => true).catch(() => false)) {
+    await host.getByTestId("meeting-name-input").fill("Breakout host");
+    await host.getByRole("button", { name: /进入会议|Enter meeting/ }).last().click();
+  }
   await until("host in meeting", async () =>
     (await host.evaluate(() => (window as any).__meeting?.getState()?.stage)) === "in-meeting");
   const meetingId = String(await host.evaluate(() => (window as any).__meeting?.getState()?.roomId));
   assert.match(meetingId, /^\d{4}$/);
 
   await guest.evaluate((id: string) => { window.location.hash = `#/meeting?room=${id}`; }, meetingId);
+  const guestNameGate = guest.getByTestId("meeting-name-gate");
+  if (await guestNameGate.waitFor({ state: "visible", timeout: 10_000 }).then(() => true).catch(() => false)) {
+    await guest.getByTestId("meeting-name-input").fill("Breakout guest");
+    await guest.getByRole("button", { name: /进入会议|Enter meeting/ }).last().click();
+  }
   await until("guest in meeting", async () =>
     (await guest.evaluate(() => (window as any).__meeting?.getState()?.stage)) === "in-meeting");
   assert.equal(await guest.getByRole("button", { name: /分组讨论/ }).count(), 0, "non-host must not see breakout control");

@@ -5,7 +5,7 @@
  * 诚实边界：SOCKS 代理只覆盖 TCP（WS 信令 + TURN 凭据请求），WebRTC 媒体
  * 是浏览器原生 UDP、不经代理。因此本测试验证的是：
  *   - 信令经海外出口时通话协商仍成功
- *   - 双端（不同源 IP）经生产 TURN 中继双向字节/电平/丢包正常
+ *   - 双端（不同源 IP）经生产 SFU 双向字节/电平/丢包正常
  * 媒体真实跨境路径需 TUN 模式或真实海外节点，此为本地可做的最强模拟。
  *
  * 运行：node --import tsx --test --test-force-exit tests/e2e/call-prod-proxy.test.ts
@@ -28,7 +28,7 @@ async function until(desc: string, cond: () => Promise<boolean>, timeoutMs = 30_
   throw new Error(`timeout waiting: ${desc}`);
 }
 
-test("生产环境（代理变体）：bob 信令走海外代理，双端经 TURN 中继双向通话", async (t) => {
+test("生产环境（代理变体）：bob 信令走海外代理，双端经 SFU 双向通话", async (t) => {
   const sentinel = await (await fetch(`${SITE}/version.json`, { cache: "no-store" })).json() as { v: string };
   assert.ok(sentinel.v >= EXPECTED_BUILD, `生产前端为旧构建（${sentinel.v}）`);
 
@@ -53,7 +53,7 @@ test("生产环境（代理变体）：bob 信令走海外代理，双端经 TUR
       ...(useProxy ? { proxy: { server: PROXY } } : {}),
     });
     await ctx.addInitScript((n: string) => {
-      localStorage.setItem("ls_force_relay", "1");
+      localStorage.setItem("ls_debug_stats", "1");
       const s = {
         roomId: "prode2ep", userTheme: "light", userLanguage: "zh-CN", serverMode: "custom",
         customServerUrl: "wss://ecs.letshare.fun/", authToken: "98d9a399675116e5256e9082c192bc06eb6434937af99f201252e9424c7a5652",
@@ -104,14 +104,14 @@ test("生产环境（代理变体）：bob 信令走海外代理，双端经 TUR
     btn.click();
   });
 
-  type Stats = { rxBytes: number; txBytes: number; relay: boolean | null; audioLevel: number };
+  type Stats = { rxBytes: number; txBytes: number; sfu: boolean; audioLevel: number };
   async function sampleStats(page: import("playwright").Page): Promise<Stats> {
     return page.evaluate(async () => {
       const getStats = (window as unknown as { __lsCallStats?: () => Promise<Map<string, Record<string, unknown>>> }).__lsCallStats;
-      if (!getStats) return { rxBytes: -1, txBytes: -1, relay: null, audioLevel: -1 };
+      const getDebug = (window as unknown as { __lsPc?: () => Record<string, unknown> }).__lsPc;
+      if (!getStats || !getDebug) return { rxBytes: -1, txBytes: -1, sfu: false, audioLevel: -1 };
       const stats = await getStats();
       let rxBytes = 0, txBytes = 0, audioLevel = 0;
-      let relay: boolean | null = null;
       for (const [, r] of stats) {
         if (r.type === "inbound-rtp" && r.kind === "audio") {
           rxBytes += Number(r.bytesReceived ?? 0);
@@ -119,19 +119,15 @@ test("生产环境（代理变体）：bob 信令走海外代理，双端经 TUR
           if (lvl > audioLevel) audioLevel = lvl;
         }
         if (r.type === "outbound-rtp" && r.kind === "audio") txBytes += Number(r.bytesSent ?? 0);
-        if (r.type === "candidate-pair" && (r.state === "succeeded" || r.nominated === true)) {
-          const local = stats.get(String(r.localCandidateId ?? "")) as { candidateType?: string } | undefined;
-          if (local?.candidateType) relay = local.candidateType === "relay";
-        }
       }
-      return { rxBytes, txBytes, relay, audioLevel };
+      return { rxBytes, txBytes, sfu: getDebug().transport === "sfu", audioLevel };
     });
   }
 
   for (const [i, page] of pages.entries()) {
-    await until(`client${i}（${i === 0 ? "直连" : "代理"}）经 TURN 中继连通`, async () => {
+    await until(`client${i}（${i === 0 ? "直连" : "代理"}）经 SFU 连通`, async () => {
       const s = await sampleStats(page);
-      return s.rxBytes >= 0 && s.relay === true;
+      return s.sfu && s.rxBytes > 0;
     }, 90_000);
   }
   for (const [i, page] of pages.entries()) {

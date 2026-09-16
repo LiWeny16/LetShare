@@ -32,13 +32,33 @@ export type MeetingInviteIncoming = {
 
 export type MeetingInviteStatusAction = "sent" | "accept" | "reject" | "expired";
 
+export type MeetingApplicationStatusAction = "pending" | "approved" | "rejected" | "expired" | "failed";
+
+export type MeetingApplicationStatusMsg = {
+  kind: "apply-status";
+  requestId: string;
+  meetingId: string;
+  action: MeetingApplicationStatusAction;
+  /** Original ordinary-room channel used to deliver the approved applicant into the meeting. */
+  sourceRoomId?: string;
+  /** Stable applicant identity; the host also receives the status for state cleanup. */
+  applicantId?: string;
+};
+
+export type MeetingApplicationState = {
+  requestId: string;
+  meetingId: string;
+  status: MeetingApplicationStatusAction;
+  at: number;
+};
+
 /** 服务器定向下发的邀请状态回执（kind=status，双方各一份）。 */
 export type MeetingInviteStatusMsg = {
   kind: "status";
   inviteId?: string;
   meetingId?: string;
   /** 状态归属的目标用户（房主侧按此更新邀请行）。 */
-  userId: string;
+  uniqId: string;
   action: MeetingInviteStatusAction;
 };
 
@@ -58,6 +78,20 @@ export type HostInviteState = {
   status: HostInviteStatus;
   at: number;
 };
+
+/**
+ * 成员离开会议后，最近一次 accepted 只代表上一轮入会，不再代表当前成员状态。
+ * 仅清理 accepted：sending/sent 仍可能是尚未响应的在途邀请，不能因一次成员表抖动被误删。
+ */
+export function clearHostInviteStateOnMemberLeave(
+  states: Record<string, HostInviteState>,
+  uniqId: string,
+): Record<string, HostInviteState> {
+  if (!uniqId || states[uniqId]?.status !== "accepted") return states;
+  const next = { ...states };
+  delete next[uniqId];
+  return next;
+}
 
 /**
  * 构造会议邀请链接：仅包含 meetingId 与 sourceRoomId，绝不携带 token 或临时连接状态。
@@ -89,27 +123,63 @@ export function applyHostInviteStatus(
   msg: MeetingInviteStatusMsg,
   now: number,
 ): Record<string, HostInviteState> {
-  const current = states[msg.userId];
+  const current = states[msg.uniqId];
   const next: Record<string, HostInviteState> = { ...states };
   switch (msg.action) {
     case "sent":
       if (!current || current.status === "sending" || current.status === "sent") {
-        next[msg.userId] = { inviteId: msg.inviteId, status: "sent", at: now };
+        next[msg.uniqId] = { inviteId: msg.inviteId, status: "sent", at: now };
       }
       break;
     case "accept":
-      next[msg.userId] = { inviteId: msg.inviteId ?? current?.inviteId, status: "accepted", at: now };
+      next[msg.uniqId] = { inviteId: msg.inviteId ?? current?.inviteId, status: "accepted", at: now };
       break;
     case "reject":
-      next[msg.userId] = { inviteId: msg.inviteId ?? current?.inviteId, status: "rejected", at: now };
+      next[msg.uniqId] = { inviteId: msg.inviteId ?? current?.inviteId, status: "rejected", at: now };
       break;
     case "expired":
       if (!current || current.status === "sending" || current.status === "sent") {
-        next[msg.userId] = { inviteId: msg.inviteId ?? current?.inviteId, status: "expired", at: now };
+        next[msg.uniqId] = { inviteId: msg.inviteId ?? current?.inviteId, status: "expired", at: now };
       }
       break;
   }
   return next;
+}
+
+/** Apply server-authoritative join-application updates without allowing late frames to rewind a decision. */
+export function applyMeetingApplicationStatus(
+  states: Record<string, MeetingApplicationState>,
+  msg: MeetingApplicationStatusMsg,
+  now: number,
+): Record<string, MeetingApplicationState> {
+  if (!msg.requestId || !msg.meetingId) return states;
+  const current = states[msg.requestId];
+  if (current && ["approved", "rejected", "expired", "failed"].includes(current.status)) return states;
+  return {
+    ...states,
+    [msg.requestId]: {
+      requestId: msg.requestId,
+      meetingId: msg.meetingId,
+      status: msg.action,
+      at: now,
+    },
+  };
+}
+
+export function parseMeetingApplicationStatus(data: unknown): MeetingApplicationStatusMsg | null {
+  if (!data || typeof data !== "object") return null;
+  const d = data as Record<string, unknown>;
+  if (d.kind !== "apply-status" || typeof d.requestId !== "string" || !d.requestId || typeof d.meetingId !== "string" || !d.meetingId) return null;
+  const action = d.action;
+  if (action !== "pending" && action !== "approved" && action !== "rejected" && action !== "expired" && action !== "failed") return null;
+  return {
+    kind: "apply-status",
+    requestId: d.requestId,
+    meetingId: d.meetingId,
+    action,
+    ...(typeof d.sourceRoomId === "string" && d.sourceRoomId ? { sourceRoomId: d.sourceRoomId } : {}),
+    ...(typeof d.applicantId === "string" && d.applicantId ? { applicantId: d.applicantId } : {}),
+  };
 }
 
 /** 判定服务器下行帧是否为合法的 meeting:invite 载荷（含最小字段校验）。 */
@@ -124,10 +194,13 @@ export function parseMeetingInviteSignal(data: unknown): MeetingInviteIncoming |
     return d as unknown as MeetingInviteIncoming;
   }
   if (d.kind === "status") {
-    if (typeof d.userId !== "string" || !d.userId) return null;
+    // Old clients called this field userId; normalize that legacy wire field
+    // at the boundary while keeping uniqId as the Meeting-domain contract.
+    const uniqId = typeof d.uniqId === "string" ? d.uniqId : d.userId;
+    if (typeof uniqId !== "string" || !uniqId) return null;
     const action = d.action;
     if (action !== "sent" && action !== "accept" && action !== "reject" && action !== "expired") return null;
-    return d as unknown as MeetingInviteStatusMsg;
+    return { ...d, uniqId } as unknown as MeetingInviteStatusMsg;
   }
   return null;
 }

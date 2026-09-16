@@ -108,10 +108,55 @@ test("meeting prejoin matches the ready state without layout shifts", async (t) 
   }
 
   await page.getByLabel("会议名称").fill("Prejoin ready flow");
-  await page.getByRole("button", { name: /开始会议/ }).click();
+  await page.getByRole("button", { name: "进入会议" }).click();
   await page.waitForURL(/#\/meeting\?room=\d{4}/, { timeout: 30_000 });
-  await page.waitForSelector('[data-stage="in-meeting"], [data-stage="joining"]', { timeout: 30_000 });
+  await page.getByTestId("meeting-name-gate").waitFor({ state: "visible" });
+  await page.getByTestId("meeting-name-input").fill("Prejoin attendee");
+  await page.getByRole("button", { name: "进入会议" }).click();
+  await page.waitForSelector('[data-stage="in-meeting"]', { timeout: 30_000 });
   await page.getByText("Prejoin ready flow", { exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+  const mediaHandoff = await page.evaluate(() => {
+    const manager = (window as unknown as { __meeting?: { getState?: () => any; getLocalStream?: () => MediaStream | null } }).__meeting;
+    const state = manager?.getState?.();
+    const stream = manager?.getLocalStream?.();
+    if (!state) {
+      // Production builds intentionally omit the dev-only manager hook. Use
+      // the rendered meeting controls and local video track as the black-box
+      // equivalent of the internal state assertions.
+      const labels = Array.from(document.querySelectorAll("button[aria-label]"))
+        .map((button) => button.getAttribute("aria-label") ?? "");
+      const muted = labels.some((label) => label === "解除静音" || label === "Unmute")
+        ? true
+        : labels.some((label) => label === "静音" || label === "Mute")
+          ? false
+          : undefined;
+      const cameraOn = labels.some((label) => label === "关闭摄像头" || label === "Stop video")
+        ? true
+        : labels.some((label) => label === "开启摄像头" || label === "Start video")
+          ? false
+          : undefined;
+      const videoTracks = Array.from(document.querySelectorAll("video")).flatMap((video) =>
+        Array.from((video as HTMLVideoElement).srcObject?.getVideoTracks() ?? [])
+          .map((track) => ({ enabled: track.enabled, readyState: track.readyState }))
+      );
+      return { muted, cameraOn, audioTracks: [], videoTracks, production: true };
+    }
+    return {
+      muted: state?.muted,
+      cameraOn: state?.cameraOn,
+      audioTracks: stream?.getAudioTracks().map((track) => ({ enabled: track.enabled, readyState: track.readyState })) ?? [],
+      videoTracks: stream?.getVideoTracks().map((track) => ({ enabled: track.enabled, readyState: track.readyState })) ?? [],
+      production: false,
+    };
+  });
+  assert.equal(mediaHandoff.muted, false, `prejoin microphone choice was not handed to Meeting: ${JSON.stringify(mediaHandoff)}`);
+  assert.equal(mediaHandoff.cameraOn, true, `prejoin camera choice was not handed to Meeting: ${JSON.stringify(mediaHandoff)}`);
+  if (mediaHandoff.production) {
+    assert.ok(mediaHandoff.videoTracks.some((track) => track.enabled && track.readyState === "live"), `production meeting has no rendered live video track: ${JSON.stringify(mediaHandoff)}`);
+  } else {
+    assert.ok(mediaHandoff.audioTracks.some((track) => track.enabled && track.readyState === "live"), `meeting has no enabled live audio track: ${JSON.stringify(mediaHandoff)}`);
+    assert.ok(mediaHandoff.videoTracks.some((track) => track.enabled && track.readyState === "live"), `meeting has no enabled live video track: ${JSON.stringify(mediaHandoff)}`);
+  }
   await page.screenshot({ path: `Harness/tasks/task-meeting-3-8-3-enterprise-readiness/artifacts/meeting-prejoin-entered${artifactSuffix}.png`, fullPage: true });
   assert.match(await page.url(), /#\/meeting\?room=\d{4}/);
 });

@@ -24,7 +24,7 @@ test("后端 service: presence 广播基元存在（snapshot / broadcast / 去�
 
 test("后端 handler: subscribe 后接线 snapshot 下发 + join 广播", () => {
   const src = readFileSync(repoPath("server/internal/handler/websocket.go"), "utf8");
-  assert.match(src, /SendMembershipSnapshot\(client\.ID/, "订阅成功即下发 snapshot");
+  assert.match(src, /SendMembershipSnapshot(?:WithMeetingRooms)?\(client\.ID/, "订阅成功即下发 snapshot");
   assert.match(src, /BroadcastMembershipEvent\(message\.Channel, "membership:changed"/, "入房广播 join");
 });
 

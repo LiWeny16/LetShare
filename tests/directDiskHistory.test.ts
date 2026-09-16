@@ -62,8 +62,8 @@ test("file bubble explains direct-to-disk history cannot be downloaded from brow
 });
 
 test("direct-to-disk image messages render as file bubbles when no browser blob exists", () => {
-  assert.match(chatPanelSource, /message\.type === 'image' && fileMsg\.fileMetadata\.fileKey/);
-  const imageBranchIndex = chatPanelSource.indexOf("message.type === 'image' && fileMsg.fileMetadata.fileKey");
+  assert.match(chatPanelSource, /fileMsg\.type === 'image' && fileMsg\.fileMetadata\.fileKey/);
+  const imageBranchIndex = chatPanelSource.indexOf("fileMsg.type === 'image' && fileMsg.fileMetadata.fileKey");
   const fileBubbleIndex = chatPanelSource.indexOf("<FileBubble", imageBranchIndex);
   assert.ok(fileBubbleIndex > imageBranchIndex, "image messages without fileKey should fall through to FileBubble");
 });

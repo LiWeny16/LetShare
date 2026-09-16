@@ -5,8 +5,9 @@
  * carries provider metadata and transcript text; API keys remain in this tab.
  */
 
-export type AsrSource = "browser-speech" | "wasm" | "iflytek";
-export type SummaryProvider = "mimo" | "openai" | "anthropic" | "custom";
+export type AsrSource = "browser-speech" | "mimo-asr" | "wasm" | "iflytek";
+export type SummaryProvider = "mimo" | "openai" | "deepseek" | "anthropic" | "custom";
+export type SummaryProtocol = "openai" | "anthropic";
 export type WasmModelId = "tiny" | "base" | "small";
 
 export type MeetingAiConfig = {
@@ -16,6 +17,7 @@ export type MeetingAiConfig = {
   asrSource: AsrSource;
   asrModel: string;
   summaryProvider: SummaryProvider;
+  summaryProtocol: SummaryProtocol;
   summaryBaseUrl: string;
   summaryModel: string;
 };
@@ -30,6 +32,23 @@ export type MeetingTranscriptSegment = {
   final: boolean;
 };
 
+export type MeetingMinutesJson = {
+  meetingTitle: string;
+  overview: string;
+  timeline: Array<{
+    id: string;
+    startMs: number;
+    endMs: number;
+    speakerName: string;
+    summary: string;
+    transcript: string;
+    kind: "speech" | "decision" | "action" | "question";
+  }>;
+  decisions: Array<{ text: string; timeMs: number }>;
+  actionItems: Array<{ task: string; owner: string; deadline: string; timeMs: number }>;
+  openQuestions: Array<{ question: string; timeMs: number }>;
+};
+
 export type MeetingMinutesPublicState = {
   configured: boolean;
   running: boolean;
@@ -42,6 +61,40 @@ export type MeetingMinutesPublicState = {
   summary?: string;
 };
 
+export type MemberMeetingAiPreferences = {
+  enabled: boolean;
+  language: string;
+  asrSource: AsrSource;
+  asrModel: string;
+};
+
+export const DEFAULT_MEMBER_MEETING_AI_PREFERENCES: MemberMeetingAiPreferences = {
+  enabled: true,
+  language: "zh-CN",
+  asrSource: "browser-speech",
+  asrModel: "browser-network",
+};
+
+let memberMeetingAiPreferences: MemberMeetingAiPreferences = { ...DEFAULT_MEMBER_MEETING_AI_PREFERENCES };
+
+export function getMemberMeetingAiPreferences(): MemberMeetingAiPreferences {
+  return { ...memberMeetingAiPreferences };
+}
+
+export function setMemberMeetingAiPreferences(patch: Partial<MemberMeetingAiPreferences>): MemberMeetingAiPreferences {
+  const next: MemberMeetingAiPreferences = {
+    ...memberMeetingAiPreferences,
+    ...patch,
+    language: String(patch.language ?? memberMeetingAiPreferences.language).slice(0, 16),
+    asrModel: String(patch.asrModel ?? memberMeetingAiPreferences.asrModel).slice(0, 64),
+    asrSource: patch.asrSource === "mimo-asr" ? "mimo-asr" : "browser-speech",
+    enabled: patch.enabled !== false,
+  };
+  memberMeetingAiPreferences = next;
+  if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("meeting-minutes-member-preferences", { detail: next }));
+  return { ...next };
+}
+
 export const DEFAULT_MEETING_AI_CONFIG: MeetingAiConfig = {
   enabled: false,
   requireConsent: true,
@@ -49,9 +102,13 @@ export const DEFAULT_MEETING_AI_CONFIG: MeetingAiConfig = {
   asrSource: "browser-speech",
   asrModel: "browser-network",
   summaryProvider: "mimo",
+  summaryProtocol: "openai",
   summaryBaseUrl: "https://token-plan-cn.xiaomimimo.com/v1",
   summaryModel: "mimo-v2.5-pro",
 };
+
+export const MIMO_TOKEN_PLAN_BASE_URL = "https://token-plan-cn.xiaomimimo.com/v1";
+export const MIMO_API_BASE_URL = "https://api.xiaomimimo.com/v1";
 
 export const SUMMARY_PROVIDERS: ReadonlyArray<{
   id: SummaryProvider;
@@ -59,14 +116,19 @@ export const SUMMARY_PROVIDERS: ReadonlyArray<{
   description: string;
   defaultBaseUrl: string;
   defaultModel: string;
+  modelOptions: ReadonlyArray<{ id: string; label: string; use: string }>;
   apiKeyHeader: "authorization" | "api-key" | "x-api-key";
 }> = [
   {
     id: "mimo",
     label: "MiMo",
     description: "小米 MiMo，OpenAI-compatible",
-    defaultBaseUrl: "https://token-plan-cn.xiaomimimo.com/v1",
+    defaultBaseUrl: MIMO_TOKEN_PLAN_BASE_URL,
     defaultModel: "mimo-v2.5-pro",
+    modelOptions: [
+      { id: "mimo-v2.5-pro", label: "MiMo V2.5 Pro", use: "复杂推理、长文档与会议总结" },
+      { id: "mimo-v2.5", label: "MiMo V2.5", use: "通用会议总结与多模态理解" },
+    ],
     apiKeyHeader: "api-key",
   },
   {
@@ -74,7 +136,24 @@ export const SUMMARY_PROVIDERS: ReadonlyArray<{
     label: "OpenAI",
     description: "Chat Completions",
     defaultBaseUrl: "https://api.openai.com/v1",
-    defaultModel: "gpt-4o-mini",
+    defaultModel: "gpt-5.6-terra",
+    modelOptions: [
+      { id: "gpt-5.6-sol", label: "GPT-5.6 Sol", use: "最高质量、复杂分析" },
+      { id: "gpt-5.6-terra", label: "GPT-5.6 Terra", use: "质量与成本平衡" },
+      { id: "gpt-5.6-luna", label: "GPT-5.6 Luna", use: "高并发、低成本" },
+    ],
+    apiKeyHeader: "authorization",
+  },
+  {
+    id: "deepseek",
+    label: "DeepSeek",
+    description: "OpenAI-compatible endpoint",
+    defaultBaseUrl: "https://api.deepseek.com/v1",
+    defaultModel: "deepseek-v4-flash",
+    modelOptions: [
+      { id: "deepseek-v4-pro", label: "DeepSeek V4 Pro", use: "复杂会议分析与长上下文" },
+      { id: "deepseek-v4-flash", label: "DeepSeek V4 Flash", use: "实时总结与高性价比" },
+    ],
     apiKeyHeader: "authorization",
   },
   {
@@ -82,7 +161,12 @@ export const SUMMARY_PROVIDERS: ReadonlyArray<{
     label: "Anthropic",
     description: "Messages API",
     defaultBaseUrl: "https://api.anthropic.com/v1",
-    defaultModel: "claude-3-5-haiku-latest",
+    defaultModel: "claude-sonnet-5",
+    modelOptions: [
+      { id: "claude-opus-5", label: "Claude Opus 5", use: "最高质量推理" },
+      { id: "claude-sonnet-5", label: "Claude Sonnet 5", use: "会议总结推荐" },
+      { id: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5", use: "快速、低成本" },
+    ],
     apiKeyHeader: "x-api-key",
   },
   {
@@ -91,6 +175,7 @@ export const SUMMARY_PROVIDERS: ReadonlyArray<{
     description: "自定义 OpenAI-compatible endpoint",
     defaultBaseUrl: "",
     defaultModel: "",
+    modelOptions: [],
     apiKeyHeader: "authorization",
   },
 ];
@@ -127,13 +212,13 @@ export const WASM_MODELS: ReadonlyArray<{
   },
   {
     id: "small",
-    label: "Whisper Small",
-    quality: "更高准确率，浏览器负载更高",
-    deviceHint: "16GB 内存 / 8 核以上",
-    size: "约 466 MB",
+    label: "Whisper Small Q5_1",
+    quality: "浏览器 WASM 可用的最高质量档，体积更适合本地缓存",
+    deviceHint: "16GB 内存 / 8 核以上；建议桌面 Chrome",
+    size: "约 190 MB",
     mirrors: [
-      { label: "Hugging Face 官方", url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin?download=true" },
-      { label: "HF 镜像", url: "https://hf-mirror.com/ggerganov/whisper.cpp/resolve/main/ggml-small.bin?download=true" },
+      { label: "Hugging Face 官方", url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin?download=true" },
+      { label: "HF 镜像", url: "https://hf-mirror.com/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin?download=true" },
     ],
   },
 ];
@@ -154,18 +239,28 @@ export function clearMeetingAiSecrets(): void {
 }
 
 export function sanitizeMeetingAiConfig(input: Partial<MeetingAiConfig>): MeetingAiConfig {
-  const asrSource: AsrSource = input.asrSource === "wasm" || input.asrSource === "iflytek" ? input.asrSource : "browser-speech";
-  const summaryProvider: SummaryProvider = input.summaryProvider === "openai" || input.summaryProvider === "anthropic" || input.summaryProvider === "custom" ? input.summaryProvider : "mimo";
+  const asrSource: AsrSource = input.asrSource === "mimo-asr" || input.asrSource === "wasm" || input.asrSource === "iflytek" ? input.asrSource : "browser-speech";
+  const summaryProvider: SummaryProvider = input.summaryProvider === "openai" || input.summaryProvider === "deepseek" || input.summaryProvider === "anthropic" || input.summaryProvider === "custom" ? input.summaryProvider : "mimo";
+  const summaryProtocol: SummaryProtocol = summaryProvider === "anthropic" || input.summaryProtocol === "anthropic" ? "anthropic" : "openai";
   const provider = SUMMARY_PROVIDERS.find((item) => item.id === summaryProvider) ?? SUMMARY_PROVIDERS[0];
+  const requestedBaseUrl = String(input.summaryBaseUrl ?? provider.defaultBaseUrl).trim().replace(/\/+$/, "");
+  const summaryBaseUrl = summaryProvider === "mimo"
+    ? requestedBaseUrl === MIMO_API_BASE_URL ? MIMO_API_BASE_URL : MIMO_TOKEN_PLAN_BASE_URL
+    : requestedBaseUrl.slice(0, 512);
+  const requestedModel = String(input.summaryModel ?? provider.defaultModel).trim();
+  const summaryModel = provider.modelOptions.length
+    ? (provider.modelOptions.some((item) => item.id === requestedModel) ? requestedModel : provider.defaultModel)
+    : requestedModel.slice(0, 128);
   return {
     enabled: input.enabled === true,
     requireConsent: input.requireConsent !== false,
     language: String(input.language || DEFAULT_MEETING_AI_CONFIG.language).slice(0, 16),
     asrSource,
-    asrModel: String(input.asrModel || (asrSource === "wasm" ? "base" : "browser-network")).slice(0, 64),
+    asrModel: String(input.asrModel || (asrSource === "mimo-asr" ? "mimo-v2.5-asr" : asrSource === "wasm" ? "base" : "browser-network")).slice(0, 64),
     summaryProvider,
-    summaryBaseUrl: String(input.summaryBaseUrl ?? provider.defaultBaseUrl).trim().slice(0, 512),
-    summaryModel: String(input.summaryModel ?? provider.defaultModel).trim().slice(0, 128),
+    summaryProtocol,
+    summaryBaseUrl,
+    summaryModel,
   };
 }
 
@@ -504,6 +599,189 @@ export class IflytekRealtimeSession {
   isRunning(): boolean { return this.running || this.opening; }
 }
 
+function writeAscii(view: DataView, offset: number, value: string): void {
+  for (let index = 0; index < value.length; index += 1) view.setUint8(offset + index, value.charCodeAt(index));
+}
+
+function pcmToWav(pcm: Int16Array, sampleRate = 16_000): Uint8Array {
+  const buffer = new ArrayBuffer(44 + pcm.byteLength);
+  const view = new DataView(buffer);
+  writeAscii(view, 0, "RIFF");
+  view.setUint32(4, 36 + pcm.byteLength, true);
+  writeAscii(view, 8, "WAVE");
+  writeAscii(view, 12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeAscii(view, 36, "data");
+  view.setUint32(40, pcm.byteLength, true);
+  new Int16Array(buffer, 44).set(pcm);
+  return new Uint8Array(buffer);
+}
+
+export async function requestMimoAsr(args: {
+  baseUrl?: string;
+  model?: string;
+  apiKey: string;
+  audio: Uint8Array;
+  language?: string;
+  signal?: AbortSignal;
+}): Promise<string> {
+  if (!args.apiKey.trim()) throw new Error("MiMo ASR 需要 API Key");
+  if (!args.audio.byteLength) throw new Error("MiMo ASR 音频片段为空");
+  const response = await fetch(chatEndpoint(args.baseUrl || MIMO_TOKEN_PLAN_BASE_URL), {
+    method: "POST",
+    signal: args.signal,
+    headers: { "content-type": "application/json", "api-key": args.apiKey.trim() },
+    body: JSON.stringify({
+      model: args.model || "mimo-v2.5-asr",
+      messages: [{ role: "user", content: [{ type: "input_audio", input_audio: { data: `data:audio/wav;base64,${base64FromBytes(args.audio)}`, format: "wav" } }] }],
+      asr_options: { language: args.language?.toLowerCase().startsWith("en") ? "en" : args.language?.toLowerCase().startsWith("zh") ? "zh" : "auto" },
+      stream: false,
+    }),
+  });
+  const body = await response.text();
+  if (!response.ok) throw new Error(`MiMo ASR 请求失败 (${response.status}): ${body.slice(0, 240)}`);
+  let payload: any;
+  try { payload = JSON.parse(body); } catch { throw new Error("MiMo ASR 返回了无效 JSON"); }
+  const text = extractText(payload);
+  if (!text) throw new Error("MiMo ASR 响应没有可显示文本");
+  return text;
+}
+
+/**
+ * Captures the local microphone, batches it into short WAV segments, and
+ * sends each segment to MiMo's OpenAI-compatible audio understanding API.
+ * The raw stream and API key never enter the meeting WebSocket.
+ */
+export class MimoChunkedSession {
+  private audioContext: AudioContext | null = null;
+  private mediaStream: MediaStream | null = null;
+  private processor: ScriptProcessorNode | null = null;
+  private mutedGain: GainNode | null = null;
+  private running = false;
+  private sampleParts: Int16Array[] = [];
+  private sampleCount = 0;
+  private queue: Int16Array[] = [];
+  private pumpPromise: Promise<void> | null = null;
+  private readonly chunkSamples = 16_000 * 8;
+
+  constructor(
+    private readonly options: {
+      apiKey: string;
+      baseUrl?: string;
+      model?: string;
+      language?: string;
+      onFinal: (text: string) => void;
+      onError?: (message: string) => void;
+    },
+  ) {}
+
+  async start(): Promise<boolean> {
+    if (this.running) return true;
+    if (typeof window === "undefined" || !navigator.mediaDevices?.getUserMedia) {
+      this.options.onError?.("当前浏览器不支持 MiMo ASR 所需的麦克风采集");
+      return false;
+    }
+    if (!this.options.apiKey.trim()) {
+      this.options.onError?.("请先在会议纪要设置中填写 MiMo API Key");
+      return false;
+    }
+    try {
+      this.mediaStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+      const AudioContextCtor = window.AudioContext || (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+      if (!AudioContextCtor) throw new Error("当前浏览器不支持 AudioContext");
+      this.audioContext = new AudioContextCtor({ sampleRate: 16_000 });
+      await this.audioContext.resume();
+      const source = this.audioContext.createMediaStreamSource(this.mediaStream);
+      this.processor = this.audioContext.createScriptProcessor(4096, 1, 1);
+      this.mutedGain = this.audioContext.createGain();
+      this.mutedGain.gain.value = 0;
+      source.connect(this.processor);
+      this.processor.connect(this.mutedGain);
+      this.mutedGain.connect(this.audioContext.destination);
+      this.processor.onaudioprocess = (event) => {
+        if (!this.running) return;
+        const sampleRate = this.audioContext?.sampleRate || 16_000;
+        this.sampleParts.push(downsamplePcm(event.inputBuffer.getChannelData(0), sampleRate));
+        this.sampleCount += this.sampleParts[this.sampleParts.length - 1].length;
+        if (this.sampleCount >= this.chunkSamples) {
+          const merged = this.takeSamples();
+          this.queue.push(merged);
+          if (this.queue.length > 8) {
+            this.queue.shift();
+            this.options.onError?.("MiMo ASR 处理速度落后，已丢弃最早的一个音频片段");
+          }
+          void this.pump();
+        }
+      };
+      this.running = true;
+      return true;
+    } catch (error) {
+      this.options.onError?.(error instanceof Error ? error.message : "MiMo ASR 启动失败");
+      await this.stop();
+      return false;
+    }
+  }
+
+  private takeSamples(): Int16Array {
+    const merged = new Int16Array(this.sampleCount);
+    let offset = 0;
+    for (const part of this.sampleParts) {
+      merged.set(part, offset);
+      offset += part.length;
+    }
+    this.sampleParts = [];
+    this.sampleCount = 0;
+    return merged;
+  }
+
+  private pump(): Promise<void> {
+    if (this.pumpPromise) return this.pumpPromise;
+    this.pumpPromise = (async () => {
+      while (this.queue.length) {
+        const pcm = this.queue.shift();
+        if (!pcm) continue;
+        try {
+          const text = await requestMimoAsr({
+            baseUrl: this.options.baseUrl,
+            model: this.options.model,
+            apiKey: this.options.apiKey,
+            audio: pcmToWav(pcm),
+            language: this.options.language,
+          });
+          if (text.trim()) this.options.onFinal(text.trim());
+        } catch (error) {
+          this.options.onError?.(error instanceof Error ? error.message : "MiMo ASR 片段识别失败");
+        }
+      }
+    })().finally(() => { this.pumpPromise = null; });
+    return this.pumpPromise;
+  }
+
+  async stop(): Promise<void> {
+    this.running = false;
+    this.processor?.disconnect();
+    this.mutedGain?.disconnect();
+    this.processor = null;
+    this.mutedGain = null;
+    this.mediaStream?.getTracks().forEach((track) => track.stop());
+    this.mediaStream = null;
+    void this.audioContext?.close().catch(() => undefined);
+    this.audioContext = null;
+    if (this.sampleCount >= 1_600) this.queue.push(this.takeSamples());
+    else { this.sampleParts = []; this.sampleCount = 0; }
+    await this.pump();
+    this.queue = [];
+  }
+
+  isRunning(): boolean { return this.running; }
+}
+
 function normalizeHttpBaseUrl(value: string): URL {
   const url = new URL(value.trim());
   if (url.protocol !== "https:" && url.protocol !== "http:") throw new Error("AI endpoint 必须使用 http 或 https");
@@ -525,18 +803,54 @@ function messagesEndpoint(baseUrl: string): string {
   return url.toString();
 }
 
-export function buildMeetingSummaryPrompt(segments: MeetingTranscriptSegment[]): string {
+export function buildMeetingSummaryPrompt(segments: MeetingTranscriptSegment[], options: { previousSummary?: string; incremental?: boolean } = {}): string {
   const transcript = segments
     .filter((segment) => segment.final && segment.text.trim())
     .map((segment) => `[${new Date(segment.startMs).toISOString()}] ${segment.speakerName || segment.speakerId}: ${segment.text.trim()}`)
     .join("\n");
+  const previous = options.previousSummary?.trim().slice(0, 12000);
   return [
-    "请根据下面的会议转写生成结构化会议纪要。不要编造转写中不存在的信息。",
-    "只返回 JSON，不要 Markdown 代码围栏，字段必须包含：summary、decisions、actionItems、openQuestions。",
-    'actionItems 为数组，每项包含 task、owner、deadline；未知时使用空字符串。',
-    "会议转写：",
+    options.incremental ? "这是会议纪要增量更新：合并已有 JSON 和新增发言，不要重复编造。" : "请根据会议转写生成结构化会议纪要，不要编造不存在的信息。",
+    "只返回合法 JSON，不要 Markdown、代码围栏或解释。",
+    "必须包含 meetingTitle、overview、timeline、decisions、actionItems、openQuestions。",
+    "timeline 项包含 id、startMs、endMs、speakerName、summary、transcript、kind；kind 只能是 speech、decision、action、question。",
+    "decisions 项包含 text、timeMs；actionItems 项包含 task、owner、deadline、timeMs；openQuestions 项包含 question、timeMs。未知值使用空字符串或 0。",
+    ...(previous ? ["已有纪要 JSON（只在增量更新时合并）：", previous] : []),
+    "新增最终转写（含说话人）：",
     transcript || "（暂无有效转写）",
   ].join("\n");
+}
+
+function stripJsonFence(value: string): string {
+  return value.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
+}
+
+export function parseMeetingMinutesJson(value: string): MeetingMinutesJson | null {
+  let parsed: any;
+  try { parsed = JSON.parse(stripJsonFence(value)); } catch { return null; }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  const timeline = Array.isArray(parsed.timeline) ? parsed.timeline : [];
+  const decisions = Array.isArray(parsed.decisions) ? parsed.decisions : [];
+  const actionItems = Array.isArray(parsed.actionItems) ? parsed.actionItems : [];
+  const openQuestions = Array.isArray(parsed.openQuestions) ? parsed.openQuestions : [];
+  const normalizedTimeline: MeetingMinutesJson["timeline"] = timeline.map((item: any, index: number) => ({
+      id: String(item?.id || `timeline-${index + 1}`),
+      startMs: Number.isFinite(Number(item?.startMs)) ? Number(item.startMs) : 0,
+      endMs: Number.isFinite(Number(item?.endMs)) ? Number(item.endMs) : Number(item?.startMs) || 0,
+      speakerName: String(item?.speakerName || ""),
+      summary: String(item?.summary || item?.transcript || ""),
+      transcript: String(item?.transcript || item?.summary || ""),
+      kind: item?.kind === "decision" || item?.kind === "action" || item?.kind === "question" ? item.kind : "speech",
+    }));
+  const fallbackOverview = normalizedTimeline.map((item) => item.summary || item.transcript).filter(Boolean).slice(0, 3).join(" ");
+  return {
+    meetingTitle: String(parsed.meetingTitle || "会议纪要"),
+    overview: String(parsed.overview || parsed.summary || fallbackOverview),
+    timeline: normalizedTimeline,
+    decisions: decisions.map((item: any) => ({ text: String(item?.text || item || ""), timeMs: Number.isFinite(Number(item?.timeMs)) ? Number(item.timeMs) : 0 })),
+    actionItems: actionItems.map((item: any) => ({ task: String(item?.task || item || ""), owner: String(item?.owner || ""), deadline: String(item?.deadline || ""), timeMs: Number.isFinite(Number(item?.timeMs)) ? Number(item.timeMs) : 0 })),
+    openQuestions: openQuestions.map((item: any) => ({ question: String(item?.question || item || ""), timeMs: Number.isFinite(Number(item?.timeMs)) ? Number(item.timeMs) : 0 })),
+  };
 }
 
 function extractText(payload: any): string {
@@ -549,17 +863,20 @@ function extractText(payload: any): string {
 
 export async function requestMeetingSummary(args: {
   provider: SummaryProvider;
+  protocol?: SummaryProtocol;
   baseUrl: string;
   model: string;
   apiKey: string;
   segments: MeetingTranscriptSegment[];
+  previousSummary?: string;
+  incremental?: boolean;
   signal?: AbortSignal;
 }): Promise<string> {
   if (!args.apiKey.trim()) throw new Error("请先填写会议纪要模型 API Key");
   if (!args.model.trim()) throw new Error("请先填写会议纪要模型名称");
-  const prompt = buildMeetingSummaryPrompt(args.segments);
+  const prompt = buildMeetingSummaryPrompt(args.segments, { previousSummary: args.previousSummary, incremental: args.incremental });
   let response: Response;
-  if (args.provider === "anthropic") {
+  if (args.protocol === "anthropic" || args.provider === "anthropic") {
     response = await fetch(messagesEndpoint(args.baseUrl), {
       method: "POST",
       signal: args.signal,
@@ -580,7 +897,7 @@ export async function requestMeetingSummary(args: {
       method: "POST",
       signal: args.signal,
       headers,
-      body: JSON.stringify({ model: args.model.trim(), messages: [{ role: "system", content: "你是严谨的企业会议纪要助手。" }, { role: "user", content: prompt }], max_completion_tokens: 2048, temperature: 0.2, stream: false }),
+      body: JSON.stringify({ model: args.model.trim(), messages: [{ role: "system", content: "你是严谨的企业会议纪要助手。" }, { role: "user", content: prompt }], max_completion_tokens: 2048, temperature: 0.2, stream: false, thinking: { type: "disabled" } }),
     });
   }
   const body = await response.text();
@@ -588,6 +905,11 @@ export async function requestMeetingSummary(args: {
   const payload = JSON.parse(body);
   const text = extractText(payload);
   if (!text) throw new Error("AI 摘要响应没有可显示文本");
+  if (args.provider === "mimo") {
+    const parsed = parseMeetingMinutesJson(text);
+    if (!parsed) throw new Error("MiMo 返回的会议纪要不是合法 JSON，请重试");
+    return JSON.stringify(JSON.parse(stripJsonFence(text)));
+  }
   return text;
 }
 

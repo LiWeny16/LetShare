@@ -24,6 +24,7 @@ import {
   type CallSignal,
 } from "./callSignaling";
 import { CallSession, type CallSessionState, type CallSessionEvents, type CallTransport, type CallQualitySample } from "./callSession";
+import { CallSfuSession } from "./callSfuSession";
 import type { VideoCodecPrioritySetting } from "./videoCapture";
 import {
   DEFAULT_POLICY_CONFIG,
@@ -73,6 +74,12 @@ export type CallManagerDeps = {
   isConnected?: () => boolean;
   /** TURN 凭据拉取（单测注入用；缺省走 proUpgrade.fetchTurnCredentials）。 */
   fetchTurn?: () => Promise<TurnCredentialsResponse>;
+  /** Production ordinary calls use the meeting SFU over the custom WebSocket. */
+  sfu?: {
+    send: (type: string, data: unknown, channel: string) => void;
+    available?: () => boolean;
+    sourceRoomId?: () => string | null;
+  };
 };
 
 const RTC_CONFIG: RTCConfiguration = {
@@ -147,7 +154,7 @@ function clearScheduledTimeout(handle: TimerHandle): void {
 }
 
 type ActiveCall = {
-  session: CallSession;
+  session: CallSession | CallSfuSession;
   peerId: string;
   role: "caller" | "callee";
   lastSwitch: { at: number; from: TransportDecision; to: TransportDecision } | null;
@@ -215,6 +222,7 @@ export class CallManager {
     if (!selfId) throw new Error("not in room");
     // 服务器信令通道不可用时拒绝拨号（3.7.0）：避免创建必然失败的通话挂在界面上
     if (this.deps.isConnected && !this.deps.isConnected()) throw new Error("not connected to server");
+    if (this.deps.sfu?.available && !this.deps.sfu.available()) throw new Error("SFU media transport unavailable");
     if (this.byPeer.has(peerId)) throw new Error("already in a call with this peer");
 
     const callId = `c_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
@@ -223,27 +231,10 @@ export class CallManager {
       this.ensureTurnFresh(),
       new Promise<void>((r) => scheduleTimeout(r, 2500)),
     ]);
-    const prefs = this.videoPrefs();
-    const session = new CallSession(
-      {
-        callId,
-        peerId,
-        rtcConfig: buildRtcConfig(this.turnServers),
-        localStream,
-        wantVideo: media !== "audio",
-        videoCodec: prefs.videoCodec,
-        videoMaxBitrateKbps: prefs.videoMaxBitrateKbps,
-        onIceCandidate: (candidate) => {
-          this.deps.broadcast(buildIce(callId, candidate));
-        },
-        onNegotiationNeeded: () => {
-          // offer/answer 由 session 内部 setLocalDescription 后触发；
-          // 这里读取 localDescription 广播
-          this.broadcastLocalSdp(callId);
-        },
-      },
-      this.sessionEvents(callId, peerId),
-    );
+    // 普通通话由同一个工厂选择 SFU；只有文件传输保留 P2P 优化。
+    // 不要先构造一个未使用的 P2P session，否则一次拨号会同时持有两套
+    // PeerConnection，并重复注册媒体事件。
+    const session = this.createPendingSession(callId, peerId, media !== "audio", localStream);
 
     const call: ActiveCall = {
       session, peerId, role: "caller", lastSwitch: null,
@@ -363,6 +354,14 @@ export class CallManager {
         return;
       }
     }
+  }
+
+  /** Routes meeting-style signaling from a c_<callId> channel to the SFU session. */
+  handleSfuSignal(type: string, data: unknown, channel?: string): void {
+    if (!channel || !this.calls.has(channel)) return;
+    const call = this.calls.get(channel);
+    if (!call || !(call.session instanceof CallSfuSession)) return;
+    call.session.handleSignal(type, data);
   }
 
   /** UI 接听来电。 */
@@ -489,7 +488,7 @@ export class CallManager {
     return this.calls.get(callId)?.session.getLocalStream() ?? null;
   }
 
-  getCallByPeer(peerId: string): CallSession | null {
+  getCallByPeer(peerId: string): CallSession | CallSfuSession | null {
     const callId = this.byPeer.get(peerId);
     return callId ? this.calls.get(callId)?.session ?? null : null;
   }
@@ -510,7 +509,25 @@ export class CallManager {
     return this.deps.videoPrefs?.() ?? { videoCodec: "auto" as VideoCodecPrioritySetting, videoMaxBitrateKbps: null };
   }
 
-  private createPendingSession(callId: string, peerId: string, wantVideo: boolean): CallSession {
+  private createPendingSession(callId: string, peerId: string, wantVideo: boolean, localStream?: MediaStream): CallSession | CallSfuSession {
+    if (this.deps.sfu) {
+      const prefs = this.videoPrefs();
+      return new CallSfuSession(
+        {
+          callId,
+          peerId,
+          selfId: this.deps.getSelfId() ?? "",
+          rtcConfig: buildRtcConfig(this.turnServers),
+          localStream,
+          wantVideo,
+          videoCodec: prefs.videoCodec,
+          videoMaxBitrateKbps: prefs.videoMaxBitrateKbps,
+          sourceRoomId: this.deps.sfu.sourceRoomId?.() ?? null,
+          send: (type, data, channel) => this.deps.sfu?.send(type, data, channel),
+        },
+        this.sessionEvents(callId, peerId),
+      );
+    }
     // 视频能力偏好（编码器优先/码率上限）：UI 层注入；缺省"浏览器自动"
     const prefs = this.videoPrefs();
     return new CallSession(
@@ -518,6 +535,7 @@ export class CallManager {
         callId,
         peerId,
         rtcConfig: buildRtcConfig(this.turnServers),
+        localStream,
         wantVideo,
         videoCodec: prefs.videoCodec,
         videoMaxBitrateKbps: prefs.videoMaxBitrateKbps,
@@ -716,6 +734,11 @@ export class CallManager {
       if (!this.calls.has(call.session.getCallId())) return;
       if (call.statsTimer == null) return; // cleanup 已清除句柄，停止
       const p2pStats = await call.session.getStats();
+      if (call.session instanceof CallSfuSession) {
+        if (!this.calls.has(call.session.getCallId())) return;
+        call.statsTimer = scheduleTimeout(loop, 5000);
+        return;
+      }
       const p2pQuality: TrackQuality = {
         rttMs: p2pStats.rttMs,
         lossRate: p2pStats.lossRate,

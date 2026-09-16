@@ -18,7 +18,8 @@ import CloseIcon from "@mui/icons-material/Close";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import LinkIcon from "@mui/icons-material/Link";
 import TuneIcon from "@mui/icons-material/Tune";
-import VideocamIcon from "@mui/icons-material/Videocam";
+import AddIcon from "@mui/icons-material/Add";
+import GroupsIcon from "@mui/icons-material/Groups";
 import WorkspacePremiumOutlinedIcon from "@mui/icons-material/WorkspacePremiumOutlined";
 import { useTranslation } from "react-i18next";
 import MeetingPrejoinPreview from "./MeetingPrejoinPreview";
@@ -98,7 +99,7 @@ export default function MeetingCreateDialog({
         <Stack direction="row" alignItems="center" justifyContent="space-between" gap={2} sx={{ px: { xs: 2.5, sm: 2.5 }, pt: { xs: 2.25, sm: 2.25 }, pb: { xs: 0.75, sm: 1 } }}>
           <Stack direction="row" alignItems="center" gap={1.25} minWidth={0}>
             <Box sx={{ width: 30, height: 30, borderRadius: 2, bgcolor: "primary.main", color: "common.white", display: "grid", placeItems: "center", flexShrink: 0, boxShadow: (theme) => `0 5px 12px ${alpha(theme.palette.primary.main, 0.2)}` }}>
-              <VideocamIcon sx={{ fontSize: 17 }} />
+              <GroupsIcon sx={{ fontSize: 17 }} />
             </Box>
             <Stack direction="row" alignItems="center" gap={0.75} sx={{ minHeight: 18, color: "text.secondary" }}>
               <Typography sx={{ fontSize: "0.72rem", fontWeight: 650, color: "text.primary" }}>LetShare</Typography>
@@ -241,7 +242,6 @@ export default function MeetingCreateDialog({
                     fullWidth
                     variant="outlined"
                     label={t("meeting.roomId", "会议号")}
-                    placeholder="0000"
                     inputProps={{ maxLength: 4, inputMode: "numeric" }}
                     sx={{ "& .MuiOutlinedInput-root": { minHeight: 72, borderRadius: 2.5, bgcolor: "rgba(255,255,255,0.72)" }, "& .MuiInputBase-input": { fontSize: "2rem", fontWeight: 760, letterSpacing: "0.28em", fontVariantNumeric: "tabular-nums" } }}
                   />
@@ -267,7 +267,7 @@ export default function MeetingCreateDialog({
               variant="contained"
               autoFocus={isCreate && !isCreated}
               disabled={creating}
-              startIcon={creating ? <CircularProgress size={17} color="inherit" /> : <VideocamIcon />}
+              startIcon={creating ? <CircularProgress size={17} color="inherit" /> : isCreate ? <GroupsIcon /> : <AddIcon />}
               sx={{ minWidth: { xs: 142, sm: 148 }, minHeight: 44, px: 2.25, borderRadius: 2.25, justifyContent: "center", whiteSpace: "nowrap", textTransform: "none", fontWeight: 760, boxShadow: (theme) => `0 6px 16px ${alpha(theme.palette.primary.main, 0.24)}`, "&:active": { transform: "scale(0.96)" }, transition: "transform 120ms ease-out" }}
             >
               {creating ? t("meeting.creating", "创建中…") : isCreated ? t("meeting.enterNow", "进入会议") : !isCreate ? t("meeting.joinNow", "加入会议") : t("meeting.startNow", "开始会议")}

@@ -23,6 +23,10 @@ export interface MemberTileData {
   /** 静音 / 摄像头状态（用于右下角状态图标）。 */
   muted: boolean;
   cameraOn: boolean;
+  /** Speaking state belongs to member camera tiles, never to Active Sharing. */
+  isSpeaking?: boolean;
+  /** Render this member as the selected large-stage tile. */
+  isExpanded?: boolean;
 }
 
 /** 从 uniqId（"name:id" 或纯 id）提取显示名。 */

@@ -99,6 +99,9 @@ test("WF-003/004: Host 独立 publish → 成员加入订阅 → 屏幕共享重
   await host.getByRole("button", { name: /开始会议|进入会议/ }).click();
   await until("Host 进入 meeting 路由", async () =>
     (await host.evaluate(() => location.hash))?.includes("/meeting"), 20_000);
+  await host.getByTestId("meeting-name-gate").waitFor({ state: "visible" });
+  await host.getByTestId("meeting-name-input").fill("Alice");
+  await host.getByRole("button", { name: "进入会议" }).click();
 
   // Host 独立完成 publish：不等任何成员，publish PC ICE connected → in-meeting
   await until("Host 独立达成 in-meeting（publish PC 连通，不依赖远端）", async () =>
@@ -114,6 +117,9 @@ test("WF-003/004: Host 独立 publish → 成员加入订阅 → 屏幕共享重
 
   // ── 3. 第二个用户经 URL 直入（邀请链接路径）并加入 ──
   await guest.evaluate((roomId: string) => { window.location.hash = `#/meeting?room=${roomId}&source=${"e2e-p0-1"}`; }, meetingRoomId);
+  await guest.getByTestId("meeting-name-gate").waitFor({ state: "visible" });
+  await guest.getByTestId("meeting-name-input").fill("Bob");
+  await guest.getByRole("button", { name: "进入会议" }).click();
   await until("bob joinMeeting 启动", async () =>
     (await guest.evaluate(() => (window as any).__meeting?.getState()?.roomId)) === meetingRoomId, 20_000);
   await until("bob 达成 in-meeting", async () =>

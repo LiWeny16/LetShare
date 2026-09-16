@@ -33,8 +33,8 @@ export function getMeetingMediaSettings(): MeetingMediaSettings {
   };
 }
 
-/** Capture through the same device/AEC/noise/video pipeline as LetShare calls. */
-export async function acquireMeetingMedia(): Promise<MediaStream> {
+/** Capture the meeting microphone through the same device/AEC/noise pipeline as LetShare calls. */
+export async function acquireMeetingAudio(): Promise<MediaStream> {
   const settings = getMeetingMediaSettings();
   const tracks: MediaStreamTrack[] = [];
   const errors: unknown[] = [];
@@ -66,6 +66,27 @@ export async function acquireMeetingMedia(): Promise<MediaStream> {
     } else {
       tracks.push(...raw.getAudioTracks());
     }
+  } catch (error) {
+    errors.push(error);
+    console.warn("[meeting] audio capture failed", error);
+  }
+
+  if (tracks.length === 0) {
+    const first = errors[0];
+    throw first instanceof Error ? first : new Error("meeting audio capture failed");
+  }
+  return new MediaStream(tracks);
+}
+
+/** Capture through the same device/AEC/noise/video pipeline as LetShare calls. */
+export async function acquireMeetingMedia(): Promise<MediaStream> {
+  const settings = getMeetingMediaSettings();
+  const tracks: MediaStreamTrack[] = [];
+  const errors: unknown[] = [];
+
+  try {
+    const audio = await acquireMeetingAudio();
+    tracks.push(...audio.getAudioTracks());
   } catch (error) {
     errors.push(error);
     console.warn("[meeting] audio capture failed", error);

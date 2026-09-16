@@ -26,17 +26,20 @@ async function until(desc: string, cond: () => Promise<boolean>, timeoutMs = 60_
 
 async function stateOf(page: Page) {
   return page.evaluate(() => {
-    const manager = (window as any).__meeting;
-    const state = manager?.getState?.();
     const videos = Array.from(document.querySelectorAll("video")).filter((video) => {
       const rect = video.getBoundingClientRect();
       return rect.width > 0 && rect.height > 0 && video.srcObject?.getVideoTracks().some((track) => track.readyState === "live");
     }).length;
+    const stage = document.querySelector('[data-testid="meeting-stage"]');
+    const room = new URLSearchParams(location.hash.split("?")[1] ?? "").get("room");
     return {
-      stage: state?.stage,
-      roomId: state?.roomId,
-      members: state?.members?.length ?? 0,
-      remoteTracks: state?.remoteTracks?.filter((track: any) => track.track?.readyState === "live").length ?? 0,
+      // Production E2E must not depend on the dev-only __meeting hook.
+      stage: stage?.getAttribute("data-stage"),
+      roomId: room,
+      members: document.querySelectorAll('[data-testid^="meeting-member-tile-"]').length,
+      remoteTracks: Array.from(document.querySelectorAll("video")).filter((video) =>
+        video.srcObject?.getVideoTracks().some((track) => track.readyState === "live")
+      ).length,
       videos,
       memory: (performance as any).memory?.usedJSHeapSize ?? null,
     };
@@ -70,6 +73,8 @@ test("enterprise meeting 30-minute lifecycle soak", async (t) => {
         transferPriority: "p2p",
         version: "0",
         isNewUser: false,
+        meetingCameraDefaultOn: true,
+        meetingMicrophoneDefaultOn: true,
       }));
     }, { name, sourceRoom: SOURCE_ROOM, ws: WS, token: TOKEN });
     const page = await context.newPage();
@@ -90,16 +95,22 @@ test("enterprise meeting 30-minute lifecycle soak", async (t) => {
   await host.locator('button[aria-label="plus"]:visible').click();
   await host.getByRole("menuitem", { name: /创建会议/ }).click();
   await host.getByLabel(/会议名称/).fill("Enterprise soak");
-  await host.getByRole("button", { name: /开始会议/ }).click();
-  await host.getByRole("button", { name: /进入会议/ }).click();
-  await until("host in meeting", async () => (await host.evaluate(() => (window as any).__meeting?.getState()?.stage)) === "in-meeting");
-  const meetingId = String(await host.evaluate(() => (window as any).__meeting?.getState()?.roomId));
+  const createDialog = host.locator('[role="dialog"]:visible').last();
+  await createDialog.locator("button").last().click();
+  await createDialog.locator("button").last().click();
+  await until("host in meeting", async () => (await host.locator('[data-testid="meeting-stage"]').getAttribute("data-stage")) === "in-meeting");
+  const meetingId = String(await host.evaluate(() => new URLSearchParams(location.hash.split("?")[1] ?? "").get("room")));
   assert.match(meetingId, /^\d{4}$/);
 
   await guest.evaluate((id: string) => { window.location.hash = `#/meeting?room=${id}`; }, meetingId);
-  await until("guest in meeting", async () => (await guest.evaluate(() => (window as any).__meeting?.getState()?.stage)) === "in-meeting");
-  await until("guest receives host track", async () => (await guest.evaluate(() => (window as any).__meeting?.getState()?.remoteTracks?.some((track: any) => track.uniqId === "soak-host:soak" && track.kind === "video"))) === true);
-  await until("host receives guest track", async () => (await host.evaluate(() => (window as any).__meeting?.getState()?.remoteTracks?.some((track: any) => track.uniqId === "soak-guest:soak" && track.kind === "video"))) === true);
+  const guestNameGate = guest.getByTestId("meeting-name-gate");
+  if (await guestNameGate.waitFor({ state: "visible", timeout: 10_000 }).then(() => true).catch(() => false)) {
+    await guest.getByTestId("meeting-name-input").fill("Soak guest");
+    await guest.getByRole("button", { name: "进入会议" }).click();
+  }
+  await until("guest in meeting", async () => (await guest.locator('[data-testid="meeting-stage"]').getAttribute("data-stage")) === "in-meeting");
+  await until("guest receives host rendered video", async () => (await stateOf(guest)).videos >= 2);
+  await until("host receives guest rendered video", async () => (await stateOf(host)).videos >= 2);
 
   const samples: Array<{ elapsedMs: number; host: Awaited<ReturnType<typeof stateOf>>; guest: Awaited<ReturnType<typeof stateOf>> }> = [];
   const durationMs = SOAK_MINUTES * 60_000;

@@ -4,7 +4,7 @@ export interface IConnectionProvider {
    * @param roomId 房间ID
    * @returns 连接是否成功
    */
-  connect(roomId: string): Promise<boolean>;
+  connect(roomId: string, options?: { transportOnly?: boolean }): Promise<boolean>;
   
   /**
    * 断开连接
@@ -80,9 +80,13 @@ export interface IConnectionProvider {
    * 获取唯一ID
    */
   getUniqId?(): string;
+
+  setUserName?(userName: string): void;
 }
 
 export interface ConnectionConfig {
   roomId: string;
+  userId?: string;
+  userName: string;
   uniqId: string;
 }

@@ -19,13 +19,13 @@ export class ConnectionManager implements IConnectionProvider {
     this.config = config;
   }
 
-  async connect(roomId: string): Promise<boolean> {
+  async connect(roomId: string, options?: { transportOnly?: boolean }): Promise<boolean> {
     const serverMode = settingsStore.get("serverMode") as ServerMode;
     // auto 模式已废弃（依赖 ipinfo 地区探测，国内网络下会卡）：残留的 'auto' 旧值按国内处理
     if (serverMode === 'ably') {
-      return this.connectWithProvider('ably', roomId);
+      return this.connectWithProvider('ably', roomId, options);
     }
-    return this.connectWithProvider('custom', roomId);
+    return this.connectWithProvider('custom', roomId, options);
   }
 
   async disconnect(soft?: boolean): Promise<void> {
@@ -127,7 +127,16 @@ export class ConnectionManager implements IConnectionProvider {
     return this.currentProvider?.getUniqId?.() ?? this.config.uniqId;
   }
 
-  private async connectWithProvider(providerType: 'ably' | 'custom', roomId: string): Promise<boolean> {
+  setUserName(userName: string): void {
+    this.config.userName = userName;
+    this.currentProvider?.setUserName?.(userName);
+  }
+
+  private async connectWithProvider(
+    providerType: 'ably' | 'custom',
+    roomId: string,
+    options?: { transportOnly?: boolean },
+  ): Promise<boolean> {
     // 检查失败次数
     const failures = this.failureCount.get(providerType) || 0;
     if (failures >= this.maxFailures) {
@@ -165,7 +174,7 @@ export class ConnectionManager implements IConnectionProvider {
       }
 
       // 尝试连接
-      const success = await provider.connect(roomId);
+      const success = await provider.connect(roomId, options);
       
       if (success) {
         this.currentProvider = provider;

@@ -139,7 +139,9 @@ test("server relay backend forwards receiver ACK messages to the sender", () => 
   assert.notEqual(resendIndex, -1, "handleFileTransferResend should follow ACK handler");
   const body = serverWebSocketSource.slice(ackHandlerIndex, resendIndex);
 
-  assert.match(body, /session\.ToUserID\s*!=\s*client\.UserID/);
+  // Meeting transfers may authorize by stable uniqID while legacy transfers
+  // still use UserID; both paths are centralized in the ownership adapter.
+  assert.match(body, /clientOwnsTransferUser\(client,\s*session\.ToUserID\)/);
   assert.match(body, /model\.MessageTypeFileTransferAck/);
   assert.match(body, /SendMessageToUser\(session\.FromUserID/);
 });

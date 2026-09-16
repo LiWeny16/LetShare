@@ -78,11 +78,31 @@ test("meeting without camera or microphone still joins and keeps meeting control
   await page.locator('button[aria-label="plus"]:visible').first().click();
   await page.getByRole("menuitem", { name: /创建会议|Create meeting/ }).click();
   await page.getByText("MEETING PASS", { exact: true }).waitFor({ state: "visible", timeout: 15_000 });
-  await page.getByRole("button", { name: /开始会议|Start meeting/ }).click();
+  // M-04/M-10: the create dialog changes from "开始会议" to "进入会议"
+  // after reserving the room; keep the assertion language-independent.
+  await page
+    .getByRole("button", { name: /开始会议|进入会议|Start meeting|Enter meeting/i })
+    .click();
 
   await until("meeting route", async () => (await page.evaluate(() => location.hash)).includes("/meeting"), 20_000);
-  await until("server-confirmed in-meeting state without local media", async () =>
-    (await page.getByTestId("meeting-stage").getAttribute("data-stage")) === "in-meeting", 30_000);
+  // M-01: a generated identity must choose a Meeting display name once before
+  // the Meeting-owned join can begin; this must not change its stable uniqID.
+  await page.getByTestId("meeting-name-gate").waitFor({ state: "visible", timeout: 10_000 });
+  await page.getByTestId("meeting-name-input").fill("No-media attendee");
+  await page.getByRole("button", { name: "进入会议" }).click();
+  try {
+    await until("server-confirmed in-meeting state without local media", async () =>
+      (await page.getByTestId("meeting-stage").getAttribute("data-stage")) === "in-meeting", 30_000);
+  } catch (error) {
+    console.log("[no-media-diagnostic]", await page.evaluate(() => ({
+      href: location.href,
+      stage: document.querySelector('[data-testid="meeting-stage"]')?.getAttribute("data-stage"),
+      mediaError: document.querySelector('[data-testid="meeting-stage"]')?.getAttribute("data-media-error"),
+      text: document.body.innerText.slice(0, 1200),
+      manager: (window as any).__meeting?.getState?.(),
+    })));
+    throw error;
+  }
 
   const state = await page.evaluate(() => (window as any).__meeting?.getState?.());
   const stage = page.getByTestId("meeting-stage");
@@ -107,4 +127,5 @@ test("meeting without camera or microphone still joins and keeps meeting control
   }
 
   assert.match(consoleLines.join("\n"), /NotFoundError|not found/i);
+  assert.doesNotMatch(consoleLines.join("\n"), /Unexpected token '<'|<!DOCTYPE html>/i, "TURN fallback must not parse Vite HTML as JSON");
 });

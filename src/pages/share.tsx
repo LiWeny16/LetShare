@@ -6,10 +6,7 @@ import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import WifiOffIcon from '@mui/icons-material/WifiOff';
 import DownloadIcon from "@mui/icons-material/Download";
 import AddIcon from "@mui/icons-material/Add";
-import VideoCallIcon from "@mui/icons-material/VideoCall";
-import VideocamIcon from "@mui/icons-material/Videocam";
-import MeetingRoomIcon from "@mui/icons-material/MeetingRoom";
-import ScreenShareIcon from "@mui/icons-material/ScreenShare";
+import GroupsIcon from "@mui/icons-material/Groups";
 import PhonelinkIcon from "@mui/icons-material/Phonelink";
 import PhonelinkRingIcon from "@mui/icons-material/PhonelinkRing";
 import { ButtonBase, CssBaseline, GlobalStyles } from '@mui/material';
@@ -51,6 +48,7 @@ import EditableUserId from "../components/UserId";
 import DownloadDrawer from "../components/Download";
 import MeetingPrejoinPreview from "../components/meeting/components/MeetingPrejoinPreview";
 import MeetingCreateDialog from "../components/meeting/components/MeetingCreateDialog";
+import MeetingMinutesHistoryDialog from "../components/meeting/components/MeetingMinutesHistoryDialog";
 import ChatPanel from "../components/Chat/ChatPanel";
 import SelectedFileStrip from '../components/SelectedFileStrip';
 import ChatIntegration from "@App/libs/chat/ChatIntegration";
@@ -58,8 +56,12 @@ import AppleIcon from "@mui/icons-material/Apple";
 import LinkIcon from "@mui/icons-material/Link";
 import SyncIcon from "@mui/icons-material/Sync";
 import ChatIcon from "@mui/icons-material/Chat";
+import AttachFileIcon from "@mui/icons-material/AttachFile";
+import PhoneIcon from "@mui/icons-material/Phone";
+import VideocamIcon from "@mui/icons-material/Videocam";
 import CloudIcon from "@mui/icons-material/Cloud";
 import AutoAwesomeIcon from "@mui/icons-material/AutoAwesome";
+import NotesOutlinedIcon from "@mui/icons-material/NotesOutlined";
 import CelebrationIcon from "@mui/icons-material/Celebration";
 import { compareUniqIdPriority, getDeviceType } from "@App/libs/tools/tools";
 import { observer } from "mobx-react-lite";
@@ -224,6 +226,8 @@ type ConnectedUser = {
   userType: UserType
   name?: string;
   status: UserStatus
+  /** 对方当前所在会议号（undefined = 未在任何会议中）。 */
+  meetingRoom?: string;
 };
 export const buttonStyleNormal = {
   borderRadius: "5px",
@@ -252,6 +256,8 @@ const Share = observer(() => {
   const [downloadPageState, setDwnloadPageState] = useState(false);
   const [isDraggingOver, setIsDraggingOver] = React.useState(false);
   const [fileSendingTargetUser, setFileSendingTargetUser] = React.useState("");
+  // 右键“发送文件”后，文件选择器完成选择即发送给这个用户。
+  const [filePickerTargetUser, setFilePickerTargetUser] = React.useState<string | null>(null);
   // 拖拽即传：悬停的用户卡片 + 待发区 chip 拖拽的原始文件
   const [dragOverUserId, setDragOverUserId] = React.useState<string | null>(null);
   const chipDragPayloadRef = React.useRef<File[] | null>(null);
@@ -315,6 +321,11 @@ const Share = observer(() => {
             return v && v !== "auto" ? Number(v) : null;
           })(),
         }),
+        sfu: {
+          send: (type, data, channel) => realTimeColab.sendCallSFUMessage(type, data, channel),
+          available: () => realTimeColab.isConnected() && realTimeColab.getConnectionManager().getConnectionType() === "custom",
+          sourceRoomId: () => settingsStore.get("roomId") ?? null,
+        },
       },
       {
         onIncoming: (info) => {
@@ -384,12 +395,14 @@ const Share = observer(() => {
     );
     callManagerRef.current = manager;
     realTimeColab.registerCallSignalHandler((from, data) => manager.handleSignal(from, data));
+    realTimeColab.registerCallSFUHandler((type, data, channel) => manager.handleSfuSignal(type, data, channel));
     // 对端离开（页面关闭/刷新广播 leave）：立即结束与其的通话（其 bye 已不可能到达）
     realTimeColab.registerCallPeerLeaveHandler((peerId) => manager.peerLeft(peerId));
     // 后台省流定时器豁免：通话/视频进行中注入活跃查询，后台 10 分钟到点也不断开连接
     realTimeColab.registerCallActivityProvider(() => manager.isInCall());
     return () => {
       realTimeColab.registerCallActivityProvider(null);
+      realTimeColab.registerCallSFUHandler(null);
       manager.leaveRoom();
       callManagerRef.current = null;
     };
@@ -434,7 +447,7 @@ const Share = observer(() => {
         isVideo: videoEnabled,
         remoteStream: null,
         localStream: stream,
-        transport: "p2p" as const,
+        transport: "public" as const,
         state: "connecting",
         muted: false,
         videoEnabled,
@@ -470,7 +483,7 @@ const Share = observer(() => {
         isVideo: videoEnabled,
         remoteStream: null,
         localStream: stream,
-        transport: "p2p" as const,
+        transport: "public" as const,
         state: "connecting",
         muted: false,
         videoEnabled,
@@ -808,6 +821,7 @@ const Share = observer(() => {
   const [meetingTitleInput, setMeetingTitleInput] = useState("");
   const [meetingCreating, setMeetingCreating] = useState(false);
   const [createdMeeting, setCreatedMeeting] = useState<{ id: string; title: string } | null>(null);
+  const [meetingHistoryOpen, setMeetingHistoryOpen] = useState(false);
   const [copied, setCopied] = useState("");
   const meetingCreateRequestRef = useRef(0);
 
@@ -887,11 +901,6 @@ const Share = observer(() => {
   const createdInviteLink = createdMeeting
     ? `${window.location.origin}${window.location.pathname}#/meeting?room=${encodeURIComponent(createdMeeting.id)}`
     : "";
-  const handleStartScreenShare = () => {
-    setFabMenuAnchor(null);
-    // 即时屏幕共享：也进入会议路由并自动发起共享（同一条 SFU 上行）
-    navigator("/meeting?screen=1");
-  };
   const factoryMenuItem = ({
     icon: Icon, title, sub, badge, onClick,
   }: {
@@ -903,21 +912,38 @@ const Share = observer(() => {
   }) => (
     <MenuItem
       key={title}
+      disableRipple
       onClick={() => { setFabMenuAnchor(null); onClick(); }}
-      sx={{ px: 1.5, py: 1, gap: 1.25, borderRadius: 2, mx: 0.5 }}
+      sx={{
+        minHeight: 60,
+        px: 1.25,
+        py: 1,
+        gap: 1.25,
+        borderRadius: 2.25,
+        mx: 0.25,
+        transition: "background-color 140ms ease, transform 140ms ease",
+        "&:hover": {
+          bgcolor: alpha(theme.palette.primary.main, 0.06),
+        },
+        "&:active": {
+          transform: "scale(0.985)",
+        },
+      }}
     >
       <Box sx={{
-        width: 40, height: 40, borderRadius: '50%', flexShrink: 0,
+        width: 42, height: 42, borderRadius: 2.25, flexShrink: 0,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
-        bgcolor: `${theme.palette.primary.main}1A`, color: 'primary.main',
+        bgcolor: alpha(theme.palette.primary.main, 0.09),
+        border: `1px solid ${alpha(theme.palette.primary.main, 0.12)}`,
+        color: 'primary.main',
       }}>
-        <Icon sx={{ fontSize: 22 }} />
+        <Icon sx={{ fontSize: 21 }} />
       </Box>
       <Box sx={{ flex: 1, minWidth: 0 }}>
-        <Typography sx={{ fontWeight: 700, color: 'text.primary', fontSize: '0.9rem', lineHeight: 1.25 }}>
+        <Typography sx={{ fontWeight: 750, color: 'text.primary', fontSize: '0.9rem', lineHeight: 1.25, letterSpacing: '-0.01em' }}>
           {title}
         </Typography>
-        <Typography sx={{ fontSize: '0.75rem', color: 'text.secondary', lineHeight: 1.3 }}>
+        <Typography sx={{ mt: 0.25, fontSize: '0.73rem', color: 'text.secondary', lineHeight: 1.25 }}>
           {sub}
         </Typography>
       </Box>
@@ -938,6 +964,11 @@ const Share = observer(() => {
   // 聊天相关状态
   const [chatPanelOpen, setChatPanelOpen] = useState<boolean>(false);
   const [chatTargetUser, setChatTargetUser] = useState<string | null>(null);
+  const [userContextMenu, setUserContextMenu] = useState<{
+    mouseX: number;
+    mouseY: number;
+    user: ConnectedUser;
+  } | null>(null);
   const searchButtonRef = useRef(null)
   const mainDialogRef = useRef<HTMLDivElement | null>(null);
   // const [videoPanelOpen, setVideoPanelOpen] = useState(false);
@@ -1120,18 +1151,99 @@ const Share = observer(() => {
   const updateConnectedUsers = (userList: Map<string, UserInfo>) => {
     const usersArray: ConnectedUser[] = Array.from(userList.entries()).map(
       ([id, userInfo]) => {
-        // 从 id 中提取 name (兼容 "name:id" 或纯 id)
+        // 名称属于可变 profile；uniqId 只用于稳定路由/排序，不能再当昵称来源。
         const [namePart, idPart] = id.split(":");
         return {
           uniqId: idPart ? `${namePart}:${idPart}` : id, // 保持完整 ID
-          name: namePart || id,           // 没有冒号时用 id 作为 name
+          name: userInfo.userName || namePart || id,
           status: userInfo.status,        // 携带状态
-          userType: userInfo.userType
+          userType: userInfo.userType,
+          meetingRoom: userInfo.meetingRoom,
         };
       }
     );
     setConnectedUsers(usersArray);
   }
+
+  // 用户点「申请加入」→ 走 meetingManager（服务器定向转发给会议主持人）。
+  // 申请方此时不在会议中：meetingManager 的 applyToMeeting 用 sourceRoomId 做投递上下文。
+  const handleApplyToMeeting = (user: ConnectedUser) => {
+    if (!user.meetingRoom) return;
+    const sourceRoom = settingsStore.get("roomId");
+    if (!sourceRoom) {
+      alertUseMUI(t('meeting.applyNoRoom', '请先加入原始房间'), 2500, { kind: "warning" });
+      return;
+    }
+    const sent = meetingManager.applyToMeeting(user.meetingRoom, sourceRoom);
+    alertUseMUI(
+      sent
+        ? t('meeting.applySent', '已发送加入申请，等待会议主持人处理')
+        : t('meeting.applyPending', '已在等待主持人处理，请勿重复申请'),
+      2500,
+      { kind: sent ? "info" : "warning" },
+    );
+  };
+
+  const handleUserContextMenu = (event: React.MouseEvent<HTMLElement>, user: ConnectedUser) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setUserContextMenu({
+      mouseX: event.clientX + 2,
+      mouseY: event.clientY + 2,
+      user,
+    });
+  };
+
+  const closeUserContextMenu = () => setUserContextMenu(null);
+
+  const openFilePickerForUser = (targetUserId: string) => {
+    setFilePickerTargetUser(targetUserId);
+    const input = document.getElementById("multi-file-input") as HTMLInputElement | null;
+    if (!input) return;
+    input.value = "";
+    // 让右键菜单先完成关闭，避免浏览器把文件选择器视为菜单的副作用。
+    window.setTimeout(() => input.click(), 0);
+  };
+
+  const copyUserId = async (user: ConnectedUser) => {
+    if (await writeClipboard(user.uniqId)) {
+      alertUseMUI(t("user.idCopied", "已复制用户 ID"), 1500, { kind: "success" });
+    }
+  };
+
+  type UserContextAction = "chat" | "file" | "audio" | "video" | "meeting" | "downloads" | "copy";
+  const runUserContextAction = (action: UserContextAction) => {
+    const context = userContextMenu;
+    closeUserContextMenu();
+    if (!context) return;
+
+    const { user } = context;
+    switch (action) {
+      case "chat":
+        setChatTargetUser(user.uniqId);
+        setChatPanelOpen(true);
+        break;
+      case "file":
+        openFilePickerForUser(user.uniqId);
+        break;
+      case "audio":
+        void startCall(user.uniqId, "audio");
+        break;
+      case "video":
+        void startCall(user.uniqId, "video");
+        break;
+      case "meeting":
+        handleApplyToMeeting(user);
+        break;
+      case "downloads":
+        setDwnloadPageState(true);
+        break;
+      case "copy":
+        void copyUserId(user);
+        break;
+    }
+  };
+
   const handleClickSearch = async () => {
     setLoading(true);
     try {
@@ -1211,7 +1323,14 @@ const Share = observer(() => {
   const handleMultiFileSelect = async (event: React.ChangeEvent<HTMLInputElement>, isImg: boolean | undefined) => {
     const files = event.target.files;
     if (!files || files.length === 0) return;
-    await applyFileSelection(Array.from(files), isImg);
+    const selected = Array.from(files);
+    const targetUserId = filePickerTargetUser;
+    setFilePickerTargetUser(null);
+    if (targetUserId) {
+      await sendFilesToUserCard(targetUserId, selected);
+      return;
+    }
+    await applyFileSelection(selected, isImg);
   };
   const handleClickOtherClients = async (_e: any, targetUserId: string) => {
     try {
@@ -1485,6 +1604,7 @@ const Share = observer(() => {
                 startIcon={<FileIcon />}
                 disabled={!canSendFile}
                 onClick={() => {
+                  setFilePickerTargetUser(null);
                   const input = document.getElementById("multi-file-input") as HTMLInputElement;
                   if (input) {
                     input.value = "";
@@ -1517,6 +1637,7 @@ const Share = observer(() => {
                 startIcon={<ImageIcon />}
                 disabled={!canSendFile}
                 onClick={() => {
+                  setFilePickerTargetUser(null);
                   const input = document.getElementById("image-input") as HTMLInputElement;
                   if (input) {
                     input.value = "";
@@ -1689,6 +1810,7 @@ const Share = observer(() => {
                   component="div"
                   data-testid="connected-user"
                   data-user-id={user.uniqId}
+                  onContextMenu={(e) => handleUserContextMenu(e, user)}
                   onClick={(e) => {
                     if (selectedButton === "video") {
                       // 如果尚未建立视频连接，则主动发起连接
@@ -1834,6 +1956,24 @@ const Share = observer(() => {
                         zIndex: 4,
                         height: 28,
                       }}>
+                        {user.meetingRoom && (
+                          <Tooltip title={t('meeting.applyToJoin', '申请加入会议 {{id}}', { id: user.meetingRoom })} arrow enterDelay={250}>
+                            <span>
+                              <IconButton
+                                size="small"
+                                color="primary"
+                                data-testid="apply-meeting-button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleApplyToMeeting(user);
+                                }}
+                                sx={{ opacity: 0.85, '&:hover': { opacity: 1 } }}
+                              >
+                                <GroupsIcon sx={{ fontSize: 20 }} />
+                              </IconButton>
+                            </span>
+                          </Tooltip>
+                        )}
                         <Tooltip title={t('chat.startChat', '开始聊天')} arrow enterDelay={250}>
                           <span>
                             <IconButton
@@ -1862,6 +2002,71 @@ const Share = observer(() => {
           </Box>
 
           {/* 加号 FAB（含下载角标）+ 弹出菜单 */}
+          <Menu
+            open={Boolean(userContextMenu)}
+            onClose={closeUserContextMenu}
+            anchorReference="anchorPosition"
+            anchorPosition={userContextMenu ? { top: userContextMenu.mouseY, left: userContextMenu.mouseX } : undefined}
+            MenuListProps={{
+              "aria-label": userContextMenu ? `${userContextMenu.user.name} 操作菜单` : "用户操作菜单",
+              disablePadding: true,
+              sx: { p: 0.75 },
+            }}
+            slotProps={{
+              paper: {
+                sx: {
+                  minWidth: 230,
+                  borderRadius: 2.5,
+                  border: (th) => `1px solid ${alpha(th.palette.primary.main, 0.1)}`,
+                  boxShadow: "0 16px 42px rgba(23, 32, 51, 0.18), 0 3px 12px rgba(23, 32, 51, 0.08)",
+                  overflow: "hidden",
+                },
+              },
+            }}
+          >
+            {userContextMenu && (
+              <Box sx={{ px: 1.5, pt: 0.75, pb: 0.65 }}>
+                <Typography sx={{ fontSize: "0.78rem", fontWeight: 800, color: "text.primary", maxWidth: 205, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {userContextMenu.user.name}
+                </Typography>
+                <Typography sx={{ mt: 0.2, fontSize: "0.68rem", color: "text.secondary" }}>
+                  选择要执行的操作
+                </Typography>
+              </Box>
+            )}
+            <MenuItem onClick={() => runUserContextAction("chat")} data-testid="user-context-chat">
+              <ChatIcon sx={{ mr: 1.25, color: "primary.main", fontSize: 20 }} />
+              开始聊天
+            </MenuItem>
+            <MenuItem onClick={() => runUserContextAction("file")} data-testid="user-context-send-file">
+              <AttachFileIcon sx={{ mr: 1.25, color: "primary.main", fontSize: 20 }} />
+              发送文件
+            </MenuItem>
+            <MenuItem onClick={() => runUserContextAction("audio")} data-testid="user-context-audio-call">
+              <PhoneIcon sx={{ mr: 1.25, color: "primary.main", fontSize: 20 }} />
+              发起语音通话
+            </MenuItem>
+            <MenuItem onClick={() => runUserContextAction("video")} data-testid="user-context-video-call">
+              <VideocamIcon sx={{ mr: 1.25, color: "primary.main", fontSize: 20 }} />
+              发起视频通话
+            </MenuItem>
+            {userContextMenu?.user.meetingRoom && (
+              <MenuItem onClick={() => runUserContextAction("meeting")} data-testid="user-context-apply-meeting">
+                <GroupsIcon sx={{ mr: 1.25, color: "primary.main", fontSize: 20 }} />
+                申请加入会议
+              </MenuItem>
+            )}
+            <Divider sx={{ my: 0.5 }} />
+            <MenuItem onClick={() => runUserContextAction("downloads")} data-testid="user-context-download-manager">
+              <DownloadIcon sx={{ mr: 1.25, color: "primary.main", fontSize: 20 }} />
+              下载管理
+            </MenuItem>
+            <MenuItem onClick={() => runUserContextAction("copy")} data-testid="user-context-copy-id">
+              <ContentCopyIcon sx={{ mr: 1.25, color: "text.secondary", fontSize: 19 }} />
+              复制用户 ID
+            </MenuItem>
+          </Menu>
+
           <Fab
             color="primary"
             ref={fabAnchorRef}
@@ -1890,20 +2095,47 @@ const Share = observer(() => {
             anchorEl={fabMenuAnchor}
             open={Boolean(fabMenuAnchor)}
             onClose={() => setFabMenuAnchor(null)}
+            MenuListProps={{
+              disablePadding: true,
+              sx: { p: 0.5 },
+            }}
+            slotProps={{
+              paper: {
+                sx: {
+                  mt: 1.25,
+                  p: 0.75,
+                  width: { xs: 292, sm: 326 },
+                  borderRadius: 3.25,
+                  border: (th) => `1px solid ${alpha(th.palette.primary.main, 0.1)}`,
+                  bgcolor: "background.paper",
+                  boxShadow: "0 18px 48px rgba(23, 32, 51, 0.16), 0 3px 12px rgba(23, 32, 51, 0.08)",
+                  overflow: "hidden",
+                },
+              },
+            }}
             anchorOrigin={{ vertical: "top", horizontal: "right" }}
             transformOrigin={{ vertical: "bottom", horizontal: "right" }}
           >
+            <Box sx={{ px: 1.25, pt: 0.75, pb: 0.8 }}>
+              <Typography sx={{ color: "text.primary", fontSize: "0.76rem", fontWeight: 800, letterSpacing: "0.02em" }}>
+                {t("workspace.quickActions", "快捷入口")}
+              </Typography>
+              <Typography sx={{ mt: 0.25, color: "text.secondary", fontSize: "0.7rem" }}>
+                {t("workspace.quickActionsSub", "会议与文件传输")}
+              </Typography>
+            </Box>
             {factoryMenuItem({
-              icon: MeetingRoomIcon, title: t('meeting.create', '创建会议'), sub: t('meeting.createSub', '发起一个新的会议房间'), onClick: () => openMeetingDialog("create"),
+              icon: GroupsIcon, title: t('meeting.create', '创建会议'), sub: t('meeting.createSub', '发起一个新的会议房间'), onClick: () => openMeetingDialog("create"),
             })}
             {factoryMenuItem({
-              icon: VideoCallIcon, title: t('meeting.join', '加入会议'), sub: t('meeting.joinSub', '输入会议号加入'), onClick: () => openMeetingDialog("join"),
+              icon: AddIcon, title: t('meeting.join', '加入会议'), sub: t('meeting.joinSub', '输入会议号加入'), onClick: () => openMeetingDialog("join"),
             })}
-            {factoryMenuItem({
-              icon: ScreenShareIcon, title: t('meeting.screenShare', '即时屏幕共享'), sub: t('meeting.screenShareSub', '无需加入房间直接共享屏幕'), onClick: () => handleStartScreenShare(),
-            })}
+            <Divider sx={{ my: 0.75, mx: 1.25, borderColor: alpha(theme.palette.primary.main, 0.1) }} />
             {factoryMenuItem({
               icon: DownloadIcon, title: t('meeting.downloads', '下载管理'), sub: t('meeting.downloadsSub', '查看进行中的传输'), badge: activeTransferCount, onClick: () => setDwnloadPageState(true),
+            })}
+            {factoryMenuItem({
+              icon: NotesOutlinedIcon, title: "查看会议纪要历史", sub: "打开本机保存的已结束会议", onClick: () => setMeetingHistoryOpen(true),
             })}
           </Menu>
 
@@ -1930,7 +2162,7 @@ const Share = observer(() => {
         }}
       >
         <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1, pt: 2.5, pb: 0, px: 3, fontSize: '1.1rem', fontWeight: 590, letterSpacing: '-0.02em' }}>
-          <MeetingRoomIcon sx={{ mr: 0.5, verticalAlign: 'middle', fontSize: '1.1em', color: 'primary.main', opacity: 0.8 }} />
+          <GroupsIcon sx={{ mr: 0.5, verticalAlign: 'middle', fontSize: '1.1em', color: 'primary.main', opacity: 0.8 }} />
           {createdMeeting ? t("meeting.createdTitle", "会议已创建") : meetingDialogMode === "create" ? t('meeting.create', '创建会议') : t('meeting.join', '加入会议')}
         </DialogTitle>
         {createdMeeting ? (
@@ -1992,7 +2224,7 @@ const Share = observer(() => {
             </DialogContent>
             <DialogActions sx={{ px: { xs: 2.5, sm: 4 }, pb: 3, pt: 1.5 }}>
               <Button onClick={closeMeetingFlow} sx={{ textTransform: "none", color: "text.secondary" }}>{t("button.cancel", "稍后进入")}</Button>
-              <Button variant="contained" startIcon={<VideocamIcon />} onClick={enterCreatedMeeting} sx={{ minHeight: 44, px: 2.5, borderRadius: 2.25, textTransform: "none", fontWeight: 750, boxShadow: (th) => `0 6px 16px ${alpha(th.palette.primary.main, 0.25)}` }}>
+              <Button variant="contained" startIcon={<GroupsIcon />} onClick={enterCreatedMeeting} sx={{ minHeight: 44, px: 2.5, borderRadius: 2.25, textTransform: "none", fontWeight: 750, boxShadow: (th) => `0 6px 16px ${alpha(th.palette.primary.main, 0.25)}` }}>
                 {t("meeting.enterNow", "进入会议")}
               </Button>
             </DialogActions>
@@ -2091,7 +2323,7 @@ const Share = observer(() => {
             variant="contained"
             autoFocus
             disabled={meetingCreating}
-            startIcon={meetingDialogMode === "create" ? <VideocamIcon /> : <VideoCallIcon />}
+            startIcon={meetingDialogMode === "create" ? <GroupsIcon /> : <AddIcon />}
             sx={{ fontWeight: 590, fontSize: '0.875rem', letterSpacing: '-0.01em', borderRadius: '12px', px: 3, minWidth: { xs: 132, sm: 148 }, minHeight: 44, justifyContent: 'center', whiteSpace: 'nowrap', textTransform: 'none', boxShadow: (t: any) => `0 2px 8px ${t.palette.primary.main}30` }}
           >
             {meetingCreating ? t('meeting.creating', '创建中…') : meetingDialogMode === "create" ? t('meeting.startNow', '开始会议') : t('meeting.joinNow', '加入会议')}
@@ -2380,6 +2612,8 @@ const Share = observer(() => {
         onClose={() => { setDwnloadPageState(false) }}
         open={downloadPageState} progress={fileTransferProgress}
         setProgress={setFileTransferProgress} />
+
+      <MeetingMinutesHistoryDialog open={meetingHistoryOpen} onClose={() => setMeetingHistoryOpen(false)} />
 
       <AlertPortal />
 

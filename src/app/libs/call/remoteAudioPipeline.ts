@@ -69,15 +69,22 @@ export class RemoteAudioPipeline {
     this.stream = stream;
     if (opts) this.opts = { ...this.opts, ...opts, volume: clampSpeakerVolume(opts.volume ?? this.opts.volume) };
     if (this.ctx && this.source) {
+      if (this.ctx.state === "suspended") void this.ctx.resume().catch(() => undefined);
       this.applyConnectionOptions();
-      return true;
+      return this.ctx.state === "running";
     }
     const ctx = this.createCtx();
     if (!ctx) return false;
-    if (ctx.state === "suspended") void ctx.resume();
+    if (ctx.state === "suspended") void ctx.resume().catch(() => undefined);
     try {
       this.ctx = ctx;
       this.buildGraph(ctx);
+      // A suspended context has no audible output. Report failure so the
+      // caller keeps the native <audio> fallback instead of detaching it.
+      if (ctx.state !== "running") {
+        this.detach();
+        return false;
+      }
       return true;
     } catch (err) {
       console.warn("[RemoteAudioPipeline] 音频管线建图失败，回退元素路径:", err);
