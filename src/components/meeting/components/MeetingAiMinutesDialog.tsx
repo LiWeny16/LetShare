@@ -89,6 +89,26 @@ const sourceLabels: Record<AsrSource, string> = {
   iflytek: "讯飞实时语音",
 };
 
+const MINUTES_STATE_TIMEOUT_MS = 5_000;
+
+function waitForMeetingMinutesEvent(kind: string, timeoutMs = MINUTES_STATE_TIMEOUT_MS): Promise<boolean> {
+  return new Promise((resolve) => {
+    let settled = false;
+    let unsubscribe: () => void = () => undefined;
+    const finish = (result: boolean) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timeoutId);
+      unsubscribe();
+      resolve(result);
+    };
+    const timeoutId = window.setTimeout(() => finish(false), timeoutMs);
+    unsubscribe = meetingManager.onEvent((event) => {
+      if (event.type === "meeting:minutes" && event.data.kind === kind) finish(true);
+    });
+  });
+}
+
 const MIMO_MODELS = [
   { id: "mimo-v2.5-pro", label: "MiMo V2.5 Pro", use: "长会议总结、复杂决策" },
   { id: "mimo-v2.5", label: "MiMo V2.5", use: "通用会议总结" },
@@ -212,7 +232,7 @@ export default function MeetingAiMinutesDialog({ open, onClose, mode = "dialog",
   const memberApiKey = getMeetingAiSecret("asr");
   const memberSourceReady = memberPreferences.asrSource === "browser-speech" ? isBrowserSpeechSupported() : Boolean(memberApiKey.trim());
   const iflytekCredentialsReady = Boolean(iflytek.appId.trim() && iflytek.apiKey.trim() && iflytek.apiSecret.trim());
-  const sourceReady = config.asrSource === "browser-speech" ? isBrowserSpeechSupported() : config.asrSource === "mimo-asr" ? Boolean(summaryKey.trim()) : config.asrSource === "iflytek" ? iflytekCredentialsReady : false;
+  const sourceReady = config.asrSource === "browser-speech" ? isBrowserSpeechSupported() : config.asrSource === "mimo-asr" ? Boolean((memberApiKey || summaryKey).trim()) : config.asrSource === "iflytek" ? iflytekCredentialsReady : false;
   const summaryReady = isHost && Boolean(summaryKey.trim());
   const running = meetingState.minutes.running;
   const summaryData = parsedSummary(summary);
@@ -324,7 +344,8 @@ export default function MeetingAiMinutesDialog({ open, onClose, mode = "dialog",
   const startWithConfig = async (requestedConfig: MeetingAiConfig) => {
     const safe = sanitizeMeetingAiConfig(requestedConfig);
     setError("");
-    const requestedSourceReady = safe.asrSource === "browser-speech" ? isBrowserSpeechSupported() : safe.asrSource === "mimo-asr" ? Boolean(summaryKey.trim()) : safe.asrSource === "iflytek" ? iflytekCredentialsReady : false;
+    const asrKey = memberApiKey.trim() || summaryKey.trim();
+    const requestedSourceReady = safe.asrSource === "browser-speech" ? isBrowserSpeechSupported() : safe.asrSource === "mimo-asr" ? Boolean((memberApiKey || summaryKey).trim()) : safe.asrSource === "iflytek" ? iflytekCredentialsReady : false;
     if (meetingState.stage !== "in-meeting" || !safe.enabled || running || !requestedSourceReady) { setError(safe.asrSource === "mimo-asr" ? "请先在设置中填写 MiMo API Key，并确认会议已经入会" : "当前转写来源尚未准备好，或会议尚未真正入会"); return; }
     const startLocalCapture = async (): Promise<boolean> => {
       if (safe.asrSource === "browser-speech") {
@@ -334,7 +355,7 @@ export default function MeetingAiMinutesDialog({ open, onClose, mode = "dialog",
         return true;
       }
       if (safe.asrSource === "mimo-asr") {
-        const session = new MimoChunkedSession({ apiKey: summaryKey, baseUrl: MIMO_TOKEN_PLAN_BASE_URL, model: safe.asrModel || "mimo-v2.5-asr", language: safe.language, onFinal: appendFinal, onError: (message) => setError(message) });
+        const session = new MimoChunkedSession({ apiKey: memberApiKey || summaryKey, baseUrl: MIMO_TOKEN_PLAN_BASE_URL, model: safe.asrModel || "mimo-v2.5-asr", language: safe.language, onFinal: appendFinal, onError: (message) => setError(message) });
         if (!(await session.start())) return false;
         mimoRef.current = session;
         return true;
@@ -349,14 +370,18 @@ export default function MeetingAiMinutesDialog({ open, onClose, mode = "dialog",
       return false;
     };
     setMeetingAiSecret("summary", summaryKey);
-    if (safe.asrSource === "mimo-asr") setMeetingAiSecret("asr", summaryKey);
+    if (safe.asrSource === "mimo-asr") setMeetingAiSecret("asr", asrKey);
     if (iflytek.appId || iflytek.apiKey || iflytek.apiSecret) setMeetingAiSecret("asr", JSON.stringify(iflytek));
+    const configured = waitForMeetingMinutesEvent("configured");
     meetingManager.configureMinutes(safe);
-    await new Promise((resolve) => window.setTimeout(resolve, 250));
+    if (!(await configured)) {
+      setError("会议纪要配置未确认，请检查自定义服务器连接和主持人权限");
+      return;
+    }
     if (safe.requireConsent) meetingManager.consentMinutes(true);
+    const started = waitForMeetingMinutesEvent("started");
     meetingManager.startMinutes();
-    await new Promise((resolve) => window.setTimeout(resolve, 100));
-    if (!meetingManager.getState().minutes.running) {
+    if (!(await started)) {
       setError("会议纪要未能启动，请重试；通话不会受影响");
       return;
     }
@@ -376,6 +401,7 @@ export default function MeetingAiMinutesDialog({ open, onClose, mode = "dialog",
   const updateMemberPreferences = (patch: Parameters<typeof setMemberMeetingAiPreferences>[0]) => { const next = setMemberMeetingAiPreferences(patch); setMemberPreferences(next); };
   const saveSettings = async () => {
     const safe = sanitizeMeetingAiConfig({ ...config, enabled: isHost ? true : config.enabled });
+    setError("");
     if (isHost) {
       if (summaryKey.trim()) {
         try {
@@ -393,7 +419,7 @@ export default function MeetingAiMinutesDialog({ open, onClose, mode = "dialog",
         }
       }
       setMeetingAiSecret("summary", summaryKey);
-      if (safe.asrSource === "mimo-asr") setMeetingAiSecret("asr", summaryKey);
+      setMeetingAiSecret("asr", memberApiKey.trim() || (safe.asrSource === "mimo-asr" ? summaryKey.trim() : ""));
       meetingManager.configureMinutes(safe);
     } else {
       setMeetingAiSecret("asr", memberApiKey);
@@ -406,8 +432,14 @@ export default function MeetingAiMinutesDialog({ open, onClose, mode = "dialog",
 
   if (mode === "workspace" && !settingsOpen) return <MeetingMinutesWorkspace open={open} embedded={embedded} onClose={onClose} onSettings={() => setSettingsOpen(true)} canControl={isHost} running={running} busy={busy} startLabel={summaryReady ? "开始记录" : "仅开始实时转写"} startDisabled={!config.enabled || !sourceReady || meetingState.stage !== "in-meeting"} onStart={() => void start()} onStop={() => void stop()} error={error} statusLabel={running ? "记录中" : summary ? "已生成" : meetingState.minutes.configured ? "已配置，未开始" : "未配置"} summary={summary} summaryData={summaryData} timeline={timeline} transcript={transcript} tab={workspaceTab} onTabChange={setWorkspaceTab} onExport={exportSummary} />;
   if (settingsOpen) {
-    const settingsSurface = <MeetingAiSettingsView isHost={isHost} config={config} summaryKey={summaryKey} memberAsrEnabled={memberPreferences.enabled} memberAsrSource={memberPreferences.asrSource} memberLanguage={memberPreferences.language} memberApiKey={memberApiKey} iflytek={iflytek} sourceReady={isHost ? sourceReady : memberSourceReady} iflytekCredentialsReady={iflytekCredentialsReady} selectedWasm={selectedWasm} recommendedModel={recommendedModel} downloaded={downloaded} downloadProgress={downloadProgress} error={error} onBack={() => setSettingsOpen(false)} onSave={saveSettings} onMemberAsrChange={updateMemberPreferences} onMemberApiKeyChange={(value) => { setMeetingAiSecret("asr", value); setMemberPreferences(getMemberMeetingAiPreferences()); }} onUpdateConfig={updateConfig} onChooseProvider={chooseProvider} onChooseSource={chooseSource} onSummaryKeyChange={(value) => { setSummaryKey(value); setMeetingAiSecret("summary", value); if (config.asrSource === "mimo-asr") setMeetingAiSecret("asr", value); }} onIflytekChange={setIflytek} onDownloadModel={(model) => void downloadModel(model)} />;
-    if (mode === "panel" || mode === "workspace") return open ? settingsSurface : null;
+    const settingsSurface = <MeetingAiSettingsView isHost={isHost} config={config} summaryKey={summaryKey} memberAsrEnabled={memberPreferences.enabled} memberAsrSource={memberPreferences.asrSource} memberLanguage={memberPreferences.language} memberApiKey={memberApiKey} iflytek={iflytek} sourceReady={isHost ? sourceReady : memberSourceReady} iflytekCredentialsReady={iflytekCredentialsReady} selectedWasm={selectedWasm} recommendedModel={recommendedModel} downloaded={downloaded} downloadProgress={downloadProgress} error={error} onBack={() => setSettingsOpen(false)} onSave={saveSettings} onMemberAsrChange={updateMemberPreferences} onMemberApiKeyChange={(value) => { setMeetingAiSecret("asr", value); setMemberPreferences(getMemberMeetingAiPreferences()); }} onUpdateConfig={updateConfig} onChooseProvider={chooseProvider} onChooseSource={chooseSource} onSummaryKeyChange={(value) => { setSummaryKey(value); setMeetingAiSecret("summary", value); }} onIflytekChange={setIflytek} onDownloadModel={(model) => void downloadModel(model)} />;
+    if (mode === "panel") return open ? settingsSurface : null;
+    if (mode === "workspace") return open ? (
+      <Box sx={{ position: "absolute", inset: 0, zIndex: 55 }}>
+        <Box sx={{ position: "absolute", inset: 0, bgcolor: "rgba(14,29,53,.32)" }} onClick={() => setSettingsOpen(false)} />
+        <Box sx={{ position: "absolute", right: 0, top: 0, bottom: 0, width: { xs: "100%", sm: "min(480px, 62%)" }, minWidth: 0, display: "flex", flexDirection: "column", bgcolor: "#f6f8fb", borderLeft: "1px solid #dfe7f0", boxShadow: "-12px 0 32px rgba(14,29,53,.18)" }}>{settingsSurface}</Box>
+      </Box>
+    ) : null;
     return <Dialog open={open} onClose={busy ? undefined : onClose} fullWidth maxWidth="sm" data-testid="meeting-ai-minutes-dialog" PaperProps={{ sx: { height: "min(820px, calc(100dvh - 24px))", borderRadius: { xs: 2, sm: 3 }, overflow: "hidden" } }}><DialogContent sx={{ p: 0, overflow: "hidden" }}>{settingsSurface}</DialogContent></Dialog>;
   }
 

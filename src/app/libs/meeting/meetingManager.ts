@@ -317,6 +317,15 @@ class MeetingManagerImpl implements MeetingManager {
   private subscriberOfferProcessing = new Set<string>();
   /** 成员 → 连续订阅失败恢复次数（有界，防止 PC 反复失败时的无限重订阅）。 */
   private subscriptionRecoveryCycles = new Map<string, number>();
+  /** 发布 PC 断连自愈：有界 ICE restart 重试（失败→重建发布 PC）。 */
+  private publishRecoveryAttempts = 0;
+  private publishReconnecting = false;
+  /** 订阅 PC disconnected 观察定时器：宽限期内未恢复 connected 则提前重建，不等 failed。 */
+  private subscriberDegradedTimers = new Map<string, number>();
+  /** 成功恢复后冷却，防止网络反复抖动时计数被无意义耗尽。 */
+  private static readonly PUBLISH_RECOVERY_MAX_ATTEMPTS = 5;
+  private static readonly PUBLISH_RECOVERY_RETRY_MS = 5_000;
+  private static readonly SUBSCRIBER_DEGRADED_GRACE_MS = 6_000;
 
   /** 会议号（独立于文件房间）。作为 meeting:* 消息的 channel 直发服务器。 */
   private meetingChannel: string = "";
@@ -361,6 +370,9 @@ class MeetingManagerImpl implements MeetingManager {
     this.broadcastSourceRoomStatus(false);
     this.stopMeetingHeartbeat();
     this.clearSubscriptionRetry();
+    this.clearAllDegradedTimers();
+    this.publishRecoveryAttempts = 0;
+    this.publishReconnecting = false;
     this.subscriptionRecoveryCycles.clear();
     this.lastSubscriberOfferSdp.clear();
     this.subscriberOfferQueues.clear();
@@ -764,6 +776,9 @@ class MeetingManagerImpl implements MeetingManager {
     }
     const lifecycle = ++this.lifecycle;
     this.clearSubscriptionRetry();
+    this.clearAllDegradedTimers();
+    this.publishRecoveryAttempts = 0;
+    this.publishReconnecting = false;
     this.subscriptionRecoveryCycles.clear();
     this.lastSubscriberOfferSdp.clear();
     this.subscriberOfferQueues.clear();
@@ -836,6 +851,9 @@ class MeetingManagerImpl implements MeetingManager {
     const leavingChannel = this.meetingChannel;
     ++this.lifecycle;
     this.clearSubscriptionRetry();
+    this.clearAllDegradedTimers();
+    this.publishRecoveryAttempts = 0;
+    this.publishReconnecting = false;
     this.subscriptionRecoveryCycles.clear();
     this.lastSubscriberOfferSdp.clear();
     this.subscriberOfferQueues.clear();
@@ -1027,8 +1045,15 @@ class MeetingManagerImpl implements MeetingManager {
       this.addRemote(uid, ev.streams[0], ev.track.kind === "audio" ? "audio" : "video");
     };
     pc.onconnectionstatechange = () => {
-      if (pc.connectionState === "connected" && this.isCurrentMeeting(expectedRoomId, expectedLifecycle) && this.pc === pc) {
+      if (!this.isCurrentMeeting(expectedRoomId, expectedLifecycle) || this.pc !== pc) return;
+      if (pc.connectionState === "connected") {
         this.setStage("in-meeting");
+        // 恢复成功：清计数（下次断连重新有界重试），并刷新可能已过期的 TURN 凭据
+        this.publishRecoveryAttempts = 0;
+        this.publishReconnecting = false;
+        void this.ensureMeetingTurnServers().then(() => this.applyTurnToMeetingPcs());
+      } else if (pc.connectionState === "disconnected" || pc.connectionState === "failed") {
+        this.beginPublishRecovery(expectedRoomId, expectedLifecycle);
       }
     };
     this.startAdaptiveVideoControl(pc);
@@ -1068,6 +1093,121 @@ class MeetingManagerImpl implements MeetingManager {
     this.sendSdp("offer", undefined, offer, roomId);
   }
 
+  // ── 媒体断连自愈（网络抖动导致单通的修复）────────────────────────
+  // 上行（publish PC）死亡 = 其他人听不到你；下行（subscriber PC）死亡 =
+  // 你听不到别人。WS 聊天有自动重连所以"其他通讯都正常"，媒体 PC 必须自愈。
+
+  /** 发布 PC disconnected/failed：先 ICE restart（保轨不重采），有界重试后重建。 */
+  private beginPublishRecovery(roomId: string, lifecycle: number): void {
+    if (!this.isCurrentMeeting(roomId, lifecycle) || this.publishReconnecting) return;
+    if (this.publishRecoveryAttempts >= MeetingManagerImpl.PUBLISH_RECOVERY_MAX_ATTEMPTS) {
+      console.warn("[meeting] 发布连接多次恢复失败，停止重试（等待重进会议）");
+      return;
+    }
+    this.publishReconnecting = true;
+    this.publishRecoveryAttempts++;
+    const pc = this.pc;
+    if (!pc || pc.connectionState === "closed") {
+      this.publishReconnecting = false;
+      return;
+    }
+    console.warn(`[meeting] 发布连接断连，ICE restart（第 ${this.publishRecoveryAttempts} 次）`);
+    void (async () => {
+      try {
+        // 凭据可能已过期：中继场景 restart 必须带新凭据才可能拿到新 allocation
+        await Promise.race([
+          this.ensureMeetingTurnServers(),
+          new Promise<void>((resolve) => window.setTimeout(resolve, 1500)),
+        ]);
+        this.applyTurnToMeetingPcs();
+        if (!this.isCurrentMeeting(roomId, lifecycle) || this.pc !== pc) return;
+        const offer = await pc.createOffer({ iceRestart: true });
+        await pc.setLocalDescription(offer);
+        if (!this.isCurrentMeeting(roomId, lifecycle) || this.pc !== pc) return;
+        this.publishOfferPc = pc;
+        this.sendSdp("offer", undefined, offer, roomId);
+      } catch (error) {
+        console.warn("[meeting] 发布 ICE restart 失败", error);
+      } finally {
+        // 重连窗口开启；若 restart 未能在重试间隔内恢复，onconnectionstatechange
+        // 不会再触发（状态停留在 disconnected），由定时器驱动下一次尝试
+        window.setTimeout(() => {
+          this.publishReconnecting = false;
+          if (
+            this.isCurrentMeeting(roomId, lifecycle) &&
+            this.pc &&
+            this.pc.connectionState !== "connected" &&
+            this.pc.connectionState !== "closed"
+          ) {
+            this.beginPublishRecovery(roomId, lifecycle);
+          }
+        }, MeetingManagerImpl.PUBLISH_RECOVERY_RETRY_MS);
+      }
+    })();
+  }
+
+  /** TURN 凭据更新后热应用到全部会议 PC（Chrome 支持在途连接 setConfiguration）。 */
+  private applyTurnToMeetingPcs(): void {
+    if (this.meetingTurnServers.length === 0) return;
+    const config = this.rtcConfig();
+    for (const pc of [this.pc, ...this.subscribers.values()]) {
+      if (!pc || pc.connectionState === "closed") continue;
+      try {
+        pc.setConfiguration(config);
+      } catch {
+        // 浏览器可能拒绝在途配置更新：忽略，restart 时仍会用新凭据重建候选
+      }
+    }
+  }
+
+  /** 订阅 PC 降级（disconnected）：宽限期后仍未 connected 则提前重建订阅，不等 failed。 */
+  private markSubscriberDegraded(publisherId: string, roomId: string, lifecycle: number, pc: RTCPeerConnection): void {
+    if (this.subscriberDegradedTimers.has(publisherId)) return;
+    const timer = window.setTimeout(() => {
+      this.subscriberDegradedTimers.delete(publisherId);
+      if (
+        !this.isCurrentMeeting(roomId, lifecycle) ||
+        this.subscribers.get(publisherId) !== pc ||
+        pc.connectionState === "connected" ||
+        pc.connectionState === "closed"
+      ) {
+        return;
+      }
+      console.warn(`[meeting] 订阅 ${publisherId} 宽限期未恢复，重建订阅`);
+      this.subscribers.delete(publisherId);
+      this.removeRemoteTracksOf(publisherId);
+      this.lastSubscriberOfferSdp.delete(publisherId);
+      if (
+        this.isCurrentMeeting(roomId, lifecycle) &&
+        this.state.members.some((m) => m.uniqId === publisherId) &&
+        (this.subscriptionRecoveryCycles.get(publisherId) ?? 0) < 3
+      ) {
+        this.subscriptionRecoveryCycles.set(publisherId, (this.subscriptionRecoveryCycles.get(publisherId) ?? 0) + 1);
+        this.subscribed.delete(publisherId);
+        this.subscribeToPeer(publisherId);
+      }
+    }, MeetingManagerImpl.SUBSCRIBER_DEGRADED_GRACE_MS);
+    this.subscriberDegradedTimers.set(publisherId, timer);
+  }
+
+  private clearSubscriberDegradedTimer(publisherId: string): void {
+    const timer = this.subscriberDegradedTimers.get(publisherId);
+    if (timer !== undefined) {
+      window.clearTimeout(timer);
+      this.subscriberDegradedTimers.delete(publisherId);
+    }
+  }
+
+  private clearAllDegradedTimers(): void {
+    for (const timer of this.subscriberDegradedTimers.values()) window.clearTimeout(timer);
+    this.subscriberDegradedTimers.clear();
+  }
+
+  /** 恢复成功时重置该成员的恢复计数（网络间歇抖动不应耗尽有界重试预算）。 */
+  private resetSubscriberRecovery(publisherId: string): void {
+    this.subscriptionRecoveryCycles.delete(publisherId);
+  }
+
   // 订阅收到的 offer/answer 时用于标识当前发布者（订阅场景）
   private currentTrackPublisher = "";
 
@@ -1089,8 +1229,9 @@ class MeetingManagerImpl implements MeetingManager {
     const now = Date.now();
     if (this.meetingTurnExpiresAt > now + 60_000) return;
     if (this.meetingTurnFetch) return this.meetingTurnFetch;
-    // TURN 未启用或上次请求刚失败时，避免每个重试/订阅都轰击端点。
-    if (this.meetingTurnLastFetchAt > now - 30_000) return;
+    // 上次拉取曾失败：短冷却避免轰击端点，但不无限静默 —— 无 TURN 时严格 NAT
+    // 用户媒体直接建不起来（单通根因之一），冷却后必须允许重试。
+    if (this.meetingTurnServers.length === 0 && this.meetingTurnLastFetchAt > now - 5_000) return;
     this.meetingTurnFetch = (async () => {
       this.meetingTurnLastFetchAt = Date.now();
       try {
@@ -1165,12 +1306,24 @@ class MeetingManagerImpl implements MeetingManager {
       this.addRemote(publisherId, ev.streams[0], ev.track.kind === "audio" ? "audio" : "video", ev.track);
     };
     pc.onconnectionstatechange = () => {
-      if (pc.connectionState === "connected" && this.isCurrentMeeting(roomId, lifecycle) && this.subscribers.get(publisherId) === pc) {
+      if (!this.isCurrentMeeting(roomId, lifecycle) || this.subscribers.get(publisherId) !== pc) return;
+      if (pc.connectionState === "connected") {
         this.setStage("in-meeting");
+        this.clearSubscriberDegradedTimer(publisherId);
+        // 恢复成功：重置计数，让后续网络抖动仍拥有完整的有界重试预算
+        this.resetSubscriberRecovery(publisherId);
+        void this.ensureMeetingTurnServers().then(() => this.applyTurnToMeetingPcs());
+        return;
+      }
+      // disconnected：不立即拆连接 —— 短暂抖动通常自行恢复。挂宽限观察，
+      // 到期仍未 connected 则提前重建订阅（不等浏览器拖到 failed 的几十秒）。
+      if (pc.connectionState === "disconnected") {
+        this.markSubscriberDegraded(publisherId, roomId, lifecycle, pc);
         return;
       }
       // 订阅 PC failed/closed：必须从订阅表与远端轨清出（不得残留 closed 连接），
       // 并按成员级重新订阅（有界：连续失败达到上限后停止，等待 membership 事件恢复）。
+      this.clearSubscriberDegradedTimer(publisherId);
       if (
         (pc.connectionState === "failed" || pc.connectionState === "closed") &&
         this.subscribers.get(publisherId) === pc

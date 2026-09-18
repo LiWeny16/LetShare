@@ -12,6 +12,7 @@ import {
   recommendWasmModel,
   requestMeetingSummary,
   requestMimoAsr,
+  BrowserSpeechSession,
   sanitizeMeetingAiConfig,
   setMeetingAiSecret,
   setMemberMeetingAiPreferences,
@@ -150,6 +151,44 @@ test("MiMo ASR sends WAV input_audio to the Token Plan chat endpoint", async () 
     assert.equal(JSON.stringify(requestPayload).includes("secret-only-in-header"), false);
   } finally {
     globalThis.fetch = originalFetch;
+  }
+});
+
+test("browser SpeechRecognition stops after a terminal network error instead of restarting", async () => {
+  const originalWindow = (globalThis as any).window;
+  const instances: Array<{ onerror: ((event: { error?: string }) => void) | null; onend: (() => void) | null; start: () => void; abort: () => void }> = [];
+  let starts = 0;
+  let aborts = 0;
+  (globalThis as any).window = {
+    SpeechRecognition: class {
+      onresult = null;
+      onerror: ((event: { error?: string }) => void) | null = null;
+      onend: (() => void) | null = null;
+      continuous = false;
+      interimResults = false;
+      maxAlternatives = 1;
+      lang = "";
+      start = () => { starts += 1; };
+      stop = () => undefined;
+      abort = () => { aborts += 1; };
+      constructor() { instances.push(this); }
+    },
+    setTimeout,
+    clearTimeout,
+  };
+  try {
+    const errors: string[] = [];
+    const session = new BrowserSpeechSession({ language: "zh-CN", onFinal: () => undefined, onError: (message) => errors.push(message) });
+    assert.equal(session.start(), true);
+    instances[0].onerror?.({ error: "network" });
+    instances[0].onend?.();
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    assert.equal(session.isRunning(), false);
+    assert.equal(starts, 1);
+    assert.equal(aborts, 1);
+    assert.deepEqual(errors, ["SpeechRecognition: network"]);
+  } finally {
+    (globalThis as any).window = originalWindow;
   }
 });
 

@@ -1,23 +1,23 @@
 {
-  "checkedAt": "2026-09-01T01:41:37.722Z",
-  "noticedAt": "2026-09-01T01:41:20.497Z",
+  "checkedAt": "2026-09-18T02:33:07.428Z",
+  "noticedAt": "2026-09-18T02:32:52.400Z",
   "update": {
     "status": "update-available",
     "from": "0.8.17",
-    "to": "0.8.20",
-    "sourceBase": "npm:create-harness-vibe-coding@0.8.20/templates/common/",
+    "to": "0.9.5",
+    "sourceBase": "npm:create-harness-vibe-coding@0.9.5/templates/common/",
     "releaseNotes": {
-      "version": "0.8.20",
-      "date": "2026-08-28",
+      "version": "0.9.5",
+      "date": "2026-09-14",
       "highlights": [
-        "Ship the wf-ui workflow canvas as a full agent-team surface: goal, event, timer, display, and capability node types with typed action surfaces, skills hub, magnetic docking, and undoable versioned graph edits.",
-        "Add agent team cooperation: structured peer requests with request ids, timer wakeup delivery, runtime-aware role profiles, and a subagent strategy matrix covering built-in helpers and visible wf-node agents with depth resume docking.",
-        "Consolidate all agent actions into a single `Harness/a2a/action-registry.json` source of truth (72 actions) with loader validation, derived `help --json`/`manuals` surfaces, and structural anti-drift tests against ghost/phantom actions.",
-        "Upgrade the file node with xlsx/pdf/zip format adapters, preview caching, write locks, `file.changed` watch broadcasts, and security hardening (Zip Slip guards, entry/size clamps, per-page PDF reads).",
-        "Rebuild markdown rendering on a shared markdown-it pipeline with lazy CDN mermaid (SRI-pinned, offline fallback), KaTeX, GFM task lists, and preview toggles for node cards, file big view, and the fullscreen editor.",
-        "Add task capsule groups with `--group`/`--by-group` filtering and whole-group batch archive, plus a task group index for grouped overviews.",
-        "Add real PTY-backed chat sessions (chat driver, Claude stream-json support, WS chat events) alongside terminal-based agent control.",
-        "Harden wf-ui terminal orchestration: full terminal input control, Codex rollout-id capture via PTY scan and sessions-dir polling, PTY resource usage reporting, and per-session terminal transcript ranges."
+        "Recommend the global runtime with project-local state, and add an explicit migration path for legacy project-local installs.",
+        "Preserve user tasks, progress, memory, research, project facts, README, package files, and modified or user-authored files during migration and removal.",
+        "Route `wf-browser` through BrowserOS Neo and require users to download BrowserOS Neo themselves when it is unavailable.",
+        "Keep global update, project task routing, weekly task archiving, wf-ui, and wf-search behavior covered by the release validation suite.",
+        "Harden `/wf-search` rendering: square brackets in all text output are HTML-escaped so escaped-bracket Markdown link injection (`[x\\]](https://evil.example)`) can never survive as a clickable link.",
+        "Harden `/wf-search` save-path validation: dangling symlink/junction segments of `Harness/research` are now resolved through realpath and rejected instead of being treated as plain directory names.",
+        "Harden `/wf-search` stdin handling: `--input -` enforces the 1 MiB limit during the read (64 KiB bounded chunks) instead of buffering the entire stream first.",
+        "Found by independent cross-review of the released 0.9.3; full verification matrix (75 wf-search tests, 458-test suite, mirror parity, version checksums) re-run on the fix candidate."
       ]
     },
     "partialUpdate": null,
@@ -31,12 +31,12 @@
         "updatedAt": "2026-07-27T03:46:46.371Z"
       }
     },
-    "updated": 42,
-    "created": 49,
+    "updated": 66,
+    "created": 80,
     "adopted": 0,
     "moved": 0,
     "conflict": 1,
-    "skipped": 98,
+    "skipped": 74,
     "agent": {
       "mode": "script-first-ai-conflicts",
       "dryRunJsonCommand": "node Harness/scripts/wf-update-check.mjs --json",
@@ -195,28 +195,28 @@
         }
       },
       "releaseNotes": {
-        "version": "0.8.20",
-        "date": "2026-08-28",
+        "version": "0.9.5",
+        "date": "2026-09-14",
         "highlights": [
-          "Ship the wf-ui workflow canvas as a full agent-team surface: goal, event, timer, display, and capability node types with typed action surfaces, skills hub, magnetic docking, and undoable versioned graph edits.",
-          "Add agent team cooperation: structured peer requests with request ids, timer wakeup delivery, runtime-aware role profiles, and a subagent strategy matrix covering built-in helpers and visible wf-node agents with depth resume docking.",
-          "Consolidate all agent actions into a single `Harness/a2a/action-registry.json` source of truth (72 actions) with loader validation, derived `help --json`/`manuals` surfaces, and structural anti-drift tests against ghost/phantom actions.",
-          "Upgrade the file node with xlsx/pdf/zip format adapters, preview caching, write locks, `file.changed` watch broadcasts, and security hardening (Zip Slip guards, entry/size clamps, per-page PDF reads).",
-          "Rebuild markdown rendering on a shared markdown-it pipeline with lazy CDN mermaid (SRI-pinned, offline fallback), KaTeX, GFM task lists, and preview toggles for node cards, file big view, and the fullscreen editor.",
-          "Add task capsule groups with `--group`/`--by-group` filtering and whole-group batch archive, plus a task group index for grouped overviews.",
-          "Add real PTY-backed chat sessions (chat driver, Claude stream-json support, WS chat events) alongside terminal-based agent control.",
-          "Harden wf-ui terminal orchestration: full terminal input control, Codex rollout-id capture via PTY scan and sessions-dir polling, PTY resource usage reporting, and per-session terminal transcript ranges."
+          "Recommend the global runtime with project-local state, and add an explicit migration path for legacy project-local installs.",
+          "Preserve user tasks, progress, memory, research, project facts, README, package files, and modified or user-authored files during migration and removal.",
+          "Route `wf-browser` through BrowserOS Neo and require users to download BrowserOS Neo themselves when it is unavailable.",
+          "Keep global update, project task routing, weekly task archiving, wf-ui, and wf-search behavior covered by the release validation suite.",
+          "Harden `/wf-search` rendering: square brackets in all text output are HTML-escaped so escaped-bracket Markdown link injection (`[x\\]](https://evil.example)`) can never survive as a clickable link.",
+          "Harden `/wf-search` save-path validation: dangling symlink/junction segments of `Harness/research` are now resolved through realpath and rejected instead of being treated as plain directory names.",
+          "Harden `/wf-search` stdin handling: `--input -` enforces the 1 MiB limit during the read (64 KiB bounded chunks) instead of buffering the entire stream first.",
+          "Found by independent cross-review of the released 0.9.3; full verification matrix (75 wf-search tests, 458-test suite, mirror parity, version checksums) re-run on the fix candidate."
         ]
       },
       "releaseHighlights": [
-        "Ship the wf-ui workflow canvas as a full agent-team surface: goal, event, timer, display, and capability node types with typed action surfaces, skills hub, magnetic docking, and undoable versioned graph edits.",
-        "Add agent team cooperation: structured peer requests with request ids, timer wakeup delivery, runtime-aware role profiles, and a subagent strategy matrix covering built-in helpers and visible wf-node agents with depth resume docking.",
-        "Consolidate all agent actions into a single `Harness/a2a/action-registry.json` source of truth (72 actions) with loader validation, derived `help --json`/`manuals` surfaces, and structural anti-drift tests against ghost/phantom actions.",
-        "Upgrade the file node with xlsx/pdf/zip format adapters, preview caching, write locks, `file.changed` watch broadcasts, and security hardening (Zip Slip guards, entry/size clamps, per-page PDF reads).",
-        "Rebuild markdown rendering on a shared markdown-it pipeline with lazy CDN mermaid (SRI-pinned, offline fallback), KaTeX, GFM task lists, and preview toggles for node cards, file big view, and the fullscreen editor.",
-        "Add task capsule groups with `--group`/`--by-group` filtering and whole-group batch archive, plus a task group index for grouped overviews.",
-        "Add real PTY-backed chat sessions (chat driver, Claude stream-json support, WS chat events) alongside terminal-based agent control.",
-        "Harden wf-ui terminal orchestration: full terminal input control, Codex rollout-id capture via PTY scan and sessions-dir polling, PTY resource usage reporting, and per-session terminal transcript ranges."
+        "Recommend the global runtime with project-local state, and add an explicit migration path for legacy project-local installs.",
+        "Preserve user tasks, progress, memory, research, project facts, README, package files, and modified or user-authored files during migration and removal.",
+        "Route `wf-browser` through BrowserOS Neo and require users to download BrowserOS Neo themselves when it is unavailable.",
+        "Keep global update, project task routing, weekly task archiving, wf-ui, and wf-search behavior covered by the release validation suite.",
+        "Harden `/wf-search` rendering: square brackets in all text output are HTML-escaped so escaped-bracket Markdown link injection (`[x\\]](https://evil.example)`) can never survive as a clickable link.",
+        "Harden `/wf-search` save-path validation: dangling symlink/junction segments of `Harness/research` are now resolved through realpath and rejected instead of being treated as plain directory names.",
+        "Harden `/wf-search` stdin handling: `--input -` enforces the 1 MiB limit during the read (64 KiB bounded chunks) instead of buffering the entire stream first.",
+        "Found by independent cross-review of the released 0.9.3; full verification matrix (75 wf-search tests, 458-test suite, mirror parity, version checksums) re-run on the fix candidate."
       ],
       "updateReportRequired": "After apply/finalize, tell the user the version, safe/new/conflict counts, validation results, and the core releaseHighlights from this update.",
       "aiMergeRequiredCount": 1,

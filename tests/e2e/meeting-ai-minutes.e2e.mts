@@ -84,6 +84,14 @@ test("distributed meeting minutes requires consent and broadcasts real final seg
   const errors: string[] = [];
   for (const page of [host, member]) {
     page.on("pageerror", (error) => errors.push(`${page === host ? "host" : "member"}: ${error.message}`));
+    page.on("response", (response) => {
+      if (response.status() >= 500) {
+        errors.push(`${page === host ? "host" : "member"}: HTTP ${response.status()} ${response.url()}`);
+      }
+    });
+    page.on("requestfailed", (request) => {
+      errors.push(`${page === host ? "host" : "member"}: request failed ${request.url()} (${request.failure()?.errorText ?? "unknown"})`);
+    });
     page.on("console", (message) => {
       // TURN is intentionally disabled in the local server profile and its
       // documented JSON 404 is a clean STUN fallback, not an app failure.

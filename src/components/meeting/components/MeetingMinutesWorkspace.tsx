@@ -13,7 +13,6 @@ import {
 import ArrowBackIcon from "@mui/icons-material/ArrowBack";
 import AssignmentOutlinedIcon from "@mui/icons-material/AssignmentOutlined";
 import CheckCircleOutlineIcon from "@mui/icons-material/CheckCircleOutline";
-import CloseIcon from "@mui/icons-material/Close";
 import DownloadOutlinedIcon from "@mui/icons-material/DownloadOutlined";
 import HelpOutlineIcon from "@mui/icons-material/HelpOutline";
 import NotesOutlinedIcon from "@mui/icons-material/NotesOutlined";
@@ -148,7 +147,7 @@ export default function MeetingMinutesWorkspace({ open, embedded = false, onClos
       <Box sx={{ px: { xs: 1.1, sm: 2.1 }, py: 1.05, display: "flex", alignItems: "center", gap: 0.8, borderBottom: "1px solid #e4e7ec", bgcolor: "#fff" }}>
         <Button startIcon={<ArrowBackIcon />} onClick={onClose} aria-label="关闭会议纪要" sx={{ color: "#1677ff", minHeight: 38, minWidth: { xs: 40, sm: "auto" }, px: { xs: 0.5, sm: 0.75 }, textTransform: "none", fontWeight: 800, "& .MuiButton-startIcon": { mr: { xs: 0, sm: 0.75 } }, "& > span": { display: { xs: "none", sm: "inline" } } }}><Box component="span">返回并关闭详情</Box></Button>
         <Box sx={{ width: 34, height: 34, borderRadius: 1.25, display: "grid", placeItems: "center", bgcolor: "#eef5ff", color: "#1677ff" }}><NotesOutlinedIcon /></Box><Box sx={{ flex: 1, minWidth: 0 }}><Stack direction="row" spacing={0.7} alignItems="center" flexWrap="wrap"><Typography sx={{ color: "#172033", fontSize: { xs: "0.92rem", sm: "1.05rem" }, fontWeight: 900 }}>AI 会议纪要</Typography><Chip size="small" label={statusLabel} sx={{ height: 21, bgcolor: running ? "#ecfdf3" : "#f2f4f7", color: running ? "#16805b" : "#667085", fontSize: "0.62rem", fontWeight: 800 }} /></Stack><Typography sx={{ mt: 0.15, color: "#667085", fontSize: "0.68rem", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>重点、决策和行动项会随着会议内容更新</Typography></Box>
-        {recordingAction}{onSettings && <Tooltip title="纪要设置"><IconButton onClick={onSettings} aria-label="纪要设置" sx={{ color: "#667085" }}><SettingsOutlinedIcon /></IconButton></Tooltip>}<Tooltip title="导出纪要"><IconButton onClick={onExport} aria-label="导出纪要" sx={{ color: "#1677ff" }}><DownloadOutlinedIcon /></IconButton></Tooltip><Tooltip title="返回并关闭详情"><IconButton onClick={onClose} aria-label="返回并关闭详情" sx={{ color: "#667085" }}><CloseIcon /></IconButton></Tooltip>
+        {recordingAction}{onSettings && <Tooltip title="纪要设置"><IconButton onClick={onSettings} aria-label="纪要设置" sx={{ color: "#667085" }}><SettingsOutlinedIcon /></IconButton></Tooltip>}<Tooltip title="导出纪要"><IconButton onClick={onExport} aria-label="导出纪要" sx={{ color: "#1677ff" }}><DownloadOutlinedIcon /></IconButton></Tooltip>
       </Box>
       {error && <Alert severity="error" sx={{ mx: { xs: 1.2, sm: 2.1 }, mt: 1, borderRadius: 1.25, fontSize: "0.72rem" }}>{error}</Alert>}
       <Box sx={{ minHeight: 0, flex: 1, display: "flex", flexDirection: "column" }}><FullDocument tab={tab} onTabChange={onTabChange} summary={summary} summaryData={summaryData} timeline={timeline} transcript={transcript} /></Box>

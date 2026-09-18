@@ -42,3 +42,76 @@
 ## 设计依据
 
 使用现有 Meeting Pass / prejoin 的白色、大圆角、蓝色主操作和低对比度分组卡片；AI 页面以“会议纪要工作台”作为主任务，配置、实时转写和摘要状态分层呈现。Stitch MCP 当前不可用，因此本轮以仓库现有组件和截图为设计源，不伪称已取得 Stitch 设计稿。
+## WF Diagnostic Addendum (2026-09-17)
+
+### Goal
+
+- Outcome: produce an evidence-backed root-cause report for (1) AI meeting-minutes startup failure despite configured API key and (2) browser `SpeechRecognition: network` with no transcript recorded.
+- Non-goals: production-code changes, key rotation, deployment changes, or asserting a fix before independent runtime verification.
+
+### Acceptance
+
+- AC-001: trace the AI meeting-minutes startup path from UI action through provider/config validation and identify the first failing boundary, with file/line evidence.
+- AC-002: trace the ordinary browser transcription path and explain the `SpeechRecognition: network` error, including browser/platform prerequisites and whether the failure is local or remote.
+- AC-003: distinguish confirmed causes from hypotheses, record verification commands/evidence, and list the smallest next diagnostic or fix slices.
+
+### Scope
+
+- Allowed write set: this task capsule only; source code is read-only for this diagnostic pass.
+- Forbidden: source edits, API-key changes, deployment/release actions, destructive commands, and unrelated task files.
+
+### Context
+
+- Loaded: `CLAUDE.md`, `Harness/MEMORY.md` index, `Harness/README.md`, `Harness/PROGRESS.md`, `Harness/specs/workflows/WF.md`, `Harness/specs/runtime/subagents.md`, dispatch/context/workflow protocols, and active task state.
+- Assumptions: the screenshots are symptoms from the current local app; configured key presence alone does not prove provider reachability or browser speech-service availability.
+
+### Subagent Dispatch
+
+| Role | Read / Write Set | Result |
+|------|------------------|--------|
+| codebase-explorer (meeting-minutes UI/provider) | `src/app`, meeting AI tests/docs / none | Returned |
+| codebase-explorer (SpeechRecognition/audio path) | `src/app`, `tests`, browser/runtime config / none | Returned |
+| codebase-explorer (backend/config/protocol) | `server`, `src`, env/config/docs / none | Returned |
+| docs-researcher (Web Speech and provider constraints) | official docs + selected project docs / none | Returned |
+| planner | task capsule + loaded workflow docs / none | Returned |
+| verifier | task evidence and targeted tests / none | Returned |
+| reviewer | independent diagnostic review / none | Returned |
+
+### Verification
+
+- [x] Run targeted static searches and inspect the exact failure paths.
+- [x] Run the narrowest existing meeting-minutes / backend tests if they do not mutate state.
+- [x] Report confirmed vs likely causes with file/line evidence and residual unknowns.
+
+### Evidence Matrix (2026-09-17)
+
+| Acceptance | Confirmed | Hypothesis / unresolved | Required runtime evidence |
+|------------|-----------|-------------------------|----------------------------|
+| AC-001 | `startWithConfig` sends start and waits only 100ms before the generic startup error; valid server configure/start sets running and broadcasts `started`. Provider/API keys stay on the browser/direct-provider path and are not part of `meeting:minutes` WS. | 100ms race, Ably silently dropping meeting frames, server rejection, or another transport issue. | CDP/DevTools capture of connection mode, configure/start/started/error frames, provider URL/status, and timing. |
+| AC-002 | Browser `network` error does not produce a final result; only final `onresult` updates/broadcasts transcript. The error path leaves local running state true and `onend` may restart. | Exact cause is not established: origin, secure context, permission, browser speech service, proxy/VPN, or platform support. | Browser/version, origin, `isSecureContext`, permission state, Console event order, and speech-service network evidence. |
+| AC-003 | `pnpm exec tsx --test tests/meetingAi.test.ts` passed 10/10; `go test ./internal/handler -run TestMeetingMinutes -count=1` passed. | Neither test covers real browser `SpeechRecognition: network` or 100ms runtime timing. Review verdict: `RETURN_TO_DEBUG`; no final acceptance. | Complete runtime checks before any product-code change. |
+
+### Runtime CDP Evidence (2026-09-17)
+
+- Real visible Edge `153.0.4234.32` and Chrome `152.0.7977.83` were tested against Vite `27772` and a local Go WebSocket server on `27771`; no fake speech implementation or headless browser was used.
+- Missing custom-server auth caused repeated WebSocket failures and the all-signaling-servers-failed state. The project auth token restored the connection and two-browser meeting membership. This is separate from the MiMo/API key.
+- Chrome as the server-authoritative host emitted `meeting:minutes` `configure`, `consent`, and `start`, and received `configured` and `started`; manager state became `running: true`. The API key was absent from these frames.
+- The restart timing showed `running: false` at roughly 100ms after start and `running: true` later (about 700ms in the bounded observation). The 100ms UI check is therefore a confirmed race window, although the bounded Chrome run did not itself render the generic error.
+- Both browsers reported secure context and SpeechRecognition constructors. Edge produced the actual UI `SpeechRecognition: network` failure, and that failing path produced no final-result callback/transcript. Chrome completed minutes startup in the same environment, so the speech failure is browser/service-path-specific.
+- A reconnect transferred host authority to Chrome while Edge retained stale minutes UI state, providing a second concrete host-authority/stale-tab failure mode.
+
+### Verification Gate
+
+- Status remains in progress at `phase=verify`, `gate=VERIFICATION-GATE`.
+- Next action: collect runtime browser/CDP evidence before any fix.
+- No product source files were modified.
+
+## Implementation and Final Verification (2026-09-17)
+
+- Replaced the fixed meeting-minutes startup delay with event-based waits for `configured` and `started`, each with a 5-second timeout.
+- Terminal browser speech errors now stop and abort the recognition session so `SpeechRecognition: network` cannot leave a phantom running session that repeatedly restarts; added a regression test.
+- MiMo ASR now prefers a dedicated local ASR key and falls back to the summary key when it is the only configured key, without overwriting a valid ASR key with an empty value.
+- Added HTTP 5xx/request-failure diagnostics to the meeting-minutes E2E. The observed 502s were caused by the local Vite proxy targeting `18080` while the test backend was on `27771`; running Vite with `LETSHARE_DEV_BACKEND_HTTP=http://127.0.0.1:27771` removed the failures.
+- Verification passed: `pnpm exec tsx --test tests/meetingAi.test.ts` (11/11), `go test ./internal/handler -run TestMeetingMinutes -count=1`, `pnpm exec tsc --noEmit`, `pnpm run build`, and `tests/e2e/meeting-ai-minutes.e2e.mts` (1/1).
+- Real visible Chrome/Edge CDP verification passed with the user-provided MiMo key entered through the UI: MiMo ASR returned HTTP 200, final transcript segments rendered, stopping returned the meeting to completed state, and the summary request returned HTTP 200. The key was not written to source or task memory.
+- Whisper WASM remains explicitly unavailable as an ASR runtime; the UI continues to avoid claiming it is supported until its model/inference path is implemented.

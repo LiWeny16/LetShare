@@ -342,6 +342,8 @@ export class BrowserSpeechSession {
         this.running = false;
         this.options.onError?.("浏览器未授权语音识别或网络语音服务不可用");
       } else if (event.error && event.error !== "no-speech") {
+        this.running = false;
+        try { recognition.abort(); } catch { /* stop restarting after a terminal recognition error */ }
         this.options.onError?.(`SpeechRecognition: ${event.error}`);
       }
     };

@@ -7,6 +7,7 @@ import CampaignIcon from "@mui/icons-material/Campaign";
 import PersonIcon from "@mui/icons-material/Person";
 import PersonRemoveIcon from "@mui/icons-material/PersonRemove";
 import StarIcon from "@mui/icons-material/Star";
+import StarBorderRoundedIcon from "@mui/icons-material/StarBorderRounded";
 import { useTranslation } from "react-i18next";
 import realTimeColab from "@App/libs/connection/colabLib";
 import { meetingManager } from "@App/libs/meeting/meetingManager";
@@ -23,6 +24,7 @@ export function ParticipantsPanel({
   const { t } = useTranslation();
   const theme = useTheme();
   const [kicking, setKicking] = useState<string | null>(null);
+  const [hoveredMember, setHoveredMember] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<{ left: number; top: number; uniqId: string; name: string } | null>(null);
   const longPressTimer = useRef<number | null>(null);
   const selfId = realTimeColab.getUniqId() ?? "";
@@ -96,9 +98,11 @@ export function ParticipantsPanel({
             onPointerUp={clearLongPress}
             onPointerCancel={clearLongPress}
             onPointerLeave={clearLongPress}
-            secondaryAction={isSelf ? undefined : (
+            onMouseEnter={() => setHoveredMember(member.uniqId)}
+            onMouseLeave={() => setHoveredMember((current) => (current === member.uniqId ? null : current))}
+            secondaryAction={(
               <Stack direction="row" spacing={0.25} alignItems="center">
-                {onStartPrivateChat && (
+                {!isSelf && onStartPrivateChat && (
                   <Tooltip title={t("meeting.sendMessage", "发送消息")}>
                     <IconButton
                       size="small"
@@ -116,7 +120,17 @@ export function ParticipantsPanel({
                     <StarIcon sx={{ fontSize: 16, color: "warning.main", mx: 0.5 }} />
                   </Tooltip>
                 ) : amHost ? (
-                  <Tooltip title={t("meeting.kick", "移出会议")}>
+                  <>
+                    <IconButton
+                      size="small"
+                      edge="end"
+                      aria-label={t("meeting.setHost", "设置为主持人")}
+                      title={t("meeting.setHost", "设置为主持人")}
+                      onClick={() => meetingManager.setHost(member.uniqId)}
+                      sx={{ width: 40, height: 40, color: "warning.main", opacity: hoveredMember === member.uniqId ? 1 : 0, transition: "opacity 160ms", "&:focus-visible": { opacity: 1 } }}
+                    >
+                      <StarBorderRoundedIcon sx={{ fontSize: 18 }} />
+                    </IconButton>
                     <IconButton
                       size="small"
                       edge="end"
@@ -132,7 +146,7 @@ export function ParticipantsPanel({
                     >
                       <PersonRemoveIcon sx={{ fontSize: 17 }} />
                     </IconButton>
-                  </Tooltip>
+                  </>
                 ) : undefined}
               </Stack>
             )}
