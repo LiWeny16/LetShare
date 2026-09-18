@@ -126,10 +126,11 @@ function cdnRefresh() {
 function deployFrontend() {
   log("▶", "打包 docs/ → 上传 ECS nginx 回源口(18081)...");
   // tar（纯归档，无压缩）：GNU tar 不支持 zip 容器，纯 tar 跨平台确定可解（服务器 tarfile 解压）
-  // Windows bsdtar accepts drive-qualified paths (C:/...), but does not
-  // resolve MSYS-style /C/... paths when invoked from Node on Windows.
+  // Windows 必须用 System32 bsdtar：Git Bash 的 GNU tar 会把 "C:/..." 当 host:path
+  // 远程语法（"Cannot connect to C: resolve failed"），且 PATH 顺序不保证 bsdtar 在前。
   const toPosix = (p) => (process.platform === "win32" ? p.replace(/\\/g, "/") : p);
-  run(`tar -cf "${toPosix(TMP_ZIP)}" -C "${toPosix(FRONTEND_DIST)}" .`, { stdio: "pipe" });
+  const tarBin = process.platform === "win32" ? "C:/Windows/System32/tar.exe" : "tar";
+  run(`"${tarBin}" -cf "${toPosix(TMP_ZIP)}" -C "${toPosix(FRONTEND_DIST)}" .`, { stdio: "pipe" });
   fs.writeFileSync(TMP_UNZ, EXTRACTOR);
   scp(TMP_ZIP, "/tmp/letshare-docs.zip");
   scp(TMP_UNZ, "/tmp/letshare-unz.py");
