@@ -115,6 +115,21 @@ function buildRtcConfig(turnServers: TurnIceServer[]): RTCConfiguration {
     : { ...RTC_CONFIG, iceServers, bundlePolicy: bundle };
 }
 
+/** Pure audio calls terminate at the public SFU and never use a TURN relay. */
+function buildDirectSfuRtcConfig(): RTCConfiguration {
+  let bundle = RTC_CONFIG.bundlePolicy;
+  if (typeof localStorage !== "undefined") {
+    const b = localStorage.getItem("ls_bundle");
+    if (b === "balanced" || b === "max-compat") bundle = b;
+  }
+  return {
+    ...RTC_CONFIG,
+    iceServers: [...(RTC_CONFIG.iceServers ?? [])],
+    bundlePolicy: bundle,
+    iceTransportPolicy: "all",
+  };
+}
+
 const INCOMING_TIMEOUT_MS = 30_000;
 /** 去电无人接听超时（对齐 Discord 振铃时限；对端接受/媒体建立后不再触发） */
 const OUTGOING_TIMEOUT_MS = 60_000;
@@ -156,6 +171,7 @@ function clearScheduledTimeout(handle: TimerHandle): void {
 type ActiveCall = {
   session: CallSession | CallSfuSession;
   peerId: string;
+  media: CallKind;
   role: "caller" | "callee";
   lastSwitch: { at: number; from: TransportDecision; to: TransportDecision } | null;
   statsTimer: TimerHandle;
@@ -196,9 +212,6 @@ export class CallManager {
       }
     });
 
-    // 异步预拉 TURN 凭据：失败静默降级为纯 STUN，不阻塞通话发起。
-    // 缓存含过期时间，续期定时器在到期前 60s 拉新凭据并热更新活跃会话（3.7.0）。
-    void this.refreshTurn();
   }
 
   setPolicy(partial: Partial<PolicyConfig>): void {
@@ -223,21 +236,24 @@ export class CallManager {
     // 服务器信令通道不可用时拒绝拨号（3.7.0）：避免创建必然失败的通话挂在界面上
     if (this.deps.isConnected && !this.deps.isConnected()) throw new Error("not connected to server");
     if (this.deps.sfu?.available && !this.deps.sfu.available()) throw new Error("SFU media transport unavailable");
+    if (media === "audio" && !this.deps.sfu) throw new Error("Call SFU is required for pure audio calls");
     if (this.byPeer.has(peerId)) throw new Error("already in a call with this peer");
 
     const callId = `c_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-    // 拨号前确保 TURN 凭据新鲜（页面开窗超过 TTL 后不刷新也能正常拨号）；2.5s 上限，失败静默降级
-    await Promise.race([
-      this.ensureTurnFresh(),
-      new Promise<void>((r) => scheduleTimeout(r, 2500)),
-    ]);
+    if (media !== "audio") {
+      // 非纯语音路径保留现有 TURN 生命周期；纯语音直接连接公网 SFU。
+      await Promise.race([
+        this.ensureTurnFresh(),
+        new Promise<void>((r) => scheduleTimeout(r, 2500)),
+      ]);
+    }
     // 普通通话由同一个工厂选择 SFU；只有文件传输保留 P2P 优化。
     // 不要先构造一个未使用的 P2P session，否则一次拨号会同时持有两套
     // PeerConnection，并重复注册媒体事件。
-    const session = this.createPendingSession(callId, peerId, media !== "audio", localStream);
+    const session = this.createPendingSession(callId, peerId, media, localStream);
 
     const call: ActiveCall = {
-      session, peerId, role: "caller", lastSwitch: null,
+      session, peerId, media, role: "caller", lastSwitch: null,
       statsTimer: null, incomingTimeout: null, outgoingTimeout: null, recoveryTimer: null,
     };
     this.calls.set(callId, call);
@@ -288,13 +304,22 @@ export class CallManager {
         if (signal.to && selfId && signal.to !== selfId) return;
         // 重复来电忽略（已有该 peer 通话或同 callId）
         if (this.byPeer.has(from) || this.calls.has(callId)) return;
+        // 忙线守卫（会议中等）：立即回 decline(busy)，不建会话、不占麦克风。
+        // 孤儿 manager（会议页已卸载 share）也能走此路径快速拒绝，主叫不再干等 60s。
+        const sfuUnavailable = Boolean(this.deps.sfu?.available && !this.deps.sfu.available());
+        if (sfuUnavailable || (signal.media === "audio" && !this.deps.sfu)) {
+          this.deps.broadcast(buildDecline(callId, "declined"));
+          return;
+        }
+        if (signal.media !== "audio") void this.refreshTurn();
         // wantVideo：audio 来电为 false；video/audio+video 来电为 true
-        const pendingSession = this.createPendingSession(callId, from, signal.media !== "audio");
+        const pendingSession = this.createPendingSession(callId, from, signal.media);
         // 进入 incoming 状态：accept() 的状态机守卫依赖它，缺失会导致接听死锁（无声）
         pendingSession.markIncoming();
         const pending: ActiveCall = {
           session: pendingSession,
           peerId: from,
+          media: signal.media,
           role: "callee",
           lastSwitch: null,
           statsTimer: null,
@@ -381,19 +406,21 @@ export class CallManager {
       this.cleanup(callId, "error");
       throw err;
     }
-    // 凭据热续期：invite 时构建的会话用的可能是临期凭据，accept 后刷新并应用（peer 已建才生效）
-    void (async () => {
-      try {
-        await Promise.race([
-          this.ensureTurnFresh(),
-          new Promise<void>((r) => scheduleTimeout(r, 2500)),
-        ]);
-        const cur = this.calls.get(callId);
-        await cur?.session.updateIceServers(buildRtcConfig(this.turnServers));
-      } catch {
-        // 续期失败不阻断接通；中继场景由后续 refreshTurn 的 restartIce 兜底
-      }
-    })();
+    if (call.media !== "audio") {
+      // 非纯语音路径保留现有 TURN 续期；纯语音的 PC 配置始终只有直连候选。
+      void (async () => {
+        try {
+          await Promise.race([
+            this.ensureTurnFresh(),
+            new Promise<void>((r) => scheduleTimeout(r, 2500)),
+          ]);
+          const cur = this.calls.get(callId);
+          await cur?.session.updateIceServers(buildRtcConfig(this.turnServers));
+        } catch {
+          // 续期失败不阻断接通；非纯语音路径由后续 refreshTurn 处理。
+        }
+      })();
+    }
     this.startStatsLoop(call);
   }
 
@@ -509,7 +536,8 @@ export class CallManager {
     return this.deps.videoPrefs?.() ?? { videoCodec: "auto" as VideoCodecPrioritySetting, videoMaxBitrateKbps: null };
   }
 
-  private createPendingSession(callId: string, peerId: string, wantVideo: boolean, localStream?: MediaStream): CallSession | CallSfuSession {
+  private createPendingSession(callId: string, peerId: string, media: CallKind, localStream?: MediaStream): CallSession | CallSfuSession {
+    const wantVideo = media !== "audio";
     if (this.deps.sfu) {
       const prefs = this.videoPrefs();
       return new CallSfuSession(
@@ -517,7 +545,7 @@ export class CallManager {
           callId,
           peerId,
           selfId: this.deps.getSelfId() ?? "",
-          rtcConfig: buildRtcConfig(this.turnServers),
+          rtcConfig: media === "audio" ? buildDirectSfuRtcConfig() : buildRtcConfig(this.turnServers),
           localStream,
           wantVideo,
           videoCodec: prefs.videoCodec,
@@ -528,6 +556,7 @@ export class CallManager {
         this.sessionEvents(callId, peerId),
       );
     }
+    if (media === "audio") throw new Error("Call SFU is required for pure audio calls");
     // 视频能力偏好（编码器优先/码率上限）：UI 层注入；缺省"浏览器自动"
     const prefs = this.videoPrefs();
     return new CallSession(
@@ -586,8 +615,10 @@ export class CallManager {
    *  重试（兼作信令补发，覆盖 WS 刚恢复的窗口）。callee 仅等待（caller 发起的重启经 call:sdp 到达）。 */
   private beginRecovery(call: ActiveCall): void {
     if (call.recoveryTimer != null) return;
-    // 断连期间凭据可能已过期：先拉新凭据并热更新（中继场景 restartIce 重建 allocation）
-    void this.ensureTurnFresh().then(() => this.applyTurnToActiveCalls());
+    if (call.media !== "audio") {
+      // 非纯语音路径可能使用 TURN；纯语音恢复只重启到公网 SFU 的 ICE。
+      void this.ensureTurnFresh().then(() => this.applyTurnToActiveCalls());
+    }
     if (call.role === "caller") {
       void call.session.restartIce();
     }
@@ -692,6 +723,7 @@ export class CallManager {
   private applyTurnToActiveCalls(): void {
     const config = buildRtcConfig(this.turnServers);
     for (const call of this.calls.values()) {
+      if (call.media === "audio") continue;
       void call.session.updateIceServers(config);
       if (call.role === "caller" && call.session.getState() !== "reconnecting") {
         void call.session.isRelayed().then((relay) => {

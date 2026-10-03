@@ -113,11 +113,15 @@ test("双客户端经 Go 后端 + SFU 完成语音通话", async (t) => {
     },
   });
   t.after(() => { killTree(goProc); });
-  goProc.stdout?.on("data", (d: Buffer) => {
-    const line = d.toString();
-    // 保留 TURN/relay 认证日志，便于本地 ICE 配置故障定位。
-    if (/turn|TURN|auth|Auth|alloc|Alloc|relay|Relay/.test(line)) console.log("[go]", line.trim().slice(0, 500));
-  });
+  const logGoOutput = (d: Buffer) => {
+    for (const line of d.toString().split(/\r?\n/)) {
+      if (/("level":"(error|warning)"|\blevel=(error|warning)\b)/i.test(line)) {
+        console.log("[go]", line.trim().slice(0, 500));
+      }
+    }
+  };
+  goProc.stdout?.on("data", logGoOutput);
+  goProc.stderr?.on("data", logGoOutput);
 
   await waitHttp(`http://127.0.0.1:${GO_PORT}/api/turn-credentials`);
   // TURN listener 必须真的在监听（凭据端点 200 但 TURN 起不来 = relay 必然全挂）
@@ -257,28 +261,86 @@ test("双客户端经 Go 后端 + SFU 完成语音通话", async (t) => {
 
   // ── 5. 断言：SFU 媒体连接建立 + 音频字节流动 ────────────────────
   type Stats = {
-    audioBytes: number;
+    inboundAudioBytes: number;
+    inboundAudioPackets: number;
+    outboundAudioBytes: number;
+    outboundAudioPackets: number;
     sfu: boolean;
+    debug: Record<string, unknown> | null;
+    audioRtp: Array<Record<string, unknown>>;
+    selectedPairs: Array<Record<string, unknown>>;
   };
   async function sampleStats(page: import("playwright").Page): Promise<Stats> {
     return page.evaluate(async () => {
       const getStats = (window as unknown as { __lsCallStats?: () => Promise<Map<string, Record<string, unknown>>> }).__lsCallStats;
       const getDebug = (window as unknown as { __lsPc?: () => Record<string, unknown> }).__lsPc;
-      if (!getStats || !getDebug) return { audioBytes: -1, sfu: false };
+      if (!getStats || !getDebug) return {
+        inboundAudioBytes: -1, inboundAudioPackets: -1, outboundAudioBytes: -1, outboundAudioPackets: -1,
+        sfu: false, debug: null, audioRtp: [], selectedPairs: [],
+      };
       const stats = await getStats();
-      let audioBytes = 0;
-      for (const [, r] of stats) {
-        if (r.type === "inbound-rtp" && r.kind === "audio") audioBytes += Number(r.bytesReceived ?? 0);
+      const reports = [...stats.values()];
+      const inbound = reports.filter((r) => r.type === "inbound-rtp" && (r.kind === "audio" || r.mediaType === "audio"));
+      const outbound = reports.filter((r) => r.type === "outbound-rtp" && (r.kind === "audio" || r.mediaType === "audio"));
+      const transports = reports.filter((r) => r.type === "transport");
+      const selectedPairIds = new Set(transports.map((r) => r.selectedCandidatePairId).filter((id): id is string => typeof id === "string"));
+      let selectedPairs = reports
+        .filter((r) => r.type === "candidate-pair" && (r.selected === true || selectedPairIds.has(String(r.id))))
+        .map((r) => ({
+          id: r.id, state: r.state, selected: r.selected, nominated: r.nominated,
+          bytesSent: r.bytesSent, bytesReceived: r.bytesReceived,
+          localCandidateId: r.localCandidateId, remoteCandidateId: r.remoteCandidateId,
+        }));
+      if (selectedPairs.length === 0) {
+        selectedPairs = reports
+          .filter((r) => r.type === "candidate-pair" && r.nominated === true && r.state === "succeeded")
+          .map((r) => ({
+            id: r.id, state: r.state, selected: r.selected, nominated: r.nominated,
+            bytesSent: r.bytesSent, bytesReceived: r.bytesReceived,
+            localCandidateId: r.localCandidateId, remoteCandidateId: r.remoteCandidateId,
+          }));
       }
-      return { audioBytes, sfu: getDebug().transport === "sfu" };
+      const candidateById = new Map(reports.filter((r) => typeof r.id === "string").map((r) => [String(r.id), r]));
+      for (const pair of selectedPairs) {
+        const local = candidateById.get(String(pair.localCandidateId));
+        const remote = candidateById.get(String(pair.remoteCandidateId));
+        pair.localCandidate = local ? { candidateType: local.candidateType, protocol: local.protocol, address: local.address, port: local.port } : null;
+        pair.remoteCandidate = remote ? { candidateType: remote.candidateType, protocol: remote.protocol, address: remote.address, port: remote.port } : null;
+      }
+      const debug = getDebug();
+      return {
+        inboundAudioBytes: inbound.reduce((sum, r) => sum + Number(r.bytesReceived ?? 0), 0),
+        inboundAudioPackets: inbound.reduce((sum, r) => sum + Number(r.packetsReceived ?? 0), 0),
+        outboundAudioBytes: outbound.reduce((sum, r) => sum + Number(r.bytesSent ?? 0), 0),
+        outboundAudioPackets: outbound.reduce((sum, r) => sum + Number(r.packetsSent ?? 0), 0),
+        sfu: debug.transport === "sfu", debug,
+        audioRtp: [...inbound, ...outbound].map((r) => ({
+          type: r.type, kind: r.kind ?? r.mediaType, bytes: r.bytesReceived ?? r.bytesSent,
+          packets: r.packetsReceived ?? r.packetsSent, ssrc: r.ssrc, trackIdentifier: r.trackIdentifier,
+        })),
+        selectedPairs,
+      };
     });
   }
 
   for (const [i, page] of pages.entries()) {
-    await until(`client${i} SFU stats 就绪且有音频`, async () => {
-      const s = await sampleStats(page);
-      return s.sfu && s.audioBytes > 0;
-    }, 60_000);
+    try {
+      await until(`client${i} SFU stats 就绪且有入站音频 RTP`, async () => {
+        const s = await sampleStats(page);
+        return s.sfu && s.inboundAudioBytes > 0 && s.inboundAudioPackets > 0;
+      }, 60_000);
+    } catch (error) {
+      console.log(`[diag:call-audio-failure] client${i} ${JSON.stringify(await sampleStats(page))}`);
+      throw error;
+    }
+    const sample = await sampleStats(page);
+    console.log(`[diag:call-audio] client${i} ${JSON.stringify(sample)}`);
+    assert.ok(sample.selectedPairs.length > 0, `client${i} has no selected ICE candidate pair`);
+    assert.ok(sample.selectedPairs.every((pair) => {
+      const local = pair.localCandidate as { candidateType?: unknown } | null;
+      const remote = pair.remoteCandidate as { candidateType?: unknown } | null;
+      return local?.candidateType !== "relay" && remote?.candidateType !== "relay";
+    }), `pure audio selected a relay candidate: ${JSON.stringify(sample.selectedPairs)}`);
   }
 
   // 音频字节递增（真有数据流过 SFU）
@@ -286,7 +348,8 @@ test("双客户端经 Go 后端 + SFU 完成语音通话", async (t) => {
     const a = await sampleStats(page);
     await new Promise((r) => setTimeout(r, 2000));
     const b = await sampleStats(page);
-    assert.ok(b.audioBytes > a.audioBytes, `client${i} audio bytesReceived 应递增: ${a.audioBytes} → ${b.audioBytes}`);
+    assert.ok(b.inboundAudioBytes > a.inboundAudioBytes, `client${i} audio bytesReceived 应递增: ${a.inboundAudioBytes} → ${b.inboundAudioBytes}`);
+    assert.ok(b.inboundAudioPackets > a.inboundAudioPackets, `client${i} audio packetsReceived 应递增: ${a.inboundAudioPackets} → ${b.inboundAudioPackets}`);
   }
 
   await alice.page.keyboard.press("Escape").catch(() => undefined);

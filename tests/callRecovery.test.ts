@@ -110,7 +110,7 @@ function makeManager(overrides: {
     broadcast: (s: object) => { broadcasted.push(s); },
     getSelfId: () => ("selfId" in overrides ? overrides.selfId ?? null : "self:uid"),
     ...(overrides.isConnected ? { isConnected: overrides.isConnected } : {}),
-    ...(overrides.fetchTurn ? { fetchTurn: overrides.fetchTurn } : {}),
+    fetchTurn: overrides.fetchTurn ?? (async () => ({ ice_servers: [], ttl_seconds: 0 })),
   };
   const manager = new CallManager(deps, {
     onIncoming: (info) => events.onIncoming.push(info),
@@ -172,11 +172,12 @@ test("TURN 续期: 到期前定时器触发重拉；活跃会话收到 setConfig
         },
       );
 
-      // 构造时第 1 次拉取（异步）；拨号走 ensureTurnFresh（新鲜 → 不重复拉）
+      // 构造时不预拉；视频拨号时按需拉取一次。
       await flushMicrotasks();
-      assert.equal(fetchCount, 1);
+      assert.equal(fetchCount, 0);
 
-      const callId = await manager2.startCall("peer:uid", "audio", makeEmptyStream());
+      const callId = await manager2.startCall("peer:uid", "audio+video", makeEmptyStream());
+      assert.equal(fetchCount, 1);
       const pc = driveToActive();
 
       // 推进过续期点（TTL 600 → 半值 300s 刷新）
@@ -219,7 +220,7 @@ test("TURN 续期: 中继会话在续期时触发 ICE restart（新 allocation �
       );
       await flushMicrotasks();
 
-      const callId = await manager.startCall("peer:uid", "audio", makeEmptyStream());
+      const callId = await manager.startCall("peer:uid", "audio+video", makeEmptyStream());
       const pc = driveToActive();
       // 注入"当前选中候选对走中继"的 stats
       pc.statsOverride = new Map<string, unknown>([
@@ -248,7 +249,7 @@ test("断线自愈: active 下 disconnected → reconnecting，caller 立即 ICE
     try {
       const events2: Record<string, unknown[]> = { onIncoming: [], onCallState: [], onRemoteStream: [], onLocalStream: [], onTransportChange: [], onCallEnded: [] };
       const manager = new CallManager(
-        { broadcast: () => {}, getSelfId: () => "self:uid", isConnected: () => true },
+        { broadcast: () => {}, getSelfId: () => "self:uid", isConnected: () => true, fetchTurn: async () => ({ ice_servers: [], ttl_seconds: 0 }) },
         {
           onIncoming: (i) => events2.onIncoming.push(i), onCallState: (p, s, i) => events2.onCallState.push({ p, s, i }),
           onRemoteStream: (p, s, k) => events2.onRemoteStream.push({ p, s, k }), onLocalStream: (p, s) => events2.onLocalStream.push({ p, s }),
@@ -256,7 +257,7 @@ test("断线自愈: active 下 disconnected → reconnecting，caller 立即 ICE
         },
       );
       const states = events2.onCallState as { s: string }[];
-      const callId = await manager.startCall("peer:uid", "audio", makeEmptyStream());
+      const callId = await manager.startCall("peer:uid", "audio+video", makeEmptyStream());
       const pc = driveToActive();
       const offersBefore = pc.createOfferOpts.length;
 
@@ -292,13 +293,13 @@ test("断线自愈: 自愈窗口（25s）耗尽 → ended 并收口 onCallEnded"
     try {
       const ended: unknown[] = [];
       const manager = new CallManager(
-        { broadcast: () => {}, getSelfId: () => "self:uid", isConnected: () => true },
+        { broadcast: () => {}, getSelfId: () => "self:uid", isConnected: () => true, fetchTurn: async () => ({ ice_servers: [], ttl_seconds: 0 }) },
         {
           onIncoming: () => {}, onCallState: () => {}, onRemoteStream: () => {}, onLocalStream: () => {},
           onTransportChange: () => {}, onCallEnded: (p, r) => { ended.push({ p, r }); },
         },
       );
-      const callId = await manager.startCall("peer:uid", "audio", makeEmptyStream());
+      const callId = await manager.startCall("peer:uid", "audio+video", makeEmptyStream());
       driveToActive();
       const pc = FakeRTCPeerConnection.instances.at(-1)!;
 
@@ -321,13 +322,13 @@ test("断线自愈: failed 也走恢复而非立即挂断（旧行为回归防�
     try {
       const states: string[] = [];
       const manager = new CallManager(
-        { broadcast: () => {}, getSelfId: () => "self:uid", isConnected: () => true },
+        { broadcast: () => {}, getSelfId: () => "self:uid", isConnected: () => true, fetchTurn: async () => ({ ice_servers: [], ttl_seconds: 0 }) },
         {
           onIncoming: () => {}, onCallState: (_p, s) => { states.push(s); }, onRemoteStream: () => {}, onLocalStream: () => {},
           onTransportChange: () => {}, onCallEnded: () => {},
         },
       );
-      await manager.startCall("peer:uid", "audio", makeEmptyStream());
+      await manager.startCall("peer:uid", "audio+video", makeEmptyStream());
       const pc = driveToActive();
 
       pc.connectionState = "failed";
@@ -348,7 +349,7 @@ test("断线自愈: callee 不自救只响应 —— 断开等待，收 caller �
       const broadcastedCallee: object[] = [];
       const eventsC: Record<string, unknown[]> = { onIncoming: [], onCallState: [], onRemoteStream: [], onLocalStream: [], onTransportChange: [], onCallEnded: [] };
       const callee = new CallManager(
-        { broadcast: (s) => { broadcastedCallee.push(s); }, getSelfId: () => "callee:uid", isConnected: () => true },
+        { broadcast: (s) => { broadcastedCallee.push(s); }, getSelfId: () => "callee:uid", isConnected: () => true, fetchTurn: async () => ({ ice_servers: [], ttl_seconds: 0 }) },
         {
           onIncoming: (i) => eventsC.onIncoming.push(i), onCallState: (p, s, i) => eventsC.onCallState.push({ p, s, i }),
           onRemoteStream: (p, s, k) => eventsC.onRemoteStream.push({ p, s, k }), onLocalStream: (p, s) => eventsC.onLocalStream.push({ p, s }),
@@ -358,7 +359,7 @@ test("断线自愈: callee 不自救只响应 —— 断开等待，收 caller �
       const states = eventsC.onCallState as { s: string }[];
 
       // caller 来电 → 接听 → active
-      callee.handleSignal("caller:uid", buildInvite("c_9", "audio"));
+      callee.handleSignal("caller:uid", buildInvite("c_9", "audio+video"));
       const callId = (eventsC.onIncoming.at(-1) as { callId: string }).callId;
       const accepted = callee.acceptCall(callId, makeEmptyStream());
       await accepted;
@@ -395,13 +396,13 @@ test("去电超时: 60s 无应答 → bye(timeout) + onCallEnded(timeout)，通�
       const ended: { p: string; r?: string }[] = [];
       const broadcasted: object[] = [];
       const manager = new CallManager(
-        { broadcast: (s) => { broadcasted.push(s); }, getSelfId: () => "self:uid", isConnected: () => true },
+        { broadcast: (s) => { broadcasted.push(s); }, getSelfId: () => "self:uid", isConnected: () => true, fetchTurn: async () => ({ ice_servers: [], ttl_seconds: 0 }) },
         {
           onIncoming: () => {}, onCallState: () => {}, onRemoteStream: () => {}, onLocalStream: () => {},
           onTransportChange: () => {}, onCallEnded: (p, r) => { ended.push({ p, r }); },
         },
       );
-      const callId = await manager.startCall("peer:uid", "audio", makeEmptyStream());
+      const callId = await manager.startCall("peer:uid", "audio+video", makeEmptyStream());
       assert.equal(manager.isInCall(), true);
 
       mock.timers.tick(61_000);
@@ -423,13 +424,13 @@ test("去电超时: 接通后不再触发（通话中 60s 平安）", async () =
       const ended: { p: string; r?: string }[] = [];
       const broadcasted: object[] = [];
       const manager = new CallManager(
-        { broadcast: (s) => { broadcasted.push(s); }, getSelfId: () => "self:uid", isConnected: () => true },
+        { broadcast: (s) => { broadcasted.push(s); }, getSelfId: () => "self:uid", isConnected: () => true, fetchTurn: async () => ({ ice_servers: [], ttl_seconds: 0 }) },
         {
           onIncoming: () => {}, onCallState: () => {}, onRemoteStream: () => {}, onLocalStream: () => {},
           onTransportChange: () => {}, onCallEnded: (p, r) => { ended.push({ p, r }); },
         },
       );
-      await manager.startCall("peer:uid", "audio", makeEmptyStream());
+      await manager.startCall("peer:uid", "audio+video", makeEmptyStream());
       driveToActive(); // ontrack + connected → active（去电超时应被清除）
 
       mock.timers.tick(61_000);
@@ -456,7 +457,7 @@ test("拨号守卫: 信令通道不可用（isConnected=false）拒绝拨号", a
 test("收到对端 bye(timeout) → onCallEnded(timeout)（对端未接听取消）", async () => {
   await withFakeRTC(() => {
     const { manager, events } = makeManager({ isConnected: () => true });
-    manager.handleSignal("peer:uid", buildInvite("c_end", "audio"));
+    manager.handleSignal("peer:uid", buildInvite("c_end", "audio+video"));
     const callId = (events.onIncoming.at(-1) as { callId: string }).callId;
     manager.handleSignal("peer:uid", buildBye(callId, "timeout"));
     assert.equal((events.onCallEnded.at(-1) as { reason?: string }).reason, "timeout");
@@ -470,7 +471,7 @@ test("收到 decline(timeout) → onCallEnded(declined)（对方未接听我的�
     // caller 侧无实际通话也能安全处理（未知 callId 忽略）；先建一次通话
     void manager;
     const callId = "c_decl";
-    manager.handleSignal("peer:uid", buildInvite(callId, "audio"));
+    manager.handleSignal("peer:uid", buildInvite(callId, "audio+video"));
     manager.handleSignal("peer:uid", buildDecline(callId, "timeout"));
     // 被邀请侧收到 decline：清理并触发 onCallEnded（reason=declined）
     assert.equal((events.onCallEnded.at(-1) as { reason?: string }).reason, "declined");

@@ -22,6 +22,7 @@ import { buildInvite, buildBye, buildDecline, buildAccept, buildSdp, buildIce } 
 
 class FakeRTCPeerConnection {
   static instances: FakeRTCPeerConnection[] = [];
+  config: RTCConfiguration;
   connectionState = "new";
   localDescription: RTCSessionDescription | null = null;
   remoteDescription: RTCSessionDescription | null = null;
@@ -44,7 +45,8 @@ class FakeRTCPeerConnection {
     transceiver?: { setCodecPreferences?: (codecs: unknown[]) => void };
   }> = [];
 
-  constructor(_config?: RTCConfiguration) {
+  constructor(config: RTCConfiguration = {}) {
+    this.config = config;
     FakeRTCPeerConnection.instances.push(this);
   }
   addTrack(_track: MediaStreamTrack, _stream: MediaStream) {
@@ -68,6 +70,12 @@ class FakeRTCPeerConnection {
   /** sender.setParameters 调用记录（码率上限热更新断言用） */
   paramCalls: unknown[] = [];
   addTransceiver(_kind: string, _init?: RTCRtpTransceiverInit) { return {} as RTCRtpTransceiver; }
+  getTransceivers() {
+    return this.senders.map((sender) => ({
+      sender,
+      setCodecPreferences: (codecs: unknown[]) => { this.codecPrefsCalls.push(codecs); },
+    })) as unknown as RTCRtpTransceiver[];
+  }
   /** createOffer 入参记录（ICE restart 断言用：iceRestart flag） */
   createOfferOpts: (RTCOfferAnswerOptions | undefined)[] = [];
   async createOffer(opts?: RTCOfferAnswerOptions) { this.createOfferOpts.push(opts); return { type: "offer", sdp: "fake-offer" }; }
@@ -118,8 +126,15 @@ function makeEmptyStream(): MediaStream {
 
 type Events = Record<string, unknown[]>;
 
-function makeManager(overrides: { selfId?: string; broadcast?: (s: object) => void; videoPrefs?: CallManagerDeps["videoPrefs"] } = {}) {
+function makeManager(overrides: {
+  selfId?: string;
+  broadcast?: (s: object) => void;
+  videoPrefs?: CallManagerDeps["videoPrefs"];
+  sfu?: CallManagerDeps["sfu"] | null;
+  fetchTurn?: CallManagerDeps["fetchTurn"];
+} = {}) {
   const broadcasted: object[] = [];
+  const sfu = "sfu" in overrides ? overrides.sfu ?? undefined : { available: () => true, send: () => {} };
   const events: Events = {
     onIncoming: [], onCallState: [], onRemoteStream: [], onLocalStream: [], onTransportChange: [], onCallEnded: [],
   };
@@ -129,6 +144,8 @@ function makeManager(overrides: { selfId?: string; broadcast?: (s: object) => vo
       // 注意不能用 ??：null 也是合法 selfId 值（"不在房间"用例），?? 会把 null 吞成默认值
       getSelfId: () => ("selfId" in overrides ? overrides.selfId ?? null : "self:uid"),
       ...(overrides.videoPrefs ? { videoPrefs: overrides.videoPrefs } : {}),
+      ...(sfu ? { sfu } : {}),
+      fetchTurn: overrides.fetchTurn ?? (async () => ({ ice_servers: [], ttl_seconds: 0 })),
     },
     {
       onIncoming: (info) => events.onIncoming.push(info),
@@ -206,6 +223,73 @@ test("handleSignal: duplicate invite from same peer is ignored", () => {
     manager.handleSignal("peer:uid", buildInvite("c_2", "audio"));
     assert.equal(events.onIncoming.length, 1);
     manager.leaveRoom();
+  });
+});
+
+test("AC-002: ordinary pure audio uses public SFU ICE and never fetches TURN", async () => {
+  await withFakeRTC(async () => {
+    let turnFetches = 0;
+    const sfuMessages: Array<{ type: string; data: unknown; channel: string }> = [];
+    const oldStorage = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      value: { getItem: (key: string) => key === "ls_force_relay" ? "1" : null },
+    });
+    try {
+      const { manager, broadcasted } = makeManager({
+        sfu: {
+          available: () => true,
+          send: (type, data, channel) => sfuMessages.push({ type, data, channel }),
+        },
+        fetchTurn: async () => {
+          turnFetches++;
+          return { ice_servers: [{ urls: "turn:turn.example.test", username: "user", credential: "credential" }], ttl_seconds: 600 };
+        },
+      });
+
+      const callId = await manager.startCall("peer:uid", "audio", fakeStream() as MediaStream);
+
+      assert.equal(turnFetches, 0, "纯语音不得请求 TURN 凭据");
+      assert.ok(FakeRTCPeerConnection.instances.length > 0, "应建立到 SFU 的媒体 PC");
+      for (const pc of FakeRTCPeerConnection.instances) {
+        assert.equal(pc.config.iceTransportPolicy, "all", "ls_force_relay 不得强制 TURN");
+        assert.ok((pc.config.iceServers ?? []).every((server) => !JSON.stringify(server).toLowerCase().includes("turn:")), "纯语音 PC 配置不得包含 TURN");
+      }
+      assert.ok(sfuMessages.some((message) => message.type === "call:sfu:join"), "应加入专用 Call SFU 房间");
+      assert.ok(sfuMessages.some((message) => message.type === "meeting:sdp"), "媒体 SDP 应发给 SFU");
+      assert.ok(!broadcasted.some((signal) => ["call:sdp", "call:ice"].includes((signal as { type?: string }).type ?? "")), "不得发送 P2P 媒体信令");
+      manager.hangup(callId);
+    } finally {
+      if (oldStorage) Object.defineProperty(globalThis, "localStorage", oldStorage);
+      else delete (globalThis as { localStorage?: Storage }).localStorage;
+    }
+  });
+});
+
+test("AC-003: outgoing pure audio fails closed without an available SFU", async () => {
+  await withFakeRTC(async () => {
+    const { manager } = makeManager({
+      sfu: { available: () => false, send: () => {} },
+      fetchTurn: async () => ({ ice_servers: [], ttl_seconds: 0 }),
+    });
+
+    await assert.rejects(() => manager.startCall("peer:uid", "audio", fakeStream() as MediaStream), /SFU/i);
+    assert.equal(FakeRTCPeerConnection.instances.length, 0, "SFU 不可用时不得建立 P2P PC");
+  });
+});
+
+test("AC-003: incoming pure audio without an SFU is declined without creating a P2P PC", async () => {
+  await withFakeRTC(async () => {
+    const { manager, broadcasted, events } = makeManager({
+      sfu: null,
+      fetchTurn: async () => ({ ice_servers: [], ttl_seconds: 0 }),
+    });
+
+    manager.handleSignal("peer:uid", buildInvite("c_no_sfu", "audio"));
+
+    assert.equal(events.onIncoming.length, 0, "没有 Call SFU 时不应向 UI 显示可接听来电");
+    assert.equal(FakeRTCPeerConnection.instances.length, 0, "没有 Call SFU 时不得建立 P2P PC");
+    assert.ok(broadcasted.some((signal) => (signal as { type?: string }).type === "call:decline"), "应拒绝无法走 SFU 的纯语音来电");
   });
 });
 
@@ -399,56 +483,23 @@ test("invite 后 session 进入 incoming 状态（死锁修复）", async () => 
   });
 });
 
-test("早到 offer 缓冲：accept 前收到的 offer 在 accept 后被应用并回 answer", async () => {
+test("AC-001: pure audio negotiates through SFU and ignores legacy P2P SDP/ICE", async () => {
   await withFakeRTC(async () => {
-    const { manager, broadcasted } = makeManager();
-    manager.handleSignal("peer:uid", buildInvite("c_early", "audio"));
-    // 未接听时 offer 先到 —— 旧代码此处 peer 为 null，offer 被丢弃
-    await manager.handleSignal("peer:uid", buildSdp("c_early", "offer", { type: "offer", sdp: "early-offer" }));
-    const pc = FakeRTCPeerConnection.instances.at(-1);
-    assert.equal(pc, undefined, "accept 前 peer 不应创建");
-
-    await manager.acceptCall("c_early", fakeStream() as MediaStream);
-    const pc2 = FakeRTCPeerConnection.instances.at(-1);
-    assert.ok(pc2, "accept 后 peer 应创建");
-    assert.ok(
-      pc2!.setRemoteDescriptionCalls.some((d) => (d as { sdp?: string }).sdp === "early-offer"),
-      "早到 offer 应在 accept 后被 setRemoteDescription 应用",
-    );
-    assert.ok(pc2!.createAnswerCount >= 1, "应用 offer 后应 createAnswer");
-    const answers = broadcasted.filter(
-      (s) => (s as { type?: string; sdpRole?: string }).type === "call:sdp" && (s as { sdpRole?: string }).sdpRole === "answer",
-    );
-    assert.ok(answers.length >= 1, "应广播 answer 型 call:sdp");
-    manager.leaveRoom();
-  });
-});
-
-test("早到 offer 缓冲：规范顺序 SRD(offer) 先于 addTrack，缓冲 ICE 在 SRD 后立即 flush", async () => {
-  await withFakeRTC(async () => {
-    const { manager } = makeManager();
-    manager.handleSignal("peer:uid", buildInvite("c_ord", "audio"));
-    // 早到 offer + 早到 ICE 都在 accept 前到达（peer 尚未创建）
-    await manager.handleSignal("peer:uid", buildSdp("c_ord", "offer", { type: "offer", sdp: "early-offer" }));
+    const sfuMessages: Array<{ type: string; data: unknown; channel: string }> = [];
+    const { manager, broadcasted } = makeManager({
+      sfu: { available: () => true, send: (type, data, channel) => sfuMessages.push({ type, data, channel }) },
+    });
+    manager.handleSignal("peer:uid", buildInvite("c_sfu_audio", "audio"));
     const cand = { candidate: "candidate:1 1 udp 2122260223 192.0.2.1 5000 typ host", sdpMid: "0", sdpMLineIndex: 0 } as RTCIceCandidateInit;
-    await manager.handleSignal("peer:uid", buildIce("c_ord", cand));
-    // accept 携带含 audio track 的本地流 → 触发 addTrack
-    const track = { kind: "audio", stop: () => {}, onended: null } as unknown as MediaStreamTrack;
-    const stream = { getTracks: () => [track], getAudioTracks: () => [track], getVideoTracks: () => [] } as unknown as MediaStream;
-    await manager.acceptCall("c_ord", stream);
-    const pc = FakeRTCPeerConnection.instances.at(-1)!;
-    assert.ok(pc, "accept 后 peer 应创建");
-    // 规范接听端顺序：SRD(offer) → flush 早到 ICE → addTrack（接收端接收链先于发送轨）
-    const log = pc.callLog;
-    const iSrd = log.indexOf("setRemoteDescription");
-    const iIce = log.indexOf("addIceCandidate");
-    const iAdd = log.indexOf("addTrack");
-    assert.ok(iSrd >= 0, "缓冲 offer 应被 setRemoteDescription 应用");
-    assert.ok(iSrd < iAdd, `SRD(offer) 应先于 addTrack（log=${log.join("→")}）`);
-    assert.ok(iSrd < iIce, `缓冲 ICE 应在 SRD 之后立即 flush（log=${log.join("→")}）`);
-    assert.ok(pc.setRemoteDescriptionCalls.some((d) => (d as { sdp?: string }).sdp === "early-offer"));
-    assert.equal(pc.addIceCandidateCalls.length, 1, "早到候选应在 SRD 后被 flush");
-    assert.ok(pc.createAnswerCount >= 1, "应用 offer 后应 createAnswer");
+    manager.handleSignal("peer:uid", buildSdp("c_sfu_audio", "offer", { type: "offer", sdp: "legacy-p2p-offer" }));
+    manager.handleSignal("peer:uid", buildIce("c_sfu_audio", cand));
+    await manager.acceptCall("c_sfu_audio", fakeStream() as MediaStream);
+
+    assert.ok(sfuMessages.some((message) => message.type === "call:sfu:join"));
+    assert.ok(sfuMessages.some((message) => message.type === "meeting:sdp"));
+    assert.equal(FakeRTCPeerConnection.instances[0]?.setRemoteDescriptionCalls.length, 0, "P2P offer must not reach the SFU publish PC");
+    assert.equal(FakeRTCPeerConnection.instances[0]?.addIceCandidateCalls.length, 0, "P2P ICE must not reach the SFU publish PC");
+    assert.ok(!broadcasted.some((signal) => ["call:sdp", "call:ice"].includes((signal as { type?: string }).type ?? "")));
     manager.leaveRoom();
   });
 });
@@ -465,41 +516,6 @@ test("来电 wantVideo：纯 audio 来电为 false，audio+video 来电为 true"
     const videoSession = manager.getCallByPeer("peer:uid2");
     assert.ok(videoSession, "video 来电应创建 pending session");
     assert.equal(videoSession.isVideoEnabled(), true, "audio+video 来电 wantVideo 应为 true");
-    manager.leaveRoom();
-  });
-});
-
-test("早到 ICE 缓冲：accept 前收到的候选在 offer 应用后被 addIceCandidate", async () => {
-  await withFakeRTC(async () => {
-    const { manager } = makeManager();
-    manager.handleSignal("peer:uid", buildInvite("c_ice", "audio"));
-    const cand = { candidate: "candidate:1 1 udp 2122260223 192.0.2.1 5000 typ host", sdpMid: "0", sdpMLineIndex: 0 } as RTCIceCandidateInit;
-    await manager.handleSignal("peer:uid", buildIce("c_ice", cand));
-    await manager.handleSignal("peer:uid", buildIce("c_ice", cand));
-    await manager.handleSignal("peer:uid", buildIce("c_ice", cand));
-    // 此刻 peer 尚未创建，旧代码候选被静默丢弃
-    await manager.acceptCall("c_ice", fakeStream() as MediaStream);
-    await manager.handleSignal("peer:uid", buildSdp("c_ice", "offer", { type: "offer", sdp: "late-offer" }));
-    await new Promise((r) => setTimeout(r, 50)); // 等 flush 微任务链
-    const pc = FakeRTCPeerConnection.instances.at(-1)!;
-    assert.equal(pc.addIceCandidateCalls.length, 3, "3 个早到候选都应被应用");
-    manager.leaveRoom();
-  });
-});
-
-test("发起方侧：answer 前到达的 ICE 候选被缓冲，answer 应用后 flush", async () => {
-  await withFakeRTC(async () => {
-    const { manager } = makeManager();
-    const callId = await manager.startCall("peer:uid", "audio", fakeStream() as MediaStream);
-    const callerPc = FakeRTCPeerConnection.instances.at(-1)!;
-    assert.ok(callerPc, "发起方 peer 应已创建");
-    // answer 之前 remoteDescription 为 null，旧代码 addIceCandidate 抛 InvalidStateError 被丢弃
-    const cand = { candidate: "candidate:9 1 udp 2122260223 192.0.2.9 5009 typ host", sdpMid: "0", sdpMLineIndex: 0 } as RTCIceCandidateInit;
-    await manager.handleSignal("peer:uid", buildIce(callId, cand));
-    assert.equal(callerPc.addIceCandidateCalls.length, 0, "remoteDescription 未设置时不应直接 addIceCandidate");
-    await manager.handleSignal("peer:uid", buildSdp(callId, "answer", { type: "answer", sdp: "late-answer" }));
-    await new Promise((r) => setTimeout(r, 50));
-    assert.equal(callerPc.addIceCandidateCalls.length, 1, "answer 应用后候选应被 flush");
     manager.leaveRoom();
   });
 });
@@ -532,6 +548,7 @@ test("视频能力：videoPrefs 经协商应用到视频 sender（编码器排�
     };
     try {
       const { manager } = makeManager({
+        sfu: null,
         videoPrefs: () => ({ videoCodec: "h264", videoMaxBitrateKbps: 750 }),
       });
       await manager.startCall("peer:uid", "audio+video", makeVideoStream());
@@ -556,7 +573,7 @@ test("视频能力：videoPrefs 经协商应用到视频 sender（编码器排�
 
 test("swapVideoTrack: 替换视频 sender 并同步 localStream（旧轨摘除、新轨并入）", async () => {
   await withFakeRTC(async () => {
-    const { manager } = makeManager();
+    const { manager } = makeManager({ sfu: null });
     const localStream = makeVideoStream();
     await manager.startCall("peer:uid", "audio+video", localStream);
     const pc = FakeRTCPeerConnection.instances.at(-1)!;
@@ -577,7 +594,7 @@ test("swapVideoTrack: 替换视频 sender 并同步 localStream（旧轨摘除�
 
 test("setVideoBitrate: 通话中热更新 sender encodings[0].maxBitrate", async () => {
   await withFakeRTC(async () => {
-    const { manager } = makeManager();
+    const { manager } = makeManager({ sfu: null });
     await manager.startCall("peer:uid", "audio+video", makeVideoStream());
     const pc = FakeRTCPeerConnection.instances.at(-1)!;
     const before = pc.paramCalls.length;
@@ -593,7 +610,7 @@ test("setVideoBitrate: 通话中热更新 sender encodings[0].maxBitrate", async
 
 test("getQualitySample: 视频接收字节数被采样（GPU 渲染故障判定信号）", async () => {
   await withFakeRTC(async () => {
-    const { manager } = makeManager();
+    const { manager } = makeManager({ sfu: null });
     await manager.startCall("peer:uid", "audio+video", makeVideoStream());
     const pc = FakeRTCPeerConnection.instances.at(-1)!;
     pc.getStats = async () => new Map([
