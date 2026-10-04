@@ -14,7 +14,7 @@ import assert from "node:assert/strict";
 import { chromium } from "playwright";
 
 const SITE = "https://letshare.fun";
-const EXPECTED_BUILD = "2026-09-01T01:49"; // 本次推送的构建哨兵前缀（UTC）
+const EXPECTED_BUILD = "2026-10-04T10:09"; // SFU 双向恢复修复的构建哨兵前缀（UTC）
 const ROOM = "prode2e";
 
 /** 轮询直到条件为真或超时（ms）。 */
@@ -41,6 +41,7 @@ test("生产环境：双客户端经 ecs.letshare.fun SFU 完成语音通话", a
       "--use-fake-device-for-media-stream",
       "--use-fake-ui-for-media-stream",
       "--autoplay-policy=no-user-gesture-required",
+      "--mute-audio",
     ],
   });
   t.after(async () => { await browser.close(); });
@@ -113,21 +114,38 @@ test("生产环境：双客户端经 ecs.letshare.fun SFU 完成语音通话", a
     rxBytes: number;
     txBytes: number;
     sfu: boolean;
+    fullDuplex: boolean;
+    audioPlaybackState: string | null;
+    audioPlaybackError: string | null;
     audioLevel: number;
     packetsReceived: number;
     packetsLost: number;
+    candidateTypes: string[];
   };
   async function sampleStats(page: import("playwright").Page): Promise<Stats> {
     return page.evaluate(async () => {
       const getStats = (window as unknown as { __lsCallStats?: () => Promise<Map<string, Record<string, unknown>>> }).__lsCallStats;
       const getDebug = (window as unknown as { __lsPc?: () => Record<string, unknown> }).__lsPc;
-      if (!getStats || !getDebug) return { rxBytes: -1, txBytes: -1, sfu: false, audioLevel: -1, packetsReceived: -1, packetsLost: -1 };
+      if (!getStats || !getDebug) return {
+        rxBytes: -1, txBytes: -1, sfu: false, fullDuplex: false, audioPlaybackState: null,
+        audioPlaybackError: null, audioLevel: -1, packetsReceived: -1, packetsLost: -1, candidateTypes: [],
+      };
       const stats = await getStats();
+      const debug = getDebug() as {
+        transport?: string;
+        publishState?: string | null;
+        subscriberStates?: Array<{ state?: string }>;
+        remoteAudioTracks?: Array<{ readyState?: string; muted?: boolean }>;
+        remoteAudioPlayback?: { state?: string; error?: string | null };
+      };
       let rxBytes = 0;
       let txBytes = 0;
       let audioLevel = 0;
       let packetsReceived = 0;
       let packetsLost = 0;
+      const candidateTypes = Array.from(stats.values())
+        .filter((report) => report.type === "local-candidate" || report.type === "remote-candidate")
+        .map((report) => String(report.candidateType ?? "unknown"));
       for (const [, r] of stats) {
         if (r.type === "inbound-rtp" && r.kind === "audio") {
           rxBytes += Number(r.bytesReceived ?? 0);
@@ -138,7 +156,15 @@ test("生产环境：双客户端经 ecs.letshare.fun SFU 完成语音通话", a
         }
         if (r.type === "outbound-rtp" && r.kind === "audio") txBytes += Number(r.bytesSent ?? 0);
       }
-      return { rxBytes, txBytes, sfu: getDebug().transport === "sfu", audioLevel, packetsReceived, packetsLost };
+      const fullDuplex = debug.publishState === "connected"
+        && debug.subscriberStates?.some((subscriber) => subscriber.state === "connected") === true
+        && debug.remoteAudioTracks?.some((track) => track.readyState === "live" && track.muted === false) === true;
+      return {
+        rxBytes, txBytes, sfu: debug.transport === "sfu", fullDuplex,
+        audioPlaybackState: debug.remoteAudioPlayback?.state ?? null,
+        audioPlaybackError: debug.remoteAudioPlayback?.error ?? null,
+        audioLevel, packetsReceived, packetsLost, candidateTypes,
+      };
     });
   }
 
@@ -146,15 +172,17 @@ test("生产环境：双客户端经 ecs.letshare.fun SFU 完成语音通话", a
     try {
       await until(`client${i} 经生产 SFU 连通`, async () => {
         const s = await sampleStats(page);
-        return s.sfu && s.rxBytes > 0;
+        return s.sfu && s.fullDuplex && s.rxBytes > 0 && s.txBytes > 0 && s.audioPlaybackState === "playing";
       }, 90_000);
     } catch (error) {
       const statsDiagnostic = await page.evaluate(async () => {
         const getStats = (window as unknown as { __lsCallStats?: () => Promise<Map<string, Record<string, unknown>>> }).__lsCallStats;
+        const getDebug = (window as unknown as { __lsPc?: () => Record<string, unknown> }).__lsPc;
         if (!getStats) return { available: false };
         const stats = await getStats();
         return {
           available: true,
+          debug: getDebug?.() ?? null,
           reports: Array.from(stats.values())
             .filter((report) => report.type === "candidate-pair" || report.type === "local-candidate" || report.type === "inbound-rtp" || report.type === "outbound-rtp")
             .map((report) => ({
@@ -179,6 +207,9 @@ test("生产环境：双客户端经 ecs.letshare.fun SFU 完成语音通话", a
     const a = await sampleStats(page);
     await new Promise((r) => setTimeout(r, 2000));
     const b = await sampleStats(page);
+    assert.ok(b.fullDuplex, `client${i} needs both SFU PCs connected with an unmuted inbound audio track`);
+    assert.equal(b.audioPlaybackState, "playing", `client${i} playback error: ${b.audioPlaybackError ?? "none"}`);
+    assert.ok(!b.candidateTypes.includes("relay"), `ordinary audio must not use TURN: ${b.candidateTypes.join(",")}`);
     assert.ok(b.rxBytes > a.rxBytes, `client${i} audio bytesReceived 应递增（听得到对方）: ${a.rxBytes} → ${b.rxBytes}`);
     assert.ok(b.txBytes > a.txBytes, `client${i} audio bytesSent 应递增（对方听得到我）: ${a.txBytes} → ${b.txBytes}`);
     assert.ok(b.packetsReceived > 0, `client${i} inbound audio packets 应 > 0（收到对方 RTP）: ${b.packetsReceived}`);

@@ -22,6 +22,9 @@ type CallSfuSessionOptions = {
 };
 
 type StatsReport = {
+  id?: string;
+  ssrc?: number;
+  mid?: string;
   type?: string;
   kind?: string;
   mediaType?: string;
@@ -29,9 +32,16 @@ type StatsReport = {
   nominated?: boolean;
   currentRoundTripTime?: number;
   jitter?: number;
-  fractionLost?: number;
   bytesReceived?: number;
+  packetsReceived?: number;
+  packetsLost?: number;
+  audioLevel?: number;
 };
+
+type AudioRtpCounters = { packetsReceived: number; packetsLost: number };
+
+const RECONNECT_WINDOW_MS = 25_000;
+const SETUP_WATCHDOG_MS = 8_000;
 
 /**
  * Ordinary one-to-one calls use the same SFU publish/subscribe protocol as a
@@ -55,11 +65,16 @@ export class CallSfuSession {
   private remoteAudioEl: HTMLAudioElement | null = null;
   private remoteVideoEl: HTMLVideoElement | null = null;
   private remoteAudioSinkOwned = false;
+  private remoteAudioPlaybackState = "waiting-for-track";
+  private remoteAudioPlayError: string | null = null;
+  private readonly previousAudioRtp = new Map<string, AudioRtpCounters>();
   private localAudioMuted = false;
   private localVideoEnabled: boolean;
   private joined = false;
   private ended = false;
   private publishNegotiation: Promise<void> | null = null;
+  private recoveryTimer: ReturnType<typeof setTimeout> | null = null;
+  private setupTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     private readonly opts: CallSfuSessionOptions,
@@ -178,7 +193,17 @@ export class CallSfuSession {
     const el = this.ensureRemoteAudioSink();
     if (!el) return;
     el.srcObject = stream;
-    void el.play().catch(() => undefined);
+    this.remoteAudioPlaybackState = "starting";
+    this.remoteAudioPlayError = null;
+    void el.play().then(() => {
+      if (this.ended || this.remoteAudioEl !== el) return;
+      this.remoteAudioPlaybackState = "playing";
+      this.remoteAudioPlayError = null;
+    }).catch((error: unknown) => {
+      if (this.ended || this.remoteAudioEl !== el) return;
+      this.remoteAudioPlaybackState = "blocked";
+      this.remoteAudioPlayError = error instanceof Error ? error.message : String(error);
+    });
   }
 
   private bindRemoteVideo(): void {
@@ -203,6 +228,11 @@ export class CallSfuSession {
     await this.joinAndPublish();
   }
 
+  markAccepted(): void {
+    if (this.state === "outgoing") this.setState("connecting");
+    this.armSetupWatchdog();
+  }
+
   private createPublishPc(): RTCPeerConnection {
     const pc = new RTCPeerConnection(this.opts.rtcConfig);
     this.publishPc = pc;
@@ -219,6 +249,7 @@ export class CallSfuSession {
         this.maybeActivate();
       } else if (pc.connectionState === "disconnected" || pc.connectionState === "failed") {
         this.setState("reconnecting");
+        this.armRecoveryWindow();
       } else if (pc.connectionState === "closed") {
         this.hangup("error");
       }
@@ -251,6 +282,7 @@ export class CallSfuSession {
       sourceRoomId: this.opts.sourceRoomId ?? "",
     }, this.opts.callId);
     await this.sendPublishOffer();
+    this.armSetupWatchdog();
     this.maybeActivate();
   }
 
@@ -276,8 +308,14 @@ export class CallSfuSession {
   private maybeActivate(): void {
     if (this.state === "ended") return;
     const publisherConnected = this.publishPc?.connectionState === "connected";
-    const subscriberConnected = [...this.subscribers.values()].some((pc) => pc.connectionState === "connected");
-    if (publisherConnected || subscriberConnected) this.setState("active");
+    const subscriberConnected = this.subscribers.get(this.opts.peerId)?.connectionState === "connected";
+    const remoteAudioFlowing = (this.remoteStreams.get(this.opts.peerId)?.getAudioTracks() ?? [])
+      .some((track) => track.readyState === "live" && !track.muted);
+    if (publisherConnected && subscriberConnected && remoteAudioFlowing) {
+      this.clearSetupWatchdog();
+      this.clearRecoveryWindow();
+      this.setState("active");
+    }
   }
 
   private subscribeToPeer(publisherId: string): void {
@@ -312,6 +350,17 @@ export class CallSfuSession {
       const target = previous ?? stream;
       if (previous && !previous.getTracks().some((track) => track.id === event.track.id)) target.addTrack(event.track);
       this.remoteStreams.set(publisherId, target);
+      if (event.track.kind === "audio") {
+        event.track.onunmute = () => {
+          if (!this.ended && this.subscribers.get(publisherId) === pc) this.maybeActivate();
+        };
+        event.track.onmute = () => {
+          if (!this.ended && this.subscribers.get(publisherId) === pc && this.state === "active") {
+            this.setState("reconnecting");
+            this.armRecoveryWindow();
+          }
+        };
+      }
       this.events.onRemoteStream(target, event.track.kind === "video" ? "video" : "audio");
       if (event.track.kind === "audio") this.bindRemoteAudio();
       if (event.track.kind === "video") this.bindRemoteVideo();
@@ -320,6 +369,10 @@ export class CallSfuSession {
     pc.onconnectionstatechange = () => {
       if (this.ended || this.subscribers.get(publisherId) !== pc) return;
       if (pc.connectionState === "connected") this.maybeActivate();
+      if (pc.connectionState === "disconnected" || pc.connectionState === "failed" || pc.connectionState === "closed") {
+        this.setState("reconnecting");
+        this.armRecoveryWindow();
+      }
       if (pc.connectionState === "failed" || pc.connectionState === "closed") {
         this.subscribers.delete(publisherId);
         this.remoteStreams.delete(publisherId);
@@ -409,11 +462,15 @@ export class CallSfuSession {
         const id = typeof data?.uniqId === "string" ? data.uniqId : "";
         if (data?.type === "join") this.subscribeToPeer(id);
         if (data?.type === "leave" && id === this.opts.peerId) {
+          this.subscribers.get(id)?.close();
+          this.subscribers.delete(id);
           this.subscribed.delete(id);
           this.remoteStreams.delete(id);
           this.subscriberOfferQueues.delete(id);
           this.subscriberOfferSeen.delete(id);
           this.subscriberAnswerCache.delete(id);
+          this.setState("reconnecting");
+          this.armRecoveryWindow();
         }
         return;
       }
@@ -481,6 +538,12 @@ export class CallSfuSession {
   async restartIce(): Promise<boolean> {
     if (!this.publishPc || this.ended) return false;
     try {
+      // The SFU removes a failed participant. Rejoining is idempotent and must
+      // precede the publish offer so the server has recreated that participant.
+      this.opts.send("call:sfu:join", {
+        userName: this.opts.selfId,
+        sourceRoomId: this.opts.sourceRoomId ?? "",
+      }, this.opts.callId);
       await this.sendPublishOffer(true);
       return true;
     } catch {
@@ -588,10 +651,32 @@ export class CallSfuSession {
   }
 
   getDebugInfo(): Record<string, unknown> {
+    const audioTracks = this.remoteStreams.get(this.opts.peerId)?.getAudioTracks() ?? [];
+    const audioEl = this.remoteAudioEl;
+    const senders = (this.publishPc?.getSenders() ?? []).map((sender) => ({
+      kind: sender.track?.kind ?? null,
+      readyState: sender.track?.readyState ?? null,
+      enabled: sender.track?.enabled ?? null,
+      muted: sender.track?.muted ?? null,
+    }));
     return {
       transport: "sfu",
       publishState: this.publishPc?.connectionState ?? null,
       subscriberStates: [...this.subscribers.entries()].map(([id, pc]) => ({ id, state: pc.connectionState })),
+      publishSenders: senders,
+      remoteAudioTracks: audioTracks.map((track) => ({
+        readyState: track.readyState,
+        enabled: track.enabled,
+        muted: track.muted,
+      })),
+      remoteAudioPlayback: {
+        state: this.remoteAudioPlaybackState,
+        error: this.remoteAudioPlayError,
+        paused: audioEl?.paused ?? null,
+        readyState: audioEl?.readyState ?? null,
+        muted: audioEl?.muted ?? null,
+        volume: audioEl?.volume ?? null,
+      },
     };
   }
 
@@ -617,19 +702,79 @@ export class CallSfuSession {
     const pair = reports.find((report) => report.type === "candidate-pair" && (report.selected || report.nominated));
     const audio = reports.filter((report) => report.type === "inbound-rtp" && (report.kind === "audio" || report.mediaType === "audio"));
     const video = reports.filter((report) => report.type === "inbound-rtp" && (report.kind === "video" || report.mediaType === "video"));
-    const loss = audio.map((item) => item.fractionLost).filter((item): item is number => typeof item === "number");
     const jitter = audio.map((item) => item.jitter).filter((item): item is number => typeof item === "number");
-    const bytes = video.map((item) => item.bytesReceived).filter((item): item is number => typeof item === "number");
+    const audioBytes = audio.map((item) => item.bytesReceived).filter((item): item is number => typeof item === "number");
+    const audioPacketsReceived = audio.map((item) => item.packetsReceived).filter((item): item is number => typeof item === "number");
+    const audioPacketsLost = audio.map((item) => item.packetsLost).filter((item): item is number => typeof item === "number");
+    const audioLevels = audio.map((item) => item.audioLevel).filter((item): item is number => typeof item === "number");
+    const videoBytes = video.map((item) => item.bytesReceived).filter((item): item is number => typeof item === "number");
+    const activeAudioIds = new Set<string>();
+    let deltaReceived = 0;
+    let deltaLost = 0;
+    let hasLossDelta = false;
+    audio.forEach((report, index) => {
+      const id = `${report.type}:${report.id ?? report.ssrc ?? report.mid ?? index}`;
+      activeAudioIds.add(id);
+      if (typeof report.packetsReceived !== "number" || typeof report.packetsLost !== "number") return;
+      const previous = this.previousAudioRtp.get(id);
+      if (previous && report.packetsReceived >= previous.packetsReceived && report.packetsLost >= previous.packetsLost) {
+        deltaReceived += report.packetsReceived - previous.packetsReceived;
+        deltaLost += report.packetsLost - previous.packetsLost;
+        hasLossDelta = true;
+      }
+      this.previousAudioRtp.set(id, { packetsReceived: report.packetsReceived, packetsLost: report.packetsLost });
+    });
+    for (const id of this.previousAudioRtp.keys()) {
+      if (!activeAudioIds.has(id)) this.previousAudioRtp.delete(id);
+    }
+    const lossDenominator = deltaReceived + deltaLost;
     return {
       rttMs: typeof pair?.currentRoundTripTime === "number" ? pair.currentRoundTripTime * 1000 : null,
       jitterMs: jitter.length ? Math.max(...jitter) * 1000 : null,
-      lossPct: loss.length ? Math.max(...loss) * 100 : null,
-      videoBytes: bytes.length ? Math.max(...bytes) : null,
+      lossPct: hasLossDelta && lossDenominator > 0 ? (deltaLost / lossDenominator) * 100 : null,
+      videoBytes: videoBytes.length ? Math.max(...videoBytes) : null,
+      audioBytes: audioBytes.length ? audioBytes.reduce((total, value) => total + value, 0) : null,
+      audioPacketsReceived: audioPacketsReceived.length ? audioPacketsReceived.reduce((total, value) => total + value, 0) : null,
+      audioPacketsLost: audioPacketsLost.length ? audioPacketsLost.reduce((total, value) => total + value, 0) : null,
+      audioLevel: audioLevels.length ? Math.max(...audioLevels) : null,
     };
+  }
+
+  private armRecoveryWindow(): void {
+    if (this.recoveryTimer != null || this.ended) return;
+    this.recoveryTimer = setTimeout(() => {
+      this.recoveryTimer = null;
+      if (this.state === "reconnecting") this.hangup("error");
+    }, RECONNECT_WINDOW_MS);
+  }
+
+  private armSetupWatchdog(): void {
+    if (this.setupTimer != null || this.ended || this.state !== "connecting") return;
+    this.setupTimer = setTimeout(() => {
+      this.setupTimer = null;
+      if (this.state === "connecting") {
+        this.setState("reconnecting");
+        this.armRecoveryWindow();
+      }
+    }, SETUP_WATCHDOG_MS);
+  }
+
+  private clearSetupWatchdog(): void {
+    if (this.setupTimer == null) return;
+    clearTimeout(this.setupTimer);
+    this.setupTimer = null;
+  }
+
+  private clearRecoveryWindow(): void {
+    if (this.recoveryTimer == null) return;
+    clearTimeout(this.recoveryTimer);
+    this.recoveryTimer = null;
   }
 
   hangup(_reason?: "hangup" | "error" | "left-room"): void {
     if (this.ended) return;
+    this.clearSetupWatchdog();
+    this.clearRecoveryWindow();
     this.ended = true;
     if (this.joined) this.opts.send("call:sfu:leave", {}, this.opts.callId);
     this.publishPc?.close();
@@ -647,6 +792,7 @@ export class CallSfuSession {
     this.remoteAudioEl = null;
     this.remoteVideoEl = null;
     this.remoteAudioSinkOwned = false;
+    this.previousAudioRtp.clear();
     this.setState("ended");
   }
 }

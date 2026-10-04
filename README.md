@@ -185,9 +185,11 @@ Backend only (no frontend changes):
 node scripts/deploy.cjs --backend
 ```
 
-### TURN (voice/video relay)
+### TURN relay (configured WebRTC paths)
 
-Voice/video calls use WebRTC. Signaling rides the existing WebSocket channel; media prefers P2P and falls back to the TURN relay embedded in the Go server (`internal/turnserver`, `pion/turn/v2`) when NAT traversal fails. Short-lived TURN credentials are issued by `GET /api/turn-credentials` (RFC 5766 use-auth-secret, shared HMAC logic in `internal/turnauth`).
+In the custom-server deployment, ordinary one-to-one audio calls use the public LetShare SFU: each browser sends and receives media over its own WebRTC connection to the ECS. Signaling uses the existing WebSocket. Pure-audio calls do not use browser-to-browser P2P or TURN. This keeps the media route predictable, but networks that block UDP may still prevent a call; ordinary audio currently has no TCP/TURN fallback.
+
+Other WebRTC paths can still use the embedded TURN relay (`internal/turnserver`, `pion/turn/v2`) when configured. Short-lived TURN credentials are issued by `GET /api/turn-credentials` (RFC 5766 use-auth-secret, shared HMAC logic in `internal/turnauth`).
 
 Production checklist:
 
@@ -206,7 +208,7 @@ pnpm test:e2e:call
 
 ## Known Constraints
 
-- P2P success depends on NAT traversal, browser support, and network policy; the embedded TURN relay is the fallback path for symmetric NAT.
+- File-transfer P2P and legacy direct WebRTC paths depend on NAT traversal, browser support, and network policy; TURN is a fallback only for paths configured to use it. Ordinary pure-audio calls use the SFU without a TURN or TCP fallback.
 - Public relay transfer requires the Custom WebSocket provider; Ably is signaling only.
 - Free public relay transfers above 50 MB are rejected by the backend.
 - PRO authorization for relay transfer is evaluated by server-side token state.

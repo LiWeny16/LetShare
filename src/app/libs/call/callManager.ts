@@ -339,7 +339,7 @@ export class CallManager {
       case "call:accept": {
         const call = this.calls.get(callId);
         if (!call || call.role !== "caller") return;
-        // 接听确认；会话已处于 connecting（startOutgoing 后）
+        if (call.session instanceof CallSfuSession) call.session.markAccepted();
         return;
       }
       case "call:decline": {
@@ -611,15 +611,15 @@ export class CallManager {
 
   // ─── 断线自愈编排（3.7.0）────────────────────────────────────────
 
-  /** 进入 reconnecting：caller 立即 ICE restart（先确保 TURN 凭据新鲜），每 RECOVERY_RETRY_MS
-   *  重试（兼作信令补发，覆盖 WS 刚恢复的窗口）。callee 仅等待（caller 发起的重启经 call:sdp 到达）。 */
+  /** 进入 reconnecting：SFU 两端各自恢复独立的 client-to-SFU PC；旧 P2P 视频仍仅由 caller 重启。 */
   private beginRecovery(call: ActiveCall): void {
     if (call.recoveryTimer != null) return;
     if (call.media !== "audio") {
       // 非纯语音路径可能使用 TURN；纯语音恢复只重启到公网 SFU 的 ICE。
       void this.ensureTurnFresh().then(() => this.applyTurnToActiveCalls());
     }
-    if (call.role === "caller") {
+    const restartLocally = call.session instanceof CallSfuSession || call.role === "caller";
+    if (restartLocally) {
       void call.session.restartIce();
     }
     const tick = (): void => {
@@ -628,7 +628,7 @@ export class CallManager {
         call.recoveryTimer = null;
         return;
       }
-      if (cur.role === "caller") void cur.session.restartIce();
+      if (cur.session instanceof CallSfuSession || cur.role === "caller") void cur.session.restartIce();
       call.recoveryTimer = scheduleTimeout(tick, RECOVERY_RETRY_MS);
     };
     call.recoveryTimer = scheduleTimeout(tick, RECOVERY_RETRY_MS);

@@ -43,6 +43,11 @@ export type CallQualitySample = {
   lossPct: number | null;
   /** 视频接收字节数（远端在发帧的信号；GPU 渲染故障检测用，无视频轨道时 null） */
   videoBytes: number | null;
+  /** SFU audio inbound-rtp counters; optional for legacy direct-video sessions. */
+  audioBytes?: number | null;
+  audioPacketsReceived?: number | null;
+  audioPacketsLost?: number | null;
+  audioLevel?: number | null;
 };
 
 export type CallSessionEvents = {
