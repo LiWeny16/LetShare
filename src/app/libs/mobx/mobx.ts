@@ -5,6 +5,7 @@ import {
   PUBLIC_CUSTOM_SERVER_URL,
   resolveCustomServerAuthToken,
 } from '../connection/publicServerAuth';
+import { clearPersistedSettings } from '../settings/resetPersistence';
 
 const STORAGE_KEY = 'user_settings';
 /** Migrate legacy BCP-47 values before they reach MUI Select/i18next. */
@@ -126,6 +127,7 @@ class SettingsStore {
   }
 
   reset() {
+    clearPersistedSettings(localStorage);
     runInAction(() => {
       this.settings = { ...DEFAULT_SETTINGS };
     });

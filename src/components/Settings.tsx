@@ -43,6 +43,8 @@ const SettingsPage = () => {
   const settings = settingsStore.getAllSettings();
   const settingsRef = React.useRef<HTMLDivElement>(null);
   const [advancedOpen, setAdvancedOpen] = React.useState(false);
+  const settingsOpen = settingsStore.getUnrmb("settingsPageState") ?? false;
+  const [displayNameDraft, setDisplayNameDraft] = React.useState(realTimeColab.getUserName() ?? "");
   // 保存显示的 loading 状态，防止重复点击并给出反馈
   const [saving, setSaving] = React.useState(false);
   const languageLabel = t('settings.languageLabel');
@@ -52,6 +54,10 @@ const SettingsPage = () => {
   const [isPro, setIsPro] = React.useState(() => checkIsPro());
   const [upgradeOpen, setUpgradeOpen] = React.useState(false);
   const proResolveRef = React.useRef<((activated: boolean) => void) | null>(null);
+
+  React.useEffect(() => {
+    if (settingsOpen) setDisplayNameDraft(realTimeColab.getUserName() ?? "");
+  }, [settingsOpen]);
 
   React.useEffect(() => {
     registerProUpgradeDialog(() => new Promise<boolean>((resolve) => {
@@ -262,6 +268,35 @@ const SettingsPage = () => {
           </Box>
 
           <ThemeSelector />
+
+          <TextField
+            fullWidth
+            size="small"
+            label={t('settings.displayName', '显示名称')}
+            value={displayNameDraft}
+            inputProps={{ maxLength: 32, "data-testid": "settings-display-name" }}
+            onChange={(event) => setDisplayNameDraft(event.target.value)}
+            onBlur={() => {
+              const next = displayNameDraft.trim();
+              if (next) {
+                realTimeColab.setUserName(next);
+                setDisplayNameDraft(next);
+              } else {
+                setDisplayNameDraft(realTimeColab.getUserName() ?? "");
+              }
+            }}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault();
+                event.stopPropagation();
+                const next = displayNameDraft.trim();
+                if (next) {
+                  realTimeColab.setUserName(next);
+                  setDisplayNameDraft(next);
+                }
+              }
+            }}
+          />
 
           <FormControl fullWidth>
             <InputLabel>{languageLabel}</InputLabel>
