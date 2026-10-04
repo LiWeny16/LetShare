@@ -182,3 +182,48 @@ test("all translation blocks register meeting invite keys", () => {
   assert.match(src, /inviteCopyLink: "复制会议链接"/);
   assert.match(src, /inviteCopyLink: "Salin pautan mesyuarat"/);
 });
+
+// ── 忙线守卫：通话中不得接收会议邀请（双采麦克风/回声防线）────────
+
+test("meetingManager auto-rejects meeting invite when busy (does not set pendingInvite)", () => {
+  const src = readFileSync(repoPath("src/app/libs/meeting/meetingManager.ts"), "utf8");
+  // 暴露 setBusyProvider 接口
+  assert.match(src, /setBusyProvider\(provider: \(\(\) => boolean\) \| null\): void/);
+  // invite 分支：在写 pendingInvite 之前检查 busyProvider
+  const inviteIdx = src.indexOf('case "meeting:invite"');
+  assert.ok(inviteIdx !== -1, "meeting:invite 分支存在");
+  const pendingInviteIdx = src.indexOf("pendingInvite: signal", inviteIdx);
+  const busyIdx = src.indexOf("busyProvider", inviteIdx);
+  assert.ok(busyIdx !== -1, "invite 分支引用 busyProvider");
+  assert.ok(busyIdx < pendingInviteIdx, "busy 检查必须先于 pendingInvite 赋值");
+  // 忙线时回 reject（经服务器送达主叫）
+  assert.match(src, /action: "reject", inviteId: signal.inviteId/);
+});
+
+test("share.tsx registers meetingManager busy provider from call state", () => {
+  const share = readFileSync(repoPath("src/pages/share.tsx"), "utf8");
+  // 通话中 → 会议忙线（自动拒绝会议邀请）
+  assert.match(share, /meetingManager\.setBusyProvider\(\(\) => manager\.isInCall\(\)\)/);
+  // 卸载时清理
+  assert.match(share, /meetingManager\.setBusyProvider\(null\)/);
+  // 反向：会议中 → 通话忙线（自动拒绝来电）
+  assert.match(share, /busyProvider: \(\) => meetingManager\.getState\(\)\.inMeeting/);
+});
+
+test("incoming meeting invite dialog blocks accept when a call is active", () => {
+  const dialog = readFileSync(repoPath("src/components/meeting/components/IncomingMeetingInviteDialog.tsx"), "utf8");
+  assert.match(dialog, /realTimeColab\.isCallActive\(\)/);
+  // 接受与进入会议两条路径都要有忙线守卫
+  const acceptMatches = dialog.match(/isCallActive\(\)/g) ?? [];
+  assert.ok(acceptMatches.length >= 2, "onAccept 与 enterMeeting 都应有忙线守卫");
+});
+
+test("meeting page unmount leaves the meeting (stops PC/mic leak + ws-reconnect re-join)", () => {
+  const meeting = readFileSync(repoPath("src/pages/meeting.tsx"), "utf8");
+  // cleanup 必须调用 leaveMeeting（幂等）
+  assert.match(meeting, /void meetingManager\.leaveMeeting\(\)/);
+  // callManager 忙线自动拒绝（上一任务）
+  const callManager = readFileSync(repoPath("src/app/libs/call/callManager.ts"), "utf8");
+  assert.match(callManager, /busyProvider\?: \(\) => boolean/);
+  assert.match(callManager, /buildDecline\(callId, "busy"\)/);
+});

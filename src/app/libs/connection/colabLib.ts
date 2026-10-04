@@ -1175,6 +1175,11 @@ export class RealTimeColab {
    return this.callActivityProvider?.() ?? false;
   }
 
+  /** 是否存在活跃通话/视频（供会议邀请弹窗等判断“忙线”）。 */
+  public isCallActive(): boolean {
+   return this.hasActiveCall();
+  }
+
   // ─── WS 自动重连（3.7.0：断线自愈，对标 Discord）──────────────────
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempt = 0;

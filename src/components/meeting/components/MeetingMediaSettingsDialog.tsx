@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   Box,
+  Button,
   Chip,
   Dialog,
   DialogActions,
@@ -15,6 +16,7 @@ import {
   Stack,
   Switch,
   Slider,
+  TextField,
   Typography,
   useMediaQuery,
   useTheme,
@@ -25,9 +27,14 @@ import VolumeUpIcon from "@mui/icons-material/VolumeUp";
 import GraphicEqIcon from "@mui/icons-material/GraphicEq";
 import TuneIcon from "@mui/icons-material/Tune";
 import AutoFixHighIcon from "@mui/icons-material/AutoFixHigh";
+import BadgeIcon from "@mui/icons-material/Badge";
+import CasinoOutlinedIcon from "@mui/icons-material/CasinoOutlined";
 import SettingsSuggestIcon from "@mui/icons-material/SettingsSuggest";
 import { useTranslation } from "react-i18next";
 import settingsStore from "@App/libs/mobx/mobx";
+import realTimeColab from "@App/libs/connection/colabLib";
+import { meetingManager } from "@App/libs/meeting/meetingManager";
+import { randomFunName } from "@App/libs/identity/identity";
 import { listAudioDevices } from "@App/libs/call/audioCapture";
 import {
   listVideoDevices,
@@ -152,6 +159,26 @@ export default function MeetingMediaSettingsDialog({ open, onClose, onMediaSetti
   const degradation = settingsStore.get("videoDegradation") ?? "maintain-framerate";
   const background = settingsStore.get("videoBackground") ?? "off";
 
+  const currentUserName = realTimeColab.getUserName() ?? "";
+  const [nameDraft, setNameDraft] = useState(currentUserName);
+  // 打开对话框时同步一次最新名字，避免在会议里改过名后仍显示旧值
+  useEffect(() => {
+    if (open) setNameDraft(realTimeColab.getUserName() ?? "");
+  }, [open]);
+  const nameTrimmed = nameDraft.trim();
+  const nameDirty = nameTrimmed !== currentUserName && nameTrimmed.length > 0;
+
+  const applyName = () => {
+    if (!nameDirty) return;
+    meetingManager.renameInMeeting(nameTrimmed);
+    setNameDraft(nameTrimmed);
+  };
+  const randomizeName = () => {
+    const next = randomFunName();
+    meetingManager.renameInMeeting(next);
+    setNameDraft(next);
+  };
+
   const label = (device: MediaDeviceInfo | undefined, fallback: string) => device?.label || fallback;
   const nsOptions = useMemo(() => [
     ["off", t("call.nsOff", "关闭")],
@@ -216,6 +243,46 @@ export default function MeetingMediaSettingsDialog({ open, onClose, onMediaSetti
             <Chip icon={<VideocamIcon sx={{ fontSize: 17 }} />} label={t("meeting.settingsVideoTab", "视频画面")} size="small" sx={{ flex: 1, justifyContent: "flex-start", fontWeight: 750 }} />
           </Stack>
         </Paper>
+        <Group title={t("meeting.settingsIdentity", "个人")}>
+          <Box sx={{ p: 1.5, display: "grid", gap: 1.25 }}>
+            <TextField
+              data-testid="meeting-name-input-settings"
+              fullWidth
+              size="small"
+              label={t("meeting.displayName", "会议内名称")}
+              placeholder={t("meeting.displayNamePlaceholder", "别人在成员列表和聊天里看到的名字")}
+              value={nameDraft}
+              inputProps={{ maxLength: 32 }}
+              onChange={(event) => setNameDraft(event.target.value)}
+              onKeyDown={(event) => { if (event.key === "Enter") applyName(); }}
+            />
+            <Stack direction="row" spacing={1} alignItems="center">
+              <Button
+                data-testid="meeting-name-save"
+                size="small"
+                variant="contained"
+                disabled={!nameDirty}
+                onClick={applyName}
+              >
+                {t("meeting.saveName", "保存名字")}
+              </Button>
+              <Button
+                data-testid="meeting-name-random"
+                size="small"
+                variant="outlined"
+                startIcon={<CasinoOutlinedIcon sx={{ fontSize: 16 }} />}
+                onClick={randomizeName}
+              >
+                {t("meeting.randomName", "随机换一个")}
+              </Button>
+            </Stack>
+            <Stack direction="row" spacing={1} alignItems="center" sx={{ color: "text.secondary" }}>
+              <BadgeIcon sx={{ fontSize: 17 }} />
+              <Typography sx={{ fontSize: "0.7rem", lineHeight: 1.45 }}>{t("meeting.nameHint", "改名后成员列表、聊天与你的 uniqID 身份保持不变")}</Typography>
+            </Stack>
+          </Box>
+        </Group>
+
         <Group title={t("meeting.settingsDefaults", "加入会议默认状态")}>
           <SettingRow icon={<VideocamIcon fontSize="small" />} title={t("meeting.defaultCamera", "默认开启摄像头")} description={t("meeting.defaultCameraHint", "新加入会议时的初始状态，可在底部随时开启")}>
             <Switch data-testid="meeting-default-camera" checked={cameraDefault} onChange={(event) => void update("meetingCameraDefaultOn", event.target.checked)} />

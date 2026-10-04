@@ -45,7 +45,7 @@ const DEFAULT_SETTINGS = {
   videoDegradation: "maintain-framerate" as "balanced" | "maintain-framerate" | "maintain-resolution", // 网络差时浏览器降级策略：默认帧率优先（流畅 > 码率/清晰度）
   meetingCameraDefaultOn: false as boolean,
   meetingMicrophoneDefaultOn: false as boolean,
-  version: "3.8.43",
+  version: "3.8.44",
   isNewUser: true
 };
 export type SettingsKey = keyof typeof DEFAULT_SETTINGS;

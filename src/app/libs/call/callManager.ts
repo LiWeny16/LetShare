@@ -72,6 +72,8 @@ export type CallManagerDeps = {
   videoPrefs?: () => { videoCodec: VideoCodecPrioritySetting; videoMaxBitrateKbps: number | null };
   /** 服务器连接是否可用（拨号前守卫；未提供则跳过检查）。 */
   isConnected?: () => boolean;
+  /** Returns true when another media session (such as a meeting) is active. */
+  busyProvider?: () => boolean;
   /** TURN 凭据拉取（单测注入用；缺省走 proUpgrade.fetchTurnCredentials）。 */
   fetchTurn?: () => Promise<TurnCredentialsResponse>;
   /** Production ordinary calls use the meeting SFU over the custom WebSocket. */
@@ -304,6 +306,10 @@ export class CallManager {
         if (signal.to && selfId && signal.to !== selfId) return;
         // 重复来电忽略（已有该 peer 通话或同 callId）
         if (this.byPeer.has(from) || this.calls.has(callId)) return;
+        if (this.deps.busyProvider?.()) {
+          this.deps.broadcast(buildDecline(callId, "busy"));
+          return;
+        }
         // 忙线守卫（会议中等）：立即回 decline(busy)，不建会话、不占麦克风。
         // 孤儿 manager（会议页已卸载 share）也能走此路径快速拒绝，主叫不再干等 60s。
         const sfuUnavailable = Boolean(this.deps.sfu?.available && !this.deps.sfu.available());

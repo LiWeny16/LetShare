@@ -313,6 +313,8 @@ const Share = observer(() => {
         connection: realTimeColab.getConnectionManager(),
         // 3.7.0：信令通道不可用时拒绝拨号（避免创建必然失败的通话挂在界面）
         isConnected: () => realTimeColab.isConnected(),
+        // Prevent incoming calls from competing with an active meeting for media devices.
+        busyProvider: () => meetingManager.getState().inMeeting,
         // 视频能力偏好（编码器优先/码率上限）：从设置实时读取，每次建会话生效
         videoPrefs: () => ({
           videoCodec: settingsStore.get("videoCodecPriority") ?? "auto",
@@ -394,6 +396,7 @@ const Share = observer(() => {
       },
     );
     callManagerRef.current = manager;
+    meetingManager.setBusyProvider(() => manager.isInCall());
     realTimeColab.registerCallSignalHandler((from, data) => manager.handleSignal(from, data));
     realTimeColab.registerCallSFUHandler((type, data, channel) => manager.handleSfuSignal(type, data, channel));
     // 对端离开（页面关闭/刷新广播 leave）：立即结束与其的通话（其 bye 已不可能到达）
@@ -403,6 +406,7 @@ const Share = observer(() => {
     return () => {
       realTimeColab.registerCallActivityProvider(null);
       realTimeColab.registerCallSFUHandler(null);
+      meetingManager.setBusyProvider(null);
       manager.leaveRoom();
       callManagerRef.current = null;
     };

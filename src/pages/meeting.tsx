@@ -113,6 +113,10 @@ export default function MeetingPage() {
     return () => {
       cancelled = true
       if (screenTimer !== undefined) clearTimeout(screenTimer)
+      // 离开会议路由（后退键 / nav("/") / 未知 hash 兜底）即退出会议：
+      // 否则单例 manager 的发布 PC / 订阅 PC / 心跳 / 麦克风全部泄漏，
+      // 且 meeting:ws-reconnected 会静默重新入会。leaveMeeting 幂等。
+      void meetingManager.leaveMeeting()
     }
   }, [nameConfirmed, room, source, autoScreen])
 

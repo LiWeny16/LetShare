@@ -130,6 +130,7 @@ function makeManager(overrides: {
   selfId?: string;
   broadcast?: (s: object) => void;
   videoPrefs?: CallManagerDeps["videoPrefs"];
+  busyProvider?: CallManagerDeps["busyProvider"];
   sfu?: CallManagerDeps["sfu"] | null;
   fetchTurn?: CallManagerDeps["fetchTurn"];
 } = {}) {
@@ -144,6 +145,7 @@ function makeManager(overrides: {
       // 注意不能用 ??：null 也是合法 selfId 值（"不在房间"用例），?? 会把 null 吞成默认值
       getSelfId: () => ("selfId" in overrides ? overrides.selfId ?? null : "self:uid"),
       ...(overrides.videoPrefs ? { videoPrefs: overrides.videoPrefs } : {}),
+      ...(overrides.busyProvider ? { busyProvider: overrides.busyProvider } : {}),
       ...(sfu ? { sfu } : {}),
       fetchTurn: overrides.fetchTurn ?? (async () => ({ ice_servers: [], ttl_seconds: 0 })),
     },
@@ -222,6 +224,21 @@ test("handleSignal: duplicate invite from same peer is ignored", () => {
     manager.handleSignal("peer:uid", buildInvite("c_1", "audio"));
     manager.handleSignal("peer:uid", buildInvite("c_2", "audio"));
     assert.equal(events.onIncoming.length, 1);
+    manager.leaveRoom();
+  });
+});
+
+test("handleSignal: busy guard declines invite without creating a call", () => {
+  withFakeRTC(() => {
+    const { manager, broadcasted, events } = makeManager({ busyProvider: () => true });
+    manager.handleSignal("peer:uid", buildInvite("c_busy", "audio+video"));
+
+    assert.equal(events.onIncoming.length, 0);
+    assert.equal(manager.getCallIdByPeer("peer:uid"), null);
+    assert.ok(broadcasted.some((signal) => {
+      const candidate = signal as { type?: string; callId?: string; reason?: string };
+      return candidate.type === "call:decline" && candidate.callId === "c_busy" && candidate.reason === "busy";
+    }));
     manager.leaveRoom();
   });
 });

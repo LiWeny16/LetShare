@@ -246,6 +246,11 @@ export interface MeetingManager {
   sendInvite(to: string, inviteUrl?: string): void;
   /** 被邀请方：响应邀请（accept 后由 UI 跳转 meeting 路由再 join；响应前不提前加入）。 */
   respondInvite(inviteId: string, action: "accept" | "reject"): void;
+  /**
+   * 忙线查询（如通话中）：收到会议邀请时若忙，立即自动拒绝（reject 回执）且不弹来电窗。
+   * 由 UI 层注入（如 CallManager.isInCall），避免会议层反向依赖通话层。
+   */
+  setBusyProvider(provider: (() => boolean) | null): void;
   /** 被邀请方：关闭来电弹窗（不做加入/回执）。 */
   dismissInvite(inviteId: string): void;
   /** 原始房间成员：申请加入指定会议（服务器转发给会议主持人）。 */
@@ -260,6 +265,8 @@ export interface MeetingManager {
   consentMinutes(accepted: boolean): void;
   sendMinutesSegment(segment: Omit<MeetingTranscriptSegment, "speakerId" | "speakerName">): void;
   sendMinutesSummary(summary: string): void;
+  /** 会议内改名：更新本地身份并经服务器广播给全部成员（不入会时仅本地改名）。 */
+  renameInMeeting(name: string): void;
 }
 
 const EMPTY_MINUTES: MeetingMinutesPublicState = {
@@ -343,6 +350,12 @@ class MeetingManagerImpl implements MeetingManager {
   private meetingTurnExpiresAt = 0;
   private meetingTurnLastFetchAt = 0;
   private meetingTurnFetch: Promise<void> | null = null;
+  /** 忙线查询（如通话中）：收到会议邀请时忙则自动拒绝且不弹窗。 */
+  private busyProvider: (() => boolean) | null = null;
+
+  setBusyProvider(provider: (() => boolean) | null): void {
+    this.busyProvider = provider;
+  }
 
   constructor() {
     if (typeof window === "undefined") return;
@@ -486,6 +499,23 @@ class MeetingManagerImpl implements MeetingManager {
     this.localStream?.getAudioTracks().forEach((t) => (t.enabled = !muted));
     this.emit();
     this.sendLocalMediaState();
+  }
+
+  /**
+   * 会议内改名：先落本地身份（持久化 + 普通房间 profile:update），
+   * 已在会内时再经服务器 meeting:rename 广播，让成员表/瓦片/聊天实时换名。
+   */
+  renameInMeeting(name: string): void {
+    realTimeColab.setUserName(name);
+    if (this.isMeetingRoom(this.meetingChannel) && this.state.stage === "in-meeting") {
+      const selfId = this.clientId();
+      this.state = {
+        ...this.state,
+        members: this.state.members.map((member) => member.uniqId === selfId ? { ...member, name } : member),
+      };
+      this.emit();
+      this.sendMeeting("meeting:rename", { userName: name });
+    }
   }
 
   /**
@@ -1590,6 +1620,18 @@ class MeetingManagerImpl implements MeetingManager {
         this.emit();
         return;
       }
+      case "meeting:rename": {
+        if (!isMeetingChannelEvent(channel, this.meetingChannel)) return;
+        const uniqId = typeof data?.uniqId === "string" ? data.uniqId : "";
+        const userName = typeof data?.userName === "string" ? data.userName.trim() : "";
+        if (!uniqId || uniqId === this.clientId() || !userName) return;
+        this.state = {
+          ...this.state,
+          members: this.state.members.map((member) => member.uniqId === uniqId ? { ...member, name: userName } : member),
+        };
+        this.emit();
+        return;
+      }
       case "meeting:breakout": {
         if (!isMeetingChannelEvent(channel, this.meetingChannel)) return;
         const action = data?.action as string | undefined;
@@ -1653,6 +1695,14 @@ class MeetingManagerImpl implements MeetingManager {
             }
           }
           this.incomingInvites.set(signal.inviteId, signal);
+          // 忙线守卫（如通话中）：自动拒绝且不弹来电窗，避免通话与会议双采麦克风/回声。
+          // 回执走服务器（被邀请方 uniqId=本端），主叫侧收到 reject 状态。
+          if (this.busyProvider?.()) {
+            // 回执经服务器送达主叫侧（服务器会向邀请方回推 reject 状态）；本端不弹窗、不入 pendingInvite。
+            this.sendMeeting("meeting:invite", { action: "reject", inviteId: signal.inviteId }, signal.meetingId);
+            this.incomingInvites.delete(signal.inviteId);
+            return;
+          }
           this.state = { ...this.state, pendingInvite: signal };
           this.emit();
           this.emitEvent({ type: "meeting:invite", data: signal });

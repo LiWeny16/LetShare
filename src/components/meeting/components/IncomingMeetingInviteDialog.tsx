@@ -49,6 +49,12 @@ export default function IncomingMeetingInviteDialog() {
 
   const enterMeeting = (meetingId: string, sourceRoomId: string) => {
     if (!meetingId) return;
+    // 忙线守卫：通话中禁止进入会议（避免双采麦克风/回声）。meetingManager 的
+    // busyProvider 已保证通话中不会收到/弹窗，这里对“已弹窗但随后发起通话”的竞态兜底。
+    if (realTimeColab.isCallActive()) {
+      alertUseMUI(t("meeting.invBusyInCall", "通话中无法加入会议"), 2500, { kind: "warning" });
+      return;
+    }
     if (meetingManager.getState().inMeeting) {
       void meetingManager.switchMeeting(meetingId);
       return;
@@ -132,6 +138,11 @@ export default function IncomingMeetingInviteDialog() {
 
   const onAccept = () => {
     if (!invite || expired) return;
+    // 忙线守卫：通话中禁止接受会议邀请（与 enterMeeting 一致，避免双采麦克风/回声）
+    if (realTimeColab.isCallActive()) {
+      alertUseMUI(t("meeting.invBusyInCall", "通话中无法加入会议"), 2500, { kind: "warning" });
+      return;
+    }
     meetingManager.respondInvite(invite.inviteId, "accept");
     close();
     // 已在会议中 → 直接切换房间（内部 meeting:join）；否则跳转 meeting 路由，挂载后再 join
