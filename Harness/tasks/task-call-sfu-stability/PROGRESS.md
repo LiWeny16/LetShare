@@ -2,8 +2,8 @@
 
 ## Status
 
-- Phase: release preparation
-- Next: commit/push the reviewed frontend fix, deploy it through the standard frontend release command, then run the silent production E2E.
+- Phase: deployed and production-tested
+- Next: cross-network browser proof requires an opsctl-approved remote test-script destination on `onion-3080`.
 
 ## Evidence so far
 
@@ -22,3 +22,6 @@
 - Production E2E now runs Chromium with `--mute-audio` and checks both publisher/subscriber states, inbound/outbound RTP, audio playback state, and absence of relay candidates.
 - Cross-network browser automation on asset `onion-3080` is blocked: opsctl rejected transferring the temporary test script to `/tmp/letshare-e2e` as outside the approved scope (`\tmp\letshare-e2e`). The temporary Selenium install was removed; no policy bypass was attempted.
 - ECS remains healthy in the checked snapshot: systemd active, low memory/CPU, no OOM or crash loop. UDP receive-buffer counters are cumulative and not call-correlated.
+- Release: version `3.8.43`; build artifacts committed first as `baf6be4`, then the SFU fix as `efd9e1d`; both are on `main`. Frontend was deployed to the ECS static origin, which returned 200. Backend was not redeployed because there were no server-source changes.
+- Public `version.json` reports `2026-10-04T10:09:47Z-jplfm`. Silent production audio E2E passed: both clients had bidirectional RTP, live unmuted remote tracks, `playing` audio sinks, no relay candidates, and 0.0% observed packet loss during the sample. Mute/unmute recovery also passed.
+- Automatic CDN refresh was skipped because Aliyun credentials are absent; the production E2E nevertheless loaded the expected deployed frontend version.
