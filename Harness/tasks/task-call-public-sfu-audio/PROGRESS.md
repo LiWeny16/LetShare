@@ -41,8 +41,9 @@
 ## 生产部署与验证补充（2026-10-05）
 
 - 全栈执行 `node scripts/deploy.cjs`：Go Linux/amd64 后端构建成功并重启 ECS `letshare.service`；前端 `docs/` 上传至 ECS nginx 源站，源站首页返回 HTTP 200。
-- 线上 `https://letshare.fun/version.json` 返回 `3.8.45`，构建 ID `2026-10-05T07:39:47Z-optwh`。公网首页的 JS 资源列表与本地 `docs/index.html` 一致；当前 `share-DQ3BmAlQ.js` 含 `restartId` 重建逻辑。
+- 线上 `https://letshare.fun/version.json` 最终返回 `3.8.45`，构建 ID `2026-10-05T07:53:05Z-psvwo`。公网首页的 JS 资源列表与本地 `docs/index.html` 一致；当前 `share-DQ3BmAlQ.js` 含 `restartId` 重建逻辑。
 - 生产 Playwright E2E：`node --import tsx --test --test-force-exit tests/e2e/call-prod.test.ts`，1/1 通过。两个隔离 Chromium 客户端经生产 SFU 全双工通话；client0 RX/TX 23,225/33,252 bytes，client1 RX/TX 13,050/34,430 bytes，观测丢包率均为 0%，并验证静音/取消静音后的上行恢复。
+- 最终 SW/版本哨兵同步后再次通过同一生产 E2E：client0 RX/TX 6,452/31,073 bytes、client1 30,619/38,449 bytes；该次 client1 诊断采样丢包率 8.1%，但双向字节递增、全双工与静音恢复断言均通过。
 - CDN API 刷新因本机未配置 `ALIYUN_ACCESS_KEY_ID/SECRET` 被跳过；实际生产站点已读到新版入口与哈希资源，E2E 使用该站点通过。
-- 部署提交：根仓库 `c222f80`；服务端生产代码 `bc58f3a`。之后发现新增服务端 E2E 写 helper 在 `-race` 下并发写 WebSocket；测试 helper 增加 `writeMu` 与 PeerConnection 访问锁后，定向 `go test -race ./internal/sfu ./internal/handler -run 'TestSubscribeToIsIdempotentAndAC009RestartReplacesSubscription|TestMeetingE2E_AC001_AC009_OfferAnswerMediaAndSubscriberRestart' -count=1` 通过，修复提交 `e1a2c26` 待同步到根仓库。
-- GitHub 前端 CI 与 Pages 部署通过。后端全量 `go test ./internal/... -count=1 -race` 仍报告旧的 `WebSocketService.Shutdown` 与 `cleanupClientResources` teardown race；同一栈在此次改动前的 run `37199491334` 已失败，非本次运行代码变化。最新 follow-up CI 尚待推送。
+- 提交已同步：根仓库 `1534d1d`，产品修复 `12fc0c9`，服务端生产代码 `bc58f3a`，服务端测试 race 修复 `e1a2c26`。后续运行的标准 pre-push 前端单测 67/67、build 均通过；全量 `go test ./internal/... -count=1` 和 AC-009 定向 race 测试通过。
+- GitHub Pages 部署与前端 CI 均通过（run `37280428362`）。CI 后端 `-race` 全套仍在旧的 `WebSocketService.Shutdown` 与 `cleanupClientResources` teardown 代码报 race；同类栈在本次改动前的 run `37199491334` 已存在。当前 CI 没有再报告 AC-009 测试的 WebSocket 并发写问题。
