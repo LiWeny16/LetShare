@@ -25,6 +25,8 @@ const GO_PORT = 18080; // 避开常用 8080
 const VITE_PORT = 15173; // 避开常用 5173
 const ROOM = "e2ecall";
 const REUSE_DEV = process.env.LETSHARE_E2E_REUSE_DEV === "1";
+/** LETSHARE_E2E_FORCE_RELAY=1：两侧浏览器强制只走 TURN，验证 relay 凸底。 */
+const FORCE_RELAY = process.env.LETSHARE_E2E_FORCE_RELAY === "1";
 
 let goProc: ChildProcess | null = null;
 let viteProc: ChildProcess | null = null;
@@ -194,11 +196,15 @@ test("双客户端经 Go 后端 + SFU 完成语音通话", async (t) => {
   async function newClient(name: string) {
     const ctx = await browser!.newContext({ permissions: ["microphone"] });
     // 测试钩子注入（须在页面加载前）：调试 SFU stats + TURN API 指向本地 Go + 服务器指向本地 WS
-    const initArgs = [name, GO_PORT];
-    await ctx.addInitScript((args: [string, number]) => {
-      const [n, goPort] = args;
+    const initArgs = [name, GO_PORT, FORCE_RELAY];
+    await ctx.addInitScript((args: [string, number, boolean]) => {
+      const [n, goPort, forceRelay] = args;
       localStorage.setItem("ls_debug_stats", "1");
       localStorage.setItem("ls_turn_api", `http://127.0.0.1:${goPort}`);
+      // LETSHARE_E2E_FORCE_RELAY=1：强制语音只走 TURN 中继，用于证明
+      // 对称 NAT（直连不可用）场景下 relay 凸底能真正建立媒体。
+      if (forceRelay) localStorage.setItem("ls_force_relay", "1");
+      else localStorage.removeItem("ls_force_relay");
       const s = {
         roomId: "e2ecall", userTheme: "light", userLanguage: "zh-CN", serverMode: "custom",
         customServerUrl: `ws://127.0.0.1:${goPort}/`, authToken: "98d9a399675116e5256e9082c192bc06eb6434937af99f201252e9424c7a5652",
@@ -220,7 +226,7 @@ test("双客户端经 Go 后端 + SFU 完成语音通话", async (t) => {
           return connection;
         },
       });
-    }, initArgs as unknown as [string, number]);
+    }, initArgs as unknown as [string, number, boolean]);
     const page = await ctx.newPage();
     page.on("websocket", (socket) => {
       socket.on("framesent", (frame) => {

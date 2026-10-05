@@ -117,18 +117,33 @@ function buildRtcConfig(turnServers: TurnIceServer[]): RTCConfiguration {
     : { ...RTC_CONFIG, iceServers, bundlePolicy: bundle };
 }
 
-/** Pure audio calls terminate at the public SFU and never use a TURN relay. */
-function buildDirectSfuRtcConfig(): RTCConfiguration {
+/**
+ * 构建普通语音通话的 RTC 配置。
+ *
+ * 语音媒体终止于公网 SFU（永不 P2P），但“不 P2P”不等于“不要 TURN”：
+ * STUN 只是发现本端公网地址（srflx），对称 NAT / 严格企业防火墙下仍无法被
+ * SFU 主动回发媒体，此时只有 relay 候选能打通。TURN 会按 ICE 优先级最后启用，
+ * 直连可用时根本不会被选中，因此保底不会增加正常用户的带宽或延迟。
+ *
+ * 历史：此函数曾刻意剔除 TURN（注释还写着 never use a TURN relay），
+ * 使对称 NAT 用户必然 ICE 失败 → 8s 看门狗 → reconnecting → 25s 自动挂断。
+ */
+function buildDirectSfuRtcConfig(turnServers: TurnIceServer[]): RTCConfiguration {
   let bundle = RTC_CONFIG.bundlePolicy;
   if (typeof localStorage !== "undefined") {
     const b = localStorage.getItem("ls_bundle");
     if (b === "balanced" || b === "max-compat") bundle = b;
   }
+  const iceServers: RTCIceServer[] = [...(RTC_CONFIG.iceServers ?? []), ...turnServers];
+  // 测试钩子：E2E 用 ls_force_relay=1 强制只走 TURN，验证语音在直连不可用
+  // （对称 NAT）时确实能经 relay 建立媒体，而不是直接失败挂断。
+  // 默认关闭，生产零影响。
+  const forceRelay = typeof localStorage !== "undefined" && localStorage.getItem("ls_force_relay") === "1";
   return {
     ...RTC_CONFIG,
-    iceServers: [...(RTC_CONFIG.iceServers ?? [])],
+    iceServers,
     bundlePolicy: bundle,
-    iceTransportPolicy: "all",
+    iceTransportPolicy: forceRelay ? "relay" : "all",
   };
 }
 
@@ -242,13 +257,12 @@ export class CallManager {
     if (this.byPeer.has(peerId)) throw new Error("already in a call with this peer");
 
     const callId = `c_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-    if (media !== "audio") {
-      // 非纯语音路径保留现有 TURN 生命周期；纯语音直接连接公网 SFU。
-      await Promise.race([
-        this.ensureTurnFresh(),
-        new Promise<void>((r) => scheduleTimeout(r, 2500)),
-      ]);
-    }
+    // TURN 凭据对语音通话同样是必需兜底：直连 SFU 可用时 relay 候选不会被选中，
+    // 但对称 NAT / 严格防火墙下它是唯一能建立媒体通道的路径（见 buildDirectSfuRtcConfig）。
+    await Promise.race([
+      this.ensureTurnFresh(),
+      new Promise<void>((r) => scheduleTimeout(r, 2500)),
+    ]);
     // 普通通话由同一个工厂选择 SFU；只有文件传输保留 P2P 优化。
     // 不要先构造一个未使用的 P2P session，否则一次拨号会同时持有两套
     // PeerConnection，并重复注册媒体事件。
@@ -317,7 +331,9 @@ export class CallManager {
           this.deps.broadcast(buildDecline(callId, "declined"));
           return;
         }
-        if (signal.media !== "audio") void this.refreshTurn();
+        // 语音来电也要预拉 TURN 凭据，否则接听时 turnServers 为空，
+        // 对称 NAT 用户会拿到一个只有直连候选的 PC。
+        void this.refreshTurn();
         // wantVideo：audio 来电为 false；video/audio+video 来电为 true
         const pendingSession = this.createPendingSession(callId, from, signal.media);
         // 进入 incoming 状态：accept() 的状态机守卫依赖它，缺失会导致接听死锁（无声）
@@ -412,21 +428,20 @@ export class CallManager {
       this.cleanup(callId, "error");
       throw err;
     }
-    if (call.media !== "audio") {
-      // 非纯语音路径保留现有 TURN 续期；纯语音的 PC 配置始终只有直连候选。
-      void (async () => {
-        try {
-          await Promise.race([
-            this.ensureTurnFresh(),
-            new Promise<void>((r) => scheduleTimeout(r, 2500)),
-          ]);
-          const cur = this.calls.get(callId);
-          await cur?.session.updateIceServers(buildRtcConfig(this.turnServers));
-        } catch {
-          // 续期失败不阻断接通；非纯语音路径由后续 refreshTurn 处理。
-        }
-      })();
-    }
+    // 接听后热应用 TURN 配置（含语音）：语音接听前可能只跑完了 2.5s 竞争超时，
+    // 凭据尚未到位，这里补一次让 relay 兜底真正生效。
+    void (async () => {
+      try {
+        await Promise.race([
+          this.ensureTurnFresh(),
+          new Promise<void>((r) => scheduleTimeout(r, 2500)),
+        ]);
+        const cur = this.calls.get(callId);
+        await cur?.session.updateIceServers(buildRtcConfig(this.turnServers));
+      } catch {
+        // 续期失败不阻断接通；后续 refreshTurn 会重试。
+      }
+    })();
     this.startStatsLoop(call);
   }
 
@@ -551,7 +566,7 @@ export class CallManager {
           callId,
           peerId,
           selfId: this.deps.getSelfId() ?? "",
-          rtcConfig: media === "audio" ? buildDirectSfuRtcConfig() : buildRtcConfig(this.turnServers),
+          rtcConfig: media === "audio" ? buildDirectSfuRtcConfig(this.turnServers) : buildRtcConfig(this.turnServers),
           localStream,
           wantVideo,
           videoCodec: prefs.videoCodec,
@@ -620,10 +635,9 @@ export class CallManager {
   /** 进入 reconnecting：SFU 两端各自恢复独立的 client-to-SFU PC；旧 P2P 视频仍仅由 caller 重启。 */
   private beginRecovery(call: ActiveCall): void {
     if (call.recoveryTimer != null) return;
-    if (call.media !== "audio") {
-      // 非纯语音路径可能使用 TURN；纯语音恢复只重启到公网 SFU 的 ICE。
-      void this.ensureTurnFresh().then(() => this.applyTurnToActiveCalls());
-    }
+    // 恢复前刷新 TURN 凭据（语音同样适用）：长通话跨过凭据 TTL 后，
+    // 旧 allocation 已失效，没有新凭据就无法重建 relay 路径。
+    void this.ensureTurnFresh().then(() => this.applyTurnToActiveCalls());
     const restartLocally = call.session instanceof CallSfuSession || call.role === "caller";
     if (restartLocally) {
       void call.session.restartIce();
@@ -729,7 +743,7 @@ export class CallManager {
   private applyTurnToActiveCalls(): void {
     const config = buildRtcConfig(this.turnServers);
     for (const call of this.calls.values()) {
-      if (call.media === "audio") continue;
+      // 语音会话同样要热应用新凭据（含 relay 兜底），不再排除。
       void call.session.updateIceServers(config);
       if (call.role === "caller" && call.session.getState() !== "reconnecting") {
         void call.session.isRelayed().then((relay) => {

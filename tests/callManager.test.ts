@@ -243,7 +243,7 @@ test("handleSignal: busy guard declines invite without creating a call", () => {
   });
 });
 
-test("AC-002: ordinary pure audio uses public SFU ICE and never fetches TURN", async () => {
+test("AC-002: ordinary pure audio uses public SFU ICE and keeps TURN as a relay fallback", async () => {
   await withFakeRTC(async () => {
     let turnFetches = 0;
     const sfuMessages: Array<{ type: string; data: unknown; channel: string }> = [];
@@ -266,11 +266,23 @@ test("AC-002: ordinary pure audio uses public SFU ICE and never fetches TURN", a
 
       const callId = await manager.startCall("peer:uid", "audio", fakeStream() as MediaStream);
 
-      assert.equal(turnFetches, 0, "纯语音不得请求 TURN 凭据");
+      // 语音必须携带 TURN 兜底：媒体仍终止于公网 SFU（非 P2P），但对称 NAT /
+      // 严格防火墙下只有 relay 候选能打通。直连可用时 relay 优先级最低不会
+      // 被选中，所以对正常用户零成本。
+      assert.ok(turnFetches > 0, "纯语音应预拉 TURN 凭据作为 relay 兜底");
       assert.ok(FakeRTCPeerConnection.instances.length > 0, "应建立到 SFU 的媒体 PC");
       for (const pc of FakeRTCPeerConnection.instances) {
-        assert.equal(pc.config.iceTransportPolicy, "all", "ls_force_relay 不得强制 TURN");
-        assert.ok((pc.config.iceServers ?? []).every((server) => !JSON.stringify(server).toLowerCase().includes("turn:")), "纯语音 PC 配置不得包含 TURN");
+        // 本用例将 localStorage 的 ls_force_relay 置为 1（E2E 诊断钩子），
+        // 因此这里预期策略被强制为 relay。生产默认无此键，策略为 all。
+        assert.equal(pc.config.iceTransportPolicy, "relay", "ls_force_relay=1 时应强制只走 TURN");
+        assert.ok(
+          (pc.config.iceServers ?? []).some((server) => JSON.stringify(server).toLowerCase().includes("turn:")),
+          "纯语音 PC 配置应包含 TURN 以支持 relay 兜底",
+        );
+        assert.ok(
+          (pc.config.iceServers ?? []).some((server) => JSON.stringify(server).toLowerCase().includes("stun:")),
+          "纯语音 PC 配置仍应保留 STUN（用于发现本端公网地址）",
+        );
       }
       assert.ok(sfuMessages.some((message) => message.type === "call:sfu:join"), "应加入专用 Call SFU 房间");
       assert.ok(sfuMessages.some((message) => message.type === "meeting:sdp"), "媒体 SDP 应发给 SFU");
@@ -776,6 +788,44 @@ test("CallSession: disconnected 后及时恢复 connected → 回 active，通�
       assert.equal(states.includes("ended"), false);
     } finally {
       mock.timers.reset();
+    }
+  });
+});
+
+test("AC-012: 生产默认（无 ls_force_relay）语音保留 STUN 直连并携带 TURN 兜底，策略为 all", async () => {
+  await withFakeRTC(async () => {
+    let turnFetches = 0;
+    const oldStorage = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+    // 无 ls_force_relay：模拟生产默认环境
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      value: { getItem: () => null },
+    });
+    try {
+      const { manager } = makeManager({
+        sfu: { available: () => true, send: () => undefined },
+        fetchTurn: async () => {
+          turnFetches++;
+          return { ice_servers: [{ urls: "turn:turn.example.test", username: "user", credential: "credential" }], ttl_seconds: 600 };
+        },
+      });
+
+      const callId = await manager.startCall("peer:uid", "audio", fakeStream() as MediaStream);
+
+      assert.ok(turnFetches > 0, "生产默认也应拉取 TURN 凭据（对称 NAT 兜底）");
+      assert.ok(FakeRTCPeerConnection.instances.length > 0, "应建立到 SFU 的媒体 PC");
+      for (const pc of FakeRTCPeerConnection.instances) {
+        // 关键：不能强制 relay。默认应让直连（host/srflx）优先，
+        // relay 仅在直连不可用时被 ICE 选中，保证正常网络零额外开销。
+        assert.equal(pc.config.iceTransportPolicy, "all", "生产默认不得强制 relay");
+        const servers = (pc.config.iceServers ?? []).map((s) => JSON.stringify(s).toLowerCase());
+        assert.ok(servers.some((s) => s.includes("turn:")), "应含 TURN 作为兜底");
+        assert.ok(servers.some((s) => s.includes("stun:")), "应含 STUN 用于发现本端公网地址");
+      }
+      manager.hangup(callId);
+    } finally {
+      if (oldStorage) Object.defineProperty(globalThis, "localStorage", oldStorage);
+      else delete (globalThis as Record<string, unknown>).localStorage;
     }
   });
 });
