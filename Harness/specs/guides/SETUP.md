@@ -55,6 +55,17 @@ Claude or Codex must follow this order during bootstrap. This sequence is broade
 
 Before writing, identify the project state:
 
+Choose the install scope before scaffold writes:
+
+- `--install-scope global` (default for a new or empty target): write shared runtime assets to the selected global Harness directory and copy Claude Code, Codex, and OpenCode command/skill surfaces to host-global directories while keeping `Harness/tasks/`, `Harness/PROGRESS.md`, project memory, research, architecture, and project settings under the target project.
+- `--install-scope project` (default for an existing non-empty target): keep the full Harness scaffold project-local for compatibility, self-contained installs, and offline/CI use.
+- Existing project-local installs are compatibility mode. `/wf-update` recommends the global model and asks before migration; after confirmation use `npm install --global create-harness-vibe-coding@latest` followed by `create-harness-vibe-coding init . --scope global --migrate`.
+- Global migration removes only safe Harness-owned prompt-engineering framework files and old local metadata. It preserves tasks, progress, memory, research, project facts, README/package files, and modified or user-authored Harness-interest files.
+- An explicit `--install-scope` always wins. The CLI detects only whether the target is new/empty or existing/non-empty; it never silently changes an explicit choice.
+- Use `--global-dir <dir>` when the global runtime location must be explicit.
+- Use `--host-global-dir <dir>` only when the host-global copy base must be explicit; the installer creates `claude/`, `codex/`, and `opencode/` subdirectories under it.
+- Project settings in `Harness/settings.json` override global settings defaults. Existing user-authored files at config, command, skill, or agent paths are preserved or surfaced for review unless they carry a Harness ownership marker.
+
 | Project state | Required action |
 | --- | --- |
 | Empty or new project | Run the scaffold, then follow this file for 0-1 bootstrap |
@@ -152,7 +163,7 @@ The harness validator checks for specific structural invariants. When comparing 
 | `Harness/tasks/<id>/PROGRESS.md` | `## Current Goal`, `## Phase`, `## Heartbeat`, `## Loaded Context` headings |
 | `Harness/tasks/<id>/PLAN.md` | `## Tasks`, `## Parallel Dispatch`, `## Subagent Synthesis`, `## Verification` headings |
 | `Harness/specs/guides/SETUP.md` | Retained install/bootstrap guide for new projects, existing projects, legacy upgrades, and Harness update decisions. Keep "Install or Upgrade Path" present. |
-| `.claude/skills/wf-browser/SKILL.md` and `.agents/skills/wf-browser/SKILL.md` | Built-in browser workflow requires `data-testid`, `accessible labels/roles`, and `inputs, buttons, filters, rows, empty/error/loading states` guidance |
+| `.claude/skills/wf-browser/SKILL.md` and `.agents/skills/wf-browser/SKILL.md` | Built-in agent-operable browser workflow requires architecture design track, runtime control track, readiness levels, WebSocket bridge, observe/act primitives, virtual cursor, multi-window/subagent leases, `Harness/wf-browser/` artifacts, `data-testid`, `accessible labels/roles`, and `inputs, buttons, filters, rows, empty/error/loading states` guidance |
 | `Harness/workflows/ts-react-frontend.md` (if installed as optional) | Same UI selector contract as above |
 
 **Files that do NOT need manual merge when the path does not already exist (auto-created by harness):**

@@ -15,9 +15,9 @@
  *   --full-plan and --verbose are aliases.
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync, lstatSync, unlinkSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, lstatSync, unlinkSync, renameSync, readdirSync, rmSync, openSync, closeSync, mkdtempSync } from 'fs';
 import { createHash } from 'crypto';
-import { resolve, dirname, sep } from 'path';
+import { resolve, dirname, sep, join, relative } from 'path';
 import { fileURLToPath } from 'url';
 import { gunzipSync } from 'zlib';
 
@@ -35,6 +35,111 @@ const TEMPLATE_SUBPATH = 'templates/common/';
 const DEFAULT_SOURCE_BASE = `${RAW_GITHUB}/main/${TEMPLATE_SUBPATH}`;
 const LEGACY_SOURCE_BASE = `${LEGACY_RAW_GITHUB}/main/${TEMPLATE_SUBPATH}`;
 const npmPackageCache = new Map();
+const DEFAULT_UPDATE_TIMEOUT_MS = 120000;
+const UPDATE_TIMEOUT_EXIT = 3;
+const UPDATE_TEMP_ROOT = resolve(ROOT, 'Harness', '.temp', '.wf-update');
+let updateDeadlineAt = 0;
+let updateLock = null;
+
+function timeoutError(timeoutMs = DEFAULT_UPDATE_TIMEOUT_MS) {
+  const error = new Error(`Update exceeded the ${timeoutMs}ms deadline.`);
+  error.code = 'UPDATE_TIMEOUT';
+  return error;
+}
+
+function exitCodeForError(error) {
+  return error?.code === 'UPDATE_TIMEOUT' ? UPDATE_TIMEOUT_EXIT : 1;
+}
+
+function boundedTimeout(timeoutMs) {
+  if (!updateDeadlineAt) return timeoutMs;
+  const remaining = updateDeadlineAt - Date.now();
+  if (remaining <= 0) throw timeoutError();
+  return Math.min(timeoutMs, remaining);
+}
+
+function isProcessAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function transactionEntries() {
+  if (!existsSync(UPDATE_TEMP_ROOT)) return [];
+  return readdirSync(UPDATE_TEMP_ROOT, { withFileTypes: true })
+    .filter(entry => entry.isDirectory() && entry.name.startsWith('run-'))
+    .map(entry => join(UPDATE_TEMP_ROOT, entry.name));
+}
+
+function recoverTransaction(transactionDir) {
+  const journalPath = join(transactionDir, 'journal.json');
+  if (!existsSync(journalPath)) {
+    rmSync(transactionDir, { recursive: true, force: true });
+    return;
+  }
+  let journal;
+  try {
+    journal = JSON.parse(readFileSync(journalPath, 'utf8'));
+  } catch {
+    rmSync(transactionDir, { recursive: true, force: true });
+    return;
+  }
+
+  for (const move of [...(journal.moves || [])].reverse()) {
+    const from = safePath(move.from);
+    const backup = move.backup;
+    if (from && backup && existsSync(backup) && !existsSync(from)) renameSync(backup, from);
+  }
+  for (const entry of [...(journal.files || [])].reverse()) {
+    const dest = safePath(entry.file);
+    if (!dest) continue;
+    if (existsSync(dest)) unlinkSync(dest);
+    if (entry.backup && existsSync(entry.backup)) renameSync(entry.backup, dest);
+  }
+  rmSync(transactionDir, { recursive: true, force: true });
+}
+
+function acquireUpdateLock() {
+  mkdirSync(UPDATE_TEMP_ROOT, { recursive: true });
+  const lockPath = join(UPDATE_TEMP_ROOT, 'lock.json');
+  const staleRuns = transactionEntries();
+  let existing = null;
+  if (existsSync(lockPath)) {
+    try { existing = JSON.parse(readFileSync(lockPath, 'utf8')); } catch { existing = null; }
+    if (existing && isProcessAlive(existing.pid)) {
+      const error = new Error(`Another Harness update is running (pid ${existing.pid}).`);
+      error.code = 'UPDATE_LOCKED';
+      throw error;
+    }
+    unlinkSync(lockPath);
+  }
+  // Recover orphaned transactions even when the process died after removing
+  // its lock. This keeps the temp area self-healing and prevents stale files
+  // from accumulating in the user's project.
+  for (const run of staleRuns) recoverTransaction(run);
+  const fd = openSync(lockPath, 'wx');
+  writeFileSync(fd, JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }) + '\n', 'utf8');
+  closeSync(fd);
+  updateLock = lockPath;
+}
+
+function releaseUpdateLock() {
+  if (updateLock && existsSync(updateLock)) {
+    try { unlinkSync(updateLock); } catch {}
+  }
+  updateLock = null;
+  if (existsSync(UPDATE_TEMP_ROOT)) {
+    try {
+      if (readdirSync(UPDATE_TEMP_ROOT).length === 0) rmSync(UPDATE_TEMP_ROOT, { recursive: true, force: true });
+    } catch {}
+  }
+}
+
+process.once('exit', releaseUpdateLock);
 
 // Tier classification
 
@@ -43,6 +148,7 @@ const PRESERVE_PATTERNS = [
   /^Harness\/PROGRESS\.md$/,
   /^Harness\/tasks\//,
   /^Harness\/memory\//,
+  /^Harness\/research\/search\//,
   /^Harness\/research\/PRD\.md$/,
   /^Harness\/research\/research-results\.md$/,
   /^Harness\/architecture\.md$/,
@@ -102,6 +208,85 @@ function safePath(file) {
   const resolved = resolve(ROOT, normalized);
   if (!resolved.startsWith(ROOT + sep) && resolved !== ROOT) return null;
   return resolved;
+}
+
+function writeTransactionJournal(transactionDir, journal) {
+  writeFileSync(join(transactionDir, 'journal.json'), JSON.stringify(journal, null, 2) + '\n', 'utf8');
+}
+
+function stagePath(transactionDir, dest) {
+  const rel = relative(ROOT, dest);
+  return join(transactionDir, 'stage', ...rel.split(/[\\/]+/));
+}
+
+function applyPreparedTransaction(preparedWrites, moved) {
+  if (preparedWrites.length === 0 && moved.length === 0) return 0;
+  const transactionDir = mkdtempSync(join(UPDATE_TEMP_ROOT, 'run-'));
+  const journal = {
+    schemaVersion: 1,
+    pid: process.pid,
+    startedAt: new Date().toISOString(),
+    files: preparedWrites.map((prepared, index) => ({
+      file: prepared.file,
+      stage: stagePath(transactionDir, prepared.dest),
+      backup: join(transactionDir, 'backup', String(index)),
+      hadOriginal: false,
+      committed: false,
+    })),
+    moves: [],
+  };
+  let committed = 0;
+
+  try {
+    for (const [index, prepared] of preparedWrites.entries()) {
+      const entry = journal.files[index];
+      mkdirSync(dirname(entry.stage), { recursive: true });
+      writeFileSync(entry.stage, prepared.content, 'utf8');
+    }
+    writeTransactionJournal(transactionDir, journal);
+
+    for (const [index, prepared] of preparedWrites.entries()) {
+      const entry = journal.files[index];
+      if (prepared.mustNotExist && existsSync(prepared.dest)) {
+        throw new Error(`File created since plan: ${prepared.file} - treating as CONFLICT`);
+      }
+      if (existsSync(prepared.dest)) {
+        if (lstatSync(prepared.dest).isSymbolicLink()) throw new Error(`Symlink rejected: ${prepared.file}`);
+        mkdirSync(dirname(entry.backup), { recursive: true });
+        renameSync(prepared.dest, entry.backup);
+        entry.hadOriginal = true;
+        writeTransactionJournal(transactionDir, journal);
+      }
+      mkdirSync(dirname(prepared.dest), { recursive: true });
+      renameSync(entry.stage, prepared.dest);
+      entry.committed = true;
+      committed += 1;
+      writeTransactionJournal(transactionDir, journal);
+    }
+
+    for (const movedEntry of moved) {
+      const from = safePath(movedEntry.from);
+      if (!from || !existsSync(from)) continue;
+      if (lstatSync(from).isSymbolicLink()) throw new Error(`Symlink rejected: ${movedEntry.from}`);
+      const currentHash = sha256File(from);
+      if (currentHash && currentHash !== movedEntry.storedHash) {
+        throw new Error(`Legacy moved file changed before cleanup: ${movedEntry.from}`);
+      }
+      const backup = join(transactionDir, 'moved', String(journal.moves.length));
+      mkdirSync(dirname(backup), { recursive: true });
+      const move = { from: movedEntry.from, backup };
+      journal.moves.push(move);
+      writeTransactionJournal(transactionDir, journal);
+      renameSync(from, backup);
+      writeTransactionJournal(transactionDir, journal);
+    }
+
+    rmSync(transactionDir, { recursive: true, force: true });
+    return committed;
+  } catch (error) {
+    try { recoverTransaction(transactionDir); } catch {}
+    throw error;
+  }
 }
 
 /** Canonical normalization for classification matching. */
@@ -349,24 +534,36 @@ async function fetchRemote(url, timeoutMs = 30000) {
     return readFileSync(fileURLToPath(url), 'utf-8');
   }
 
+  const effectiveTimeout = boundedTimeout(timeoutMs);
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const timer = setTimeout(() => controller.abort(), effectiveTimeout);
   try {
     const res = await fetch(url, { signal: controller.signal });
     if (!res.ok) throw new Error(`HTTP ${res.status}: ${url}`);
     return res.text();
+  } catch (error) {
+    if (error?.name === 'AbortError' && updateDeadlineAt && Date.now() >= updateDeadlineAt) {
+      throw timeoutError();
+    }
+    throw error;
   } finally {
     clearTimeout(timer);
   }
 }
 
 async function fetchBytes(url, timeoutMs = 30000) {
+  const effectiveTimeout = boundedTimeout(timeoutMs);
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const timer = setTimeout(() => controller.abort(), effectiveTimeout);
   try {
     const res = await fetch(url, { signal: controller.signal, headers: { 'User-Agent': 'harness-wf-update-check' } });
     if (!res.ok) throw new Error(`HTTP ${res.status}: ${url}`);
     return Buffer.from(await res.arrayBuffer());
+  } catch (error) {
+    if (error?.name === 'AbortError' && updateDeadlineAt && Date.now() >= updateDeadlineAt) {
+      throw timeoutError();
+    }
+    throw error;
   } finally {
     clearTimeout(timer);
   }
@@ -477,23 +674,12 @@ async function createUrlSource(sourceBase, { stable = false } = {}) {
 
 async function resolveGithubReleaseSource() {
   try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 15000);
-    let res;
-    try {
-      res = await fetch(GITHUB_LATEST_STABLE, {
-        signal: controller.signal,
-        headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'harness-wf-update-check' },
-      });
-    } finally {
-      clearTimeout(timer);
-    }
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = JSON.parse(await res.text());
+    const data = JSON.parse(await fetchRemote(GITHUB_LATEST_STABLE, 15000));
     const tag = data && data.tag_name;
     if (!tag || data.prerelease) return null;
     return await createUrlSource(`${RAW_GITHUB}/${tag}/${TEMPLATE_SUBPATH}`, { stable: true });
-  } catch {
+  } catch (error) {
+    if (error?.code === 'UPDATE_TIMEOUT') throw error;
     return null;
   }
 }
@@ -507,6 +693,7 @@ async function resolveUpdateSource(explicitSource) {
   try {
     return await createNpmSource('latest');
   } catch (e) {
+    if (e?.code === 'UPDATE_TIMEOUT') throw e;
     errors.push(`npm latest: ${e.message}`);
   }
 
@@ -517,12 +704,14 @@ async function resolveUpdateSource(explicitSource) {
   try {
     return await createUrlSource(DEFAULT_SOURCE_BASE, { stable: false });
   } catch (e) {
+    if (e?.code === 'UPDATE_TIMEOUT') throw e;
     errors.push(`GitHub canonical main: ${e.message}`);
   }
 
   try {
     return await createUrlSource(LEGACY_SOURCE_BASE, { stable: false });
   } catch (e) {
+    if (e?.code === 'UPDATE_TIMEOUT') throw e;
     errors.push(`GitHub legacy mirror: ${e.message}`);
   }
 
@@ -541,6 +730,30 @@ async function main() {
   const acceptMerged = readRepeatedFlagValues(args, '--accept-merged');
   const acceptTemplate = readRepeatedFlagValues(args, '--accept-template');
   const ignoreVersion = args.includes('--ignore-version') || args.includes('--force-check');
+  const repairMode = args.includes('--repair');
+  const effectiveIgnoreVersion = ignoreVersion || repairMode;
+  const allowDowngrade = args.includes('--allow-downgrade');
+  const allowPrerelease = args.includes('--include-prerelease');
+  const timeoutRaw = readFlagValue(args, '--timeout-ms') || process.env.WF_UPDATE_TIMEOUT_MS;
+  const parsedTimeout = Number.parseInt(timeoutRaw || String(DEFAULT_UPDATE_TIMEOUT_MS), 10);
+  const timeoutMs = Number.isFinite(parsedTimeout) && parsedTimeout > 0 ? parsedTimeout : DEFAULT_UPDATE_TIMEOUT_MS;
+  updateDeadlineAt = Date.now() + timeoutMs;
+  const mutationRequested = apply || applySafe || finalize || acceptLocal.length > 0 || acceptMerged.length > 0 || acceptTemplate.length > 0;
+  if (mutationRequested) {
+    try {
+      acquireUpdateLock();
+    } catch (error) {
+      const payload = {
+        status: error.code === 'UPDATE_LOCKED' ? 'locked' : 'error',
+        code: error.code || 'UPDATE_LOCK_FAILED',
+        message: error.message,
+      };
+      if (jsonOut) console.log(JSON.stringify(payload, null, 2));
+      else console.error(`ERROR: ${payload.message}`);
+      process.exitCode = error.code === 'UPDATE_LOCKED' ? 4 : 1;
+      return;
+    }
+  }
   const explicitSource = readFlagValue(args, '--source-base') || process.env.WF_SOURCE_BASE;
   let source;
   let sourceBase;
@@ -551,6 +764,17 @@ async function main() {
     sourceBase = source.label;
     sourceStable = Boolean(source.stable);
   } catch (e) {
+    if (e?.code === 'UPDATE_TIMEOUT') {
+      const payload = {
+        status: 'timeout',
+        code: 'UPDATE_TIMEOUT',
+        message: e.message,
+      };
+      if (jsonOut) console.log(JSON.stringify(payload, null, 2));
+      else console.error(`ERROR: ${payload.message}`);
+      process.exitCode = UPDATE_TIMEOUT_EXIT;
+      return;
+    }
     sourceErrors = e.sourceErrors || [e.message];
   }
 
@@ -632,7 +856,7 @@ async function main() {
   const localGen = localVersion.generator || '0.0.0';
   const remoteGen = remoteVersion.generator || '0.0.0';
 
-  if (!ignoreVersion && isPrerelease(remoteGen)) {
+  if (!allowPrerelease && isPrerelease(remoteGen)) {
     if (jsonOut) {
       console.log(JSON.stringify({ status: 'up-to-date', version: localGen, remote: remoteGen, sourceBase }));
     } else {
@@ -642,27 +866,41 @@ async function main() {
   }
 
   const versionCmp = cmpSemver(remoteGen, localGen);
+  const reportDowngrade = !sourceStable;
 
-  if (!ignoreVersion && versionCmp <= 0) {
-    const reportDowngrade = !sourceStable;
+  if (versionCmp < 0 && !allowDowngrade) {
     if (jsonOut) {
       console.log(JSON.stringify({
-        status: (versionCmp < 0 && reportDowngrade) ? 'downgrade-refused' : 'up-to-date',
+        status: reportDowngrade ? 'downgrade-refused' : 'up-to-date',
         version: localGen,
         remote: remoteGen,
         sourceBase,
       }));
-    } else if (versionCmp < 0 && reportDowngrade) {
+    } else if (reportDowngrade) {
       console.log(`WARN: Remote (v${remoteGen}) is OLDER than local (v${localGen}). Downgrade refused.`);
     } else {
-      console.log(`Already up to date (v${localGen})`);
+      console.log(`Already up to date (v${localGen}). Remote ${remoteGen} is older and ignored.`);
     }
-    if (versionCmp < 0 && reportDowngrade) process.exitCode = 1;
+    if (reportDowngrade) process.exitCode = 1;
     return;
   }
 
-  if (ignoreVersion) {
-    if (!jsonOut) console.log('Version check bypassed (--ignore-version). Comparing files anyway.');
+  if (!effectiveIgnoreVersion && versionCmp <= 0) {
+    if (jsonOut) {
+      console.log(JSON.stringify({
+        status: 'up-to-date',
+        version: localGen,
+        remote: remoteGen,
+        sourceBase,
+      }));
+    } else {
+      console.log(`Already up to date (v${localGen})`);
+    }
+    return;
+  }
+
+  if (effectiveIgnoreVersion) {
+    if (!jsonOut) console.log(`Version check bypassed (${repairMode ? '--repair' : '--ignore-version'}). Comparing files anyway.`);
   }
 
   const remoteChecksums = remoteVersion.checksums || {};
@@ -760,6 +998,9 @@ async function main() {
       : 0;
     return {
       mode: 'script-first-ai-conflicts',
+      multiScopeDryRunCommand: 'node Harness/scripts/wf-update-runner.mjs --json',
+      multiScopeSafeApplyCommand: 'node Harness/scripts/wf-update-runner.mjs --apply-safe --json',
+      multiScopeFinalizeCommand: 'node Harness/scripts/wf-update-runner.mjs --finalize --json',
       dryRunJsonCommand: 'node Harness/scripts/wf-update-check.mjs --json',
       safeApplyCommand: 'node Harness/scripts/wf-update-check.mjs --apply-safe',
       strictApplyCommand: 'node Harness/scripts/wf-update-check.mjs --apply',
@@ -776,14 +1017,17 @@ async function main() {
       aiMergeRequiredTruncated: truncated > 0 ? truncated : undefined,
       conflictPolicy: 'Use the script for SAFE/NEW/adopted files. For each CONFLICT file, compare local content with templateHint/remoteUrl, then record the decision with --accept-local, --accept-merged, or --accept-template. Do not hand-edit Harness/.harness-version.',
       postUpdateCommands: [
+        'node Harness/scripts/sync-host-global.mjs --json',
+        'node Harness/scripts/sync-host-global.mjs --apply --json',
         'node Harness/scripts/validate-harness.mjs',
+        'node Harness/scripts/validate-harness.mjs --manifest-audit',
         'node Harness/scripts/scan-clean.mjs --json',
       ],
       bootstrapDebtCommand: 'node Harness/scripts/validate-harness.mjs --strict',
     };
   }
 
-  async function applyTemplateFile(file) {
+  async function prepareTemplateFile(file) {
     const remoteHash = remoteChecksums[file];
     if (!remoteHash) throw new Error(`No remote checksum for ${file}`);
     const dest = safePath(file);
@@ -793,10 +1037,7 @@ async function main() {
     const normalized = content.replace(/\r\n/g, '\n');
     const fetchedHash = sha256(normalized);
     if (fetchedHash !== remoteHash) throw new Error(`Hash mismatch: ${file}`);
-    mkdirSync(dirname(dest), { recursive: true });
-    writeFileSync(dest, normalized, 'utf-8');
-    localVersion.checksums[file] = remoteHash;
-    delete localVersion.acceptedConflicts[file];
+    return { file, dest, content: normalized, remoteHash };
   }
 
   function recordLocalDecision(file, decision, appliedAt) {
@@ -833,20 +1074,34 @@ async function main() {
   }
 
   let decisionMetadataDirty = false;
+  let timedOut = false;
   if (acceptLocal.length || acceptMerged.length || acceptTemplate.length) {
     const appliedAt = new Date().toISOString();
     try {
+      localVersion.checksums = localVersion.checksums || {};
+      localVersion.acceptedConflicts = localVersion.acceptedConflicts || {};
       for (const file of acceptLocal) recordLocalDecision(file, 'accept-local', appliedAt);
       for (const file of acceptMerged) recordLocalDecision(file, 'accept-merged', appliedAt);
-      for (const file of acceptTemplate) await applyTemplateFile(file);
+      const templateWrites = [];
+      for (const file of acceptTemplate) templateWrites.push(await prepareTemplateFile(file));
+      applyPreparedTransaction(templateWrites, []);
+      for (const template of templateWrites) {
+        localVersion.checksums[template.file] = template.remoteHash;
+        delete localVersion.acceptedConflicts[template.file];
+      }
       decisionMetadataDirty = true;
     } catch (e) {
+      timedOut = e?.code === 'UPDATE_TIMEOUT';
       if (jsonOut) {
-        console.log(JSON.stringify({ status: 'error', message: e.message }, null, 2));
+        console.log(JSON.stringify({
+          status: timedOut ? 'timeout' : 'error',
+          ...(timedOut ? { code: 'UPDATE_TIMEOUT' } : {}),
+          message: e.message,
+        }, null, 2));
       } else {
         console.error(`ERROR: ${e.message}`);
       }
-      process.exitCode = 1;
+      process.exitCode = exitCodeForError(e);
       return;
     }
   }
@@ -1010,8 +1265,11 @@ async function main() {
   if (jsonOut) {
     const verbose = args.includes('--verbose') || args.includes('--full-plan');
     const jsonPlan = buildJsonPlan();
+    const effectiveStatus = repairMode && versionCmp <= 0 && !localVersion.partialUpdate
+      ? 'repair-check'
+      : (localVersion.partialUpdate ? 'partial-update' : 'update-available');
     console.log(JSON.stringify({
-      status: localVersion.partialUpdate ? 'partial-update' : 'update-available',
+      status: effectiveStatus,
       from: localGen,
       to: remoteGen,
       sourceBase,
@@ -1026,6 +1284,7 @@ async function main() {
       skipped: plan.skipped.length,
       // Token-safe by default: attach the full plan only when --verbose / --full-plan is passed.
       ...(verbose ? { plan: jsonPlan } : {}),
+      repair: repairMode || undefined,
       agent: buildAgentHints(jsonPlan),
     }, null, 2));
     return;
@@ -1091,6 +1350,7 @@ async function main() {
         }
         return { ok: true, prepared: { file: entry.file, dest, content: normalized, mustNotExist } };
       } catch (e) {
+        if (e?.code === 'UPDATE_TIMEOUT') timedOut = true;
         return { ok: false, message: `   x Failed: ${entry.file} - ${e.message}` };
       }
     }
@@ -1123,33 +1383,13 @@ async function main() {
       }
     }
 
-    // All-or-nothing apply invariant: every prepared file above was hash-validated
-    // against its manifest checksum before ANY writeFileSync below. The version
-    // file is advanced only when failed === 0, so a failed apply leaves version
-    // tracking unchanged and is safe to re-run with --apply-safe. A mid-loop
-    // writeFileSync throw (disk failure) is the only partial-disk edge case;
-    // re-running --apply-safe reconciles it.
     let applied = 0;
     if (failed === 0) {
       try {
-        for (const prepared of preparedWrites) {
-          mkdirSync(dirname(prepared.dest), { recursive: true });
-          writeFileSync(prepared.dest, prepared.content, 'utf-8');
-          applied++;
-        }
-        for (const moved of plan.moved) {
-          const from = safePath(moved.from);
-          if (!from) throw new Error(`Traversal rejected: ${moved.from}`);
-          if (!existsSync(from)) continue;
-          if (lstatSync(from).isSymbolicLink()) throw new Error(`Symlink rejected: ${moved.from}`);
-          const currentHash = sha256File(from);
-          if (currentHash && currentHash !== moved.storedHash) {
-            throw new Error(`Legacy moved file changed before cleanup: ${moved.from}`);
-          }
-          unlinkSync(from);
-        }
+        applied = applyPreparedTransaction(preparedWrites, plan.moved);
       } catch (e) {
-        console.error(`   x Failed while writing prepared files - ${e.message}`);
+        if (e?.code === 'UPDATE_TIMEOUT') timedOut = true;
+        console.error(`   x Failed while committing update transaction - ${e.message}`);
         failed++;
       }
     }
@@ -1162,6 +1402,7 @@ async function main() {
       for (const c of plan.created) localVersion.checksums[c.file] = c.remoteHash;
       for (const a of plan.adopted) localVersion.checksums[a.file] = a.remoteHash;
       localVersion.sources = localVersion.sources || {};
+      localVersion.acceptedConflicts = localVersion.acceptedConflicts || {};
       for (const u of plan.updated) localVersion.sources[u.file] = remoteSources[u.file] || u.file;
       for (const c of plan.created) localVersion.sources[c.file] = remoteSources[c.file] || c.file;
       for (const a of plan.adopted) localVersion.sources[a.file] = remoteSources[a.file] || a.file;
@@ -1201,7 +1442,7 @@ async function main() {
       }
     } else {
       console.log(`${failed} failures. NO files were version-tracked. Fix and re-run.`);
-      process.exitCode = 1;
+      process.exitCode = timedOut ? UPDATE_TIMEOUT_EXIT : 1;
     }
   }
 
@@ -1239,4 +1480,14 @@ async function main() {
   return plan;
 }
 
-main().catch(e => { console.error(e); process.exit(1); });
+main().catch(e => {
+  const timedOut = e?.code === 'UPDATE_TIMEOUT';
+  const payload = {
+    status: timedOut ? 'timeout' : 'error',
+    code: e?.code || 'UPDATE_ERROR',
+    message: e?.message || String(e),
+  };
+  if (process.argv.includes('--json')) console.log(JSON.stringify(payload, null, 2));
+  else console.error(`ERROR: ${payload.message}`);
+  process.exit(timedOut ? UPDATE_TIMEOUT_EXIT : 1);
+});

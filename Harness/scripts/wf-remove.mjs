@@ -52,6 +52,7 @@ const USER_DATA_PATTERNS = [
   /^Harness\/PROGRESS\.md$/,
   /^Harness\/tasks\//,
   /^Harness\/memory\//,
+  /^Harness\/research\/search\//,
   /^Harness\/research\/PRD\.md$/,
   /^Harness\/research\/research-results\.md$/,
   /^Harness\/architecture\.md$/,
@@ -65,11 +66,21 @@ const USER_DATA_PATTERNS = [
   /^package-lock\.json$/,
 ];
 
+/** Content markers required before removing an untracked framework file. */
+const HARNESS_OWNED_CONTENT_MARKERS = [
+  /^harness:\s*(?:wf-agent|wf-framework|create-harness-vibe-coding)\b/im,
+  /\bcreate-harness-vibe-coding\b/i,
+  /\bproject harness\b/i,
+  /\bHarness\/(?:specs|WF|MEMORY|tasks|scripts|subagents|dispatch|context-loading|lifecycle|SETUP)\b/i,
+  /\bWF-(?:MAX|AUTO|KERNEL|STATE)\b/i,
+];
+
 /** Harness user-data paths that can be removed only with explicit purge flags. */
 const PURGEABLE_HARNESS_DATA_PATTERNS = [
   /^Harness\/PROGRESS\.md$/,
   /^Harness\/tasks\//,
   /^Harness\/memory\//,
+  /^Harness\/research\/search\//,
   /^Harness\/research\/PRD\.md$/,
   /^Harness\/research\/research-results\.md$/,
   /^Harness\/architecture\.md$/,
@@ -83,6 +94,7 @@ const PURGEABLE_HARNESS_DATA_PATTERNS = [
 const FRAMEWORK_TASK_PATTERNS = [
   /^Harness\/tasks\/_template\//,
   /^Harness\/tasks\/auto\//,
+  /^Harness\/tasks\/continuous\//,
 ];
 
 function isUserData(file) {
@@ -95,6 +107,15 @@ function isHarnessOwned(file) {
 
 function isFrameworkTaskFile(file) {
   return FRAMEWORK_TASK_PATTERNS.some(p => p.test(file));
+}
+
+function hasHarnessOwnershipMarker(file) {
+  try {
+    const content = readFileSync(file, 'utf8');
+    return HARNESS_OWNED_CONTENT_MARKERS.some(pattern => pattern.test(content));
+  } catch {
+    return false;
+  }
 }
 
 function isPurgeableHarnessData(file, { keepTasks }) {
@@ -141,12 +162,40 @@ const BUILT_IN_SKILL_NAMES = [
   'wf-auto',
   'wf-auto-spark',
   'wf-browser',
+  'wf-command-create',
   'wf-help',
   'wf-learn',
   'wf-max',
   'wf-readme',
   'wf-remove',
   'wf-review',
+  'wf-task-archive',
+  'wf-task-list',
+  'wf-task-record',
+  'wf-search',
+  'wf-ui',
+  'wf-init',
+  'wf-update',
+];
+
+const BUILT_IN_COMMAND_NAMES = [
+  'wf',
+  'wf-init',
+  'wf-auto',
+  'wf-auto-spark',
+  'wf-browser',
+  'wf-command-create',
+  'wf-help',
+  'wf-learn',
+  'wf-max',
+  'wf-readme',
+  'wf-remove',
+  'wf-review',
+  'wf-task-archive',
+  'wf-task-list',
+  'wf-task-record',
+  'wf-search',
+  'wf-ui',
   'wf-update',
 ];
 
@@ -159,8 +208,10 @@ const KNOWN_FRAMEWORK_FILES = new Set([
     `.claude/skills/${name}/SKILL.md`,
     `.agents/skills/${name}/SKILL.md`,
   ]),
-  '.claude/commands/wf-help.md',
-  '.opencode/commands/wf-help.md',
+  ...BUILT_IN_COMMAND_NAMES.flatMap(name => [
+    `.claude/commands/${name}.md`,
+    `.opencode/commands/${name}.md`,
+  ]),
   '.claude/rules/ecc/common.md',
   'opencode.json',
 ]);
@@ -177,6 +228,7 @@ const CLEANUP_DIRS = [
   '.claude/skills/wf-auto',
   '.claude/skills/wf-auto-spark',
   '.claude/skills/wf-browser',
+  '.claude/skills/wf-command-create',
   '.claude/skills/wf-help',
   '.claude/skills/tdd',
   '.claude/skills/ts-react-frontend',
@@ -187,7 +239,13 @@ const CLEANUP_DIRS = [
   '.claude/skills/wf-max',
   '.claude/skills/wf-readme',
   '.claude/skills/wf-review',
+  '.claude/skills/wf-task-archive',
+  '.claude/skills/wf-task-list',
+  '.claude/skills/wf-task-record',
+  '.claude/skills/wf-search',
   '.claude/skills/wf-update',
+  '.claude/skills/wf-ui',
+  '.claude/skills/wf-init',
   '.claude/skills/wf-remove',
   '.claude/skills/subagent-orchestrator',
   '.claude/skills',
@@ -196,6 +254,7 @@ const CLEANUP_DIRS = [
   '.agents/skills/wf-auto',
   '.agents/skills/wf-auto-spark',
   '.agents/skills/wf-browser',
+  '.agents/skills/wf-command-create',
   '.agents/skills/wf-help',
   '.agents/skills/tdd',
   '.agents/skills/ts-react-frontend',
@@ -206,7 +265,13 @@ const CLEANUP_DIRS = [
   '.agents/skills/wf-max',
   '.agents/skills/wf-readme',
   '.agents/skills/wf-review',
+  '.agents/skills/wf-task-archive',
+  '.agents/skills/wf-task-list',
+  '.agents/skills/wf-task-record',
+  '.agents/skills/wf-search',
   '.agents/skills/wf-update',
+  '.agents/skills/wf-ui',
+  '.agents/skills/wf-init',
   '.agents/skills/wf-remove',
   '.agents/skills/subagent-orchestrator',
   '.agents/skills',
@@ -231,7 +296,7 @@ const CLEANUP_DIRS = [
   'Harness/features',
   'Harness/memory',
   'Harness/tasks/_template',
-  'Harness/tasks/auto',
+  'Harness/tasks/continuous',
   'Harness/tasks',
   'Harness',
 ];
@@ -402,8 +467,8 @@ async function main() {
     '.claude/skills/wf-auto/SKILL.md',
     '.agents/skills/wf-auto/SKILL.md',
     'Harness/specs/workflows/WF-AUTO.md',
-    'Harness/tasks/auto/PROGRESS.md',
-    'Harness/tasks/auto/PLAN.md',
+    'Harness/tasks/continuous/PROGRESS.md',
+    'Harness/tasks/continuous/PLAN.md',
     'Harness/tasks/_template/ARTIFACTS.md',
     'Harness/tasks/_template/NOTES.md',
     'Harness/tasks/_template/PLAN.md',
@@ -469,12 +534,19 @@ async function main() {
           // opencode.json without provenance — may pre-date Harness install.
           // Only auto-remove when checksum proves Harness created it.
           modified.push({ file, currentHash, storedHash: 'none', reason: 'not in checksums (may be pre-existing user config)' });
-        } else {
+        } else if (hasHarnessOwnershipMarker(diskPath)) {
           safe.push({
             file,
             currentHash,
             storedHash: currentHash,
-            reason: 'known framework file missing from legacy checksums',
+            reason: 'known framework file with Harness ownership marker missing from legacy checksums',
+          });
+        } else {
+          modified.push({
+            file,
+            currentHash,
+            storedHash: currentHash,
+            reason: 'known framework path without a Harness ownership marker',
           });
         }
       } else {

@@ -135,6 +135,23 @@ function isUpdateStatus(status) {
   return status === 'update-available' || status === 'partial-update';
 }
 
+// Patch-only updates (x.y.Z, third segment only) stay silent in hooks: they
+// are routine and would interrupt the user for no decision worth making.
+// Major (X.y.z) and minor (x.Y.z) releases still notify. Unparseable versions
+// fail open (notify) so real updates are never hidden by a parsing edge case.
+function isPatchOnlyUpdate(update) {
+  const from = semverSegments(update?.from || update?.version);
+  const to = semverSegments(update?.to || update?.remote);
+  if (!from || !to) return false;
+  return from[0] === to[0] && from[1] === to[1] && from[2] !== to[2];
+}
+
+function semverSegments(value) {
+  const match = String(value || '').match(/(\d+)\.(\d+)\.(\d+)/);
+  if (!match) return null;
+  return [Number(match[1]), Number(match[2]), Number(match[3])];
+}
+
 function buildMessage(update) {
   const from = update.from || update.version || 'unknown';
   const to = update.to || update.remote || 'unknown';
@@ -228,6 +245,13 @@ function main() {
 
   if (!isUpdateStatus(update?.status)) {
     emit('', { modeLabel, status: update?.status || 'unknown' });
+    return;
+  }
+
+  if (isPatchOnlyUpdate(update)) {
+    // Patch updates never prompt. Do not record noticedAt: a later minor or
+    // major release must still notify immediately.
+    emit('', { modeLabel, status: update.status, suppressed: 'patch-only' });
     return;
   }
 

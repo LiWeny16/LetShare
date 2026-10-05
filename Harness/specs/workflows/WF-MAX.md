@@ -16,27 +16,54 @@ WF-MAX is **explicit only**. Enter ONLY when the user explicitly types `/wf-max`
 | State | Controller or task-scribe | task-scribe continuously maintains dispatch ledger |
 | Source edits | Implementer writes | Workers write ONLY dispatch.writeSet; CEO never writes source |
 
+The manager ranges above describe available role shapes, not a fixed headcount.
+WF-Max-Useful chooses no spawn or a cheap role pass when dependency, acceptance,
+coordination, budget, or runtime evidence makes fan-out uneconomic.
+
 ## Fan-Out Modes
 
-**WF-Max-Useful** (default): fan-out only where writeSets or review lenses are meaningfully independent. Overhead > 0.30 degrades a wave to flat role pass. This does not authorize CEO source edits: source implementation still goes through an implementer/Worker role, or the run records an honest downgrade before editing.
+**WF-Max-Useful** (default): the CEO makes an evidence-based spawn decision
+from dependency shape, independent acceptance, expected coordination benefit,
+token/time budget, and actual runtime capacity. A dependency chain, no
+independent acceptance, or coordination cost without measurable benefit is a
+valid no-spawn outcome. Persist `fanoutSuppressed: true`, the reason, and the
+budget/capacity evidence in the task ledger. This does not authorize CEO source edits;
+required production changes still go through a Worker.
 
-**WF-Max-Strict** (explicit `--strict`, `strict wf-max`, or `strict mode`): unconditional fan-out per span formula. Every file gets a Worker.
+**WF-Max-Strict** (explicit `--strict`, `strict wf-max`, or `strict mode`):
+unconditional fan-out per the span formula, bounded by real runtime capacity.
+Strict mode attempts native fan-out first; on a failure record
+`fanoutAttempted: true`, runtime/channel, requested roles, limits, failure, and
+fallback in task state. Strict mode is never inferred from task size.
 
-## Mandatory Fan-Out Contract
+## Mandatory Fan-Out Contract (Strict mode only)
 
-`/wf-max` MUST attempt native subagent fan-out before implementation planning is considered complete. A solo controller path is allowed only after an explicit degradation record.
+The mandatory portion of this contract applies only after an explicit
+`--strict`, `strict wf-max`, or `strict mode` request. In that mode the
+controller MUST attempt native subagent fan-out before implementation planning
+is considered complete, bounded by the real runtime capacity. Useful mode may
+record a no-spawn decision and does not inherit this requirement.
 
-Minimum W0 attempt:
+## Context and Research Contract
 
-- Start `task-scribe` when available to maintain task state and the dispatch ledger.
-- Start at least one independent read-only planning/exploration/review lane. For real multi-domain tasks, prefer `explore-manager` plus scoped researchers or codebase explorers.
-- Record `fanoutAttempted: true`, runtime, channel tried, agents requested, configured/runtime limit facts, result, and degradation reason in the task PLAN or PROGRESS.
+Before planning or dispatch, generate the bounded task input:
 
-Mode interaction:
+```text
+node Harness/scripts/task-context.mjs pack <task-id> --project <absolutePath> --role <role> --budget-bytes <n> --json
+```
 
-- WF-Max-Useful may shrink the fan-out after the first native attempt when write sets or review lenses are not meaningfully independent. It may not silently skip the attempt.
-- WF-Max-Strict continues through the span formula until the Harness caps, runtime caps, user budget, or safety gates stop dispatch.
-- If native manager fan-out is unavailable, the controller dispatches leaf agents directly with exact WF-MAX dispatch packets; if no independent channel exists, stop honestly and ask the user.
+The controller passes the role/work-item pack to each Worker. Resume consumes a
+new `show`/`pack` instead of the full task log; `--input` is optional for pack.
+Before any external lookup, run:
+
+```text
+node Harness/scripts/research-policy.mjs decide --trigger <trigger> --task-type <type> --json
+```
+
+Search current web, GitHub, or Hugging Face primary sources only when the result
+has `search: true`. Record URL, title, version, license, checked date, and an
+`adopt`, `adapt`, or `reject` rationale. Reuse local evidence when no trigger
+exists; do not force network research or full-memory loading.
 
 OpenCode-specific requirement: project `opencode.json` must set `subagent_depth >= 2` for manager -> worker nesting, and WF-MAX manager agents must expose `permission.task` allowlists for their child agents. Without those two settings, OpenCode may accept `/wf-max` but fail to fan out from manager subagents.
 
@@ -85,6 +112,11 @@ Every Worker dispatch or peer-CLI call must be bounded by the controller's comma
 ### Capability Evidence
 
 Record the channel actually used, command/tool form, timeout, exit status, and a <=250 token Evidence-Packet in the task capsule. Do not create ad hoc probe scripts or write peer-CLI output to `%TEMP%`; persistent evidence belongs only under the current task's `evidence/` directory when it is intentionally part of the task record.
+
+### Peer CLI Output Contract
+
+- `opencode run --agent reviewer`: installed agent is `mode: subagent` per `.opencode/agents/reviewer.md`. Do NOT claim primary-runner role use without a live probe.
+- Parse JSON/JSONL peer CLI output: fail on empty/non-JSON, error events, budget errors, fallback warnings, or missing final model text.
 
 ## Parallelism Priority
 

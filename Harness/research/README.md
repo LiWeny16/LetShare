@@ -111,6 +111,26 @@ Use these patterns when turning research into PRD or feature docs:
 
 ## Architecture Decision References
 
+## Executable research policy (0.9.2)
+
+Use `node Harness/scripts/research-policy.mjs decide --task-type chore --json`
+before external research. The optional repeatable triggers are
+`capability-gap`, `volatile-api`, `user-request`, `repeated-failure`, and
+`benchmark-gap`; without a trigger a simple local chore does not require web
+research. The decision output is `{search, reasons, addDependency:false}`.
+
+Record a checked source in the task capsule with:
+
+```text
+node Harness/scripts/research-policy.mjs record --project ROOT --task TASK --input REFERENCE.json [--apply] --json
+```
+
+The JSON reference contains `url`, `title`, `sourceType`, `version`, `license`,
+`decision` (`adopt|adapt|reject`), `reason`, `acIds`, and `checkedAt`. Recording
+is dry-run unless `--apply` is supplied, writes only that task's
+`REFERENCES.md`, rejects adopting a code dependency without a license, and does
+not download or execute external code.
+
 When filling `Harness/project/architecture.md` and `Harness/research/research-results.md`, use these high-trust sources as starting points. Search within them; do not read them whole.
 
 ### System Design & Architecture Patterns

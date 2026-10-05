@@ -4,7 +4,15 @@ Purpose: coordinate a small set of subagents without building a scheduler.
 
 Use [subagents.md](subagents.md) for orchestration strategy. Use this file for the dispatch table, handoff format, and status protocol.
 
+WF/WF-MAX: [context pack/research gate](context-loading.md#Task Context Pack and Research Gate).
+
 Use when work needs parallel reading, independent review, cross-layer analysis, or more than one bounded implementation pass.
+
+## Runtime model capability declarations
+
+Native catalogs are authoritative. See [capability fallback](../../scripts/README.md#runtime-capability-declarations)
+for exact operator config and HTTP rejection; fallback declarations are not
+provider measurement.
 
 ## Principles
 
@@ -13,7 +21,7 @@ Use when work needs parallel reading, independent review, cross-layer analysis, 
 - Important assumptions, decisions, blockers, evidence, and handoffs must be written to `Harness/tasks/<task-id>/PROGRESS.md` and `Harness/tasks/<task-id>/PLAN.md`, the current feature doc, `Harness/MEMORY.md`, or `Harness/memory/*` as appropriate.
 - Resumable state is governed by [WF-STATE.md](../workflows/WF-STATE.md). On session start, the controller reads STATE.json before building a fresh dispatch table.
 - PRD-derived Acceptance Criteria are the source of truth. Dispatch packets must carry the relevant AC IDs and contracts.
-- Agent count: default (non-WF) <=3 active agents; `/wf` selects a tier dynamically per [WF-KERNEL.md](../workflows/WF-KERNEL.md) (Light/Standard/Full); `/wf-max` inherits the selected tier and adds maximum safe fan-out (WF-Max-Useful default; WF-Max-Strict explicit only), removing the Harness default cap through the span formula. WF-MAX must attempt native subagent fan-out and record `fanoutAttempted: true` before any solo fallback. Real concurrency is still bounded by runtime thread budget, config, billing, and local resources. Use current runtime subagents first, close completed agents, then peer-CLI overflow (`claude -p`, `codex exec`, or `opencode run --agent <role> --dir .`). Do not scaffold Codex scalar `[agents]` capacity fields into project `.codex/config.toml`; probe the installed runtime and manage Codex caps through the dispatch ledger unless the installed version accepts the config shape. Generated OpenCode config defaults to `subagent_depth = 2` for manager -> worker nesting. See [WF.md](../workflows/WF.md) and [WF-MAX.md](../workflows/WF-MAX.md).
+- Agent count: non-WF <=3; `/wf` selects tier; `/wf-max` defaults to Useful suppression with rationale, while explicit Strict attempts the span formula within runtime capacity; see [WF-MAX.md](../workflows/WF-MAX.md).
 - Read-only agents may run in parallel.
 - Writing agents run serially unless write sets are disjoint.
 - Use a worktree when two agents may touch overlapping files or long-running branches.

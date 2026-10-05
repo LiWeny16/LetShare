@@ -36,28 +36,59 @@ listed loads in order, defer unused skill/tool schemas, append volatile task
 state and runtime facts last, and bound Worker returns through dispatch
 `MaxReturnTokens`/`ReturnSchema`.
 
+## Bounded Context and Research Routing
+
+Once the task id is known, the CEO generates a role-scoped pack before
+dispatch and each worker consumes that pack rather than the complete log:
+
+```text
+node Harness/scripts/task-context.mjs pack <task-id> --project <absolutePath> --role <role> --budget-bytes <n> --json
+```
+
+Recovery uses a fresh `show`/`pack`; `--input` is optional for `pack`. Before
+external lookup, ask the policy router:
+
+```text
+node Harness/scripts/research-policy.mjs decide --trigger <trigger> --task-type <type> --json
+```
+
+Only a `search: true` result authorizes current web, GitHub, or Hugging Face
+research. Read the source body, record URL/title/version/license/date, and
+record an `adopt`, `adapt`, or `reject` decision with its reason. Do not load
+all memory or connect every task to the network.
+
 ## Rules
+
+On first entry, create or enter the task with durable `mode: wf-max`. The
+mode is sticky until terminal `closed`; do not promote direct tasks or
+downgrade/exit a managed task. The next session resumes the open focus
+automatically.
 
 WF-MAX inherits the selected WF tier and the shared WF-KERNEL gates
 (`Harness/specs/workflows/WF-KERNEL.md`), then expands safe parallelism. WF-Max-Useful is
 default; WF-Max-Strict only on explicit strict request. Execution expands
 through:
 
-- New task state directories MUST use task ids matching
+- New task capsules / state directories MUST use task ids matching
   `task-<verb>-<noun>[-detail]` under `Harness/tasks/<task-id>/`; never
   create bare `fix-*` task ids.
 1. Global mode: `wf-max`
 2. Agent role: `ceo | manager | worker | reviewer | verifier | reflector`
 3. Dispatch permission: `writeSet`, `forbidden`, `verification`
 
-WF-Max-Useful (default): `/wf-max` fans out only where write sets or review
-lenses are meaningfully independent. Overhead > 0.30 degrades the wave.
-Degrading fan-out does not authorize CEO source edits; source implementation
-still goes through an implementer/Worker role, or the run records an honest
-downgrade before editing.
+WF-Max-Useful (default): the CEO evaluates dependency shape, independent
+acceptance, coordination overhead, budget, and runtime capacity. A dependency
+chain, a unit with no independent acceptance, or coordination cost without
+measurable benefit is a valid **no-spawn** decision. Persist
+`fanoutSuppressed: true`, the reason, and the budget/capacity evidence in the
+task ledger. When fan-out is useful, dispatch strong controller/manager
+reasoning and cheap scoped roles with disjoint write sets; do not substitute a
+fixed agent count for the evidence.
 
-WF-Max-Strict (explicit override): user says `--strict`, `strict wf-max`, or
-`strict mode`. Unconditional fan-out per the original span formula.
+WF-Max-Strict is active only when the user explicitly says `--strict`, `strict
+wf-max`, or `strict mode`; then attempt unconditional fan-out per the span
+formula within real runtime capacity. If a strict attempt cannot run, persist
+`fanoutAttempted: true`, channel, limits, failure, and fallback.
 
 - CEO reads, plans, dispatches, synthesizes, and writes task state only. CEO
   never edits production source.
@@ -75,10 +106,13 @@ WF-Max-Strict (explicit override): user says `--strict`, `strict wf-max`, or
 
 ## Fan-Out Discipline
 
-- MUST attempt native subagent fan-out before implementation planning is
-  considered complete. A solo controller path is allowed only after recording
-  `fanoutAttempted: true`, the runtime, channel tried, agents requested,
-  limit/cap facts, failure reason, and fallback path in task state.
+- Useful mode does not require a spawn. The controller records either a
+  `fanoutSuppressed` rationale or the expected benefit, selected roles, and
+  write-set/capacity evidence before dispatch. This does not authorize CEO source edits.
+- Strict mode requires an attempted fan-out only after the explicit strict
+  request: the controller MUST attempt native subagent fan-out before planning
+  completes. On failure record `fanoutAttempted: true`, runtime/channel,
+  limit facts, failure reason, and fallback path in task state.
 - Use as many useful subagents as the runtime safely allows.
 - Claude Code documents session, concurrent, and spawn-depth subagent caps:
   `CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION`,

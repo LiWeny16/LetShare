@@ -1,12 +1,13 @@
 {
   "schemaVersion": 1,
-  "generator": "0.8.17",
+  "generator": "0.9.5",
   "source": "https://raw.githubusercontent.com/LiWeny16/create-harness-vibe-coding/main/templates/common/",
-  "generated": "2026-07-26T09:26:35.146Z",
+  "generated": "2026-09-14T11:07:29.230Z",
   "preserve": [
     "Harness/PROGRESS.md",
     "Harness/tasks/**",
     "Harness/memory/**",
+    "Harness/research/search/**",
     "Harness/research/PRD.md",
     "Harness/research/research-results.md",
     "Harness/architecture.md",
@@ -197,7 +198,22 @@
       "overwrite": "safe"
     },
     {
+      "path": ".agents/skills/wf-browser/references/BROWSER_CONTROL_PATTERNS.md",
+      "kind": "config",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".agents/skills/wf-command-create/SKILL.md",
+      "kind": "skill",
+      "overwrite": "safe"
+    },
+    {
       "path": ".agents/skills/wf-help/SKILL.md",
+      "kind": "skill",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".agents/skills/wf-init/SKILL.md",
       "kind": "skill",
       "overwrite": "safe"
     },
@@ -223,6 +239,66 @@
     },
     {
       "path": ".agents/skills/wf-review/SKILL.md",
+      "kind": "skill",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".agents/skills/wf-search/SKILL.md",
+      "kind": "skill",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".agents/skills/wf-search/references/evidence-contract.md",
+      "kind": "config",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".agents/skills/wf-search/references/policies/compare.md",
+      "kind": "config",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".agents/skills/wf-search/references/policies/fact.md",
+      "kind": "config",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".agents/skills/wf-search/references/policies/troubleshoot.md",
+      "kind": "config",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".agents/skills/wf-search/references/policies/verify.md",
+      "kind": "config",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".agents/skills/wf-search/references/source-routing.md",
+      "kind": "config",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".agents/skills/wf-search/references/tool-adapters.md",
+      "kind": "config",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".agents/skills/wf-task-archive/SKILL.md",
+      "kind": "skill",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".agents/skills/wf-task-list/SKILL.md",
+      "kind": "skill",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".agents/skills/wf-task-record/SKILL.md",
+      "kind": "skill",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".agents/skills/wf-ui/SKILL.md",
       "kind": "skill",
       "overwrite": "safe"
     },
@@ -347,7 +423,17 @@
       "overwrite": "safe"
     },
     {
+      "path": ".claude/commands/wf-command-create.md",
+      "kind": "command",
+      "overwrite": "safe"
+    },
+    {
       "path": ".claude/commands/wf-help.md",
+      "kind": "command",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".claude/commands/wf-init.md",
       "kind": "command",
       "overwrite": "safe"
     },
@@ -373,6 +459,31 @@
     },
     {
       "path": ".claude/commands/wf-review.md",
+      "kind": "command",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".claude/commands/wf-search.md",
+      "kind": "command",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".claude/commands/wf-task-archive.md",
+      "kind": "command",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".claude/commands/wf-task-list.md",
+      "kind": "command",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".claude/commands/wf-task-record.md",
+      "kind": "command",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".claude/commands/wf-ui.md",
       "kind": "command",
       "overwrite": "safe"
     },
@@ -427,7 +538,22 @@
       "overwrite": "safe"
     },
     {
+      "path": ".claude/skills/wf-browser/references/BROWSER_CONTROL_PATTERNS.md",
+      "kind": "config",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".claude/skills/wf-command-create/SKILL.md",
+      "kind": "skill",
+      "overwrite": "safe"
+    },
+    {
       "path": ".claude/skills/wf-help/SKILL.md",
+      "kind": "skill",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".claude/skills/wf-init/SKILL.md",
       "kind": "skill",
       "overwrite": "safe"
     },
@@ -453,6 +579,66 @@
     },
     {
       "path": ".claude/skills/wf-review/SKILL.md",
+      "kind": "skill",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".claude/skills/wf-search/SKILL.md",
+      "kind": "skill",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".claude/skills/wf-search/references/evidence-contract.md",
+      "kind": "config",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".claude/skills/wf-search/references/policies/compare.md",
+      "kind": "config",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".claude/skills/wf-search/references/policies/fact.md",
+      "kind": "config",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".claude/skills/wf-search/references/policies/troubleshoot.md",
+      "kind": "config",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".claude/skills/wf-search/references/policies/verify.md",
+      "kind": "config",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".claude/skills/wf-search/references/source-routing.md",
+      "kind": "config",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".claude/skills/wf-search/references/tool-adapters.md",
+      "kind": "config",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".claude/skills/wf-task-archive/SKILL.md",
+      "kind": "skill",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".claude/skills/wf-task-list/SKILL.md",
+      "kind": "skill",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".claude/skills/wf-task-record/SKILL.md",
+      "kind": "skill",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".claude/skills/wf-ui/SKILL.md",
       "kind": "skill",
       "overwrite": "safe"
     },
@@ -587,7 +773,17 @@
       "overwrite": "safe"
     },
     {
+      "path": ".opencode/commands/wf-command-create.md",
+      "kind": "command",
+      "overwrite": "safe"
+    },
+    {
       "path": ".opencode/commands/wf-help.md",
+      "kind": "command",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".opencode/commands/wf-init.md",
       "kind": "command",
       "overwrite": "safe"
     },
@@ -617,6 +813,31 @@
       "overwrite": "safe"
     },
     {
+      "path": ".opencode/commands/wf-search.md",
+      "kind": "command",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".opencode/commands/wf-task-archive.md",
+      "kind": "command",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".opencode/commands/wf-task-list.md",
+      "kind": "command",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".opencode/commands/wf-task-record.md",
+      "kind": "command",
+      "overwrite": "safe"
+    },
+    {
+      "path": ".opencode/commands/wf-ui.md",
+      "kind": "command",
+      "overwrite": "safe"
+    },
+    {
       "path": ".opencode/commands/wf-update.md",
       "kind": "command",
       "overwrite": "safe"
@@ -632,6 +853,106 @@
       "overwrite": "safe"
     },
     {
+      "path": "Harness/a2a/action-registry.json",
+      "kind": "config",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/a2a/role-graph.json",
+      "kind": "config",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/a2a/runtime-registry.json",
+      "kind": "config",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/a2a/skills/terminal-control.json",
+      "kind": "config",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/a2a/skills/wf-ui-map.json",
+      "kind": "config",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/a2a/skills/workflow-agent-node.json",
+      "kind": "config",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/a2a/skills/workflow-context.json",
+      "kind": "config",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/a2a/skills/workflow-diagram-node.json",
+      "kind": "config",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/a2a/skills/workflow-display-node.json",
+      "kind": "config",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/a2a/skills/workflow-file-node.json",
+      "kind": "config",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/a2a/skills/workflow-goal-node.json",
+      "kind": "config",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/a2a/skills/workflow-markdown-node.json",
+      "kind": "config",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/a2a/skills/workflow-mcp-connector-node.json",
+      "kind": "config",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/a2a/skills/workflow-node-actions.json",
+      "kind": "config",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/a2a/skills/workflow-node-map.json",
+      "kind": "config",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/a2a/skills/workflow-ontology.json",
+      "kind": "config",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/a2a/skills/workflow-resource-node.json",
+      "kind": "config",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/a2a/skills/workflow-skill-group-node.json",
+      "kind": "config",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/a2a/skills/workflow-timer-node.json",
+      "kind": "config",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/a2a/workflows.json",
+      "kind": "config",
+      "overwrite": "safe"
+    },
+    {
       "path": "Harness/ownership.manifest.json",
       "kind": "config",
       "overwrite": "safe"
@@ -639,6 +960,16 @@
     {
       "path": "Harness/research/README.md",
       "kind": "config",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/scripts/README.md",
+      "kind": "script",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/scripts/a2a-terminal.mjs",
+      "kind": "script",
       "overwrite": "safe"
     },
     {
@@ -657,7 +988,52 @@
       "overwrite": "safe"
     },
     {
+      "path": "Harness/scripts/lib/memory-context.mjs",
+      "kind": "script",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/scripts/lib/path-scope.mjs",
+      "kind": "script",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/scripts/lib/research-policy.mjs",
+      "kind": "script",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/scripts/lib/wf-search.mjs",
+      "kind": "script",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/scripts/memory-context.mjs",
+      "kind": "script",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/scripts/research-policy.mjs",
+      "kind": "script",
+      "overwrite": "safe"
+    },
+    {
       "path": "Harness/scripts/scan-clean.mjs",
+      "kind": "script",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/scripts/sync-host-global.mjs",
+      "kind": "script",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/scripts/task-context.mjs",
+      "kind": "script",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/scripts/task-group-index.mjs",
       "kind": "script",
       "overwrite": "safe"
     },
@@ -682,7 +1058,22 @@
       "overwrite": "safe"
     },
     {
+      "path": "Harness/scripts/wf-search.mjs",
+      "kind": "script",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/scripts/wf-ui-control.mjs",
+      "kind": "script",
+      "overwrite": "safe"
+    },
+    {
       "path": "Harness/scripts/wf-update-check.mjs",
+      "kind": "script",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/scripts/wf-update-runner.mjs",
       "kind": "script",
       "overwrite": "safe"
     },
@@ -744,6 +1135,11 @@
     {
       "path": "Harness/specs/runtime/agent-workflow.md",
       "kind": "doc",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/specs/runtime/command-surface.json",
+      "kind": "config",
       "overwrite": "safe"
     },
     {
@@ -828,6 +1224,11 @@
     },
     {
       "path": "Harness/templates/VALIDATION_REPORT.template.md",
+      "kind": "config",
+      "overwrite": "safe"
+    },
+    {
+      "path": "Harness/wf-browser/README.md",
       "kind": "config",
       "overwrite": "safe"
     },

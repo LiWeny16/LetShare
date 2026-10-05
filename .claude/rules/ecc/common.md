@@ -8,7 +8,7 @@ alwaysApply: true
 ## Context
 
 - Start with `CLAUDE.md`. When `Harness/` exists, also read `Harness/memory/startup-hints.md` (L2 lightweight digest, not full router).
-- When the user explicitly invokes a workflow command (`/wf-*`, `$wf-*`, or `/skills wf-*`), excluding `/wf-help`, `$wf-help`, `/skills wf-help`, `/wf-update`, `$wf-update`, and `/skills wf-update`, load `Harness/MEMORY.md` and `Harness/README.md`.
+- When the user explicitly invokes a workflow command (`/wf-*`, `$wf-*`, or `/skills wf-*`), excluding `/wf-help`, `$wf-help`, `/skills wf-help`, `/wf-update`, `$wf-update`, `/skills wf-update`, `/wf-task-record`, `$wf-task-record`, `/skills wf-task-record`, `/wf-task-list`, `$wf-task-list`, `/skills wf-task-list`, `/wf-task-archive`, `$wf-task-archive`, `/skills wf-task-archive`, `/wf-command-create`, `$wf-command-create`, `/skills wf-command-create`, `/wf-ui`, `$wf-ui`, `/skills wf-ui`, `/wf-init`, `$wf-init`, `/skills wf-init`, `/wf-search`, `$wf-search`, and `/skills wf-search`, load `Harness/MEMORY.md` and `Harness/README.md`.
 - For simple single-step tasks without `/wf-*`, operate in direct mode: skip the Harness router and execute directly.
 - Do not bulk-read `Harness/`. Load by router trigger.
 - Keep `Harness/tasks/<task-id>/PROGRESS.md` and `Harness/tasks/<task-id>/PLAN.md` current when work has multiple steps, files, or agents.
@@ -40,6 +40,15 @@ alwaysApply: true
 - Writing agents must run serially unless write sets are disjoint.
 - If the runtime cannot spawn subagents, emulate the same role pack in a separate bounded pass.
 - Main agent owns integration and final verification.
+
+## Agent Team Cooperation (WF / WF-MAX)
+
+- On `/wf` / `$wf` / `/wf-max` / `$wf-max`, the main Agent node autonomously: understands the task, decides whether team collaboration is needed, finds existing agents by role/capability, connects or creates sub-agents (role profile: displayName + roleTitle), shares context via Markdown nodes (nodeId only), sends structured requests, waits via Timer wakeup messages (checked on next turn), aggregates replies, ticks Goal items, and completes when done.
+- Ambiguous target → ask the user; never blindly create/connect.
+- Never edit `Harness/a2a/**/state.json` directly; use typed actions only.
+- Timer is the only wakeup source; the Goal node never wakes agents.
+- Subagent mode comes from node settings (built-in-subagents default = native helpers, no canvas nodes; wf-node-subagents = visible canvas agents); natural language "内部助手"/"内置子代理" → built-in, "画布节点"/"WF node协作" → wf-node. Discover everything at runtime: help --json, workflow-context, manuals <type>, snapshot, workflow-ontology.
+- No jargon for users: no broadcast/A2A/thread/shared-context terminology.
 
 ## Memory
 

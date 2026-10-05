@@ -23,7 +23,7 @@
 - [explore-manager](../.claude/agents/explore-manager.md) - WF-MAX W0 exploration: spawn 5-10 read-only researchers, synthesize, report to CEO.
 - [architect-manager](../.claude/agents/architect-manager.md) - WF-MAX W1 architecture: spawn 3 architects, synthesize interface contracts, report to CEO.
 - [implement-manager](../.claude/agents/implement-manager.md) - WF-MAX W2 implementation: spawn 5-7 implementers (one file_claim each), merge, report to CEO.
-- [review-manager](../.claude/agents/review-manager.md) - WF-MAX W2R review: spawn 3-4 reviewers (spec/code/security/perf), deduplicate, classify severity, report to CEO.
+- [review-manager](../.claude/agents/review-manager.md) - optional native review manager: choose the smallest bounded fan-out, deduplicate, classify severity, and report to the controller.
 
 Stack-specific agents can be added after the product shape is known.
 
@@ -34,16 +34,23 @@ Stack-specific agents can be added after the product shape is known.
 - [subagent-orchestrator](../.claude/skills/subagent-orchestrator/SKILL.md) - controller-led subagent orchestration, parallel read-only passes, review gates, and recovery handoffs.
 - [wf-readme](../.claude/skills/wf-readme/SKILL.md) - README preservation, append-only development sections, structured tables, and approved architecture diagrams.
 - [wf-agents-docs](../.claude/skills/wf-agents-docs/SKILL.md) - source-backed Claude/Codex/OpenCode CLI invocation, JSON output, resume, telemetry, and automation gotchas.
-- [wf-review](../.claude/skills/wf-review/SKILL.md) - peer review: prefer another agent CLI (Claude/Codex/OpenCode); otherwise use the installed reviewer role as an independent subagent context. Controller decides.
+- [wf-review](../.claude/skills/wf-review/SKILL.md) - native-only peer review: the controller dispatches bounded clean reviewer subagents, deduplicates evidence, and decides.
 - [wf-help](../.claude/skills/wf-help/SKILL.md) - Codex compatibility shim for `$wf-help` / `/skills wf-help`; returns the direct command table without entering WF.
 - [wf-update](../.claude/skills/wf-update/SKILL.md) - GitHub-based incremental harness update, checksum comparison, and safe in-place updates.
-- [wf-learn](../.claude/skills/wf-learn/SKILL.md) - force memory learning cycle: context-master -> memory-master -> project + global memory.
-- [wf-max](../.claude/skills/wf-max/SKILL.md) - WF kernel + maximum safe fan-out: WF-Max-Useful by default (fan out only where independent), WF-Max-Strict only on explicit strict request; current runtime subagents first, peer-CLI overflow when available.
+- [wf-learn](../.claude/skills/wf-learn/SKILL.md) - explicit evidence-to-method learning cycle with anti-overfitting gate, route-load proof, and scoped memory writes.
+- [wf-max](../.claude/skills/wf-max/SKILL.md) - WF kernel + evidence-driven fan-out: WF-Max-Useful may persist a no-spawn rationale when dependencies, acceptance, coordination, budget, or runtime evidence show no benefit; WF-Max-Strict is explicit only; current runtime capacity remains authoritative.
 - [wf-auto](../.claude/skills/wf-auto/SKILL.md) - perpetual adaptive auto-optimization: evidence-selected probes, dynamic obligations, intent checkpoints, evidence ledger.
 - [wf-auto-spark](../.claude/skills/wf-auto-spark/SKILL.md) - perpetual inspiration mode: external spark search, long-term roadmap with staged milestones, <=50% deviation guard.
-- [wf-browser](../.claude/skills/wf-browser/SKILL.md) - built-in browser automation/E2E workflow with controllable UI contracts, Browser Use, Playwright, CDP/network evidence, screenshots, traces, and validation matrix.
+- [wf-browser](../.claude/skills/wf-browser/SKILL.md) - built-in agent-operable browser architecture and runtime-control workflow with BrowserOS Neo as the default user-provided browser, manual setup prompt, readiness levels, WebSocket bridge, UI capability contract, observe/act primitives, virtual cursor, multi-window/subagent leases, `Harness/wf-browser/` artifacts, and explicit Playwright/CDP fallback.
+- [wf-ui](../.claude/skills/wf-ui/SKILL.md) - Codex compatibility shim for `$wf-ui` / `/skills wf-ui`; direct command starts the local browser control panel without entering WF.
+- [wf-init](../.claude/skills/wf-init/SKILL.md) - Codex compatibility shim for `$wf-init` / `/skills wf-init`; direct command initializes a project against the global Harness runtime without entering WF.
+- [wf-search](../.claude/skills/wf-search/SKILL.md) - Codex compatibility shim for `$wf-search` / `/skills wf-search`; direct command validates and renders a structured search evidence report without entering WF.
 - [tdd](../.claude/skills/tdd/SKILL.md) - acceptance-driven TDD: AC-linked RED tests, real UI clicks for browser-visible behavior, Playwright/CDP evidence, and configured coverage gate.
 - [wf-remove](../.claude/skills/wf-remove/SKILL.md) - safely remove Harness framework files (SAFE/MODIFIED/USER classes), auto-prune empty directories, backup option.
+- [wf-task-record](../.claude/skills/wf-task-record/SKILL.md) - Codex compatibility: use $wf-task-record or /skills wf-task-record to wrap task-state.mjs record.
+- [wf-task-list](../.claude/skills/wf-task-list/SKILL.md) - Codex compatibility: use $wf-task-list or /skills wf-task-list to wrap task-state.mjs list.
+- [wf-task-archive](../.claude/skills/wf-task-archive/SKILL.md) - Codex compatibility: use $wf-task-archive or /skills wf-task-archive to wrap task-state.mjs archive.
+- [wf-command-create](../.claude/skills/wf-command-create/SKILL.md) - Codex compatibility: use $wf-command-create or /skills wf-command-create to update command surfaces from `command-surface.json`.
 
 Codex repo-skill mirrors live under `../.agents/skills/` with the same skill names.
 
@@ -51,6 +58,12 @@ Codex repo-skill mirrors live under `../.agents/skills/` with the same skill nam
 
 - [wf-help](../.claude/commands/wf-help.md) - direct `/wf-help` command that returns a WF command table; Codex mirror skill supports `$wf-help` without entering WF.
 - [wf-update](../.claude/commands/wf-update.md) - direct `/wf-update` command for script-driven update checks, safe apply, conflict handling, and release highlights.
+- [wf-task-record](../.claude/commands/wf-task-record.md) - direct `/wf-task-record` command that wraps `node Harness/scripts/task-state.mjs record`.
+- [wf-task-list](../.claude/commands/wf-task-list.md) - direct `/wf-task-list` command that wraps `node Harness/scripts/task-state.mjs list`.
+- [wf-task-archive](../.claude/commands/wf-task-archive.md) - direct `/wf-task-archive` command that wraps `node Harness/scripts/task-state.mjs archive`.
+- [wf-command-create](../.claude/commands/wf-command-create.md) - direct `/wf-command-create` command for task-backed wf-* command surface changes.
+- [wf-ui](../.claude/commands/wf-ui.md) - direct `/wf-ui` command that starts the local Harness backend and browser control panel.
+- [wf-init](../.claude/commands/wf-init.md) - direct `/wf-init` command that binds the current project to the globally installed Harness runtime (thin bridge; global version is authoritative).
 
 Stack-specific skills can be added after the product shape is known.
 
@@ -79,6 +92,7 @@ Located under `.claude/rules/ecc/`, auto-loaded by the CC engine:
 - [Context loading protocol](specs/runtime/context-loading.md)
 - [Dispatch protocol](specs/runtime/dispatch.md)
 - [Subagent orchestration](specs/runtime/subagents.md)
+- [Command surface registry](specs/runtime/command-surface.json)
 - [Extension contract](specs/guides/extension.md)
 - [Architecture docs](project/architecture.md)
 - [Agent workflow](specs/runtime/agent-workflow.md)

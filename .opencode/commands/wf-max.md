@@ -1,5 +1,5 @@
 ---
-description: Run WF-MAX with mandatory subagent fan-out and recorded degradation
+description: Run WF-MAX with evidence-driven fan-out and recorded suppression or degradation
 agent: build
 ---
 
@@ -11,11 +11,21 @@ static help or script command.
 1. Load `CLAUDE.md`, `Harness/MEMORY.md` (index only per Memory Preflight), then `Harness/README.md`.
 2. Load and follow `.claude/skills/wf-max/SKILL.md` (mirror: `.agents/skills/wf-max/SKILL.md`) and `Harness/specs/workflows/WF-MAX.md`.
 3. Preserve cache-first order per `Harness/specs/runtime/context-loading.md#Cache-First Context Contract`.
-4. MUST attempt native runtime subagent fan-out before planning is considered complete:
-   - start `task-scribe` when available for task ledger/state;
-   - start W0 exploration through manager/explorer/researcher roles with disjoint read sets;
-   - when running in OpenCode, require project `opencode.json` to have `subagent_depth >= 2` and manager agents to have `permission.task` allowlists for manager -> worker fan-out;
-   - if nested manager fan-out is unavailable, dispatch leaf workers directly from the primary agent with exact WF-MAX dispatch packets.
-5. In every runtime, MUST attempt native subagent fan-out before implementation planning is considered complete; never silently continue as a solo controller.
-6. If native fan-out fails, record `fanoutAttempted: true`, runtime, channel tried, agents requested, failure/degradation reason, and the fallback path in `Harness/tasks/<task-id>/PLAN.md` or `PROGRESS.md`.
-7. Continue with WF-Max-Useful by default or WF-Max-Strict only when the user explicitly requests strict mode.
+4. After the task id is known, generate a bounded controller/worker input with
+   `node Harness/scripts/task-context.mjs pack <task-id> --project <absolutePath> --role <role> --budget-bytes <n> --json`.
+   Resume by consuming a fresh `show`/`pack`; do not inject the full task log.
+5. Before external lookup, run
+   `node Harness/scripts/research-policy.mjs decide --trigger <trigger> --task-type <type> --json`.
+   Search web, GitHub, or Hugging Face only when the decision says `search: true`;
+   record source URL, title, version, license, date, and adopt/adapt/reject.
+6. Use WF-Max-Useful by default. The CEO may suppress fan-out when work is a
+   dependency chain, has no independent acceptance, or coordination cost has
+   no measured benefit; persist `fanoutSuppressed: true` plus the reason and
+   budget/capacity evidence. Workers still own any required source edits.
+7. WF-Max-Strict is active only for explicit `--strict`, `strict wf-max`, or
+   `strict mode`; then the controller MUST attempt native runtime subagent fan-out
+   and the span formula within real runtime capacity.
+   If a strict dispatch fails, record `fanoutAttempted: true`, channel, limit,
+   failure, and fallback in the task capsule. If Useful selects OpenCode
+   manager-to-worker fan-out, first require `subagent_depth >= 2` and a
+   `permission.task` child allowlist; otherwise record suppression.

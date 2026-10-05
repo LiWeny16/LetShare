@@ -10,8 +10,22 @@ manager, async runtime, or graph framework.
 |------|------|
 | `Harness/PROGRESS.md` | Derived global active pointer and Task Index |
 | `Harness/tasks/<task-id>/STATE.json` | Canonical machine-readable resume truth |
+| `Harness/tasks/INDEX.json` | Generated machine route for project/group/status/date queries |
+| `Harness/tasks/INDEX.md` | Generated human route for the same task collection |
 | `Harness/tasks/<task-id>/PROGRESS.md` | Human-readable summary |
 | `Harness/tasks/<task-id>/PLAN.md` | Plan, decisions, scope context |
+
+## Task Context Packs
+
+`STATE.json.context` is optional for legacy capsules. When present it contains
+only `intent` (with immutable `original`, `current`, and append-only `changes`),
+`constraints`, `facts`, `assumptions`, `decisions`, `evidence`, `attempts`, and
+`handoff`. The root `STATE.json.nextAction` is the only next-action field.
+Use `node Harness/scripts/task-context.mjs update|show|pack <task-id>` for
+bounded context updates and role/work-item packs. Packs include evidence paths
+or URLs and claims, never the body of a raw log; UTF-8 byte budgets fail
+explicitly when mandatory intent, constraints, unresolved items, or nextAction
+cannot fit. Legacy context is reconstructed from PLAN/STATE for read-only use.
 
 Task id convention: new task capsules MUST use
 `task-<verb>-<noun>[-detail]` (kebab-case, 2-5 words after the prefix), for
@@ -22,9 +36,12 @@ example `task-fix-login-flow`. Do not create bare task names such as
 
 ### status
 
-`active`, `blocked`, `in_progress`, `running`, `pending`,
+`active`, `blocked`, `closed`
+
+Legacy repositories may still contain `in_progress`, `running`, `pending`,
 `needs-user-decision`, `complete`, `verified`, `archived`, `abandoned`,
-`obsolete`, `done`, `closed`, `closeout`, `skipped`, `failed`
+`obsolete`, `done`, `closeout`, `skipped`, or `failed`. `task-state.mjs` reads
+those values and normalizes them to the three lifecycle statuses on new writes.
 
 ### phase
 
@@ -43,6 +60,11 @@ Legacy aliases such as `Implementation`, `Validation`, and
 
 `direct`, `wf`, `wf-max`, `wf-auto`, `wf-auto-spark`, `wf-review`,
 `wf-browser`
+
+Only `wf` and `wf-max` own the durable task lifecycle. The auto/spark modes
+use their separate continuous capsule; review/browser are capability modes.
+They remain valid explicit mode values for compatibility, but do not promote a
+normal task into cross-session WF management.
 
 ### tier
 
@@ -65,12 +87,18 @@ Legacy aliases such as `Implementation`, `Validation`, and
    not.**
 7. **If STATE.json conflicts with PLAN/PROGRESS, controller stops and reconciles
    before continuing.**
+8. **Durable WF ownership is creation-time opt-in.** A task in `wf` or
+   `wf-max` remains WF-managed for its whole lifetime; its mode cannot be
+   downgraded or exited. `closed` is terminal for that capsule. Start the
+   next unit of work in a new capsule with an explicit mode.
 
 ## CLI Contract
 
 Use `Harness/scripts/task-state.mjs` as the deterministic state writer:
 
 - `node Harness/scripts/task-state.mjs list --json`
+- `node Harness/scripts/task-state.mjs index`
+- `node Harness/scripts/task-state.mjs query <keyword> --project <project> --json`
 - `node Harness/scripts/task-state.mjs validate --json`
 - `node Harness/scripts/task-state.mjs reconcile --dry-run --json`
 - `node Harness/scripts/task-state.mjs reconcile --apply`
@@ -79,8 +107,72 @@ Use `Harness/scripts/task-state.mjs` as the deterministic state writer:
 - `node Harness/scripts/task-state.mjs archive --keep 5 --dry-run --json`
 - `node Harness/scripts/task-state.mjs archive --keep 5 --apply`
 
-Do not rely on prompt instructions alone to keep active task, task `STATE.json`,
-task `PROGRESS.md`, and root `Harness/PROGRESS.md` synchronized.
+Do not rely on prompt instructions alone to keep task `STATE.json`, task
+`PROGRESS.md`, the generated task route, and root `Harness/PROGRESS.md`
+synchronized.
+
+## Links (Cross-Task Dependencies)
+
+STATE.json `links` enables cross-task dependency resolution without reading
+every task capsule:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `links.dependsOn` | `string[]` | Task IDs this task depends on (blockers) |
+| `links.blocks` | `string[]` | Task IDs this task blocks |
+| `links.related` | `string[]` | Related task IDs (no dependency direction) |
+
+When resolving `links.dependsOn`, the controller reads only the listed tasks'
+STATE.json, not all task capsules. A task with unresolved dependsOn entries
+should stay in the blocked queue until its dependencies resolve.
+
+## Work Items (Parallel Dispatch)
+
+STATE.json `workItems[]` enables fine-grained parallel dispatch tracking with
+per-item dependencies:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | `string` | Unique item identifier |
+| `status` | `string` | `pending`, `ready`, `running`, `done`, `blocked`, `skipped`, `failed` |
+| `phase` | `string` | Phase this item belongs to |
+| `dependsOn` | `string[]` | Item IDs this item depends on |
+| `parallelGroup` | `string` | Group name for concurrent dispatch (optional) |
+| `readSet` | `string[]` | Files/patterns the item may read |
+| `writeSet` | `string[]` | Files/patterns the item may write |
+| `agent` | `string` | Agent role assigned (optional) |
+| `evidence` | `string` | Evidence path or summary (optional) |
+| `next` | `string` | Next action after this item completes (optional) |
+
+`workItems` is an additive array — it supplements the dispatchLedger and queues
+for finer-grained tracking. The dispatchLedger remains the canonical record of
+subagent dispatches.
+
+## Open Tasks
+
+"Open tasks" are task capsules with lifecycle status `active` or `blocked`.
+Legacy open values are accepted while an old repository is being migrated.
+
+The active pointer (`Harness/PROGRESS.md`) is a focus/resume pointer, not a
+lock. Multiple open tasks are valid and remain visible in `INDEX.json`,
+`INDEX.md`, and `list --by-group`; `set-active` only changes which open WF task
+is loaded first on resume while a managed WF task is open. It cannot replace
+that focus with a direct task. A direct task may coexist, but it never acquires
+WF lifecycle ownership.
+
+## Queue Entry Normalization
+
+Queues (`ready`, `running`, `blocked`, `done`) accept both plain string entries
+and object entries. The normalization rules are backward-compatible:
+
+- A plain string entry is treated as a task or dispatch item ID.
+- An object entry may contain the same fields as a work item (`id`, `status`,
+  `dependsOn`, etc.) for richer inline tracking.
+- `task-state.mjs` preserves both forms during reconcile — it does not coerce
+  objects to strings or vice versa.
+
+This enables incremental adoption: existing STATE.json files with string-only
+queues continue to work without changes.
 
 ## Resume Protocol
 
@@ -99,8 +191,17 @@ New window / session start:
    - Queues: ready (can dispatch immediately), running (awaiting results),
      blocked (needs resolution), done.
    - nextAction (what to do next).
-4. Do NOT bulk-read `Harness/tasks/` to find context. Use the active pointer.
-5. Direct simple tasks may skip STATE/PLAN/PROGRESS unless the user says
+   - **links.dependsOn**: if non-empty, check whether any dependency tasks are
+     still open (their STATE.json status is `active` or `blocked`, after legacy
+     normalization). Report blocked dependencies to the user.
+   - **workItems[]**: if non-empty, inspect items with status `running` or
+     `ready` for parallel dispatch candidates.
+4. Do NOT bulk-read `Harness/tasks/` to find context. Use the active pointer
+   and `Harness/tasks/INDEX.json` for deterministic project/group lookup.
+5. If the active pointer targets an open `wf`/`wf-max` task, automatically
+   resume WF mode from that capsule even when the user does not repeat `/wf`.
+   If it targets a direct or capability-mode task, do not enter WF.
+6. Direct simple tasks may skip STATE/PLAN/PROGRESS unless the user says
    "continue"/"resume".
 
 ## State Transitions
@@ -114,6 +215,19 @@ intake -> clarify -> requirements -> prd -> acceptance -> plan
 
 Any phase may transition to `blocked` if a dependency, user decision, or external
 input is required.
+
+Task lifecycle is deliberately smaller than phase state:
+
+```text
+direct ------------------------------> closed
+wf / wf-max (immutable ownership) ---> closed
+active <-----------------------------> blocked
+```
+
+An open managed task may move between `active` and `blocked`, then only to
+`closed`. It cannot return from `closed`, change to `direct`, or be reused as a
+new task. Multiple capsules may be open at once; the active pointer selects
+one managed focus without collapsing the collection.
 
 ## Dispatch Ledger
 

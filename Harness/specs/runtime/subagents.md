@@ -9,6 +9,21 @@ Cache-first discipline: subagent context packs follow
 docs and selected files, keep dispatch fields in deterministic order, defer
 unused skill/tool schemas, and return bounded summaries instead of transcripts.
 
+For WF and WF-MAX dispatch, the controller first creates a bounded pack with
+`node Harness/scripts/task-context.mjs pack <task-id> --project <absolutePath> --role <role>
+--budget-bytes <n> --json`. The dispatch packet references the resulting hash,
+budget, role/work-item filter, omitted sections, and evidence pointers. A
+resumed agent consumes a new pack; it does not receive the full task transcript.
+Pack structure is not semantic proof, so validators still run the behavior
+checks required by the acceptance criteria.
+
+External lookup is conditional. Run
+`node Harness/scripts/research-policy.mjs decide --trigger <trigger>
+--task-type <type> --json` only when a capability gap, volatile API, explicit
+request, repeated failure, or benchmark gap is present. If search is allowed,
+the assigned agent reads the source body and records URL, title, version,
+license, date, and adopt/adapt/reject rationale; otherwise reuse local evidence.
+
 project files are the only durable communication channel; chat/subagent transcript state is non-authoritative. Important assumptions, decisions, blockers, evidence, and handoffs must be written to `Harness/tasks/<task-id>/PROGRESS.md` and `Harness/tasks/<task-id>/PLAN.md`, the current feature doc, `Harness/MEMORY.md`, or `Harness/memory/*` as appropriate.
 
 Subagent work is acceptance-driven. Use [AGENT_ISOLATION.md](../protocols/AGENT_ISOLATION.md)
@@ -202,11 +217,17 @@ matrix from running behavior and evidence, not from the implementer's summary.
 If either reviewer finds issues, the implementer or debugger fixes them and the same gate runs again. Do not move to final acceptance with open critical/high findings or without reflector PASS.
 
 For `/wf-review`, use the installed `reviewer` role before inventing any
-ad hoc review prompt. If no peer CLI is available, dispatch `reviewer` as an
-independent same-runtime subagent context; for broad WF-MAX review, dispatch
-`review-manager` when the runtime supports nested reviewer fan-out. Reviewer
-agents report suggestions only. The controller accepts, rejects, or escalates
-each finding and owns the final decision.
+ad hoc review prompt. Dispatch it as an independent clean native subagent
+context; peer CLIs are forbidden for this command. For broad reviews, dispatch
+`review-manager` only when the runtime supports bounded native nested fan-out.
+Reviewer agents report suggestions only. The controller accepts, rejects, or
+escalates each finding and owns the final decision.
+
+### OpenCode Reviewer Caveat
+
+`opencode run --agent reviewer`: current installed `.opencode/agents/reviewer.md`
+is `mode: subagent`; OpenCode falls back to the default agent. Probe before
+claiming primary-runner review. Prefer same-runtime reviewer subagent fallback.
 
 ## Subagent Status Handling
 

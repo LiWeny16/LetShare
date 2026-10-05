@@ -20,6 +20,25 @@ But perpetual search without direction = drift. The **Roadmap** is the anchor.
 
 ## Inherited Execution Chain
 
+### Context and Conditional Research
+
+Spark discovery starts from the bounded role-scoped task pack:
+
+```text
+node Harness/scripts/task-context.mjs pack <task-id> --project <absolutePath> --role <role> --budget-bytes <n> --json
+```
+
+Workers and resumed cycles consume a fresh `show`/`pack`, not the full task
+log. Before a spark search, ask:
+
+```text
+node Harness/scripts/research-policy.mjs decide --trigger <trigger> --task-type <type> --json
+```
+
+Search results must be read from the source body and recorded with URL, title,
+version, license, date, and an adopt/adapt/reject rationale. This policy keeps
+spark search conditional and does not require network access for every cycle.
+
 WF-AUTO-SPARK is a `/wf` variant layered on WF-AUTO: it inherits the WF-KERNEL contract via WF-AUTO and WF constraints, and does not define an independent heavy process. External spark search replaces discovery only; it does not replace acceptance, implementation, review, verification, reflection, or evidence.
 
 Accepted spark candidates re-enter the standard W2-W5 gates per [WF-KERNEL.md](WF-KERNEL.md): implementer (one file_claim, ≤3 files, ≤50 lines), verifier, reviewer(s), reflector. Spark searchers are read-only. Any implementation must use the dispatch packet from `Harness/specs/runtime/dispatch.md` with explicit write set, forbidden truth files, AC IDs, and verification commands. A candidate with no verifier evidence or no reflector PASS is not accepted, even if the idea is valuable.
@@ -28,7 +47,7 @@ For task-state writes, CEO provides concise bullets and decisions; task-scribe f
 
 ## Startup: Roadmap Declaration
 
-Before first spark cycle, CEO MUST declare a roadmap. This is written to `Harness/tasks/auto/SPARK-ROADMAP.md`.
+Before first spark cycle, CEO MUST declare a roadmap. This is written to `Harness/tasks/continuous/SPARK-ROADMAP.md`.
 
 ### Roadmap Format
 
@@ -239,15 +258,15 @@ Re-Anchor Gate (every preset interval)
 
 ## Task Capsule & Recording
 
-WF-AUTO-SPARK uses a dedicated task capsule at `Harness/tasks/auto/`. Shared with `/wf-auto` — same capsule, different operational mode.
+WF-AUTO-SPARK uses a dedicated task capsule at `Harness/tasks/continuous/`. Shared with `/wf-auto` — same capsule, different operational mode.
 
 ### Capsule Structure
 
 | File | Purpose | Updated |
 |------|---------|---------|
-| `Harness/tasks/auto/SPARK-ROADMAP.md` | North Star + milestones + deviation log | At startup + every milestone change |
-| `Harness/tasks/auto/PLAN.md` | Current cycle's change spec (write set, acceptance criteria) | Before each implementation |
-| `Harness/tasks/auto/PROGRESS.md` | Cycle log, value reflections, cumulative stats, evidence | After each cycle |
+| `Harness/tasks/continuous/SPARK-ROADMAP.md` | North Star + milestones + deviation log | At startup + every milestone change |
+| `Harness/tasks/continuous/PLAN.md` | Current cycle's change spec (write set, acceptance criteria) | Before each implementation |
+| `Harness/tasks/continuous/PROGRESS.md` | Cycle log, value reflections, cumulative stats, evidence | After each cycle |
 | `Harness/PROGRESS.md` | Global task index — active spark session status | At session start, milestone, and stop |
 
 ### Heartbeat Protocol (per cycle, in `PROGRESS.md`)
@@ -314,9 +333,9 @@ This replaces the broken `/wf-auto` auto-continue. No silent drift across sessio
 | File | Purpose |
 |------|---------|
 | `Harness/specs/workflows/WF-AUTO-SPARK.md` | This spec |
-| `Harness/tasks/auto/SPARK-ROADMAP.md` | Active roadmap (created at startup) |
-| `Harness/tasks/auto/PLAN.md` | Per-cycle change spec |
-| `Harness/tasks/auto/PROGRESS.md` | Cycle log, heartbeat, evidence ledger |
+| `Harness/tasks/continuous/SPARK-ROADMAP.md` | Active roadmap (created at startup) |
+| `Harness/tasks/continuous/PLAN.md` | Per-cycle change spec |
+| `Harness/tasks/continuous/PROGRESS.md` | Cycle log, heartbeat, evidence ledger |
 | `Harness/PROGRESS.md` | Global task index linkage |
 | `.claude/skills/wf-auto-spark/SKILL.md` | Claude Code skill loader |
 | `.agents/skills/wf-auto-spark/SKILL.md` | Codex skill loader (mirror) |

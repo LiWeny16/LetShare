@@ -37,8 +37,44 @@ listed loads in order, load only routed skills/tools, append task state and
 latest tool output after stable docs, and return compact evidence instead of
 logs or transcripts.
 
+## Bounded Context and Research Routing
+
+After the controller has a task id, generate a role-scoped input and use that
+artifact for dispatch and recovery:
+
+```text
+node Harness/scripts/task-context.mjs pack <task-id> --project <absolutePath> --role <role> --budget-bytes <n> --json
+```
+
+The pack is a bounded summary of intent, constraints, unresolved items, and
+role-relevant evidence. Workers and resumed controllers consume a fresh
+`show`/`pack`; they do not receive the complete task log. `--input` is optional
+for `pack` and the controller chooses the byte budget from the task risk.
+
+Before searching outside the project, ask the local policy router:
+
+```text
+node Harness/scripts/research-policy.mjs decide --trigger <trigger> --task-type <type> --json
+```
+
+Valid triggers cover a capability gap, volatile API, explicit user request,
+repeated failure, and benchmark gap. Search web, GitHub, or Hugging Face only
+when `search: true`. An agent that searches reads the primary source, records
+URL/title/version/license/date, and records an `adopt`, `adapt`, or `reject`
+decision with its reason. A normal workflow does not load all memory or go
+online by default.
+
 ## Rules
 
+- On the first `/wf` or `$wf` entry, create or enter the task with `mode: wf`;
+  on `/wf-max`, use `mode: wf-max`. This explicit mode is the durable
+  lifecycle declaration, not a label inferred from task complexity.
+- When an open `wf`/`wf-max` task is the Harness active focus, resume it on the
+  next session automatically. Do not ask the user to repeat the trigger or
+  silently fall back to direct mode.
+- A task that started without `/wf` or `/wf-max` stays outside WF lifecycle;
+  never promote it. A managed task cannot downgrade or exit; close it, then
+  create a new task capsule for the next unit of work.
 - Create or update a task capsule under `Harness/tasks/<task-id>/`; new task
   ids MUST match `task-<verb>-<noun>[-detail]`.
 - Select the right WF tier: WF-Light (low-risk, planner/test/verifier), WF-Standard (multi-file, compact ACs, one review lens), WF-Full (high-risk/cross-layer, full role chain).

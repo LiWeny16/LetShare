@@ -31,6 +31,12 @@ files, contracts, tests, or evidence to stay under budget.
 
 After the tier is selected, load other docs only by trigger.
 
+## Task Context Pack and Research Gate
+
+Use `task-context.mjs pack/show` for bounded role packs/pointers. Run
+`research-policy.mjs decide` before web/GitHub/HF lookup; record source/adoption
+evidence. Never preload full logs; structural, not semantic proof.
+
 Escalation rule: when unsure whether a file is required, prefer targeted
 keyword search or a one-file read over guessing from memory. Escalate from a
 smaller profile to the next targeted profile only when the new file directly

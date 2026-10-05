@@ -13,12 +13,19 @@ which returns this same table without loading `Harness/MEMORY.md` or entering WF
 | `/wf-max <task>` | workflow skill | `/wf-max refactor auth module` | WF-Max-Useful default (fan-out only where independent), WF-Max-Strict override (unconditional fan-out). |
 | `/wf-auto` | workflow skill | `/wf-auto` | Perpetual adaptive auto-optimization using project evidence, dynamic probes, risk obligations, evidence ledger, and confirmation-based exhaustion. |
 | `/wf-auto-spark` | workflow skill | `/wf-auto-spark` | Perpetual inspiration mode with roadmap anchoring and external spark search. |
-| `/wf-review <focus>` | workflow skill | `/wf-review security and test coverage` | Peer CLI review through Claude/Codex/OpenCode, with reviewer subagent fallback. |
-| `/wf-learn` | workflow skill | `/wf-learn` | Force context-master -> memory-master learning cycle after repeated failures or closeout. |
-| `/wf-browser <task>` | workflow skill | `/wf-browser verify checkout flow` | Built-in browser automation/E2E workflow with real UI interaction, screenshots, traces, and CDP/network evidence. |
+| `/wf-review <focus>` | workflow skill | `/wf-review security and test coverage` | Native Harness reviewer subagents with bounded, evidence-backed fan-out. |
+| `/wf-learn` | workflow skill | `/wf-learn` | Extract generalized methods with anti-overfitting and route-load checks after verified failures or closeout. |
+| `/wf-browser <task>` | workflow skill | `/wf-browser verify checkout flow` | Agent-operable browser architecture and runtime control through BrowserOS Neo; BrowserOS Neo must be downloaded and started by the user, with no automatic install. |
 | `/wf-readme <task>` | workflow skill | `/wf-readme polish quickstart` | Preserve, merge, or improve README docs without trampling existing project documentation. |
 | `/wf-update` | direct command | `/wf-update` | Check/apply Harness scaffold updates with safe file classification and conflict handling. |
 | `/wf-remove` | workflow skill | `/wf-remove` | Safely remove Harness files while preserving project/user data unless explicitly purged. |
+| `/wf-task-record <task-id>` | direct command | `/wf-task-record my-feature --create` | Record user intent into a task capsule (wraps task-state.mjs). |
+| `/wf-task-list` | direct command | `/wf-task-list` | List all task capsules with status, phase, and dependencies. |
+| `/wf-task-archive [--apply]` | direct command | `/wf-task-archive --apply` | Archive completed task capsules (dry-run by default). |
+| `/wf-command-create <wf-command-id>` | direct command | `/wf-command-create wf-report --direct` | Create or modify wf-* command surfaces atomically from the command registry. |
+| `/wf-ui` | direct command | `/wf-ui` | Start the local Harness backend and browser control panel. |
+| `/wf-init` | direct command | `/wf-init` | Initialize this project against the global Harness runtime (thin bridge; global version is authoritative). |
+| `/wf-search` | direct command | `/wf-search <question>` | Evidence-backed search protocol with stateless validate/render helper; optional --save/--task by controller. |
 
 Source of truth: `Harness/README.md#Skill Commands` plus installed skills under
 `.claude/skills/` (Claude Code and OpenCode adapters) or `.agents/skills/`

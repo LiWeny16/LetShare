@@ -2,6 +2,18 @@
 
 This repository uses the generated Harness scaffold. Scaffold runtime files live under `Harness/`, `.claude/`, `.agents/`, `.codex/`, and `.opencode/`.
 
+When running inside a Harness-managed PTY node, the backend injects identity through environment variables instead of terminal prompt text. If `HARNESS_NODE_INIT` or `HARNESS_PEER_SESSION_ID` is set, quietly read the file pointed to by `HARNESS_NODE_INIT` before taking node-specific action. Use `HARNESS_PEER_SESSION_ID`, `HARNESS_WORKFLOW_NODE_ID`, `HARNESS_AGENT_KIND`, `HARNESS_PEER_RUNTIME`, `HARNESS_WORKFLOW_MAP`, `HARNESS_NODE_HOME`, and `HARNESS_WF_UI_URL` to identify this node, runtime, graph position, and control plane. Do not require or wait for a user-injected bootstrap prompt.
+
+In a Harness-managed PTY node, workflow context hydration is mandatory and unconditional. At the start of every operator turn, silently read this node's workflow context with `node Harness/scripts/wf-ui-control.mjs workflow-context --project .`; `HARNESS_WORKFLOW_NODE_ID` selects the current graph node. Before controlling, mutating, delegating to, reading from, or writing to any node, hydrate context again if the last context read happened before a graph change or operator message. If hydration fails, say workflow context is unavailable before making claims about node-map connections or control targets. Do not print the command or raw JSON unless asked.
+
+Workflow node state files under `Harness/a2a/**/state.json` and `Harness/a2a/workflow-map.json` are backend-owned diagnostic storage, not control surfaces or information sources. Read graph and connection state only through the typed wf-ui API/CLI. Do not edit event-node, goal-node, component-node, capability-node, node-home, workflow-map, or task state files to control Timer, Goal, Agent, resource, capability, or graph state; use the typed wf-ui backend API commands instead.
+
+### Agent Team Cooperation (WF / WF-MAX)
+
+When the user enters `/wf`, `$wf`, `/wf-max`, or `$wf-max`, the main Agent node decides whether team collaboration is needed; finds existing agents by role or capability; connects or creates sub-agents with a role profile; shares context through Markdown nodes; sends structured requests; waits via Timer wakeup messages; aggregates replies; and completes Goal items when all are checked. When the target is ambiguous, ask the user before creating or connecting an agent.
+
+Subagent mode comes from node settings (`built-in-subagents` uses native helpers; `wf-node-subagents` uses visible canvas agents). Discover node capabilities at runtime through `help --json`, `workflow-context`, `manuals`, `snapshot`, and `workflow-ontology`. Never edit `Harness/a2a/**/state.json` directly; use typed actions. The Timer is the only wakeup source; the Goal node never wakes agents. Explain this in plain language.
+
 ## 1. Harness Binding & Startup
 
 If `Harness/` exists, this repository is governed by the Harness contract.
@@ -14,21 +26,29 @@ In direct mode, do not load the full Harness router. Inspect only the files need
 
 Complex work may use direct planning, task capsules, tests, and subagents without entering WF. WF execution modes are explicit only: the user must type `/wf`, `$wf`, `/skills wf`, `/wf-max`, `$wf-max`, `/skills wf-max`, `/wf-auto`, `$wf-auto`, `/skills wf-auto`, `/wf-auto-spark`, `$wf-auto-spark`, or `/skills wf-auto-spark` to enter the WF kernel. No other phrasing, complexity heuristic, or inferred intent triggers WF.
 
-`/wf-help`, `$wf-help`, `/skills wf-help`, `/wf-update`, `$wf-update`, and `/skills wf-update` are **direct/compat commands**: do NOT load `Harness/MEMORY.md`, do NOT enter WF. Claude Code and OpenCode execute the direct command files; Codex may invoke the matching compatibility skill shim, which returns the static help/update instructions without entering WF.
+`/wf-help`, `$wf-help`, `/skills wf-help`, `/wf-update`, `$wf-update`, `/skills wf-update`, `/wf-task-record`, `$wf-task-record`, `/skills wf-task-record`, `/wf-task-list`, `$wf-task-list`, `/skills wf-task-list`, `/wf-task-archive`, `$wf-task-archive`, `/skills wf-task-archive`, `/wf-command-create`, `$wf-command-create`, `/skills wf-command-create`, `/wf-ui`, `$wf-ui`, `/skills wf-ui`, `/wf-init`, `$wf-init`, `/skills wf-init`, `/wf-search`, `$wf-search`, and `/skills wf-search` are **direct/compat commands**: do NOT load `Harness/MEMORY.md`, do NOT enter WF. Hosts execute direct command files; Codex may invoke compatibility skill shims.
 
 For non-direct workflow commands (`/wf`, `/wf-max`, `/wf-auto`, `/wf-review`, `/wf-learn`, `/wf-readme`, `/wf-remove`, `/wf-browser`, `/wf-auto-spark`, and matching `$wf-*` or `/skills wf-*` forms except the direct/compat commands above), load `Harness/MEMORY.md` first, then `Harness/README.md`.
 
+WF entry uses a bounded role pack (`task-context.mjs pack`) and fresh `show`/`pack` on resume. Before external web/GitHub/Hugging Face lookup, run `research-policy.mjs decide`; search only when `search: true` and record source metadata plus adopt/adapt/reject. Direct commands stay direct.
+
 ### Active Task Resume
+
+Durable WF task ownership is opt-in and sticky. Only a task explicitly created or entered with `wf` or `wf-max` is WF-managed. When that task remains `active` or `blocked`, the next session resumes WF mode from it. A `direct`, `wf-auto`, `wf-auto-spark`, `wf-review`, or `wf-browser` task never becomes a durable WF task by inference. A managed task cannot exit or downgrade its mode: close it terminally, then create a new task with an explicit WF trigger.
 
 If the user says "continue", "resume", "last task", "current task", "status", "where were we", or similar resume language, or the current work is not a simple direct task:
 
 1. Read `Harness/PROGRESS.md` to find Active Task.
 2. If Active Task exists, read `Harness/tasks/<active-task>/STATE.json` first.
-3. Read `Harness/tasks/<active-task>/PROGRESS.md`.
-4. Read `Harness/tasks/<active-task>/PLAN.md` only if decisions or scope need review.
-5. From `STATE.json`, recover: phase, gate, tier, ready/running/blocked/done queues, activeQuestion, nextAction.
-6. Do NOT bulk-read `Harness/tasks/` to find context. Use the active pointer.
-7. Direct simple tasks may skip STATE/PLAN/PROGRESS unless the user says "continue" or "resume".
+3. Check `links.dependsOn`; report any dependency task still open (`active` or `blocked`, normalizing legacy statuses).
+4. Check `workItems[]`; inspect items in `running` or `ready` for parallel dispatch candidates.
+5. Read `Harness/tasks/<active-task>/PROGRESS.md`.
+6. Read `Harness/tasks/<active-task>/PLAN.md` only if decisions or scope need review.
+7. From `STATE.json`, recover: phase, gate, tier, ready/running/blocked/done queues, activeQuestion, nextAction.
+8. Do NOT bulk-read `Harness/tasks/` to find context. Use the active pointer and `Harness/tasks/INDEX.json` for deterministic project/group lookup. Multiple open tasks are valid.
+
+If the active pointer names an open `wf`/`wf-max` task, the sticky lifecycle rule above takes precedence over the generic direct-task shortcut. The Harness focus remains a WF task until it is closed or another WF task is explicitly selected.
+9. Direct simple tasks may skip STATE/PLAN/PROGRESS unless the user says "continue" or "resume". `continue` resolves from the active pointer plus `STATE.json`.
 
 See `Harness/specs/workflows/WF-STATE.md` for the full state machine contract. Completed or abandoned tasks are archived to `Harness/tasks/_archive/` per `Harness/specs/protocols/TASK_ARCHIVE.md`.
 

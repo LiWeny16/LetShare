@@ -32,6 +32,28 @@ These are NOT WF triggers:
 - Multi-step work, multi-file changes, complexity, uncertainty, architecture scope, browser/API behavior, repeated failure
 - Those may need planning, subagents, or tests — but not WF
 
+### Durable Task Lifecycle
+
+The task lifecycle is separate from workflow capability routing:
+
+- `/wf` or `/wf-max` explicitly creates or enters a task with durable WF
+  ownership. Its `STATE.json.mode` is immutable for the lifetime of that task.
+- An open `wf`/`wf-max` task is automatically resumed by Harness on the next
+  session from `Harness/PROGRESS.md` plus `STATE.json`; repeating the trigger is
+  optional.
+- A task that never explicitly used `/wf` or `/wf-max` remains outside the WF
+  lifecycle forever. Complexity, project membership, `wf-auto`, `wf-review`,
+  and UI activity do not promote it.
+- Closing is terminal. To continue with a new WF unit, close the current task
+  and create a new capsule with an explicit WF trigger. Multiple task capsules
+  can remain open, but only a managed WF capsule can own the Harness resume
+  focus while one is active.
+
+`wf-auto` and `wf-auto-spark` retain their explicit continuous workflows and
+their `Harness/tasks/continuous/` capsule; they do not adopt ordinary task
+capsules. `wf-review` remains native review capability and never invokes an
+external CLI or recursively starts another review.
+
 ## Memory Preflight
 
 1. Load `CLAUDE.md`, `Harness/MEMORY.md` index only, then `Harness/README.md`.
@@ -44,6 +66,16 @@ Follow `Harness/specs/runtime/context-loading.md#Cache-First Context Contract`: 
 listed router/workflow loads in stable order, load only routed skills/tools, and
 append task state, current runtime facts, and latest tool output after the
 stable docs. Do not bulk-load skill bodies, tool schemas, or `Harness/`.
+
+## Bounded Context and Conditional Research
+
+The controller creates a role-scoped pack with
+`task-context.mjs pack <task-id> --project <absolutePath> --role <role> --budget-bytes <n>
+--json`; it carries intent, constraints, unresolved handoff, and filtered
+evidence. Dispatch and resume consume `show`/`pack`, not the full task log.
+Before lookup, ask `research-policy.mjs decide`; only `search: true` permits
+current web/GitHub/Hugging Face reads with source metadata and an
+adopt/adapt/reject rationale. No trigger means reuse-first.
 
 ## Standard Orchestration Loop
 

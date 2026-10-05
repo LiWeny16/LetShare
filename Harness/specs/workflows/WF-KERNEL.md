@@ -181,8 +181,10 @@ Delta from `/wf`:
 - Each write-unit = one file_claim = one implementer Worker
 - Managers coordinate per-domain fan-out (explore, architect, implement, review)
 - CEO/controller never writes source; delegates all production edits to Workers
-- WF-Max-Useful (default): fan-out only where writeSets are meaningfully independent
-- WF-Max-Strict (explicit `--strict`): unconditional fan-out per span formula
+- WF-Max-Useful (default): fan-out only for independent writeSets/acceptance;
+  persist `fanoutSuppressed` with reason/capacity evidence on suppression.
+- WF-Max-Strict (explicit `--strict`, `strict wf-max`, or `strict mode`): attempt
+  the span formula within runtime capacity.
 - Disjoint writeSets → parallel; overlapping → serial wave or worktree isolation
 - task-scribe continuously maintains dispatch ledger and heartbeat
 - `idleWorker -> nextReady` queue: dispatch immediately when a slot opens
