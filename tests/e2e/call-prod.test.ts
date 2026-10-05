@@ -58,8 +58,32 @@ test("生产环境：双客户端经 ecs.letshare.fun SFU 完成语音通话", a
       };
       localStorage.setItem("user_settings", JSON.stringify(s));
       (window as unknown as { __clientName: string }).__clientName = n;
+      const nativePeerConnection = window.RTCPeerConnection;
+      const captured: RTCPeerConnection[] = [];
+      (window as unknown as { __callTestPeerConnections: RTCPeerConnection[] }).__callTestPeerConnections = captured;
+      window.RTCPeerConnection = new Proxy(nativePeerConnection, {
+        construct(target, args) {
+          const connection = Reflect.construct(target, args, target) as RTCPeerConnection;
+          captured.push(connection);
+          return connection;
+        },
+      });
     }, name);
     const page = await ctx.newPage();
+    const restartFrames: string[] = [];
+    page.on("websocket", (socket) => {
+      const capture = (direction: string, frame: { payload: string | Buffer }) => {
+        if (typeof frame.payload !== "string") return;
+        try {
+          const message = JSON.parse(frame.payload) as { type?: string; data?: { type?: string; restartId?: string } };
+          if (message.type === "meeting:sdp" && message.data?.restartId) {
+            restartFrames.push(`${direction} ${message.data.type ?? ""} ${message.data.restartId}`);
+          }
+        } catch { /* ignore non-JSON frames */ }
+      };
+      socket.on("framesent", (frame) => capture("sent", frame));
+      socket.on("framereceived", (frame) => capture("received", frame));
+    });
     page.on("pageerror", (e) => console.log(`[${name}] pageerror:`, e.message));
     page.on("console", (msg) => {
       const text = msg.text();
@@ -77,7 +101,7 @@ test("生产环境：双客户端经 ecs.letshare.fun SFU 完成语音通话", a
       console.log(`[${name}] page not ready (attempt ${attempt + 1})`);
       await page.reload({ waitUntil: "domcontentloaded" }).catch(() => undefined);
     }
-    return { ctx, page };
+    return { ctx, page, restartFrames };
   }
 
   const alice = await newClient("alice");
@@ -244,4 +268,33 @@ test("生产环境：双客户端经 ecs.letshare.fun SFU 完成语音通话", a
       `静音往返后 outbound 应恢复递增: mute前=${before.txBytes} 静音中=${during.txBytes} 取消后=${after.txBytes}`,
     );
   }
+  // Force only Bob's browser-to-SFU subscriber PC down. His publisher must
+  // remain intact while the production server replaces the stale subscription.
+  const bobDownlinkIndex = await bob.page.evaluate(async () => {
+    const connections = (window as unknown as { __callTestPeerConnections: RTCPeerConnection[] }).__callTestPeerConnections;
+    for (const [index, connection] of connections.entries()) {
+      const reports = await connection.getStats();
+      if ([...reports.values()].some((report) =>
+        report.type === "inbound-rtp" && (report.kind === "audio" || report.mediaType === "audio") && Number(report.bytesReceived ?? 0) > 0
+      )) return index;
+    }
+    return -1;
+  });
+  assert.ok(bobDownlinkIndex >= 0, "production AC-009: find Bob's inbound SFU audio connection");
+  await bob.page.evaluate((index) => {
+    const connection = (window as unknown as { __callTestPeerConnections: RTCPeerConnection[] }).__callTestPeerConnections[index]!;
+    connection.close();
+    connection.dispatchEvent(new Event("connectionstatechange"));
+  }, bobDownlinkIndex);
+  await until("production AC-009: Bob's SFU subscription recovers", async () => {
+    const stats = await sampleStats(bob.page);
+    return stats.sfu && stats.fullDuplex && stats.rxBytes > 0;
+  }, 30_000);
+  const recoveryBefore = await sampleStats(bob.page);
+  await new Promise((r) => setTimeout(r, 2000));
+  const recoveryAfter = await sampleStats(bob.page);
+  assert.ok(recoveryAfter.rxBytes > recoveryBefore.rxBytes, "production AC-009: inbound audio RTP continues after recovery");
+  assert.ok(bob.restartFrames.some((frame) => frame.startsWith("sent offer ")), "production AC-009: Bob sends a restartId request");
+  assert.ok(bob.restartFrames.some((frame) => frame.startsWith("received offer ")), "production AC-009: SFU echoes restartId on the replacement offer");
+  console.log(`[diag:prod-AC009] ${JSON.stringify({ before: recoveryBefore.rxBytes, after: recoveryAfter.rxBytes, frames: bob.restartFrames })}`);
 }, 300_000);

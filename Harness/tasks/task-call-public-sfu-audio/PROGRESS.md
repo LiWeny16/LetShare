@@ -47,3 +47,5 @@
 - CDN API 刷新因本机未配置 `ALIYUN_ACCESS_KEY_ID/SECRET` 被跳过；实际生产站点已读到新版入口与哈希资源，E2E 使用该站点通过。
 - 提交已同步：根仓库 `1534d1d`，产品修复 `12fc0c9`，服务端生产代码 `bc58f3a`，服务端测试 race 修复 `e1a2c26`。后续运行的标准 pre-push 前端单测 67/67、build 均通过；全量 `go test ./internal/... -count=1` 和 AC-009 定向 race 测试通过。
 - GitHub Pages 部署与前端 CI 均通过（run `37280428362`）。CI 后端 `-race` 全套仍在旧的 `WebSocketService.Shutdown` 与 `cleanupClientResources` teardown 代码报 race；同类栈在本次改动前的 run `37199491334` 已存在。当前 CI 没有再报告 AC-009 测试的 WebSocket 并发写问题。
+
+- 生产 AC-009 故障注入回归已加入 `tests/e2e/call-prod.test.ts` 并通过：关闭 Bob 的入站 SFU PeerConnection 后，线上 SFU 回送带相同 `restartId` 的新 offer；恢复后的 inbound bytes 在 2 秒内由 1,341 增至 7,572，双向连接状态恢复。
