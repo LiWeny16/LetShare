@@ -30,6 +30,7 @@ let goProc: ChildProcess | null = null;
 let viteProc: ChildProcess | null = null;
 let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
 const tmpBin = mkdtempSync(join(tmpdir(), "letshare-e2e-"));
+const ac009WireFrames: string[] = [];
 
 /** 清理占用指定端口的残留进程（上一轮 E2E 的 preview/server 在 Windows 下树杀不彻底）。 */
 async function freePort(port: number, label: string): Promise<void> {
@@ -115,7 +116,7 @@ test("双客户端经 Go 后端 + SFU 完成语音通话", async (t) => {
   t.after(() => { killTree(goProc); });
   const logGoOutput = (d: Buffer) => {
     for (const line of d.toString().split(/\r?\n/)) {
-      if (/("level":"(error|warning)"|\blevel=(error|warning)\b)/i.test(line)) {
+      if (/("level":"(error|warning)"|\blevel=(error|warning)\b|meeting subscriber offer sent)/i.test(line)) {
         console.log("[go]", line.trim().slice(0, 500));
       }
     }
@@ -205,8 +206,40 @@ test("双客户端经 Go 后端 + SFU 完成语音通话", async (t) => {
       };
       localStorage.setItem("user_settings", JSON.stringify(s));
       (window as unknown as { __clientName: string }).__clientName = n;
+      const nativePeerConnection = window.RTCPeerConnection;
+      const captured: RTCPeerConnection[] = [];
+      (window as unknown as { __callTestPeerConnections: RTCPeerConnection[] }).__callTestPeerConnections = captured;
+      const stateEvents: { index: number; state: RTCPeerConnectionState }[] = [];
+      (window as unknown as { __callTestPeerConnectionStates: typeof stateEvents }).__callTestPeerConnectionStates = stateEvents;
+      window.RTCPeerConnection = new Proxy(nativePeerConnection, {
+        construct(target, constructorArgs) {
+          const connection = Reflect.construct(target, constructorArgs, target) as RTCPeerConnection;
+          const index = captured.length;
+          captured.push(connection);
+          connection.addEventListener("connectionstatechange", () => stateEvents.push({ index, state: connection.connectionState }));
+          return connection;
+        },
+      });
     }, initArgs as unknown as [string, number]);
     const page = await ctx.newPage();
+    page.on("websocket", (socket) => {
+      socket.on("framesent", (frame) => {
+        const payload = typeof frame.payload === "string" ? frame.payload : "";
+        if (!payload) return;
+        try {
+          const message = JSON.parse(payload) as { type?: string; data?: { type?: string; to?: string; restartId?: string } };
+          if (message.type === "meeting:sdp" || message.type === "error") ac009WireFrames.push(`${name} -> ${JSON.stringify({ type: message.type, dataType: message.data?.type, to: message.data?.to, restartId: message.data?.restartId })}`);
+        } catch { /* ignore non-JSON frames */ }
+      });
+      socket.on("framereceived", (frame) => {
+        const payload = typeof frame.payload === "string" ? frame.payload : "";
+        if (!payload) return;
+        try {
+          const message = JSON.parse(payload) as { type?: string; data?: { type?: string; to?: string; restartId?: string } };
+          if (message.type === "meeting:sdp" || message.type === "error") ac009WireFrames.push(`${name} <- ${JSON.stringify({ type: message.type, dataType: message.data?.type, to: message.data?.to, restartId: message.data?.restartId })}`);
+        } catch { /* ignore non-JSON frames */ }
+      });
+    });
     page.on("pageerror", (e) => console.log(`[${name}] pageerror:`, e.message));
     page.on("console", (msg) => {
       const text = msg.text();
@@ -351,6 +384,65 @@ test("双客户端经 Go 后端 + SFU 完成语音通话", async (t) => {
     assert.ok(b.inboundAudioBytes > a.inboundAudioBytes, `client${i} audio bytesReceived 应递增: ${a.inboundAudioBytes} → ${b.inboundAudioBytes}`);
     assert.ok(b.inboundAudioPackets > a.inboundAudioPackets, `client${i} audio packetsReceived 应递增: ${a.inboundAudioPackets} → ${b.inboundAudioPackets}`);
   }
+
+  // AC-009: Close Bob's real browser-to-SFU subscriber PC while leaving his
+  // publisher untouched. Recovery must replace the SFU subscription and resume inbound RTP.
+  const bobDownlinkIndex = await bob.page.evaluate(async () => {
+    const connections = (window as unknown as { __callTestPeerConnections: RTCPeerConnection[] }).__callTestPeerConnections;
+    for (const [index, connection] of connections.entries()) {
+      const reports = await connection.getStats();
+      const inboundAudio = [...reports.values()].filter((report) =>
+        report.type === "inbound-rtp" && (report.kind === "audio" || report.mediaType === "audio")
+      );
+      if (inboundAudio.some((report) => Number(report.bytesReceived ?? 0) > 0)) return index;
+    }
+    return -1;
+  });
+  assert.ok(bobDownlinkIndex >= 0, "AC-009: locate Bob's active inbound audio PeerConnection");
+  await bob.page.evaluate((index) => {
+    const connection = (window as unknown as { __callTestPeerConnections: RTCPeerConnection[] }).__callTestPeerConnections[index]!;
+    connection.close();
+    connection.dispatchEvent(new Event("connectionstatechange"));
+  }, bobDownlinkIndex);
+  const oldDownlinkState = await bob.page.evaluate((index) =>
+    (window as unknown as { __callTestPeerConnections: RTCPeerConnection[] }).__callTestPeerConnections[index]!.connectionState,
+    bobDownlinkIndex,
+  );
+  assert.equal(oldDownlinkState, "closed", "AC-009: the injected subscriber connection must close");
+  try {
+    await until("AC-009: Bob's SFU downlink reconnects and receives audio again", async () => {
+      const sample = await sampleStats(bob.page);
+      const debug = sample.debug as { subscriberStates?: { state: string }[]; remoteAudioTracks?: { muted: boolean }[] } | null;
+      return sample.inboundAudioBytes > 0 &&
+        debug?.subscriberStates?.some((subscriber) => subscriber.state === "connected") === true &&
+        debug.remoteAudioTracks?.some((track) => !track.muted) === true;
+    }, 20_000);
+  } catch (error) {
+    const current = await sampleStats(bob.page);
+    const connections = await bob.page.evaluate(async () => {
+      const all = (window as unknown as { __callTestPeerConnections: RTCPeerConnection[] }).__callTestPeerConnections;
+      return Promise.all(all.map(async (connection, index) => ({
+        index,
+        state: connection.connectionState,
+        inboundAudioBytes: [...(await connection.getStats()).values()]
+          .filter((report) => report.type === "inbound-rtp" && (report.kind === "audio" || report.mediaType === "audio"))
+          .reduce((sum, report) => sum + Number(report.bytesReceived ?? 0), 0),
+      })));
+    });
+    const stateEvents = await bob.page.evaluate(() => (window as unknown as { __callTestPeerConnectionStates: unknown }).__callTestPeerConnectionStates);
+    const body = await bob.page.locator("body").innerText();
+    console.log(`[AC-009 diagnostic] ${JSON.stringify({ current, connections, stateEvents, body: body.slice(-350), wire: ac009WireFrames })}`);
+    throw error;
+  }
+  const recoveredBefore = await sampleStats(bob.page);
+  await new Promise((resolve) => setTimeout(resolve, 2000));
+  const recoveredAfter = await sampleStats(bob.page);
+  assert.ok(recoveredAfter.inboundAudioBytes > recoveredBefore.inboundAudioBytes, "AC-009: Bob's inbound audio bytes keep increasing after recovery");
+  assert.ok(recoveredAfter.inboundAudioPackets > recoveredBefore.inboundAudioPackets, "AC-009: Bob's inbound audio packets keep increasing after recovery");
+  const restartFrames = ac009WireFrames.filter((frame) => frame.includes("restartId"));
+  assert.ok(restartFrames.some((frame) => frame.startsWith("bob ->")), "AC-009: Bob sends a restartId request over WebSocket");
+  assert.ok(restartFrames.some((frame) => frame.startsWith("bob <-")), "AC-009: the SFU echoes restartId with its replacement offer");
+  console.log(`[diag:AC009] ${JSON.stringify({ recoveredBefore, recoveredAfter, restartFrames })}`);
 
   await alice.page.keyboard.press("Escape").catch(() => undefined);
 }, 240_000);

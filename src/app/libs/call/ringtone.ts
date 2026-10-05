@@ -1,3 +1,5 @@
+import type { CallSessionState } from "./callSession";
+
 /**
  * 通话提示音 — 用 Web Audio API 合成，无需音频资源文件。
  *
@@ -111,6 +113,14 @@ export function stopRingtone(): void {
 export function stopRingbackTone(): void {
   ringbackLoop?.stop();
   ringbackLoop = null;
+}
+
+/** Play only the tone that matches the call's current ringing state. */
+export function setCallToneForState(state: CallSessionState): void {
+  if (state === "outgoing") startRingbackTone();
+  else stopRingbackTone();
+  if (state === "incoming") startRingtone();
+  else stopRingtone();
 }
 
 /** 停止所有提示音（来电/回铃）。 */

@@ -39,6 +39,24 @@ Then 不创建 P2P PeerConnection、不发送 P2P SDP/ICE；外呼失败，来�
 
 验证：AC-003 单测检查 PeerConnection 实例数与信令。
 
+### AC-009：下行订阅卡住时重建 SFU 订阅
+
+Given 对端已经接听，且本端上行媒体正常
+When 本端下行订阅仍在 connecting、远端音轨 muted 或没有入站音频时进入恢复
+Then 本端关闭旧订阅 PeerConnection，并用新的订阅重建请求让 SFU 替换服务端订阅连接
+And 收到新 offer 后创建新的下行 PeerConnection；双向音频恢复后退出 reconnecting
+And 重复发送同一个重建请求不会再替换该请求创建的服务端订阅
+
+验证：CallSfuSession 回归测试检查旧/新 PC 与重建信令；Go SFU 与 handler E2E 检查服务端订阅替换、restartId 回显和重复请求幂等；本地双客户端 Playwright + Go SFU 验证恢复后的 inbound RTP 递增。
+
+### AC-010：接听后停止两端提示铃声
+
+Given caller 正播放拨号回铃，或 callee 正播放来电铃声
+When 通话进入 connecting 或 reconnecting
+Then caller 回铃音和 callee 来电铃声都立即停止，不因下行音频恢复中而继续播放
+
+验证：`callSfuStability.test.ts` 分别驱动 outgoing/incoming 到 connecting，并用 AudioContext.close 断言两端提示音停止；本地通话 E2E 覆盖真实接听状态流转。
+
 ## 路由与状态契约
 
 | 用例 | 预期行为 |
@@ -49,9 +67,19 @@ Then 不创建 P2P PeerConnection、不发送 P2P SDP/ICE；外呼失败，来�
 | TURN 凭据 | 纯语音不拉取、不注入、不续期 |
 | SFU 不可用 | 失败关闭，不创建 `CallSession` P2P 会话 |
 
+### AC-009 WebSocket 信令契约
+
+- 请求：已加入 SFU 房间的客户端通过现有 WebSocket 发送 `meeting:sdp`，payload 为 `{ "type": "offer", "to": "<publisher uniqId>", "restartId": "<unique request id>" }`。
+- 成功：服务端关闭旧订阅 PeerConnection，创建并发送新 SFU offer；offer 回显 `restartId`，客户端以新订阅 PeerConnection 回 answer 和 ICE。
+- 重试：相同 `restartId` 不关闭当前替代连接；若 answer 尚未到达，重发同一 offer。普通订阅请求省略 `restartId`，继续保持幂等复用行为。
+- 范围：仅替换指定 subscriber→publisher 下行订阅，不重建对端发布端，也不改 P2P 或 TURN 行为。
+
 ## 验证命令
 
 - `pnpm exec tsx --test tests/callManager.test.ts`
+- `pnpm exec tsx --test tests/callSfuStability.test.ts tests/callManager.test.ts tests/callRecovery.test.ts`
+- `pnpm exec tsc --noEmit`
+- `go test ./internal/sfu ./internal/handler -count=1`
 - `pnpm test:e2e:call`（本地双浏览器 + 本地 SFU）
 - 本机浏览器与远端 `ecs.zingspark.tech` 客户端，经 `wss://ecs.letshare.fun/` 的真实跨网语音 E2E。
 

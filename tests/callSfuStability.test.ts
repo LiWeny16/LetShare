@@ -6,6 +6,7 @@ import { CallManager } from "../src/app/libs/call/callManager";
 import { CallSfuSession } from "../src/app/libs/call/callSfuSession";
 import type { CallSessionEvents } from "../src/app/libs/call/callSession";
 import { buildAccept, buildInvite } from "../src/app/libs/call/callSignaling";
+import { setCallToneForState, stopAllCallTones } from "../src/app/libs/call/ringtone";
 
 class FakeRTCPeerConnection {
   static instances: FakeRTCPeerConnection[] = [];
@@ -241,6 +242,74 @@ test("AC-008: peer leave closes its stale subscriber and rejoins with a fresh su
     assert.notEqual(FakeRTCPeerConnection.instances[2], oldSubscriber);
     session.hangup();
   });
+});
+
+test("AC-009: recovery replaces a stalled downlink subscriber with a fresh SFU subscription", async () => {
+  await withFakeRTC(async () => {
+    const sent: Array<{ type: string; data: any; channel: string }> = [];
+    const session = makeSession(sent, []);
+    await session.startOutgoing();
+    session.handleSignal("meeting:membership:snapshot", { members: ["peer:uid"] });
+    session.handleSignal("meeting:sdp", { type: "offer", to: "peer:uid", sdp: "subscriber-offer-1" });
+    await flushMicrotasks();
+
+    const publisher = FakeRTCPeerConnection.instances[0]!;
+    const oldSubscriber = FakeRTCPeerConnection.instances[1]!;
+    oldSubscriber.ontrack?.({
+      track: { id: "peer-audio", kind: "audio", readyState: "live", enabled: true, muted: true } as unknown as MediaStreamTrack,
+    });
+    oldSubscriber.connectionState = "connecting";
+    publisher.connectionState = "connected";
+    await session.restartIce();
+
+    assert.equal(oldSubscriber.connectionState, "closed", "a muted track from a connecting PC must not suppress downlink recovery");
+    const restartRequest = sent.find((message) => message.type === "meeting:sdp" && message.data.to === "peer:uid" && message.data.restartId);
+    assert.ok(restartRequest, "recovery must ask the SFU to replace its existing subscriber PC");
+    assert.equal(typeof restartRequest.data.restartId, "string");
+
+    session.handleSignal("meeting:sdp", { type: "offer", to: "peer:uid", sdp: "subscriber-offer-2" });
+    await flushMicrotasks();
+    assert.equal(FakeRTCPeerConnection.instances.length, 3, "the replacement offer must create a fresh subscriber PC");
+    assert.notEqual(FakeRTCPeerConnection.instances[2], oldSubscriber);
+    assert.ok(sent.some((message) => message.type === "meeting:sdp" && message.data.type === "answer" && message.data.sdp === "fake-answer"));
+    session.hangup();
+  });
+});
+
+test("AC-010: answering stops caller ringback and callee ringtone during recovery", async () => {
+  const previousWindow = (globalThis as Record<string, unknown>).window;
+  let created = 0;
+  let closed = 0;
+  class FakeAudioContext {
+    currentTime = 0;
+    state = "running";
+    destination = {};
+    constructor() { created++; }
+    createOscillator() {
+      return { type: "sine", frequency: { value: 0 }, connect: () => {}, start: () => {}, stop: () => {} };
+    }
+    createGain() {
+      return { gain: { setValueAtTime: () => {}, exponentialRampToValueAtTime: () => {} }, connect: () => {} };
+    }
+    async close() { closed++; }
+  }
+  (globalThis as Record<string, unknown>).window = { AudioContext: FakeAudioContext };
+  try {
+    setCallToneForState("outgoing");
+    assert.equal(created, 1, "outgoing call must start ringback");
+    setCallToneForState("connecting");
+    await flushMicrotasks();
+    assert.equal(closed, 1, "acceptance must stop ringback before remote audio recovers");
+    setCallToneForState("incoming");
+    assert.equal(created, 2, "incoming call must start ringtone");
+    setCallToneForState("reconnecting");
+    await flushMicrotasks();
+    assert.equal(closed, 2, "callee ringtone must stop after acceptance while downlink recovers");
+  } finally {
+    stopAllCallTones();
+    if (previousWindow === undefined) delete (globalThis as Record<string, unknown>).window;
+    else (globalThis as Record<string, unknown>).window = previousWindow;
+  }
 });
 
 test("AC-006: SFU audio stats use inbound RTP counters and packet-loss deltas", async () => {

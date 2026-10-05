@@ -42,6 +42,7 @@ type AudioRtpCounters = { packetsReceived: number; packetsLost: number };
 
 const RECONNECT_WINDOW_MS = 25_000;
 const SETUP_WATCHDOG_MS = 8_000;
+const SUBSCRIBER_RESTART_THROTTLE_MS = 8_000;
 
 /**
  * Ordinary one-to-one calls use the same SFU publish/subscribe protocol as a
@@ -75,6 +76,8 @@ export class CallSfuSession {
   private publishNegotiation: Promise<void> | null = null;
   private recoveryTimer: ReturnType<typeof setTimeout> | null = null;
   private setupTimer: ReturnType<typeof setTimeout> | null = null;
+  private subscriberRestartSequence = 0;
+  private lastSubscriberRestartAt = 0;
 
   constructor(
     private readonly opts: CallSfuSessionOptions,
@@ -321,12 +324,55 @@ export class CallSfuSession {
   private subscribeToPeer(publisherId: string): void {
     if (publisherId === this.opts.selfId || publisherId !== this.opts.peerId || this.subscribed.has(publisherId) || this.ended) return;
     this.subscribed.add(publisherId);
-    this.opts.send("meeting:sdp", { type: "offer", to: publisherId }, this.opts.callId);
+    const request = (): void => this.opts.send("meeting:sdp", { type: "offer", to: publisherId }, this.opts.callId);
+    request();
     let tries = 0;
     const retry = (): void => {
-      if (this.ended || !this.subscribed.has(publisherId) || this.remoteStreams.has(publisherId)) return;
+      if (this.ended || !this.subscribed.has(publisherId) || this.hasHealthySubscriber(publisherId)) return;
       if (tries++ >= 5) return;
-      this.opts.send("meeting:sdp", { type: "offer", to: publisherId }, this.opts.callId);
+      request();
+      setTimeout(retry, 1200);
+    };
+    setTimeout(retry, 1200);
+  }
+
+  private hasHealthySubscriber(publisherId: string): boolean {
+    const connected = this.subscribers.get(publisherId)?.connectionState === "connected";
+    const audioFlowing = (this.remoteStreams.get(publisherId)?.getAudioTracks() ?? [])
+      .some((track) => track.readyState === "live" && !track.muted);
+    return connected && audioFlowing;
+  }
+
+  private restartSubscriber(publisherId: string): void {
+    if (this.ended || publisherId !== this.opts.peerId || !this.subscribed.has(publisherId)) return;
+    if (this.hasHealthySubscriber(publisherId)) return;
+    const now = Date.now();
+    if (this.lastSubscriberRestartAt !== 0 && now - this.lastSubscriberRestartAt < SUBSCRIBER_RESTART_THROTTLE_MS) return;
+    this.lastSubscriberRestartAt = now;
+
+    const stale = this.subscribers.get(publisherId);
+    this.subscribers.delete(publisherId);
+    stale?.close();
+    this.remoteStreams.delete(publisherId);
+    this.subscriberOfferQueues.delete(publisherId);
+    this.subscriberOfferSeen.delete(publisherId);
+    this.subscriberAnswerCache.delete(publisherId);
+    this.pendingIce.delete(`sub:${publisherId}`);
+    this.previousAudioRtp.delete(publisherId);
+
+    const restartId = `${now}-${++this.subscriberRestartSequence}`;
+    const request = (): void => this.opts.send("meeting:sdp", {
+      type: "offer",
+      to: publisherId,
+      restartId,
+    }, this.opts.callId);
+    request();
+
+    let tries = 0;
+    const retry = (): void => {
+      if (this.ended || !this.subscribed.has(publisherId) || this.hasHealthySubscriber(publisherId)) return;
+      if (tries++ >= 5) return;
+      request();
       setTimeout(retry, 1200);
     };
     setTimeout(retry, 1200);
@@ -374,13 +420,7 @@ export class CallSfuSession {
         this.armRecoveryWindow();
       }
       if (pc.connectionState === "failed" || pc.connectionState === "closed") {
-        this.subscribers.delete(publisherId);
-        this.remoteStreams.delete(publisherId);
-        this.subscribed.delete(publisherId);
-        this.subscriberOfferQueues.delete(publisherId);
-        this.subscriberOfferSeen.delete(publisherId);
-        this.subscriberAnswerCache.delete(publisherId);
-        if (!this.ended) this.subscribeToPeer(publisherId);
+        this.restartSubscriber(publisherId);
       }
     };
     return pc;
@@ -545,6 +585,7 @@ export class CallSfuSession {
         sourceRoomId: this.opts.sourceRoomId ?? "",
       }, this.opts.callId);
       await this.sendPublishOffer(true);
+      this.restartSubscriber(this.opts.peerId);
       return true;
     } catch {
       return false;

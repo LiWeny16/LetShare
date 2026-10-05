@@ -70,7 +70,7 @@ import { isApp } from "@App/libs/capacitor/user";
 import { Trans, useTranslation } from "react-i18next";
 import { CallManager } from "@App/libs/call/callManager";
 import type { CallQualitySample } from "@App/libs/call/callSession";
-import { startRingtone, stopRingtone, startRingbackTone, stopRingbackTone, stopAllCallTones, playDisconnectTone } from "@App/libs/call/ringtone";
+import { startRingtone, stopRingtone, setCallToneForState, stopAllCallTones, playDisconnectTone } from "@App/libs/call/ringtone";
 import { acquireCallAudio, mergedAudioConstraints } from "@App/libs/call/audioCapture";
 import { buildVideoConstraintAttempts, acquireCallVideo, type VideoCaptureOpts } from "@App/libs/call/videoCapture";
 import { nsPipeline } from "@App/libs/call/noiseSuppression";
@@ -344,13 +344,8 @@ const Share = observer(() => {
           // 停端侧降噪管线 —— 会话层无法停止管线持有的原始流轨与 AudioContext，
           // 必须在此释放，否则麦克风持续被占用；stop() 幂等，无管线时无副作用
           if (state === "ended") nsPipeline.stop();
-          // 拨号回铃：caller 在 outgoing（去电等待接听）期间播放；接通或结束即停。
-          // 来电方走 incoming→connecting→active，不进入 outgoing，故不会误触回铃。
-          if (state === "outgoing") {
-            startRingbackTone();
-          } else if (state === "active" || state === "ended") {
-            stopRingbackTone();
-          }
+          // outgoing 播放拨号回铃，incoming 播放来电铃；进入 connecting/reconnecting 后两端提示铃都停止。
+          setCallToneForState(state);
           // 函数式更新：同一批次内多个事件（如 onRemoteStream 后紧跟 state=active）
           // 依赖 activeCallRef.current 会互相覆盖，必须链式基于最新 state 合并
           setActiveCall((prev) => (prev && prev.peerId === peerId ? { ...prev, state } : prev));
