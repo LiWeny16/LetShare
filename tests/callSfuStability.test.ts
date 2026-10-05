@@ -388,3 +388,67 @@ test("AC-006: remote audio playback rejection is visible in call diagnostics", a
     }
   });
 });
+
+test("AC-010: SFU error frame during setup arms the bounded recovery window instead of hanging forever", async () => {
+  await withFakeRTC(async () => {
+    mock.timers.enable({ apis: ["setTimeout"] });
+    try {
+      const states: string[] = [];
+      const session = makeSession([], states);
+      await session.startOutgoing();
+      session.markAccepted();
+      assert.equal(session.getState(), "connecting");
+
+      // Server refuses a subscribe ("meeting:sdp 订阅失败: ...") while still connecting.
+      // Entering reconnecting here must also arm the recovery window: otherwise the
+      // setup watchdog (which only fires while "connecting") never runs and the call
+      // is stuck in reconnecting with no terminal state.
+      session.handleSignal("error", { error: { message: "meeting:sdp 订阅失败: 发布者暂无已发布 track" } });
+      assert.equal(session.getState(), "reconnecting");
+
+      mock.timers.tick(25_000);
+      assert.equal(session.getState(), "ended", "an SFU error must still be bounded by the recovery window");
+    } finally {
+      mock.timers.reset();
+    }
+  });
+});
+
+test("AC-011: a failed subscribe offer clears the subscribed marker so the downlink can be rebuilt", async () => {
+  await withFakeRTC(async () => {
+    const sent: Array<{ type: string; data: any; channel: string }> = [];
+    const session = makeSession(sent, []);
+    await session.startOutgoing();
+
+    session.handleSignal("meeting:membership:snapshot", { members: ["peer:uid"] });
+    const firstOffer = sent.find(
+      (message) => message.type === "meeting:sdp" && message.data?.to === "peer:uid" && message.data?.sdp === undefined,
+    );
+    assert.ok(firstOffer, "initial subscribe request must be sent");
+
+    // Deliver the subscribe offer once so the subscriber PC is created, then make
+    // its answer processing fail. This is the real shape of a collided
+    // subscriber negotiation: the server offer can no longer be applied.
+    session.handleSignal("meeting:sdp", { type: "offer", to: "peer:uid", sdp: "subscriber-offer-bad" });
+    await flushMicrotasks();
+    const subscriber = FakeRTCPeerConnection.instances[1];
+    assert.ok(subscriber, "subscriber PC must be created for the subscribe offer");
+    subscriber.setRemoteDescription = async () => {
+      throw new Error("collided subscriber negotiation");
+    };
+    session.handleSignal("meeting:sdp", { type: "offer", to: "peer:uid", sdp: "subscriber-offer-bad-2" });
+    await flushMicrotasks();
+    assert.deepEqual(session.getDebugInfo().subscriberStates, [], "failed subscriber must be dropped");
+
+    // After the failure a later membership event must be able to re-subscribe.
+    // Before the fix the `subscribed` marker survived the catch block, so
+    // subscribeToPeer returned early forever and the callee never regained audio.
+    const before = sent.length;
+    session.handleSignal("meeting:membership:changed", { type: "join", uniqId: "peer:uid" });
+    const retry = sent.slice(before).find(
+      (message) => message.type === "meeting:sdp" && message.data?.to === "peer:uid" && message.data?.sdp === undefined,
+    );
+    assert.ok(retry, "a failed subscription must be retryable after the subscribed marker is cleared");
+    session.hangup();
+  });
+});

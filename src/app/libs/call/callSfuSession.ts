@@ -469,6 +469,12 @@ export class CallSfuSession {
           this.subscriberOfferQueues.delete(publisherId);
           this.subscriberOfferSeen.delete(publisherId);
           this.subscriberAnswerCache.delete(publisherId);
+          this.pendingIce.delete(`sub:${publisherId}`);
+          // 必须同时撤销订阅标记：只清 Map 而保留 subscribed 会让
+          // subscribeToPeer 的 `subscribed.has()` 守门永远命中，后续 membership
+          // 事件全部变成 no-op，该方向的订阅再也不会被重建（永久单向静音）。
+          // 清除后可由下一次 membership 事件或 restartSubscriber 重新发起订阅。
+          this.subscribed.delete(publisherId);
         }
       }
     } finally {
@@ -523,7 +529,13 @@ export class CallSfuSession {
           void pc.setRemoteDescription({ type: "answer", sdp: data.sdp })
             .then(() => this.flushPendingIce("publish", pc))
             .then(() => this.maybeActivate())
-            .catch(() => this.setState("reconnecting"));
+            .catch(() => {
+              // 发布 answer 应用失败：reconnecting 必须同时武装恢复窗口，
+              // 否则 setup 看门狗因状态不再是 connecting 而不再计时，
+              // 该通话会永久卡在 reconnecting（既不恢复也不挂断）。
+              this.setState("reconnecting");
+              this.armRecoveryWindow();
+            });
           return;
         }
         if (subType === "offer" && data?.to === this.opts.peerId) {
@@ -547,7 +559,11 @@ export class CallSfuSession {
         return;
       }
       case "error":
+        // SFU 拒绝（如「订阅失败」「未找到订阅连接」）属于单个订阅方向的可重试错误，
+        // 不是致命错误：进入 reconnecting 并武装有界恢复窗口，由恢复循环重建订阅，
+        // 窗口耗尽才挂断。
         this.setState("reconnecting", { error: String(data?.error?.message ?? data?.message ?? "SFU signaling error") });
+        this.armRecoveryWindow();
         return;
     }
   }
