@@ -19,7 +19,7 @@
 
 | AC ID | 结果 | 证据 | 备注 |
 |---|---|---|---|
-| AC-001 | NOT RUN | `pnpm test:e2e:call` 本地双客户端记录 | 本次验证了本地双向 RTP；未重新跑跨网公网矩阵。 |
+| AC-001 | PASS | `tests/e2e/call-prod.test.ts` 生产双客户端 E2E | 两个隔离 Chromium 客户端经 `wss://ecs.letshare.fun/` 完成语音通话；双端 SFU 入站与出站 RTP 递增，未使用 relay candidate。 |
 | AC-002 | PASS | 55 项通话相关前端测试 | 纯语音 TURN/P2P 既有回归项通过。 |
 | AC-003 | PASS | 55 项通话相关前端测试 | SFU 不可用时失败关闭既有回归项通过。 |
 | AC-009 | PASS | 前端回归、Go SFU/handler 测试、`pnpm test:e2e:call` | 故障注入关闭 Bob 的下行 PC；`restartId` 请求与 offer 回显；恢复后 inbound audio 从 1,014 bytes / 15 packets 增至 7,303 bytes / 119 packets（2 秒）。 |
@@ -36,4 +36,13 @@
 ## 变更边界
 
 - 保留工作区原有未提交改动，包括 `Harness/.runtime/update-check.json`；不运行 `/wf-update`。
-- 未部署生产服务；会议、文件传输没有改动。
+- 会议、文件传输没有改动。
+
+## 生产部署与验证补充（2026-10-05）
+
+- 全栈执行 `node scripts/deploy.cjs`：Go Linux/amd64 后端构建成功并重启 ECS `letshare.service`；前端 `docs/` 上传至 ECS nginx 源站，源站首页返回 HTTP 200。
+- 线上 `https://letshare.fun/version.json` 返回 `3.8.45`，构建 ID `2026-10-05T07:39:47Z-optwh`。公网首页的 JS 资源列表与本地 `docs/index.html` 一致；当前 `share-DQ3BmAlQ.js` 含 `restartId` 重建逻辑。
+- 生产 Playwright E2E：`node --import tsx --test --test-force-exit tests/e2e/call-prod.test.ts`，1/1 通过。两个隔离 Chromium 客户端经生产 SFU 全双工通话；client0 RX/TX 23,225/33,252 bytes，client1 RX/TX 13,050/34,430 bytes，观测丢包率均为 0%，并验证静音/取消静音后的上行恢复。
+- CDN API 刷新因本机未配置 `ALIYUN_ACCESS_KEY_ID/SECRET` 被跳过；实际生产站点已读到新版入口与哈希资源，E2E 使用该站点通过。
+- 部署提交：根仓库 `c222f80`；服务端生产代码 `bc58f3a`。之后发现新增服务端 E2E 写 helper 在 `-race` 下并发写 WebSocket；测试 helper 增加 `writeMu` 与 PeerConnection 访问锁后，定向 `go test -race ./internal/sfu ./internal/handler -run 'TestSubscribeToIsIdempotentAndAC009RestartReplacesSubscription|TestMeetingE2E_AC001_AC009_OfferAnswerMediaAndSubscriberRestart' -count=1` 通过，修复提交 `e1a2c26` 待同步到根仓库。
+- GitHub 前端 CI 与 Pages 部署通过。后端全量 `go test ./internal/... -count=1 -race` 仍报告旧的 `WebSocketService.Shutdown` 与 `cleanupClientResources` teardown race；同一栈在此次改动前的 run `37199491334` 已失败，非本次运行代码变化。最新 follow-up CI 尚待推送。
