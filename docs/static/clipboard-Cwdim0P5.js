@@ -1,1 +1,0 @@
-import{t as e}from"./share-BRdMn1_F.js";export{e as readClipboard};

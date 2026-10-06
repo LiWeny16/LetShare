@@ -1,1 +1,0 @@
-import{t as e}from"./share-CRio-ICw.js";export{e as readClipboard};

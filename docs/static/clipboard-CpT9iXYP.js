@@ -1,1 +1,0 @@
-import{r as e}from"./share-TelkuLfj.js";export{e as readClipboard};

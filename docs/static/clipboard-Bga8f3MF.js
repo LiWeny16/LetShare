@@ -1,1 +1,0 @@
-import{t as e}from"./share-Dx1aORJ3.js";export{e as readClipboard};

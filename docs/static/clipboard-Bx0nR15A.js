@@ -1,1 +1,0 @@
-import{r as e}from"./share-BtGUXCFf.js";export{e as readClipboard};

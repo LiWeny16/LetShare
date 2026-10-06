@@ -1,1 +1,0 @@
-import{r as e}from"./share-CxTWEzap.js";export{e as readClipboard};

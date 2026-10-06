@@ -1,1 +1,0 @@
-import{t as e}from"./share-CDmDRntM.js";export{e as readClipboard};

@@ -1,1 +1,0 @@
-import{t as e}from"./share-DxGWj_wW.js";export{e as readClipboard};
