@@ -1,126 +1,156 @@
-# 核心重写总计划（rewrite/core-v2）
+# 实施计划（PLAN）—— 收窄后的纵切片
 
-**架构师**：主 Agent（本文件作者）· **分支**：`rewrite/core-v2` · **基线**：`main@336e5ac`
+**架构师**：主 Agent · **分支**：`rewrite/core-v2` · **基线**：`main@336e5ac`
+**效力**：本文件服从 `PURPOSE.md`。冲突以 `PURPOSE.md` 为准。
 
 ---
 
-## 1. 目标与验收判据
+## 1. 范围（严格来自 `PURPOSE.md` §2.1）
 
-| 维度 | 目标 |
+| 类型 | 项 |
 |---|---|
-| 可恢复性 | 网络抖动 ≤30s 内媒体自动恢复，会议号不丢，用户无感 |
-| 确定唯一性 | 每个不变量只有一个写者；结构上不允许分叉 |
-| 可观测 | 任何断连能**只靠服务端日志**定位，不需用户配合 |
-| 可演进 | 协议版本化；机制只有一份实现 |
-| 代码质量 | `STANDARDS.md` 全绿；无文件超 400 行；无 god object |
+| **做** | R1 通话稳定性状态 · R2 播放客户端组件 · R3 保活 · R4 静音 · R5 双重播放/回声 · R6 注释卫生 |
+| **不做** | 文件传输 relay 重构 · call/meeting 机制完整统一 · 聊天/白板/纪要/i18n/PWA · 大而全重构 |
+
+**每片 = 一个已确诊故障 + 它背后那条结构缺陷，一起消灭；且当片即可上线。**
 
 ---
 
-## 2. 范围
+## 2. 切片（可上线纵切片，非"先重写后接流量"）
 
-**重写**：`src/core/**`（新建）+ `internal/observ`、`internal/meeting`（新建）
-**冻结不动**：`features/file`（P2P/relay 文件传输，需求不同）、聊天、白板、纪要、i18n、PWA 外壳、主题
-**删除目标**（S9）：`colabLib.ts`(4713) / `callManager.ts`(842) / `callSession.ts`(928) / `callSfuSession.ts`(935) / `meetingManager.ts`(2454)
+### V0 · 诊断能力（**前置，不是重构**）
+- **为什么必须第一**：`PURPOSE.md` §4.4「不在缺少诊断和回退能力时替换核心」；且没有它，后续任何片都无法验证。
+- **交付**
+  - SFU/会议状态跃迁从 `.Debug` 提到 **Info**（`internal/sfu/participant.go:68`、`room.go:65`）
+  - **selected candidate pair**（direct/relay）上报
+  - `sessionId` 贯穿 WS → meeting/call → SFU participant
+  - 客户端 `window.__ls.dump()`：远端轨道列表 / 各订阅 PC 状态 / 音频轨 `enabled|muted` / `audibleVia` / `ctxState`
+  - `server_error.log` 加轮转
+- **验收**：能**只靠服务端日志**给一次断连写出完整因果链
+- **范围标记**：唯一允许修改旧代码的切片，但仅**加观测、不改行为**
+
+### V1 · 服务端会议号保活（红队判定必须前置）
+- **故障**：重连必得 `404 会议不存在或已结束`（线上 02:33 实事故）
+- **结构缺陷**：会议生命周期有 **4 条拆除路径**（`teardownMeeting` / `endMeetingRoom` / `scheduleMeetingEnd` / `finishMeetingMemberLeave`）+ 4 个定时器靠守卫对齐（= `DIVERGENCE.md` F10）
+- **交付**
+  - 4 条路径收敛为**唯一** `End(reason)` + 策略表
+  - **最后一人离开不再立即回收**会议号；宽限到点若房间非空必须**重排**而非静默跳过
+  - 会议号生命周期与房间占用**解耦**
+- **验收**（`CONFORMANCE.md` C-17/C-18/C-19/C-20）：Grace 内任何成员重入**100% 成功**；`End` 幂等；全员显式离开后 `Phase !== Ended` 直到 reservation 到期
+- **上线**：服务端独立部署，协议向后兼容
+
+### V2 · 客户端保活与重连必然性（R1 + R3）
+- **故障**：
+  - **4 分 25 秒零连接尝试**（实测）
+  - 后台满 10 分钟被主动断开且不自动重连
+- **结构缺陷**：
+  - 重连 early-return 静默死锁（`colabLib.ts:1209`）
+  - **客户端完全没有"服务端连接存活"探测** —— 现有 ping/pong 全是对端探活（`to: id`），服务端用的是协议级 Ping 帧，JS 不可见 ⇒ **半开连接不可感知**（NAT 重绑定场景）
+  - 后台省流豁免只查 `CallManager.isInCall()`，会议不算（`share.tsx:401`）
+- **交付**
+  - `ConnectionStateMachine` + `RetrySupervisor`（**只做机制**：注入时钟/随机数/退避/取消；重试与否仍由各领域决定 —— 红队第 7 条）
+  - 所有退出路径二选一：已排下一次 或 终止态+原因
+  - **客户端主动存活探测**（应用层 ping/pong + 超时 → 触发重连）
+  - 后台豁免纳入会议
+  - 会话代次：旧异步结果不得覆盖新连接（红队第 6 条补入属主表）
+- **验收**（C-01/C-02/C-03/C-04 + 新增）：注入半开连接 → **≤30s 内必然发生重连**；后台 15 分钟连接不断
+
+### V3 · 远端音频播放权威（R2 + R4 + R5）
+- **故障**：永久静音 / 双重声音 / 回声（全部线上取证）
+- **结构缺陷**：远端音频有 **3 个可能的主人**（会话 sink / UI `<audio>` / Web Audio 管线），靠"谁先声明接管"协商；且**声明后永不复查**（`DIVERGENCE.md` F12）
+- **交付**
+  - 收敛为唯一 `RemoteAudioHost`：元素与管线**互斥**，任何时刻**至少一条通路可用**
+  - **存活看门狗**：`ctxState !== "running"` → **≤1s 内**元素自动接管
+  - 会话内部 sink **一律静音**（只用于驱动解码）
+  - 自动播放被拒 → **可见降级**（用户能看到提示，而不是静默无声）
+- **验收**（C-08/C-09/C-10/C-11/C-12 + **真机可听性**）：恰 1 路可听；管线失效 ≤1s 回退；**真机 E2E 断言声音存在**（红队第 8 条：模拟状态断言证明不了可听）
+
+### V4 · 注释卫生（R6，贯穿 V0–V3 + 终审）
+- **规则**：每条被改/删的"教训注释"必须二选一 —— **转成测试** 或 **删除**（禁止用注释代替测试，X7）
+- **明确清单（已核实为错/过时）**
+  | 注释 | 问题 |
+  |---|---|
+  | `websocket.go:3756` 帧头 `[callId 16B\|seq 2B\|track 1B\|padding 5B]` | **漏掉 4B 魔数**，与实际布局（`medi`+16+2+1+1=24）不符；连同 `frame[18]`（应为 `22`）一起误导重写者 |
+  | `callSignaling.ts:12` 写 `[18)` vs `:136` 写 `22` | 同文件自相矛盾 |
+  | `websocket.go:1951-1957` 聊天"纯转发、不存历史" | 实现存 200 条并在 join 回放 |
+  | `ServerFileTransfer.ts:1739` `pendingChunkIndex` "Bug1 修复" | 描述的机制已不存在 |
+  | `reconnectPolicy.ts:12-18` "抖动由调用方叠加" | 调用方并未加抖动 |
+- **验收**：清单全部关闭；每条要么有对应测试，要么已删除
+- **附带零风险修正**：`frame[18]` → `frame[22]`（仅日志失真，一行）
 
 ---
 
-## 3. AI Team 角色
-
-| 角色 | 承担者 | 职责 | 权限 |
-|---|---|---|---|
-| **Architect** | 主 Agent | 定契约、拆片、出片级契约卡、裁决分歧、终审、合并 | 唯一合并权 |
-| **Refactor Worker** | `qwen` subagent | 按片实现；**每轮只派一个** | 写自己片内的文件 |
-| **Reviewer** | 异模型 subagent | 逐条走 `STANDARDS.md` checklist；出问题清单 | 只读 + 出报告 |
-| **Adversary** | 异模型 subagent | 反驳 Reviewer 的结论、构造反例、攻击契约 | 只读 + 出报告 |
-| **Verifier** | 主 Agent / 脚本 | 跑 G1–G4，产出可对标量 | 执行测试 |
-| **Deployer** | 主 Agent + opsctl | 预发 → 灰度（capability flag） | 部署 |
-
-### 交叉博弈规则（防止评审走过场）
-
-1. Worker 交付 → Reviewer 出问题清单
-2. Adversary **必须**对 Reviewer 的每一条结论给出 `concur / refute + 理由`；禁止只复述
-3. 任何一条 `CONFORMANCE` 契约被判定"不可断言"→ 必须由 Architect 修改契约，**不许绕过**
-4. 未决分歧提交 Architect 裁决，裁决结果写回本文件或 `CONFORMANCE.md`
-5. Reviewer 与 Adversary **不得是同一个模型**，且都不得是 Worker
-
----
-
-## 4. 切片分解
-
-| 片 | 内容 | 保护的不变量 | 依赖 | 覆盖坑 |
-|---|---|---|---|---|
-| **S0** | 契约与坑清单补齐（只读研究 → 文档）| — | — | Q01–Q22 全覆盖 |
-| **S1** | 可观测最小补丁（**唯一允许改旧代码的例外**）：SFU 状态提到 Info + selected pair + `window.__ls.dump()` | 每次跃迁可定位 | S0 | C-22, C-23 |
-| **S2** | `core/transport`：`RetrySupervisor` + `ConnectionPhase`/`ConnectionStatePort` + `TransportClient` | 重试必有下一次或终止态 | S0 | Q04,Q10,Q14,Q20,Q21 |
-| **S3** | `core/turn`：`TurnLease` | relay 续期必重建 allocation | S2 | Q03,Q22 |
-| **S4** | `core/audio`：`RemoteAudioHost` | 恰一个发声者，且永不静音 | S2 | Q01,Q02,Q07,Q08,Q09,Q17 |
-| **S5** | `core/media`：`MediaSession`/`PublishPeer`/`SubscribePeer`/`IceManager`/`RecoveryPolicy` | 恢复不依赖事件；track 唯一入列 | S3,S4 | Q06,Q11,Q12,Q13,Q16,Q21 |
-| **S6** | `features/call` 迁移到新核心 | — | S5 | — |
-| **S7** | `features/meeting` 迁移到新核心 | — | S5 | Q06,Q10,Q11,Q13 |
-| **S8** | 服务端 `internal/meeting` 状态机 + 会议号与占用解耦 | 会议号生命周期 ≠ 房间占用 | S2 | Q05,Q12,Q18,Q19 |
-| **S9** | 删旧代码 + PWA 缓存版本 bump | — | 全部 | Q15 |
-
-**顺序硬约束**：可观测（S1）→ 去重（S3/S4/S5）→ 生命周期（S8）→ 删码（S9）。
-**S1 必须在所有重构之前**，否则后续改动无法验证。
-
----
-
-## 5. 每轮流水线
+## 3. 顺序（硬约束）
 
 ```
-[Architect] 出片级契约卡
-      ↓
-[Worker/qwen] 实现  ──────────────────────────────► G1 静态门
-      ↓                                                  ↓
-[Reviewer] 逐条 checklist 评审                          G2 契约门
-      ↓                                                  ↓
-[Adversary] 对每条结论 concur/refute + 构造反例          G3 评审门
-      ↓                                                  ↓
-[Architect] 裁决未决分歧 ──────────────────────────────► G4 对拍门
-      ↓                                                  ↓
-[Verifier] 跑对拍台 + E2E ─────────────────────────────► G5 上线门
-      ↓
-[Architect] 合并到 rewrite/core-v2，记入 ROUNDS.md
+V0 诊断（前置，阻塞一切验证）
+  → V1 服务端保号（阻塞"重连有效"，红队判定必须早于客户端迁移）
+    → V2 客户端保活与重连
+      → V3 播放权威
+        → V4 注释卫生（贯穿 + 终审）
 ```
 
-### Gates
+**MUST NOT**：不得跳过 V0；不得在 V1 之前先做客户端重连（否则重连改好也撞 404 —— 红队第 1 条）。
+
+---
+
+## 4. AI Team 与每轮流水线
+
+| 角色 | 模型 | 约束 |
+|---|---|---|
+| **Architect** | 主 Agent | 定契约 · 拆片 · 裁决 · 终审 · **唯一合并权** |
+| **Worker** | `mimo-v2.6-pro` | 每轮**只派一个**；只写本片文件 |
+| **Reviewer** | `deepseek-flash` | 逐条走 `STANDARDS.md` checklist |
+| **Adversary** | `codex` gpt-6-sol / high | 对 Reviewer 每条结论 concur/refute + 构造反例 |
+
+```
+Worker 实现 ──► G1 静态门
+    ↓
+Reviewer 逐条 checklist ──► G2 契约门
+    ↓
+Adversary concur/refute + 反例 ──► G3 评审门
+    ↓
+Architect 裁决 ──► G4 证据门
+    ↓
+合并 rewrite/core-v2 ──► G5 上线门（按协议组合灰度 + 交叉版本验证 + 回退演练）
+```
+
+**硬规则**：Reviewer ≠ Adversary ≠ Worker，三方异模型；契约被判"不可断言"必须由 Architect 改契约，不许绕过。
+
+---
+
+## 5. Gates
 
 | Gate | 判据 |
 |---|---|
-| **G1 静态门** | `tsc --noEmit` / `eslint --max-warnings 0` / `go vet` / `staticcheck` / 文件行数与复杂度阈值 |
-| **G2 契约门** | 本片相关 `C-XX` 全绿；新增测试名可读出被保护的不变量 |
+| **G1 静态门** | `tsc --noEmit` ×2（全局 + `tsconfig.core.json` 严格档）· `eslint --max-warnings 0` · `go vet` · `staticcheck` · 文件 ≤400 行 / 函数 ≤50 行 / 复杂度 ≤12 |
+| **G2 契约门** | 本片 `C-XX` 全绿；**测试名可读出被保护的不变量** |
 | **G3 评审门** | Reviewer 通过 **且** Adversary 无未决 refute |
-| **G4 对拍门** | 静默秒数=0 · 重连 P95<5s · 出声通路=1 · 会议号存活=100% · 断言失败=0 |
-| **G5 上线门** | 预发验证通过 → capability flag 灰度（按房间/用户维度）|
+| **G4 证据门**（重写）| **必须声明故障注入矩阵**（半开连接 / 出口 IP 变更 / 后台 N 分钟 / 暂停-恢复 / 丢包率）+ 每格**样本量**与**统计窗口**。判据 = **注入故障后 ≤X 秒内恢复，且恢复期间无用户可见中断**（*已消除"注入中断 vs 静默秒数=0"的自相矛盾*）|
+| **G5 上线门** | 按**兼容的客户端-服务端协议组合**灰度（非单片开关）· 验证**新旧版本交叉连接** · 回退路径**实际演练**过 |
 
-**任一门未过，不得进入下一片。**
+**基线**：每片上线前后必须对比 `PURPOSE.md` §3 的 A 类指标（断线后恢复率 / 无声率 / 双声率）。
 
 ---
 
 ## 6. 分支与回退纪律
 
 - 长期分支 `rewrite/core-v2`，**每周 rebase `main`**
-- 新代码只落 `src/core/**` / `internal/observ/**` / `internal/meeting/**`；**S1 之外禁止 in-place 改旧文件**
-- 每片一个 capability flag，**单片灰度、单片回退**（不做全局开关）
-- CI 同时跑新旧两套测试
-- `main` 保持可发布：重写期间线上 bug 仍在 `main` 修，然后 rebase 进来
+- 新代码落 `src/core/**`；**V0 之外禁止 in-place 修改旧文件**（V1 为服务端，独立部署）
+- 灰度按**协议组合**，不做全局开关
+- `main` 保持可发布；线上 P0 在 `main` 修，然后 rebase 进来
+- **K1 停做条件生效**：某片无法用 A 类指标证明价值 → 停该片，保留已交付收益
 
 ---
 
-## 7. 估算
+## 7. 当前状态
 
-| 项 | 估算 |
-|---|---|
-| 核心重写工作量 | ≈10–13 人月（架构已有量化依据）|
-| AI Team 并行度收益 | 实现环节可压缩，**验证环节不可压缩** |
-| 片数 | 10 片，每片预计 2–4 轮迭代（Worker→Review→Adversary→裁决→验证）|
-
----
-
-## 8. 当前状态
-
-- [x] 分支 `rewrite/core-v2` 建立
-- [x] `ARCHITECTURE.md` / `STANDARDS.md` / `QUIRKS.md` / `CONFORMANCE.md` / `PLAN.md` / `ROUNDS.md` 落盘
-- [ ] **S0** 补齐 `QUIRKS.md` R0 待补充区间
-- [ ] **S1** 可观测最小补丁
-- [ ] **S2** `core/transport` ← 本轮进行中
+- [x] 分支 / 契约层（`ARCHITECTURE.md` `STANDARDS.md` `QUIRKS.md` `CONFORMANCE.md` `DIVERGENCE.md` `PURPOSE.md`）
+- [x] S0 坑清单补齐（15 条分叉登记）
+- [x] 目的锁定（人类负责人裁决：选 3 + 收窄范围）
+- [x] 红队裁决（计划 3 处排序修正 + G4 门重写）
+- [ ] **V0 诊断能力** ← 下一步
+- [ ] V1 服务端保号
+- [ ] V2 客户端保活与重连
+- [ ] V3 播放权威
+- [ ] V4 注释卫生
