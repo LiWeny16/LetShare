@@ -272,6 +272,8 @@ const Share = observer(() => {
     remoteStream: MediaStream | null;
     localStream: MediaStream | null;
     transport: "p2p" | "public" | null;
+    /** SFU 通话的实际中继状态（null = 未确定）；P2P 通话忽略。 */
+    isRelayed: boolean | null;
     state: string;
     muted: boolean;
     videoEnabled: boolean;
@@ -447,6 +449,7 @@ const Share = observer(() => {
         remoteStream: null,
         localStream: stream,
         transport: "public" as const,
+        isRelayed: null as boolean | null,
         state: "connecting",
         muted: false,
         videoEnabled,
@@ -483,6 +486,7 @@ const Share = observer(() => {
         remoteStream: null,
         localStream: stream,
         transport: "public" as const,
+        isRelayed: null as boolean | null,
         state: "connecting",
         muted: false,
         videoEnabled,
@@ -540,6 +544,36 @@ const Share = observer(() => {
     if (!cur) return Promise.resolve(null);
     return callManagerRef.current?.getQuality(cur.peerId) ?? Promise.resolve(null);
   }, []);
+
+  // 中继状态采样（CallBar 传输徽标）：SFU 通话才返回 true/false（实际 ICE 选中是否为 relay），
+  // P2P 通话返回 null（transport 已明示直连）。null = 未确定，UI 展示中性“直连”标签。
+  const getCallRelay = React.useCallback(async (): Promise<boolean | null> => {
+    const cur = activeCallRef.current;
+    const manager = callManagerRef.current;
+    if (!cur || !manager) return null;
+    const session = manager.getCallByPeer(cur.peerId);
+    if (!session) return null;
+    try {
+      return await session.isRelayed();
+    } catch {
+      return null;
+    }
+  }, []);
+
+  // 中继状态轮询：每 3s 采样一次并写回 activeCall.isRelayed；面板关闭即停
+  React.useEffect(() => {
+    if (!activeCall) return;
+    let cancelled = false;
+    const poll = (): void => {
+      void getCallRelay().then((v) => {
+        if (cancelled) return;
+        setActiveCall((prev) => (prev && prev.isRelayed !== v ? { ...prev, isRelayed: v } : prev));
+      });
+    };
+    poll();
+    const timer = window.setInterval(poll, 3000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [activeCall?.callId, getCallRelay]);
 
   // 通话中换麦克风：重新采集首选麦克风 → replaceTrack 原子换轨（不动协商），旧轨停止。
   const handleMicChange = React.useCallback(async (deviceId: string) => {
@@ -2647,6 +2681,7 @@ const Share = observer(() => {
           remoteStream={activeCall.remoteStream}
           localStream={activeCall.localStream}
           transport={activeCall.transport}
+          isRelayed={activeCall.isRelayed}
           state={activeCall.state}
           muted={activeCall.muted}
           videoEnabled={activeCall.videoEnabled}

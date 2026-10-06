@@ -146,10 +146,21 @@ test("AC-004: subscriber disconnect enters reconnecting even if publisher stays 
     subscriber.onconnectionstatechange?.();
     assert.equal(session.getState(), "active");
 
-    subscriber.connectionState = "disconnected";
-    subscriber.onconnectionstatechange?.();
-    assert.equal(session.getState(), "reconnecting");
-    assert.ok(states.includes("reconnecting"));
+    // Per spec, `disconnected` is transient (ICE typically self-heals in 1-5s).
+    // We arm a grace timer before flagging the call as reconnecting; advance the
+    // fake clock past DISCONNECTED_GRACE_MS to trigger the state change.
+    mock.timers.enable({ apis: ["setTimeout"] });
+    try {
+      subscriber.connectionState = "disconnected";
+      subscriber.onconnectionstatechange?.();
+      assert.equal(session.getState(), "active", "disconnected alone must not immediately flip to reconnecting");
+
+      mock.timers.tick(3_000);
+      assert.equal(session.getState(), "reconnecting", "persistent disconnect must enter reconnecting after grace period");
+      assert.ok(states.includes("reconnecting"));
+    } finally {
+      mock.timers.reset();
+    }
     session.hangup();
   });
 });
@@ -184,12 +195,32 @@ test("AC-005: caller and callee rejoin SFU before their ICE-restart offer", asyn
       const publisher = FakeRTCPeerConnection.instances[0]!;
       const offersBefore = publisher.createOfferOptions.length;
       const start = sent.length;
-      publisher.connectionState = "disconnected";
-      publisher.onconnectionstatechange?.();
+      const session = manager.getCallByPeer(role === "caller" ? "callee:uid" : "caller:uid")!;
+
+      // `disconnected` is transient per spec: arm the grace timer, then advance
+      // the fake clock past DISCONNECTED_GRACE_MS so the state machine flips to
+      // `reconnecting`. CallManager's beginRecovery then drives restartIce.
+      mock.timers.enable({ apis: ["setTimeout"] });
+      try {
+        publisher.connectionState = "disconnected";
+        publisher.onconnectionstatechange?.();
+        assert.notEqual(session.getState(), "reconnecting", "disconnected alone must not immediately flip");
+
+        mock.timers.tick(3_000);
+        assert.equal(session.getState(), "reconnecting", `${role}: persistent disconnect must enter reconnecting`);
+      } finally {
+        mock.timers.reset();
+      }
+
+      // With real timers restored, drive a recovery so createOffer promises settle.
+      await session.restartIce();
       await flushMicrotasks();
 
+      // beginRecovery already kicked off its own restartIce inside the fake
+      // window (which queued the SFU rejoin synchronously); our explicit
+      // restartIce here just completes the ICE-restart offer with real timers.
       const recoveryMessages = sent.slice(start).map((message) => message.type);
-      assert.deepEqual(recoveryMessages.slice(0, 2), ["call:sfu:join", "meeting:sdp"], `${role} must rejoin before ICE restart SDP`);
+      assert.equal(recoveryMessages[0], "call:sfu:join", `${role} must rejoin SFU before ICE restart SDP`);
       assert.ok(publisher.createOfferOptions.length > offersBefore, `${role} must create a recovery offer`);
       assert.equal((publisher.createOfferOptions.at(-1) as RTCOfferAnswerOptions | undefined)?.iceRestart, true);
       assert.equal(sent.some((message) => message.type === "call:sdp" || message.type === "call:ice"), false);
@@ -411,6 +442,47 @@ test("AC-010: SFU error frame during setup arms the bounded recovery window inst
     } finally {
       mock.timers.reset();
     }
+  });
+});
+
+test("AC-012: brief track mute must not enter reconnecting; long mute must", async () => {
+  await withFakeRTC(async () => {
+    const sent: Array<{ type: string; data: any; channel: string }> = [];
+    const states: string[] = [];
+    const session = makeSession(sent, states);
+    await session.startOutgoing();
+    session.handleSignal("meeting:membership:snapshot", { members: ["peer:uid"] });
+    session.handleSignal("meeting:sdp", { type: "offer", to: "peer:uid", sdp: "subscriber-offer" });
+    await flushMicrotasks();
+
+    const publisher = FakeRTCPeerConnection.instances[0]!;
+    const subscriber = FakeRTCPeerConnection.instances[1]!;
+    const remoteTrack = { id: "peer-audio", kind: "audio", readyState: "live", enabled: true, muted: false } as unknown as MediaStreamTrack;
+    subscriber.ontrack?.({ track: remoteTrack });
+    publisher.connectionState = "connected";
+    publisher.onconnectionstatechange?.();
+    subscriber.connectionState = "connected";
+    subscriber.onconnectionstatechange?.();
+    assert.equal(session.getState(), "active");
+
+    mock.timers.enable({ apis: ["setTimeout"] });
+    try {
+      // Brief mute (< MUTE_GRACE_MS): the track.muted flag is a transient WebRTC
+      // signal (RTP arrival gaps, jitter buffer adjustments) and must NOT flip
+      // the call out of `active`. Only a persistent mute past the grace window
+      // warrants the reconnecting alarm.
+      (remoteTrack as unknown as { muted: boolean }).muted = true;
+      (remoteTrack as unknown as { onmute?: () => void }).onmute?.();
+      assert.equal(session.getState(), "active", "brief mute must not enter reconnecting");
+
+      // Advance past MUTE_GRACE_MS with the track still muted: now reconnecting.
+      mock.timers.tick(4_000);
+      assert.equal(session.getState(), "reconnecting", "persistent mute must enter reconnecting after grace period");
+      assert.ok(states.includes("reconnecting"));
+    } finally {
+      mock.timers.reset();
+    }
+    session.hangup();
   });
 });
 

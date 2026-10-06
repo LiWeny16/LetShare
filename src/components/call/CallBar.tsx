@@ -258,6 +258,8 @@ export type ActiveCallProps = {
   remoteStream: MediaStream | null;
   localStream: MediaStream | null;
   transport: "p2p" | "public" | null;
+  /** 真实中继状态：null = 未知，true = 经 TURN 中继，false = 直连。SFU 通话时由 isRelayed() 提供。 */
+  isRelayed?: boolean | null;
   state: string;
   muted: boolean;
   videoEnabled: boolean;
@@ -777,7 +779,11 @@ export function ActiveCallPanel(props: ActiveCallProps) {
         <Box sx={{ flex: 1 }} />
         {props.transport && (
           <Typography variant="caption" sx={{ color: theme.palette.primary.main, fontWeight: 600, px: 1, py: 0.25, borderRadius: 1, border: `1px solid ${theme.palette.primary.main}` }}>
-            {props.transport === "p2p" ? t("call.p2p", "P2P 直连") : t("call.public", "公网中继")}
+            {props.transport === "p2p" 
+              ? t("call.p2p", "P2P 直连")
+              : props.isRelayed === true 
+                ? t("call.relay", "中继")
+                : t("call.direct", "直连")}
           </Typography>
         )}
         <Tooltip title={t("call.close", "关闭")}>

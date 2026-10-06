@@ -43,6 +43,8 @@ type AudioRtpCounters = { packetsReceived: number; packetsLost: number };
 const RECONNECT_WINDOW_MS = 25_000;
 const SETUP_WATCHDOG_MS = 8_000;
 const SUBSCRIBER_RESTART_THROTTLE_MS = 8_000;
+const MUTE_GRACE_MS = 4_000;
+const DISCONNECTED_GRACE_MS = 3_000;
 
 /**
  * Ordinary one-to-one calls use the same SFU publish/subscribe protocol as a
@@ -76,6 +78,9 @@ export class CallSfuSession {
   private publishNegotiation: Promise<void> | null = null;
   private recoveryTimer: ReturnType<typeof setTimeout> | null = null;
   private setupTimer: ReturnType<typeof setTimeout> | null = null;
+  private muteGraceTimer: ReturnType<typeof setTimeout> | null = null;
+  private disconnectGraceTimer: ReturnType<typeof setTimeout> | null = null;
+  private relayedState: boolean | null = null;
   private subscriberRestartSequence = 0;
   private lastSubscriberRestartAt = 0;
 
@@ -250,7 +255,9 @@ export class CallSfuSession {
       if (pc !== this.publishPc || this.ended) return;
       if (pc.connectionState === "connected") {
         this.maybeActivate();
-      } else if (pc.connectionState === "disconnected" || pc.connectionState === "failed") {
+      } else if (pc.connectionState === "disconnected") {
+        this.armDisconnectGrace("publish", pc);
+      } else if (pc.connectionState === "failed") {
         this.setState("reconnecting");
         this.armRecoveryWindow();
       } else if (pc.connectionState === "closed") {
@@ -398,12 +405,14 @@ export class CallSfuSession {
       this.remoteStreams.set(publisherId, target);
       if (event.track.kind === "audio") {
         event.track.onunmute = () => {
-          if (!this.ended && this.subscribers.get(publisherId) === pc) this.maybeActivate();
+          if (!this.ended && this.subscribers.get(publisherId) === pc) {
+            this.clearMuteGraceTimer();
+            this.maybeActivate();
+          }
         };
         event.track.onmute = () => {
           if (!this.ended && this.subscribers.get(publisherId) === pc && this.state === "active") {
-            this.setState("reconnecting");
-            this.armRecoveryWindow();
+            this.armMuteGraceTimer(publisherId, pc);
           }
         };
       }
@@ -414,8 +423,12 @@ export class CallSfuSession {
     };
     pc.onconnectionstatechange = () => {
       if (this.ended || this.subscribers.get(publisherId) !== pc) return;
-      if (pc.connectionState === "connected") this.maybeActivate();
-      if (pc.connectionState === "disconnected" || pc.connectionState === "failed" || pc.connectionState === "closed") {
+      if (pc.connectionState === "connected") {
+        this.clearDisconnectGraceTimer();
+        this.maybeActivate();
+      } else if (pc.connectionState === "disconnected") {
+        this.armDisconnectGrace(publisherId, pc);
+      } else if (pc.connectionState === "failed" || pc.connectionState === "closed") {
         this.setState("reconnecting");
         this.armRecoveryWindow();
       }
@@ -625,7 +638,29 @@ export class CallSfuSession {
   }
 
   async isRelayed(): Promise<boolean> {
-    return true;
+    // Detect relay by reading the selected ICE candidate pair from getStats().
+    // Returns false when the selected candidate is not determinable (caller
+    // should treat that as "not relayed" for transport-decision purposes);
+    // see getDebugInfo().relayed for a tri-state (boolean | null) view.
+    if (this.ended) return this.relayedState === true;
+    for (const pc of [this.publishPc, ...this.subscribers.values()]) {
+      if (!pc) continue;
+      try {
+        const stats = await pc.getStats();
+        const reports: any[] = [];
+        stats.forEach((report) => reports.push(report));
+        const pair = reports.find((r) => r.type === "candidate-pair" && (r.selected === true || r.nominated === true));
+        if (!pair?.localCandidateId) continue;
+        const localCandidate = reports.find((r) => r.id === pair.localCandidateId);
+        if (localCandidate) {
+          const isRelay = localCandidate.candidateType === "relay";
+          // Only update the cached state when we actually determine something.
+          this.relayedState = isRelay;
+          return isRelay;
+        }
+      } catch { /* ignore */ }
+    }
+    return this.relayedState === true;
   }
 
   setVideoBitrateLimit(kbps: number | null): void {
@@ -721,6 +756,7 @@ export class CallSfuSession {
       publishState: this.publishPc?.connectionState ?? null,
       subscriberStates: [...this.subscribers.entries()].map(([id, pc]) => ({ id, state: pc.connectionState })),
       publishSenders: senders,
+      relayed: this.relayedState,
       remoteAudioTracks: audioTracks.map((track) => ({
         readyState: track.readyState,
         enabled: track.enabled,
@@ -805,6 +841,46 @@ export class CallSfuSession {
     }, RECONNECT_WINDOW_MS);
   }
 
+  private armMuteGraceTimer(publisherId: string, pc: RTCPeerConnection): void {
+    if (this.muteGraceTimer != null || this.ended) return;
+    this.muteGraceTimer = setTimeout(() => {
+      this.muteGraceTimer = null;
+      if (this.ended || this.subscribers.get(publisherId) !== pc) return;
+      // Check if track is still muted
+      const track = (this.remoteStreams.get(publisherId)?.getAudioTracks() ?? []).find((t) => t.muted);
+      if (track && this.state === "active") {
+        this.setState("reconnecting");
+        this.armRecoveryWindow();
+      }
+    }, MUTE_GRACE_MS);
+  }
+
+  private clearMuteGraceTimer(): void {
+    if (this.muteGraceTimer == null) return;
+    clearTimeout(this.muteGraceTimer);
+    this.muteGraceTimer = null;
+  }
+
+  private armDisconnectGrace(publisherId: string, pc: RTCPeerConnection): void {
+    if (this.disconnectGraceTimer != null || this.ended) return;
+    this.disconnectGraceTimer = setTimeout(() => {
+      this.disconnectGraceTimer = null;
+      if (this.ended) return;
+      // Check if still disconnected
+      const currentPc = publisherId === "publish" ? this.publishPc : this.subscribers.get(publisherId);
+      if (currentPc === pc && pc.connectionState === "disconnected") {
+        this.setState("reconnecting");
+        this.armRecoveryWindow();
+      }
+    }, DISCONNECTED_GRACE_MS);
+  }
+
+  private clearDisconnectGraceTimer(): void {
+    if (this.disconnectGraceTimer == null) return;
+    clearTimeout(this.disconnectGraceTimer);
+    this.disconnectGraceTimer = null;
+  }
+
   private armSetupWatchdog(): void {
     if (this.setupTimer != null || this.ended || this.state !== "connecting") return;
     this.setupTimer = setTimeout(() => {
@@ -832,6 +908,8 @@ export class CallSfuSession {
     if (this.ended) return;
     this.clearSetupWatchdog();
     this.clearRecoveryWindow();
+    this.clearMuteGraceTimer();
+    this.clearDisconnectGraceTimer();
     this.ended = true;
     if (this.joined) this.opts.send("call:sfu:leave", {}, this.opts.callId);
     this.publishPc?.close();
