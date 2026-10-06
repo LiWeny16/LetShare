@@ -23,6 +23,7 @@
 | **F13** | TURN 续期后是否重建 allocation | `callManager.ts:738`（`restartIce`）| `meetingManager.ts:1180`（只 `setConfiguration`）| 同一课只在一边学到 | **C2 relay 场景 10 分钟必断** | **CONFIRMED** |
 | **F14** | 媒体帧 `track` 偏移 | `websocket.go:3822`（`frame[18]`）| 同文件 `mediaFrameCallID`=4..20、`mediaFrameSeq`=20..21（**正确**）；客户端 `callSignaling.ts:136` = **22** | 同一文件内部自相矛盾；服务端注释 `[callId 16B\|seq 2B\|track 1B\|padding 5B]` 还漏掉了 4B 魔数 | `track` 仅进日志 → 日志失真；**注释会误导重写者按错偏移解析** | **CONFIRMED** |
 | **F15** | 后台省流豁免分支 | `colabLib.ts:4566-4570`（通话分支 **re-arm** 定时器）| `colabLib.ts:4572-4574`（直写磁盘分支直接 `return`，**不重挂**）| 两分支不对称 | 直写磁盘请求挂起期间省流被永久解除 | REPORTED |
+| **F16** | 主连接状态 handler 的安装方式 | `participant.go:66`（`bindPeerConnection` 内安装）| `participant.go:207`（`Participant.OnConnectionStateChange` 导出方法，**直接透传给 PC**）| Pion v4.0.0 `peerconnection.go:490` 是单槽 `atomic.Value` → **替换语义，无追加**；`room.go:60` 还装了第三份同类 handler | 一旦有人调 `p.OnConnectionStateChange(...)`，该 PC **同时**丢掉 ① Info 跃迁日志（观测静默失效）② `failed/closed → p.Close()` 自动清理（既有的僵尸参与者风险）。当前**零调用方** → 潜伏雷，G2 核验为真 | **CONFIRMED** |
 
 ---
 

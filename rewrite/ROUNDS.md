@@ -290,3 +290,66 @@ V2 评审时与真实调用方接入一起过门（红队已判定：先接入**
 - **G2/G3 门锁的是"合并到 `rewrite/core-v2`"与"部署上线"，不是本地特性分支的提交**
 - `server` 子仓库的 V0 提交 `39fcccc` 落在**特性分支 `rewrite/v0-diagnostics`**（非主分支），目的是让**部署产物可复现可追溯**；未过 G2/G3 前**不部署**
 - 前端 V0 改动与 S2a 产物**保持未提交**，等各自过门后再入 `rewrite/core-v2`
+
+---
+
+## V0a · G2 契约门 + G3 裁决 + 上线（Architect）
+
+### G2 判定：**PASS-WITH-CONDITIONS**（Reviewer `glm-5.3`，70 tool uses / 142.4k token / 10.5 分钟）
+
+| Q | 结论 |
+|---|---|
+| Q1 只加观测不改行为 | **PASS** —— 10 处改动逐语句枚举；`p.room`/`p.ID` 恒等于旧闭包捕获的 `r.ID`/`participantID`（全包无再赋值）；`meetingManager` 单例拆分零求值顺序变化；`diagnostics/index.ts` **零 import** → 不可能成环；`useEffect` 注册/注销严格配对 |
+| Q2 观测可达生产日志 | **PASS** —— logrus 无 `SetOutput` → 默认 stderr → systemd `StandardError=append:`；刷屏上界 ≈8 行/人/断连周期，无风险 |
+| Q3 验收判据 | **部分满足（缺口明确）** —— 见下 |
+| Q4 测试质量 | **PASS**（真测试，非假绿）＋ 登记 4 项该测未测 |
+| Q5 阈值规范 | **PASS** —— 新增代码全达标；既有超标不阻塞 |
+| Q6 6 条偏离 | **6/6 全部接受** |
+| Q7 6 条未做项 | 4 条登记不阻塞；**2 条需 Architect 裁决** |
+
+**Q3 逐项（关键）**：直连/中继 ✅（仅建连时刻）· 断开前最后状态+时长 ✅ · 自己断 vs 被移除 ⚠️ 部分 · 谁先离开 ❌ · 房间为何销毁 ⚠️ reason 不落盘 · 订阅侧 ❌
+
+**Q7-1 核验为真**：Pion v4.0.0 `peerconnection.go:490` 是单槽 `atomic.Value` → **替换语义**。`Participant.OnConnectionStateChange`（`participant.go:207`）一旦被调用，**同时**失去 ① Info 跃迁日志 ② `failed/closed → p.Close()` 清理。但全仓**零调用方** → 潜伏雷，已登记 `DIVERGENCE.md` **F16**。
+
+### G3 裁决（Architect，Arbiter）
+
+1. **两个上线前置条件，裁定如下**
+   - **PLAN V0 未交付的两项（`sessionId` 贯穿、日志轮转）→ 改契约，排入 V0.1**。理由：本片已交付部分自洽、零行为变化、独立有价值；`sessionId` 贯穿是跨 WS↔meeting↔SFU↔客户端的横切改动，塞进本片会让「只加观测、不改行为」的边界失效；日志轮转是运维关注点、与归因正交。
+   - **但必须诚实记录：因此 V0 的整体验收判据（「只靠服务端日志写出完整因果链」）未达成。V0.1 不是可选增强，它是 V0 的完成。** 已在 `PLAN.md` 把 V0 拆为 V0a / V0.1 并列出 7 条缺口。
+   - **F16 登记完成**，排 V0.1（因当前零调用方，不阻塞上线）。
+2. **Architect 的额外裁断（超出 Reviewer 建议）**：Reviewer 指出 Q3 的缺口「恰好」落在订阅侧与会议层拆除路径上 —— 而这**正是本项目真实踩过的两个坑**：订阅侧零日志 = 「没声音」盲区；拆除路径零日志 = 「会议不存在或已结束」盲区（当时数小时才靠客户端日志定位）。**结论：V0a 的观测恰好避开了最该被看见的两处。** 这不否掉 V0a 的价值（ICE 层归因从 0 到 1），但明确了 V0.1 的优先级排序：**拆除 reason > 订阅侧观测 > sessionId > 其余**。
+3. **上线决定：批准**。理由：G2 无硬阻塞；改动经逐语句核验为零行为变化；而「线上对 SFU 连接状态可见度为零」每天都在制造盲区调试成本。
+
+### 上线记录（G5）
+
+| 步骤 | 结果 |
+|---|---|
+| 推送前基线 | `md5 f278b8ef2f758f3c3596ef8a2aea8019` · 21,482,689B · 启动 10-06 15:30:12 |
+| 后端部署 | `node scripts/deploy.cjs --backend --no-sync-docs` · 产物 20.5MB |
+| 后二进制 | `md5 24ee5543eb82889ff9476a3be1dc5b1d` · 21,498,913B |
+| V0 符号入盘 | `logConnectionStateChange` / `selectedCandidatePairFields` / `connStateTrace` / `peerConnectionStateReason` 全部 FOUND |
+| 服务 | `active` · 启动 **04:35:17** · `NRestarts=0` |
+| 前端部署 | 实际由前一次误用 flag 的调用完成（见下），CDN 已提供新 `index.html`，新旧 chunk 均 200 |
+
+### ⚠️ Architect 操作失误留档（必须记录，不掩饰）
+- **失误**：我读了 `deploy.cjs` 的 flag 逻辑却读反了 —— 实际是 `doFrontend = !includes("--backend")`、`doBackend = !includes("--frontend")`，即 **`--frontend` = 只部署前端**。我误以为 `--frontend` = 跳过前端
+- **后果**：第一次部署只推了前端、没推后端；且因未设置 ALIYUN 密钥跳过了 CDN 刷新
+- **实际影响：无破损**。核查证据：CDN 已在提供新 `index.html`；新 chunk CDN 200；**旧 chunk `static/index-BdIVZbkm.js` 亦 200**（构建未清空 outDir，旧资源仍在）→ 缓存旧 HTML 的用户不会 404
+- **纠正**：第二次调用改为 `--backend`，后端正确部署
+- **教训**：**部署前必须先用 `--dry-run` 或读 flag 消费点，不靠推理**
+
+### 验收证据：V0 在真实 PC 上触发（Architect 亲自跑）
+生产二进制上跑 `go test ./internal/handler/ -run TestMeetingE2E_AC001 -v`（**真实 Pion PeerConnection**，非 mock）：
+```
+level=info msg="参与者的主连接状态变化" ice_state=checking  prev_state=unknown    prev_state_duration_ms=0   state=connecting  roomID=9893 participantID=uniqA-1
+level=info msg="参与者的主连接状态变化" ice_state=connected prev_state=connecting prev_state_duration_ms=5   state=connected   roomID=9893 participantID=uniqA-1
+level=info msg="参与者主连接 ICE 选中候选对" relayed=false local_type=host remote_type=host ...
+level=info msg="参与者的主连接状态变化" ice_state=closed    prev_state=connected  prev_state_duration_ms=414 state=closed      roomID=9893 participantID=uniqA-1
+--- PASS: TestMeetingE2E_AC001_AC009_OfferAnswerMediaAndSubscriberRestart
+```
+- ✅ 因果链字段全部真实落盘；`relayed` 归因可用
+- ✅ 用**真实 PC + 真实 logrus 管线**证明接线有效 —— 这是 Reviewer 点名的最大假绿敞口，现已有证据（**但仍非回归测试 → V0.1 必补**）
+- 观察到一个可疑点（登记）：`participantID=uniqB-1` 首次跃迁即 `state=closed`（`prev_state=unknown`）→ 疑似 PC 被过早关闭，V0.1 期间复核
+
+### 下一步
+派 **V0.1**  Worker（`mimo-v2.6-pro`）：拆除 reason · 订阅侧观测 · 房主/转移日志 · F16 拆除 · 接线回归测试

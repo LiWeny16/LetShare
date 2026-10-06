@@ -20,14 +20,26 @@
 
 ### V0 · 诊断能力（**前置，不是重构**）
 - **为什么必须第一**：`PURPOSE.md` §4.4「不在缺少诊断和回退能力时替换核心」；且没有它，后续任何片都无法验证。
-- **交付**
-  - SFU/会议状态跃迁从 `.Debug` 提到 **Info**（`internal/sfu/participant.go:68`、`room.go:65`）
-  - **selected candidate pair**（direct/relay）上报
-  - `sessionId` 贯穿 WS → meeting/call → SFU participant
-  - 客户端 `window.__ls.dump()`：远端轨道列表 / 各订阅 PC 状态 / 音频轨 `enabled|muted` / `audibleVia` / `ctxState`
-  - `server_error.log` 加轮转
-- **验收**：能**只靠服务端日志**给一次断连写出完整因果链
 - **范围标记**：唯一允许修改旧代码的切片，但仅**加观测、不改行为**
+- **Architect 裁决（G2 后）：本片拆为 V0a（已交付）+ V0.1（未完成）。** G2 判决「验收判据仅部分满足」，故 **V0.1 不是可选增强，它是 V0 的完成**
+
+#### V0a · 已交付（G2 = PASS-WITH-CONDITIONS，2026-10-07）
+- SFU 主连接状态跃迁 `.Debug` → **Info**，带 `prev_state` / `prev_state_duration_ms` / `ice_state` / `reason`
+- **selected candidate pair**：`relayed` / `local_type` / `remote_type` / 脱敏地址
+- 客户端 `window.__ls.dump()`：`meeting` / `playback` / `connection` 三段
+- 产物：`server/internal/sfu/diagnostics.go`(131) + `diagnostics_test.go`(201)；`src/diagnostics/index.ts`(145) + `tests/diagnostics.test.ts`(73)
+
+#### V0.1 · 未完成（验收缺口，**每一条都直接对应本项目真实踩过的事故**）
+| 缺口 | 位置 | 为什么不是「可选增强」 |
+|---|---|---|
+| **订阅侧 PC 零日志** | `participant.go:386-390` | 正是 **「没声音」** 症状的服务端盲区 |
+| **会议层拆除路径零日志**：显式 leave / 踢人 / teardown / **宽限到点被静默跳过** / `SFU 房间已关闭` 无 reason | `websocket.go:1346-1357`、`1855-1870`、`1502-1505`、`room.go:175` | 正是 **「会议不存在或已结束」** 那次事故的盲区 —— 数小时才靠客户端日志定位 |
+| **房主角色 / `transferMeetingHost` 无日志** | — | 无法回答「谁先离开」 |
+| **`sessionId` 贯穿** WS → meeting/call → SFU participant | — | SFU 日志用 `uniqId`、WS 日志用 `client_id/user_id` → **跨层无法对账** |
+| **接线无测试保护**：删掉 `room.go:60` / `participant.go:66` 的调用，全部测试仍绿 | — | V0 的本质路径没有回归防护 = 最大假绿敷口 |
+| **`Participant.OnConnectionStateChange` 替换语义** | `participant.go:207` | 潜伏雷：一旦被调用，**同时**失去 Info 日志与 `failed/closed → p.Close()` 清理。当前零调用方（F16）|
+| `server_error.log` 轮转（43MB 无轮转）| — | 运维关注点，与归因正交 |
+- **V0 整体验收（未达成）**：能**只靠服务端日志**给一次断连写出完整因果链
 
 ### V1 · 服务端会议号保活（红队判定必须前置）
 - **故障**：重连必得 `404 会议不存在或已结束`（线上 02:33 实事故）
