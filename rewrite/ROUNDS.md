@@ -46,3 +46,28 @@
   - `S1` 可观测补丁未做 → 阻塞 S2 之后的验证能力
 
 ---
+
+### Round 1 · 切片 S2a · `core/transport` 地基（进行中）
+- 日期：2026-10-07
+- Worker：**模型切换事件** —— 首次派 `qwen`(qwen3.8-27b-distill) 失败：`502 upstream_error: Connection refused`（provider `onion-3080-public` 不可达，21.7s / 0 tool use）。经用户裁定改用 **`cc-switch-xiaomi-mi-mo-token-plan-china/mimo-v2.6-pro`** 重派，provider 正常（已验证有 tool 调用）。
+- 本轮跨模型阵容（满足 STANDARDS §3 硬规则：Reviewer ≠ Adversary ≠ Worker）：
+
+  | 角色 | 模型 |
+  |---|---|
+  | Worker | `mimo-v2.6-pro`（Xiaomi）|
+  | Reviewer | `deepseek-flash`（DeepSeek）|
+  | Adversary | `codex` gpt-5.6-luna / xhigh（OpenAI）|
+
+- 并行另有 Researcher(Explore) 执行 S0 缺口补齐（8 个文件族的教训注释挖掘）
+- 交付物（Worker）：`src/core/transport/{RetrySupervisor,ConnectionState,index}.ts` + `tests/transportCore.test.ts`
+- 保护的不变量：**重试必有下一次调度或终止态**（消灭 A3 静默死锁 / Q20）
+- G1 静态门：待验证（`tsc --noEmit` ×2 / `eslint --max-warnings 0` / 阈值）
+- G2 契约门：待验证（C-01 … C-04）
+- G3 评审门：待 Reviewer / Adversary
+- G4 对拍门：N/A（本片为纯逻辑，无线上路径）
+- 结论：进行中
+- 残留：
+  - `onion-3080-public` provider 离线 → qwen 角色暂不可用（未阻塞，已换模型）
+  - `QUIRKS.md` R0 待补充区间 → Researcher 进行中
+
+---
