@@ -98,24 +98,25 @@ V0 诊断（前置，阻塞一切验证）
 
 | 角色 | 模型 | 约束 |
 |---|---|---|
-| **Architect** | 主 Agent | 定契约 · 拆片 · 裁决 · 终审 · **唯一合并权** |
+| **Orchestrator + Reviewer** | 主 Agent（`deepseek-flash`）| 定契约 · 拆片 · **逐条走 checklist 详审** · 裁决 · 终审 · **唯一合并权** · 调度 |
 | **Worker** | `mimo-v2.6-pro` | 每轮**只派一个**；只写本片文件 |
-| **Reviewer** | `deepseek-flash` | 逐条走 `STANDARDS.md` checklist |
-| **Adversary** | `codex` gpt-6-sol / high | 对 Reviewer 每条结论 concur/refute + 构造反例 |
+| **Gatekeeper** | `codex` gpt-6-sol / high | **高层次建议 + 把关**：反对意见 · 构造反例 · 判定是否放行 |
 
 ```
-Worker 实现 ──► G1 静态门
+Worker 实现 ──► G1 静态门（Architect 跑）
     ↓
-Reviewer 逐条 checklist ──► G2 契约门
+Architect 逐条 checklist 详审 ──► G2 契约门
     ↓
-Adversary concur/refute + 反例 ──► G3 评审门
+Gatekeeper(codex gpt-6-sol) 高层次把关 ──► G3 评审门
     ↓
-Architect 裁决 ──► G4 证据门
+Architect 裁决未决分歧 ──► G4 证据门
     ↓
-合并 rewrite/core-v2 ──► G5 上线门（按协议组合灰度 + 交叉版本验证 + 回退演练）
+合并 rewrite/core-v2 ──► G5 上线门（Architect 部署 + 重启）
 ```
 
-**硬规则**：Reviewer ≠ Adversary ≠ Worker，三方异模型；契约被判"不可断言"必须由 Architect 改契约，不许绕过。
+**硬规则**：三方异模型（Worker `mimo-v2.6-pro` / Reviewer `deepseek-flash` / Gatekeeper `gpt-6-sol`）；
+Gatekeeper 必须对每片明确表态（**放行 / 拦下 + 理由**），禁止默认通过；
+契约被判"不可断言"必须由 Architect 改契约，不许绕过。
 
 ---
 
@@ -125,7 +126,7 @@ Architect 裁决 ──► G4 证据门
 |---|---|
 | **G1 静态门** | `tsc --noEmit` ×2（全局 + `tsconfig.core.json` 严格档）· `eslint --max-warnings 0` · `go vet` · `staticcheck` · 文件 ≤400 行 / 函数 ≤50 行 / 复杂度 ≤12 |
 | **G2 契约门** | 本片 `C-XX` 全绿；**测试名可读出被保护的不变量** |
-| **G3 评审门** | Reviewer 通过 **且** Adversary 无未决 refute |
+| **G3 评审门** | Architect 详审通过 **且** Gatekeeper(`codex gpt-6-sol`) 明确放行（拦下必须有理由）|
 | **G4 证据门**（重写）| **必须声明故障注入矩阵**（半开连接 / 出口 IP 变更 / 后台 N 分钟 / 暂停-恢复 / 丢包率）+ 每格**样本量**与**统计窗口**。判据 = **注入故障后 ≤X 秒内恢复，且恢复期间无用户可见中断**（*已消除"注入中断 vs 静默秒数=0"的自相矛盾*）|
 | **G5 上线门** | 按**兼容的客户端-服务端协议组合**灰度（非单片开关）· 验证**新旧版本交叉连接** · 回退路径**实际演练**过 |
 

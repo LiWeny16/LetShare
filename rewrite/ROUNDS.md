@@ -127,3 +127,20 @@
   - 风险控制：两片各自独立走 G1–G3，不共享评审结论。
 - 下一步：V0 完成 → G1/G2 → Reviewer(deepseek-flash) → Adversary(codex gpt-6-sol) → Architect 裁决 → **协调部署窗口**（重启服务会中断进行中的通话，须负责人确认时机）
 - 阻塞：V0 的**上线**需要人类负责人给出部署窗口（服务端重启会打断通话）
+
+### Round 3 · 角色定调与部署授权
+- 日期：2026-10-07
+- 人类负责人裁决：
+  1. **部署授权：可自由重启上线**（不限制时间窗口）→ 记入 `PURPOSE.md` §7，V0 起每片过完 G1–G3 即可直接部署重启
+  2. **角色定调**：Worker = `mimo-v2.6-pro` · **详细 review = 主 Agent（我）** · **高层次建议与把关 = `codex gpt-6-sol`** · 调度 = 主 Agent
+- 同步改动：
+  - `PLAN.md` §4 角色表与流水线重写（Reviewer/Adversary → Orchestrator+Reviewer / Gatekeeper）
+  - `PLAN.md` §5 G3 判据改为「Architect 详审通过 **且** Gatekeeper 明确放行」
+  - 跨模型属性仍然成立：`deepseek-flash`(我) / `mimo-v2.6-pro`(Worker) / `gpt-6-sol`(Gatekeeper)，三厂商
+- 在跑的 Worker（均为 `mimo-v2.6-pro`）：
+  | Worker | 切片 | 状态 |
+  |---|---|---|
+  | `worker-v0-diagnostics` | **V0** 诊断门（阻塞一切验证）| 运行中 |
+  | `worker-s2a-mimo` | S2a（属 V2 机制件）| 运行中 |
+- **评审带宽约束（Architect 决策）**：暂**不**再派 V1 的 Worker。理由：当前已有两个 Worker 在跑，若再并发第三个会变成三份评审堆在我一人身上，违背「Architect 逐条详审」的质量前提。V1 将在 V0/S2a 落地并完成评审后立即派单。
+- 下一步：V0 落地 → G1 → Architect 详审 → Gatekeeper 把关 → 部署重启 → 派 V1
