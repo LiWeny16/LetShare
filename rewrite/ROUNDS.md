@@ -237,3 +237,56 @@
 
 ### 下一步
 G2 契约门 → Reviewer(`glm-5.3`) 审查中；并行确认 Worker 自报的 **Q7.1「Pion `OnConnectionStateChange` 是替换语义 → 新 Info 日志可能被静默失效」** 是否属实（若属实即 P0：诊断日志静默失效是本项目最危险的失败模式）
+
+---
+
+## S2a · 传输机制件（Worker: `mimo-v2.6-pro`）—— 属 V2，末位优先级
+
+派单：2026-10-07 · 交付：2026-10-07 · 用量：42 tool uses / 264.2k token / 38.4 分钟
+
+### 交付物（Worker 声明"只写这 4 个文件"，Architect 核实为真）
+| 文件 | 行数 |
+|---|---|
+| `src/core/transport/RetrySupervisor.ts` | 218 |
+| `src/core/transport/ConnectionState.ts` | 69 |
+| `src/core/transport/index.ts` | 3（纯 re-export） |
+| `tests/transportCore.test.ts` | 373 |
+
+### G1 静态门 —— Architect 亲自执行
+| 检查 | 结果 |
+|---|---|
+| 文件面核实 | ✅ 仅新增 `src/core/`；无既有文件被改；无遗留调试文件 |
+| `tsc --noEmit` | ✅ EXIT 0 |
+| **`tsc -p tsconfig.core.json --noEmit`** | ✅ EXIT 0（严格档，见下"契约修订"）|
+| `eslint src/core --max-warnings 0` | ✅ 无输出 |
+| S2a 用例 | ✅ 13/13 PASS（Architect 复跑）|
+| 全量 `pnpm test` | ✅ **547 通过 / 0 失败**（512 + 35，与 V0 并存无冲突）|
+| 行数 / 函数 / 复杂度 | ✅ 218 ≤400；最长函数 21 行；圈复杂度 ≈5 |
+
+Worker 额外自证（值得留档）：为排除"ESLint 目录扫描空跑造成的假绿"，它临时放入故意含错的探针文件确认报错后再删除。**这正是本项目历史上栽过的坑（2 个 grep 源码冒充测试的假绿），Worker 主动防了。**
+
+### 契约修订 ①：`tsconfig.core.json` 由 Architect 补建
+- 现象：STANDARDS §1 要求 G1 跑作用域化严格档 `tsconfig.core.json`，但该文件不存在 → **严格门不可复现**，Worker 只能用 CLI 等价开关临时替代
+- 裁定：属契约/配置（Architect 属地），Worker 受文件预算约束不建是对的
+- 动作：Architect 建 `tsconfig.core.json`，并**修正我自己的契约缺陷** —— 原 include 只含 `src/core/**`，而 V0 的新代码在 `src/diagnostics/**`（新代码必须走严格档，不能因为目录名不在 `src/core` 就漏掉）。修订后：
+  ```json
+  "include": ["src/core/**/*.ts", "src/core/**/*.tsx", "src/diagnostics/**/*.ts"]
+  ```
+- 验证：两个档均 EXIT 0
+- 后续约束：**新代码模块一律放 `src/core/<域>/`**（单一严格根）；`src/diagnostics/**` 作为已落地的例外显式列入
+
+### Architect 预读发现（待 V2 评审时作为裁决输入，**尚未裁定**）
+1. **C-01 与实现自相矛盾（真问题）**：`delayFor = floor(min(baseMs·2ⁿ, capMs) × (1−r + 2r·rand))` —— 对**基准**封顶，未对**抖动结果**二次 clamp。故 `jitterRatio>0` 时实际时延可超过 `capMs`（上界 `capMs·(1+r)`），而 C-01 断言"必然在 capMs 内"。目前测试只在 `jitterRatio=0` 下断言，**契约字面义被绕过**
+2. **收敛缺口（真问题，且正是我们要消灭的故障类）**：`RetryPolicy` 无 `attemptTimeoutMs`。若 `task()` 返回的 Promise **永不 settle**，链既不排下一次也不发终止态 —— 与线上"4 分 25 秒零重连"是同一失败模式的缩小版。建议契约强制尝试自带超时
+3. **`terminal` 语义被稀释**：成功路径也发 `terminal(reason:"succeeded")`。为可判定性是有理由的，但建议 `terminal` 带判别字段（`succeeded | failed | exhausted | cancelled`），否则消费方必须解析字符串
+4. **不属于本 Worker 的既有债**：`tests/` 不在 `tsconfig.json` include 内 → 测试类型错误只靠 tsx 运行时暴露
+
+### 下一步
+V2 评审时与真实调用方接入一起过门（红队已判定：先接入**一条**端到端恢复路径证明共性，再抽 `MediaSession`）。**当前不提交、不合并**。
+
+---
+
+## 流程纪律澄清（Architect，防止审计歧义）
+- **G2/G3 门锁的是"合并到 `rewrite/core-v2`"与"部署上线"，不是本地特性分支的提交**
+- `server` 子仓库的 V0 提交 `39fcccc` 落在**特性分支 `rewrite/v0-diagnostics`**（非主分支），目的是让**部署产物可复现可追溯**；未过 G2/G3 前**不部署**
+- 前端 V0 改动与 S2a 产物**保持未提交**，等各自过门后再入 `rewrite/core-v2`
