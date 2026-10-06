@@ -60,6 +60,7 @@ import PictureInPictureAltIcon from "@mui/icons-material/PictureInPictureAlt";
 import realTimeColab from "@App/libs/connection/colabLib";
 import settingsStore from "@App/libs/mobx/mobx";
 import { RemoteAudioPipeline, clampSpeakerVolume } from "@App/libs/call/remoteAudioPipeline";
+import { buildPlaybackDump, registerDiagnosticsProvider } from "../../diagnostics/index";
 import { useTranslation } from "react-i18next";
 import alertUseMUI from "@App/libs/tools/alert";
 import { meetingManager, type PresentationFocusTarget } from "@App/libs/meeting/meetingManager";
@@ -555,6 +556,34 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
     remoteAudioPipelineRef.current?.detach();
     remoteAudioPipelineRef.current = null;
   }, []);
+
+  // 诊断出口（window.__ls.dump 的 playback 段）：只读采集当前元素/管线快照，
+  // 让“无声/双声”可以不靠用户开控制台就能取证。
+  useEffect(
+    () =>
+      registerDiagnosticsProvider({
+        playback: () => {
+          const audio = audioRef.current;
+          const pipeline = remoteAudioPipelineRef.current;
+          const srcObject = audio ? (audio.srcObject as MediaStream | null) : null;
+          return buildPlaybackDump({
+            elements: audio
+              ? [{
+                  muted: audio.muted,
+                  volume: audio.volume,
+                  paused: audio.paused,
+                  readyState: audio.readyState,
+                  audioTracks: srcObject && typeof srcObject.getAudioTracks === "function" ? srcObject.getAudioTracks().length : null,
+                }]
+              : [],
+            pipeline: pipeline
+              ? { active: pipeline.isActive, ctxState: pipeline.ctxState, volume: pipeline.getOptions().volume }
+              : null,
+          });
+        },
+      }),
+    [],
+  );
 
   const applyMeetingMediaSettings = async () => {
     try {

@@ -60,6 +60,11 @@ export class RemoteAudioPipeline {
     return this.ctx !== null;
   }
 
+  /** 只读诊断（window.__ls.dump）：AudioContext 状态；未建图为 null。不参与任何播放决策。 */
+  get ctxState(): AudioContextState | null {
+    return this.ctx ? this.ctx.state : null;
+  }
+
   /**
    * 挂载远端流：惰性创建 AudioContext 并建图。失败返回 false（调用方回退元素路径）。
    * 同一流重复挂载 → 幂等更新选项。detach 后可用新流再次 attach（图整体重建）。
