@@ -426,3 +426,45 @@ FAIL	letshare-server/internal/sfu	21.496s
 
 ### 生产侧现状
 V0a 部署（04:35）后生产**零条** `prev_state_duration_ms` —— 尚无真实会议。且 V0.1 落地还要再重启一次 ⇒ **建议等 V0.1 上线后再做真机会话**，避免白采数据。
+
+---
+
+## V0.1 · G2 契约门 + G3 裁决（Architect）
+
+### G2 判定：**PASS-WITH-CONDITIONS**（Reviewer `glm-5.3`，46 tool uses / 113.0k token / 10.2 分钟）
+
+| Q | 结论 | 要点 |
+|---|---|---|
+| Q1 只加观测不改行为 | **PASS** | 12/12 处**逐处**核验等价：`members()` 求值次数 1→1、`GetRoom`/`Count` 短路次数不变、`LoadAndDelete` 仍恰一次。**锁序**：全链无一处同时持两锁（`members` 只拿 registry RLock、`meta.mu` 顺序获取、零嵌套）→ 无锁序环/重入。**`meta.Parent` 无锁读无竞争**：全库唯一写点在构造字面量 `websocket.go:3280`（`LoadOrStore` 发布前一次性写入），sync.Map 原子发布建立 happens-before；既有无锁读 5 处同理由。**签名扩展调用点穷举**：`setMeetingHost`×2 / `teardownMeeting`×3 / `teardownMeetingLocked`×3 / `RemoveRoomWithReason`×1 / `closeWithReason`×1 → **零漏改、零错 reason** |
+| Q2 日志假值 | **PASS**（附建议）| 守卫 `websocket.go:1923` 是 `m.To == client.UniqID \|\| m.To == meta.Host` **直接比对**；`HostClientID` 回退分支只影响**踢人者权限**，不产生"target 是房主"的路径。**Worker 登记的疑点不成立（非假值）**。仅剩极窄 TOCTOU（守卫与日志间并发转移）|
+| Q3 reason 完备性 | **PASS** | **穷举 11 条拆除入口，每条均有稳定 reason 的 Info 日志，无静默路径**。点名 3 处无痕点（均非本片恶化）。**发现 1 个死枚举**：`server-teardown` 不可达（`clientReason` 实际取值域只有 `"timeout"`/`"host-ended"`）；另 `RemoveRoom`/`Room.Close` 现为零调用死代码 |
+| Q4 验收判据 | **PASS** | **五问全部成立**，未发现"Worker 说能而实际不能"的项。关键：`is_host` 在 `transferMeetingHost` **之前**计算（`:1329` vs `:1345`）→ 语义正确；并发双"最后离场"两条 teardown 靠 `was_registered:false` 可区分 |
+| Q5 测试质量 | **PASS** | 真 `logrus.Hook` + **级别钉在 Info** + 真实 pion PC + offer/answer/ICE 双向。**第三条负向自证由 Reviewer 在临时副本独立复现变红**；三条接线测试在 `-race` 下全 PASS |
+| Q6 会议层接线无测试 | 可排 V1 | 风险中低（被调函数全纯、接线行紧邻既有行为、删一行只丢观测）；**但必须写入 V1 契约** |
+| Q7 阈值 | **FAIL** | ⚠️ 见下 |
+
+### ⚠️ Reviewer 抓到了我 G1 漏掉的东西
+**我 G1 只查了文件行数（≤400），没查函数行数（≤50）。** Reviewer 补上了：
+- `setMeetingHost` **40 → 51 行**、`handleMeetingKick` **49 → 51 行** —— 本片把两个**原本合规**的函数**推成违规**（HEAD 对照亲测）
+- `diagnostics_wiring_test.go` 两个测试函数 **79 / 127 行**
+
+### G3 裁决（Architect，Arbiter）
+1. **阈值违规不豁免，打回机械修复。** 理由不是教条：修法是「把为观测新增的日志字段构造抽成纯函数」，这**恰好也是正确的结构方向**（降低耦合），成本低且改善代码。我自己写的「无例外，超限即打回」不能自己先破。
+2. **一并做 5 项低成本补强**（B1–B5）：
+   - **B1 `is_host` 改为求值** —— 虽 Reviewer 判定顺序路径上为真，但"日志说谎"对诊断片比"没有日志"更危险，一行成本换掉 TOCTOU 假值
+   - **B2 补订阅 PC 停在 `new` 的创建态日志** —— 「订阅发出但从未跃迁」是「没声音」的真实成因，此前零日志
+   - **B3 补 `reason` 与 `prev_state_duration_ms` 的值级断言**
+   - **B4 补 reason 映射表驱动单测**
+   - **B5 死枚举/死代码加注释（不删，避免 churn）**
+3. **明确不改的（有原则的推迟）**：
+   - **同一事件双 `decision` 日志**（`handleMeetingEnd`+`endMeetingRoom`；grace 同理）→ 推 V1。理由：消解它需要重新决定"intent 日志"该在哪一层，而 **V1 本来就要把 4 条拆除路径收敛为唯一 `End(reason)`** —— 到那时自然合并。现在改是白干
+   - `cleanupMeetingClientID` 成员级无日志、`RemoveParticipant` 无 reason → 推 V1（同一收敛点）
+   - 进程停机无拆除日志 → 超范围
+4. **会议层 12 处接线零测试** → **接受 Reviewer 建议排入 V1，但已写入 `PLAN.md` V1 追加验收项**（不允许"排到以后"变成"永远不排"）
+
+### Architect 同步修订（契约层）
+1. **`STANDARDS.md` 新增 SIZE-EXEMPT 登记表** —— 补上一个**治理缺口**：`websocket.go` 等文件早已超标却**无任何 `SIZE-EXEMPT` 声明**，等于规则被隐式规避。现显式登记 5 个存量超标文件（行数 / 理由 / 收敛归属片），并加硬规则：**任何片使表内文件行数净增，G1 即打回**；新增文件**一律不得**引用该表
+2. **`PLAN.md` V1 追加验收项**：每条拆除路径必产 `meeting-end:reason=` 日志**且带测试**；消化 V0.1 的 3 处无痕点；F10 行为本体必须修（V0.1 只留痕）
+
+### 当前状态
+修复 Worker（`mimo-v2.6-pro`）已派出。修完 → 我重跑 G1（**这次补上函数行数检查**）→ 验证 B1–B5 → 上线。

@@ -13,6 +13,20 @@
 | 模块公开符号数 | **12** | 无例外 |
 | Go 单包文件数 | **8** | 无例外 |
 
+### SIZE-EXEMPT 登记表（豁免必须显式登记，不允许“隐式超标”）
+
+G2 审查指出：`websocket.go` 等文件早已超标，却**无任何 `SIZE-EXEMPT` 声明** —— 规避成发明文规则，等于规则失效。因此所有存量超标必须在此登记，并且**每片不得恶化行数**。
+
+| 文件 | 当前行数 | 豁免理由 | 收敛归属 |
+|---|---|---|---|
+| `server/internal/handler/websocket.go` | 4911 | 巨型信令中枢，V0a/V0.1 被 PLAN 授权为 **in-place 观测例外**；拆它本身属于大重构，已超出本次收窄后的范围 | 不做全拆；仅要求**后续片不得再增加净行数** |
+| `server/internal/sfu/participant.go` | 497 | 同上；V0.1 净减 2 行（删 F16）——**已满足“不得恶化”** | V2（订阅/主连接观测重构时顺势下沉） |
+| `server/internal/sfu/subscriber.go` | 423 | 同上；V0.1 +3（connTrace 字段）| V2 |
+| `src/app/libs/meeting/meetingManager.ts` | 2495 | 同上；V3 播放权威收敛时拆 | **V3** |
+| `src/components/meeting/MeetingRoom.tsx` | 1959 | 同上；V3 | **V3** |
+
+**硬规则**：新增文件**一律不得**引用本表；本表只用于存量。任何片若使表内文件行数**净增**，G1 即打回。
+
 TypeScript 基线：
 - `strict: true`
 - 禁 `any`（`@typescript-eslint/no-explicit-any: error`）
