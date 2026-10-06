@@ -468,3 +468,69 @@ V0a 部署（04:35）后生产**零条** `prev_state_duration_ms` —— 尚无�
 
 ### 当前状态
 修复 Worker（`mimo-v2.6-pro`）已派出。修完 → 我重跑 G1（**这次补上函数行数检查**）→ 验证 B1–B5 → 上线。
+
+---
+
+## V0.1 · 打回修复 + 上线（G5）
+
+修复 Worker（`mimo-v2.6-pro`，89 tool uses / 214.1k token / 33.2 分钟）交付后，Architect 重跑 G1。
+
+### G1 重跑 —— **这次补上了我上轮漏掉的函数行数检查**
+Architect 写了脚本，**对全仓逐函数比对 HEAD 与工作区**（两种口径：A = 从 `func` 到下一顶层 `func` 前；B = 函数体）：
+
+| 函数 | 打回时 | 修复后 | 结论 |
+|---|---|---|---|
+| `setMeetingHost` | 51 | **45**（A）/ 41（B）| ✅ |
+| `handleMeetingKick` | 51 | **50**（A）/ 46（B）| ✅ 恰在线内，零余量 |
+| `TestMainConnection...` | 79 | **33** | ✅ |
+| `TestSubscriberConnection...` | 127 | **43** | ✅ |
+
+**自动化裁决输出**：`无：没有任何函数被本片从合规推成超限，也没有既有超限函数被本片恶化`
+
+**顺带暴露的体质事实（写入留档）**：仅 `websocket.go` 一个文件就有 **28 个函数 >50 行**，其中 `handleMeetingPresentation` **293 行**、`Allow` 233、`HandleWebSocket` 176、`handleFileTransferResend` 128 —— 这是"石山代码体质"最直接的量化证据。
+
+### 其余 G1
+| 检查 | 结果 |
+|---|---|
+| `go build` / `go vet` / `go test -count=1 ./...` | ✅ 全绿 |
+| `gofmt -l`（改动文件）| ✅ 干净 |
+| 文件行数（SIZE-EXEMPT 不得净增）| ✅ `websocket.go` 4911→**4904**（−7）· `participant.go` 497→497（0）· `subscriber.go` 423→423（0）|
+| 新文件行数 ≤400 | ✅ 139 / 27 / 61 / 311 |
+| **B1 `is_host` 已求值** | ✅ `"is_host": h.meetingHostUniqID(roomID) == target`；调用点`handleMeetingKick` 函数体内**零 `Lock/Unlock`** → 短锁纯读安全 |
+| **B2 订阅创建态日志** | ✅ `"订阅连接已创建"` 带 `sfu/roomID/participantID/publisherID` |
+
+### 负向自证（修复后重跑，三条接线各拆一次）
+`①main` / `②bind` / `③subscriber` 分别拆除 → 各自 **FAIL**（`超时：未等到期望的日志条目`）→ 还原 → 各自 **PASS**。原始输出见 Worker 回报。
+
+### G2 收尾（Architect 裁断）
+本轮 delta **仅实现 Reviewer 自己开出的补救项**（A1/A2 阈值 + B1–B5），且均为机械抽取或一行级语义修正，已由 Architect 逐条核验 → **G2 关闭为 PASS**。理由：实质审查已在上一轮通过；delta 是执行审查结论，非新设计。
+**未做的有原则推迟**（已写入 V1 契约，不会变成"永远不排"）：同一事件双 `decision` 日志、`cleanupMeetingClientID` 成员级无日志、`RemoveParticipant` 无 reason、F10 行为本体。
+
+### 上线记录（G5）
+| 项 | 值 |
+|---|---|
+| 提交 | `server` 子仓库 `d0092f9`（分支 `rewrite/v0-diagnostics`，基于 `39fcccc`）|
+| 部署 | `node scripts/deploy.cjs --backend --no-sync-docs` |
+| 二进制 | `44910236a0d7fc766cc9eb24d4b94fad` · 21,523,984B |
+| V0.1 符号 | `logMeetingEnd`/`logMeetingTeardown`/`logMeetingKick`/`logMeetingHostChange`/`meetingHostChangeFields`/`diagnostics_subscriber`/`订阅连接已创建`/`meeting-end:reason=` **全部 FOUND** |
+| 服务 | `active` · 启动 **05:51:30** |
+
+### 验收证据（真实 PC 的会议 E2E，Architect 亲自跑）
+```
+meeting-end:reason=member-left            action=member-removed   is_host=true  members_remaining=1  explicit_leave=false  uniqID=uniqA-1
+meeting-host-changed:trigger=host-left    prev_host=uniqA-1 → new_host=uniqB-1  members_remaining=1
+meeting-end:reason=disconnect-grace-armed action=schedule-grace  grace_ms=120000 room_empty=true
+订阅连接已创建                              sfu=subscriber participantID=uniqB-1 publisherID=uniqA-1
+参与者的订阅连接状态变化                     state=connecting→connected→closed  publisherID=uniqA-1  prev_state_duration_ms=2
+订阅连接 ICE 选中候选对                     relayed=false local_type=host remote_type=host
+```
+⇒ **V0 的整体验收判据（只靠服务端日志还原因果链）已达成。** 上面这段正是线上真实事故的形状：**房主断线离开 → 房主自动转移 → 另一人也断线 → 排定 120s 宽限**。此前这三件事在服务端日志里**一件都看不见**。
+
+### V0 阶段小结
+| 切片 | 状态 | G2 |
+|---|---|---|
+| V0a | 已上线（后端 + 前端）| PASS-WITH-CONDITIONS |
+| V0.1 | 已上线（后端）| PASS-WITH-CONDITIONS → 打回 → 关闭为 PASS |
+| V0.1b（`sessionId` 贯穿 / 日志轮转）| 未开始 | — |
+
+**Architect 的自我复盘**：本轮我犯了两个错 —— ① 部署 flag 读反（已留档，无破损）② G1 只查文件行数、漏查函数行数（被 Reviewer 抓住）。两次都靠"独立审查 + 亲验"兜住，说明流程本身在起作用。

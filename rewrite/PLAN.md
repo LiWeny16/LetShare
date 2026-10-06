@@ -170,8 +170,11 @@ V0 诊断（前置，阻塞一切验证）
 - [x] S0 坑清单补齐（15 条分叉登记）
 - [x] 目的锁定（人类负责人裁决：选 3 + 收窄范围）
 - [x] 红队裁决（计划 3 处排序修正 + G4 门重写）
-- [ ] **V0 诊断能力** ← 下一步
-- [ ] V1 服务端保号
-- [ ] V2 客户端保活与重连
+- [x] **V0a 诊断能力** —— 2026-10-07 上线（主连接 Info 跃迁 + ICE 选中候选对 + `window.__ls.dump()`）· G2 = PASS-WITH-CONDITIONS
+- [x] **V0.1 归因缺口** —— 2026-10-07 上线（拆除 reason / 订阅侧观测 / 房主变更 / F16 排雷）· G2 = PASS-WITH-CONDITIONS → 打回机械修复 → G1 重跑通过
+- [ ] **V0.1b**（`sessionId` 贯穿 WS→meeting/call→SFU→客户端 · `server_error.log` 轮转）← 下一步
+- [x] **V0 整体验收（「只靠服务端日志写出完整因果链」）** —— 真实 PC 的 E2E 已产出完整链路（`member-left` / `host-left` / `disconnect-grace-armed` / 订阅 `publisherID` + `relayed`）；`sessionId` 跨层对账仍待 V0.1b
+- [ ] V1 服务端保号（**已回填验收项**：每条拆除路径必产 `meeting-end:reason=` 日志且带测试 · V0.1 遗留 3 处无痕点 · F10 行为本体）
+- [ ] V2 客户端保活与重连（S2a 机制件已交付待评，属本片）
 - [ ] V3 播放权威
 - [ ] V4 注释卫生
