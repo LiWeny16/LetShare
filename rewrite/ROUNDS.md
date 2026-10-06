@@ -144,3 +144,15 @@
   | `worker-s2a-mimo` | S2a（属 V2 机制件）| 运行中 |
 - **评审带宽约束（Architect 决策）**：暂**不**再派 V1 的 Worker。理由：当前已有两个 Worker 在跑，若再并发第三个会变成三份评审堆在我一人身上，违背「Architect 逐条详审」的质量前提。V1 将在 V0/S2a 落地并完成评审后立即派单。
 - 下一步：V0 落地 → G1 → Architect 详审 → Gatekeeper 把关 → 部署重启 → 派 V1
+
+#### 角色微调（同日，负责人裁定）
+- **Reviewer 改为 `cc-switch-zhipu-glm/glm-5.3`**（Zhipu，500k 上下文），不再由主 Agent 承担详细 review
+- 主 Agent 角色收敛为 **Orchestrator + Arbiter**：定契约 · 拆片 · **裁决未决分歧** · 终审 · 唯一合并权 · 部署
+- 最终四方阵容（全异厂商）：
+  | 角色 | 模型 | 厂商 |
+  |---|---|---|
+  | Worker | `mimo-v2.6-pro` | 小米 |
+  | Reviewer | `glm-5.3` | 智谱 |
+  | Gatekeeper | `gpt-6-sol` | OpenAI |
+  | Arbiter | `deepseek-flash`（主 Agent）| DeepSeek |
+- 流水线：Worker → G1(Architect 跑) → **G2 Reviewer(glm-5.3) 逐条详审** → **G3 Gatekeeper(codex) 把关** → G4 → G5 部署
