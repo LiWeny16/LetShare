@@ -353,3 +353,76 @@ level=info msg="参与者的主连接状态变化" ice_state=closed    prev_stat
 
 ### 下一步
 派 **V0.1**  Worker（`mimo-v2.6-pro`）：拆除 reason · 订阅侧观测 · 房主/转移日志 · F16 拆除 · 接线回归测试
+
+---
+
+## V0.1 · 归因缺口（Worker: `mimo-v2.6-pro`）— G1 静态门
+
+派单：2026-10-07 · 交付：2026-10-07 · 用量：78 tool uses / 191.6k token / 28.7 分钟
+
+### 交付物
+| 文件 | 前 → 后 | 内容 |
+|---|---|---|
+| `internal/handler/meeting_diagnostics.go` | — → **120** | reason/action/trigger 稳定枚举 + 纯日志函数 + 纯读 getter |
+| `internal/handler/websocket.go` | 4832 → 4911 | 12 处拆除/决策路径接线 |
+| `internal/sfu/diagnostics_subscriber.go` | — → **61** | 订阅侧 PC 观测（带 `publisherID`） |
+| `internal/sfu/diagnostics_wiring_test.go` | — → **288** | 接线回归测试 ×3（真实 PC + 真实 logrus hook） |
+| `internal/sfu/participant.go` | 499 → **497** | +订阅接线 1 行；**删 F16 导出方法**（−5）|
+| `internal/sfu/room.go` | 186 → 195 | `Close()`→`closeWithReason(reason)`，`SFU 房间已关闭` 带 reason |
+| `internal/sfu/manager.go` | 96 → 106 | `RemoveRoomWithReason`；gofmt 顺带修正既有 import 漂移 |
+| `internal/sfu/subscriber.go` | 420 → 423 | +1 字段 `connTrace`（有界）|
+
+### G1 结果 —— Architect 亲自执行
+| 检查 | 结果 |
+|---|---|
+| `go build ./...` / `go vet ./...` | ✅ EXIT 0 |
+| `go test -count=1 ./...` | ✅ 全绿 |
+| `gofmt -l`（8 个改动文件）| ✅ 干净 |
+| 新增测试 3 条 | ✅ PASS |
+| 行数 | ✅ 新文件 120 / 61 ≤400；既有超标未恶化（`participant.go` 净 −2）|
+
+### G1 期间的独立验证（Architect，**这是本片最有价值的一步**）
+Worker 声称「删掉接线行，对应测试会变红」。我**自己复现了一遍**：把
+`room.go` 的 `p.logConnectionStateChange(pc, state)` 与 `participant.go` 的 `sub.logConnectionStateChange(pc, state)`
+各替换为 `_ = pc`，然后跑那两条测试：
+
+```
+--- FAIL: TestMainConnectionTransitionReachesLogrusWithCausalFields (10.14s)
+    diagnostics_wiring_test.go:110: 超时：未等到期望的日志条目
+--- FAIL: TestSubscriberConnectionTransitionReachesLogrusWithPublisherID (10.41s)
+    diagnostics_wiring_test.go:270: 超时：未等到期望的日志条目
+FAIL	letshare-server/internal/sfu	21.496s
+```
+还原后 PASS，`git diff --stat` 与改动前一致。
+⇒ **G2 上一轮点名的最大假绿敞口（「删掉接线行测试仍全绿」）已真实堵住**，非 Worker 自述而已。
+
+### Worker 自报的代码实况校准（值得留档：简报行号普遍漂移）
+| 简报位置 | 实际 |
+|---|---|
+| `websocket.go:1346-1357` 显式 leave | `handleMeetingLeave` `1332-1343` |
+| `websocket.go:1855-1870` 踢人 | `handleMeetingKick` `1824-1865` |
+| `websocket.go:1502-1505` 宽限跳过 | `scheduleMeetingEnd` 定时器闭包 `1507-1510` |
+| `websocket.go:1442-1450` 分歧点 | 实为 `finishMeetingMemberLeave` `1311-1327` |
+| Pion 单槽 handler | `peerconnection.go:` **491**（简报写 490）|
+
+### F16 处置：**已消灭**（选择纯删除）
+- 删除前 grep（全仓含测试）：`pc.OnConnectionStateChange` 仅 4 处，均为直接装在 Pion 原生 PC 上；`Participant.OnConnectionStateChange` **零调用方** → `internal` 包内死代码
+- Pion v4.0.0 `peerconnection.go:491` = `atomic.Value` 单槽替换，无追加
+- 未选"链式组合"的理由（接受）：为零个消费者引入新组合语义与调用顺序 = 凭空新增未被使用的行为，风险严格大于删除
+
+### Worker 登记「发现但故意没做」
+1. **F10 行为本体**（宽限只生效一次、skip 不重排）—— 按简报只留痕不修（V1 的活）
+2. `pkg/logger` 的 `FileHook.Fire` 只收 ErrorLevel —— 属日志路由/轮转（另一片）
+3. 踢人路径不走 `finishMeetingMemberLeave`：理论上「非成员身份 host 踢掉最后成员 → 空会议注册残留且无宽限」的边角；只加日志、行为未动
+4. 幂等 no-op 不落日志（避免污染检索）—— 故意留空
+5. `scheduleMeetingEnd` 幂等时不区分"是否真的新建了定时器"
+
+### 待 G2 裁决的重点（已交给 Reviewer）
+- ⚠️ **`logMeetingKick` 硬编码 `is_host: false`** —— 若守卫不覆盖全部路径，这就是**日志说谎**（对诊断片比"没有日志"更危险）
+- 11 个 reason 枚举是否有**永不发出**的死枚举
+- `parentRoomID = meta.Parent` 的**无锁读**是否引入数据竞争（`go test -race`）
+- `finishMeetingMemberLeave` 新增 `meetingHostUniqID()`（要拿锁）是否引入锁序问题
+- Q3 验收表逐项是否真的成立（**本片核心**）
+
+### 生产侧现状
+V0a 部署（04:35）后生产**零条** `prev_state_duration_ms` —— 尚无真实会议。且 V0.1 落地还要再重启一次 ⇒ **建议等 V0.1 上线后再做真机会话**，避免白采数据。
