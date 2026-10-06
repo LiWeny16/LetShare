@@ -172,3 +172,68 @@
 | 1 | 2026-10-07 | 红队整份重写计划（4 问 + 「只改一处改哪里」）| 战略级（阶段 0 边界）| 否掉 3 处切片排序 + 指出 G4 门自相矛盾 |
 | 2 | 2026-10-07 | 锁定目的（A 可靠性 vs B 结构）| 战略级（阶段 0 边界）| 裁定「重写从已决定变为需被证明」+ 5 条不该做 + K1–K4 |
 | — | — | **本阶段（V0–V1）剩余配额：0 次**，除非出现排期级分歧 | | |
+
+---
+
+## V0 · 诊断门（Worker: `mimo-v2.6-pro`）
+
+派单时间：2026-10-07 · 交付时间：2026-10-07 · Worker 用量：76 tool uses / 164.0k token / 26.5 分钟
+
+### 交付物
+| 文件 | 行数 | 类型 |
+|---|---|---|
+| `server/internal/sfu/diagnostics.go` | 131 | 新增（观测） |
+| `server/internal/sfu/diagnostics_test.go` | 201 | 新增（7 用例） |
+| `src/diagnostics/index.ts` | 145 | 新增（`window.__ls.dump()`） |
+| `tests/diagnostics.test.ts` | 73 | 新增（3 用例） |
+| `server/internal/sfu/participant.go` | 499（−2）| 改（日志调用替换） |
+| `server/internal/sfu/room.go` | 186（−5）| 改（同上，消 X2 分叉） |
+| `src/app/libs/meeting/meetingManager.ts` | +43 | 改（只读快照 + 注册） |
+| `src/components/meeting/MeetingRoom.tsx` | +29 | 改（只读 provider） |
+| `src/app/libs/call/remoteAudioPipeline.ts` | +5 | 改（只读 getter，**清单外，见偏离 1**） |
+
+提交：`server` 子仓库 `rewrite/v0-diagnostics` @ `39fcccc`（基于线上提交 `572d2b9`）
+
+### G1 静态门 —— Architect 亲自执行（不采信 Worker 汇报）
+| 检查 | 结果 |
+|---|---|
+| `go build ./...` | ✅ EXIT 0 |
+| `go vet ./...` | ✅ EXIT 0 |
+| `go test ./...` | ✅ 全绿（handler / service / sfu / turnauth / logger） |
+| 新增 Go 用例 | ✅ 7/7 PASS（Architect 复跑 `-run 'Conn\|CandidatePair'`） |
+| 新增 TS 用例 | ✅ 3/3 PASS |
+| `gofmt -l` | ✅ 新增两文件**无漂移**（既有漂移：`manager.go` 等 8 文件 + `scripts/generate-authtoken.go` 语法错，均非本片引入） |
+| `tsc --noEmit` | ✅ EXIT 0 |
+| `eslint --max-warnings 0` | ⚠️ 1 warning `MeetingRoom.tsx:128` `react-hooks/exhaustive-deps`；已核实 diff 仅落在 63 行与 560+ 行 → **非本片引入**，记为既有债 |
+| 新增文件行数 ≤400 | ✅ 131 / 201 / 145 / 73 |
+| `participant.go` 499 行 | ⚠️ 既有超标（改前 501，净 −2）；非本片引入 |
+
+### G1 期间的独立发现（Architect，非 Worker 报告）
+
+**① 断连不可归因的根因已锁定（比 Worker 描述更严重）**
+- 生产 `configs/production.yaml`：`log.level = "info"`；`pkg/logger` 的 `FileHook.Levels()` 只收 `ErrorLevel`
+- 实测：43MB `server_error.log` 中 `"level":"debug"` 出现 **0 次**
+- ⇒ 原 `participant.go`/`room.go` 里那条 `Debug("参与者的主连接状态变化")` **从未落盘**。服务端对 SFU 连接状态的可见度**为零**
+- ⇒ 同时确认 Info **可达**：logrus 默认 stderr，systemd `StandardError=append:/root/cloud/logs/server_error.log`（该文件确含 157,969 条 info）
+
+**② 部署面精确对齐（重要，直接影响可否安全上线）**
+- 探针法（Go 二进制保留函数名于 pclntab）确认：线上二进制**包含** `NewChannelErrorMessage`——该符号**仅**由 `572d2b9` 引入
+- ⇒ **线上运行的就是 `572d2b9`，即 `server` 子仓库当前分支 HEAD**
+- ⇒ 部署 `rewrite/v0-diagnostics`（`572d2b9` + V0）= **线上代码 + V0**，不多带任何一个提交
+- 顶部仓库记录的 gitlink 正是 `572d2b9`，无分叉（`35e033c` 是祖先，本地 main 领先 31 个提交）
+- 部署基线快照：`md5 f278b8ef2f758f3c3596ef8a2aea8019` · 21,482,689B · 服务启动 `2026-10-06 15:30:12`
+- 自建交叉编译产物 21,445,975B（差 0.17%，与"线上 + V0"吻合）；本地 Go 1.26.5，服务器 Go 1.13.8 → **必须本机编译后 scp**
+
+**③ 一处自我纠错（留档防复发）**
+初次探针从 `_test.go` 抓串，得出"线上不含 `572d2b9`"的**错误**结论 —— 测试字符串永不编入二进制。改用非测试源码串与函数符号后结论反转。**教训：二进制探针只能用非测试符号。**
+
+### Worker 自报偏离（待 Reviewer 裁定）
+1. 改了清单外文件 `remoteAudioPipeline.ts`（+5 只读 getter）
+2. Go 逻辑放新文件而非简报点名文件（避免 X2 + 原文件已超标）
+3. dump 字段超"至少包含"
+4. 每条跃迁都带 `prev_state`/`prev_state_duration_ms`/`ice_state`
+5. ICE 候选对走 `pc.SCTP().Transport().ICETransport()` 主路径，未走 `GetStats()` 兜底
+6. 未跑 staticcheck（环境未装）；**未部署**
+
+### 下一步
+G2 契约门 → Reviewer(`glm-5.3`) 审查中；并行确认 Worker 自报的 **Q7.1「Pion `OnConnectionStateChange` 是替换语义 → 新 Info 日志可能被静默失效」** 是否属实（若属实即 P0：诊断日志静默失效是本项目最危险的失败模式）
