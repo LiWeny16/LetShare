@@ -35,6 +35,8 @@ G2 审查指出：`websocket.go` 等文件早已超标，却**无任何 `SIZE-EX
 | `server/internal/sfu/subscriber.go` | 423 | 同上；V0.1 +3（connTrace 字段）| V2 |
 | `src/app/libs/meeting/meetingManager.ts` | 2495 | 同上；V3 播放权威收敛时拆 | **V3** |
 | `src/components/meeting/MeetingRoom.tsx` | 1959 | 同上；V3 | **V3** |
+| `src/app/libs/connection/colabLib.ts` | **4825** | 巨型信令/传输中枢（**未登记就已达 4713** = 我台账缺失）；V2 把重连调度整体交给 `core/transport` 并**删除**旧重连定时器机制，残留 +112 属“接线”而非新逻辑（新机制在 `src/core/transport/**` 共 11 个新文件）| 后续片**不得再增净行数**；下次触碰先下沉 |
+| `src/app/libs/connection/ServerFileTransfer.ts` | 2218 | 存量超标**未登记**，本次未改动，仅补登记 | 待定 |
 
 **函数级台账（仅记“已到上限、零余量”的函数，供后续片保持警惕）**
 

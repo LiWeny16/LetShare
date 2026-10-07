@@ -850,3 +850,75 @@ Worker 在 D 节**主动承认三处没有测试守护**（并发修复 / 级联
 
 #### Architect 同步更新
 `STANDARDS.md` SIZE-EXEMPT 表：`websocket.go` 行数更新为 4855（自 4911 持续下降）；新增**函数级台账**记录两个"恰在 50、零余量"的函数（`handleMeetingKick` / `handleCallSFUJoin`），供后续片保持警惕。
+
+---
+
+## V2 · 客户端保活与重连必然性（Worker: `mimo-v2.6-pro`）— 交付 + G1
+
+Worker：209 tool uses / 490.6k token / **98.3 分钟**
+
+### 交付物
+**新增机制（`src/core/transport/**`，严格档根，共 11 个文件）**：`RetrySupervisor.ts`(218→279，二次 clamp + `attemptTimeoutMs`) · `attemptRun.ts`(101) · `ReconnectController.ts`(221) · `SessionEpoch.ts`(74) · `LivenessMonitor.ts`(168) · `ServerLiveness.ts`(70) · `livenessProbe.ts`(46) · `BackgroundPolicy.ts`(182) · `systemClock.ts`(35，**唯一**允许直连 `Date.now/Math.random/setTimeout` 的注入边界) · `ConnectionState.ts`(69→72) · `index.ts`(3→13)
+**新增测试（`tests/` 顶层，33 用例）**：`reconnectConvergence`(324) · `livenessProbe`(206) · `backgroundExemption`(189) · `coreInjection`(88) · `testClock`(113，共享虚拟时钟)
+**修改**：`colabLib.ts`(+112) · `ConnectionManager.ts`(+29) · `src/pages/share.tsx`(+4) · `src/pages/meeting.tsx`(+7)
+
+### 三个缺陷的修法（均按"接入机制"而非"打补丁"）
+| 缺陷 | 修法 |
+|---|---|
+| **① 重连 early-return 静默死锁**（4m25s 零尝试）| 重连调度整体交给 `ReconnectController`；原 `reconnectTimer` / `reconnectAttempt` / 裸 `setTimeout` 退避**整段删除**；两个 early-return 改为 `throw RetryAbandonedError` → 落到 P2 的第二种合法出口 |
+| **② 无服务端存活探测**（半开不可感知）| `LivenessMonitor` + `ServerLiveness`：每 10s 发应用层探测，**任一下行帧都算存活**，10s 零下行 → 判半开 → 经 `RetrySupervisor` 重连 |
+| **③ 后台豁免漏会议 + F15 不对称** | **判定只写一处**（`BackgroundPolicy.shouldExemptBackgroundTimeout`），三类事实（通话/会议/直写磁盘）各有唯一供给方；"不断开 ⇒ 必重挂"只有 `BackgroundGuard.rearm()` 一个落点 → 两分支不对称**结构上不可能再现**（`setupVisibilityWatcher` 97→44 行）|
+
+**V2 自己挖出的第四个洞（值得留档）**：`connectToServer` 开头的 `this.cancelReconnect()` 会把"正在运行它的那条重连链"**自己拆掉** → 失败后无人排下一次 = **又一个静默死锁**。修法：`reconnectAttemptInFlight` 标志位。
+
+### G1（Architect 亲跑）
+| 检查 | 结果 |
+|---|---|
+| `tsc --noEmit` / `tsc -p tsconfig.core.json --noEmit` | ✅ EXIT 0 / EXIT 0 |
+| `eslint --max-warnings 0` | ✅ EXIT 0 |
+| 新增 33 用例 | ✅ 全绿 |
+| 新文件 ≤400 行 | ✅ 最大 373（测试 324）|
+| `pnpm test` | ⚠️ 2 个失败，**均非 V2 引入**（见下）|
+
+### ⚠️ V2 发现的重大质量问题：**既有测试把 bug 写成了期望**（比我简报描述的更严重）
+我简报里写的是"现有测试只在 `jitterRatio=0` 下断言 → 契约字面义被绕过"。
+**实际情况**：`tests/transportCore.test.ts` 用的就是 `jitterRatio: 0.2` + `capMs: 250`，并且**明确断言 `299`（> capMs）为期望值** —— 不是"没测到"，而是**测反了**：**把一个契约违反钉成了期望**。
+⇒ **这类测试比没有测试更糟**：它把 bug 变成"必须保持的行为"，任何修复都会被它打红。
+⇒ **它还是过了上一轮 G2 的** —— 因为 Reviewer 是拿"实现 ↔ 测试"对齐，而没做"测试 ↔ 契约"对齐。**这是审查环节的一个盲区，已记入教训。**
+
+**Architect 裁定**：授权改这一行断言（`299` → `250`）。理由：不改则 `pnpm test` 必红（与"不得使基线变红"冲突），不改实现则 C-01 字面义被永久绕过 —— 二者只能取一，取"修实现 + 改这一行期望"。
+
+### Architect 裁决（V2 的 2 个跨边界请求 + 2 个契约建议）
+| # | 裁决 |
+|---|---|
+| 请求 1：改 `tests/transportCore.test.ts` 一行断言 | **批准**（上述）|
+| 请求 2：SIZE-EXEMPT 补登记 `colabLib.ts`(4825) / `ServerFileTransfer.ts`(2218) | **批准**。并**承认台账缺失是我的问题** —— `colabLib.ts` **未登记就已达 4713**。V2 的 +112 属"接线"（新机制在 `src/core/` 的 11 个新文件里，且它**删除**了旧重连定时器机制）；规则对**已登记**文件生效，现已登记，往后不得再净增 |
+| 建议 C-01 补"含抖动不得超过 `capMs`" | **接受**并已写入 `CONFORMANCE.md` |
+| 建议 §4.1 terminal reason 补"放弃/耗尽"值 | **接受**，已加 `"attempts-exhausted"`；并**补登红队第 6 条的 3 行属主表**（会话代次 / 服务端连接存活 / 后台豁免判定）|
+
+### V2 的偏离（均接受）
+1. **未复用既有 `presenceProbe`**，理由三条且成立：(a) 它只对 `userList` 里的用户发探测，**空房间根本不发**；(b) 它的结论是"把对端从列表移除"不是"重连服务端"；(c) `MAX_FAILS(3) × PONG_TIMEOUT(15s) = 45s` **超过 ≤30s 验收**。**但两者共享同一份事实来源**（任何下行都进同一个 `noteServerTraffic()`）→ **不存在两份"连接是否存活"的判定**（X2）。属主表上是两个不同不变量：`presenceProbe` 管"对端在线"，`ServerLiveness` 管"服务端连接存活"。
+2. **保留 `isCallActive()` 只看通话**，未并入会议 —— `tests/meetingInvite.test.ts` 锁死忙线语义；且"忙线"与"豁免"是**两个不同不变量**（缺陷③要的是**豁免**）。**这是对我"收敛为单一判定"指令的正确理解**：要收敛的是判定，不是事实。
+3. Ably 通道不跑应用层探测（SDK 自带心跳、不支持自定义原始帧，强发会造成假阳性判死）。
+
+### 验收关键数字
+- **半开连接最坏 20.85s 内必然重连**（余量 9.15s）；上限 = `probeInterval(10s) + probeTimeout(10s) + 首跳退避(≈1.1s) ≈ 21.1s`，**与注入时机无关**（在 0/1000/5000/9999/12000ms 五个时刻注入均成立）
+- **后台会议 15 分钟零断开**，且定时器确实重挂（`rearmed=2x`）
+- `handleVisibilityChange` 原 97 行 → 44 + 24
+
+### ④ 会话代次（红队第 6 条）—— 找到两条真实风险路径
+1. `ConnectionManager.connectWithProvider`：`await provider.connect()` 后**无条件**写 `currentProvider`，而可见性变更与重连可在同一 tick 并发 → **后完成的旧连接把新连接顶掉**（旧 socket 留着、新 socket 被遗忘；症状与半开**同源**）
+2. `colabLib.connectToServer`：await 后写 `settingsStore` / 发 `meeting:ws-reconnected` / 广播 discover，无代次校验
+
+### 需要服务端配合的接口（记入后续片）
+| # | 请求 | 现状 |
+|---|---|---|
+| **S1** | `liveness:probe` → 回 `liveness:pong{probeId}` | 缺失（现靠复用 `unsubscribe` 的 `unsubscribed` 回执间接测 RTT）|
+| **S2** | `liveness:probe` 加入 `processMessage` switch | 否则落 `default:` → 回 `400`，**且经 `sendError` 受 `ErrorRateLimiter` 约束**（5s/3 条屏蔽 10s）→ 极端情况下回执被吞 → 假阳性判死 |
+| **S3** | 服务端主动周期心跳（如每 20s） | 缺失；有了它客户端可纯被动判活，空闲房间最省 |
+
+**V2 诚实交代的残余风险**：若限流恰好屏蔽回执、且期间无任何其它下行 → 会误判半开重连一次。概率极低（探测 10s/次 ≪ 5s/3 条阈值），且重连幂等。S1+S2 落地后彻底消除。
+
+### 跨切片影响（Architect 已处理）
+V1a 改 `RemoveParticipant` 签名 → **打红了前端测试** `tests/meetingP0.test.ts:231`（该处用**正则断言 Go 源码文本**，属已知的"扫源码冒充测试"类）。
+⇒ 已 `steer_subagent` 要求 V1a（正在跑测试轮）把该断言改为**签名无关**，并检查同文件是否还有其它"签名锁"。**归属原则：谁改的签名，谁负责修复它打红的断言。**

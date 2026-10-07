@@ -26,6 +26,9 @@
 | 恢复不依赖事件到达 | `core/transport/TransportClient` + `core/media/MediaSession` | A5 ICE restart 被服务端 400 挡死 |
 | 每次跃迁有 Info + reason | `internal/observ` / `diagnostics` | 无法定位任何断连 |
 | 每个远端成员按 trackId 唯一入列 | `core/media/MediaSession` | 重复瓦片 / 重复音频 |
+| **会话代次：旧异步结果不得覆盖新连接** | `core/transport/SessionEpoch` + `ConnectionSlot` | 旧 socket 顶掉新连接 —— 症状与"半开永不重连"**同源**（V2 实现）|
+| **服务端连接存活（半开探测）** | `core/transport/ServerLiveness` + `LivenessMonitor` | NAT 重绑定后客户端**永远不重连**（V2 实现）|
+| **后台省流豁免判定** | `core/transport/BackgroundPolicy` | F15：直写磁盘挂起期间省流被永久解除（V2 实现）|
 
 ---
 
@@ -101,7 +104,7 @@ export type ConnectionPhase =
   | { k: "ready"; since: number; sessionId: string }
   | { k: "degraded"; since: number; lastError: string }
   | { k: "reconnecting"; attempt: number; nextAttemptAt: number; reason: string }
-  | { k: "terminal"; reason: "user-left" | "auth-rejected" | "unsupported" };
+  | { k: "terminal"; reason: "user-left" | "auth-rejected" | "unsupported" | "attempts-exhausted" };
 
 export interface ConnectionStatePort {
   readonly phase: ConnectionPhase;
