@@ -922,3 +922,54 @@ Worker：209 tool uses / 490.6k token / **98.3 分钟**
 ### 跨切片影响（Architect 已处理）
 V1a 改 `RemoveParticipant` 签名 → **打红了前端测试** `tests/meetingP0.test.ts:231`（该处用**正则断言 Go 源码文本**，属已知的"扫源码冒充测试"类）。
 ⇒ 已 `steer_subagent` 要求 V1a（正在跑测试轮）把该断言改为**签名无关**，并检查同文件是否还有其它"签名锁"。**归属原则：谁改的签名，谁负责修复它打红的断言。**
+
+---
+
+## V3 · 远端音频播放权威（Worker: `mimo-v2.6-pro`）— 交付 + G1
+
+Worker：165 tool uses / 479.4k token / **84.5 分钟** · 这是修用户两个线上症状的切片
+
+### 结构性手段（不靠调用方自觉）
+| 症状 | 结构性消除方式 |
+|---|---|
+| **B2 双重声音** | **会话 sink 整体废除**（两个 session 都不再自建 `<audio>`）；`muted`/`volume`/`srcObject`/`play()`/`gain` 全部收进唯一权威 `RemoteAudioHost` |
+| **B1 永久静音自锁** | `attach()` 两条分支**同一语义**（返回值改为"音频图是否已建立"= `hasGraph`，**不再表示"正在发声"**）· **危险 getter `isActive` 删除** · 存活看门狗（`statechange` 即时 + 250ms 轮询双通道，可注入时钟）|
+
+### 交付物
+**新增 `src/core/audio/**`（7 文件，966 行，全部 ≤400）**：`remoteAudioHost.ts`(391) · `remoteAudioPipeline.ts`(294，**迁移自 app 层**) · `remoteAudioDecision.ts`(97，**纯转移函数**) · `remoteAudioHostTypes.ts`(73) · `remoteAudioDom.ts`(55) · `remoteAudioClock.ts`(28，**裸 `setInterval` 唯一落点**) · `index.ts`(28)
+**新增测试**：`remoteAudioHost`(377，25 用例) · `remoteAudioAudible`(113，**真机 RMS**) · `remoteAudioDecision`(95) · `tests/fixtures/remoteAudioRmsHarness.ts`(152)
+**修改/删除**：`callSession.ts`(928→895) · `callSfuSession.ts`(935→896) · `callManager.ts`(842→841，**删死 API** `attachRemoteAudio`) · **`src/app/libs/call/remoteAudioPipeline.ts` → 删除（迁入 core/audio）** · `CallBar.tsx`(1278→1276) · `MeetingRoom.tsx`(1959→**1943，净 −16**) · `diagnostics/index.ts`(145→159)
+
+### G1（Architect 亲跑）
+| 检查 | 结果 |
+|---|---|
+| `tsc --noEmit` / `tsc -p tsconfig.core.json --noEmit` | ✅ EXIT 0 / EXIT 0 |
+| `pnpm test` | ✅ **563 + 35 = 598 通过 / 0 失败** |
+| `eslint --max-warnings 0`（改动面）| ✅ EXIT 0 |
+| **危险 getter `isActive` 是否真删除** | ✅ 只剩迁移注释中的说明文字（+ 一个无关变量 `isActiveScreenOwner`）|
+| **旧 `remoteAudioPipeline.ts` 是否真迁走** | ✅ `No such file or directory` |
+| **单写者核实**：`el.muted` / `el.volume` 在 `src/core/audio/` 之外 | ✅ **零写者**（唯一例外 `videoBinding.ts:16` 的 `video.muted`，属视频域且本就不在范围）|
+| 新文件 ≤400 行 | ✅ 最大 391 |
+| `MeetingRoom.tsx`（SIZE-EXEMPT 表内）| ✅ **净 −16**，未恶化 |
+
+### 真机可听性（红队第 8 条）—— **用真实浏览器 + 负控**
+Playwright Chromium + esbuild 注入 harness：振荡器 → 真 `MediaStream` → 分别经**元素通路**（`captureStream()` tap）与**管线通路**（`tapOutput()`，挂在进 destination 之前的发声节点）→ AnalyserNode 采时域 RMS：
+```
+[RMS] 元素通路: maxRms=0.3591  未绑流负控=0    audibleVia=element  element={muted:false, volume:1, paused:false}
+[RMS] 管线通路: maxRms=0.3635  gain=0 负控=0   ctxState=running    audibleVia=pipeline
+```
+断言（Architect 已核实为**真断言**）：`negativeRms === 0`（证明 tap 不是常数）、`maxRms > 0.01`、`audibleVia === "element"`、`element.muted === false`。
+**Worker 如实交代了它做不到的**：`captureStream()` 实测**不反映 `muted`/`volume`**（muted 后仍采到 0.356），`createMediaElementSource()` 对 `srcObject` 型元素恒 0 → **"用户耳朵处的电平"无法在浏览器里直接断言**。故元素路径可听性 = 「真机证明在解码并输出信号」+「`!muted ∧ volume>0 ∧ !paused`」+「单写者结构性互斥」三层合成。**已把"证据强度属于合成而非直接"这点明确交给 Reviewer 判定（Q6）。**
+
+### Worker 的关键偏离（先实现最小正确版本 + 写明理由，符合简报要求）
+1. **D5 语义收紧**：`autoplayBlocked` 从"任一被拒即置位"改为"**该拒绝导致没有通路真的在响**才置位"。反例：`resume()` 被拒但元素通路正常出声时，照字面会常驻**假告警**（chip 文案与事实相反）
+2. **`attach()` 返回值语义变更**（图已建立 ≠ 可发声）—— D2 允许的两个方案之一，且被两道回归测试锁死
+3. **新增 `bindElement()`**（§4.5 之外）：保留 UI 元素的 DOM 位置与生命周期，否则 `tests/e2e/diag-*.mts` 用 `document.querySelector("audio")` 会测到**静音 sink**（假阴性）；**写权仍 100% 在 host**
+4. `getDebugInfo().remoteAudioPlayback` 改为从 `window.__ls.dump().playback` **只读转发**（不盲改无法在此运行的 e2e 硬门）
+
+### 基线漂移（三方并行导致，值得留档）
+Worker 报告"开工前实测基线是 **547 例 / 545 过 / 2 挂**，不是简报写的 547/0" —— 挂的两条是**并行切片在途工作**（V1a 的 server 签名变更打红 `meetingP0.test.ts`；V2 的 `transportCore.test.ts` 改动）。落码后两条已由对应 Worker 修好，**现 598/0 全绿**。
+⇒ **教训**：三方并行时"基线"是移动的；各 Worker 报告的基线快照不等于同一时点。已在本片如实记录，不视为违规。
+
+### 下一步
+**Reviewer(`glm-5.3`) 已派出**，重点让它查两处支柱：**Q1 单写者是否真的穷尽**（自己全仓 grep 找漏网写者）、**Q6 真机 RMS 的证据强度**（是否用较弱断言替换了强断言却宣称满足红队第 8 条）。
