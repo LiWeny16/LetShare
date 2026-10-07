@@ -1095,3 +1095,58 @@ src/core/transport/ReconnectController.ts:65
 ### Architect 裁决与派单
 V2 **无阻塞项**，但需一轮小修：**A1 `phaseAfterRetryEvent` 复杂度 14→≤12**（附映射对照证明行为不变）+ **A2 处理 `attemptTimeoutMs<=0` 这个无守卫的逃生门**（我倾向收紧语义：`PURPOSE.md` 的原则是"机械保证优于人工承诺"，而这个逃生门正是一个人工承诺）。
 另要求它给出 **B1 `handleRename` 旁路的下一片施工图**（该路径既不校验代次也不启动 `ServerLiveness`，是"半开探测全覆盖"的一个洞）。
+
+---
+
+## V1a · P0 修复轮（breakout nil `life`）—— Architect G1 通过
+
+Worker：`mimo-v2.6-pro` · 73 tool uses / 159.2k token / 46.2 分钟
+
+### 修法（不是"补一个字段"，而是**消灭这一整类**）
+1. **抽唯一构造入口 `newMeetingMeta(meetingMetaInit)`**（`meeting_registry.go:248-259`，12 行）：`life: meeting.NewMachine()` 与 `minutes{RequireConsent:true}` **只在这里发生**
+2. **3 处生产构造 + 3 处测试接缝全部改走它**
+3. **守卫测试 `TestMeetingMetaLiteralOnlyExistsInsideTheSharedConstructor`**：扫源码断言 `meetingMeta{` 字面量**全包恰好 1 处且在构造入口内**（针子运行时拼接防自匹配）⇒ **任何人再写游离字面量（生产或测试）当片必红**
+4. Worker 明确选择"构造入口 + 守卫测试"而**非** `assertInitialized()`，理由：自检是运行时的、要么每个触点前调用（本身就能忘）、要么埋在 panic 前；构造入口让"忘设"在**写法层就不存在** —— 调用方根本拿不到未初始化的 `life`
+
+### A2 系统性审计：**生产只有 1 处**，但接缝侧有 **3 处镜像缺失**
+| # | 位置 | 缺失字段（改前） | 后果 |
+|---|---|---|---|
+| 3 | `websocket.go:3218` breakout 子房间（**生产**）| **`life`** | **P0 本体**：nil 解引用 panic |
+| 4/5/6 | 3 处**测试接缝** | **`minutes{RequireConsent:true}`** | 零值 = 纪要转写**无需同意**（**与生产隐私默认相反**）；且它替生产补了 `life` → **bug 被永久隐藏** |
+⇒ 这正是"接缝与生产分叉"的**镜像形态**（上一次是生产少字段、接缝多了；这次是接缝少字段）。两边都被统一到单一构造入口。
+
+### A4 生产路径测试（**不走任何接缝**）
+`meeting_breakout_production_path_test.go`(216)：全程真 WS 信令 —— `meeting:create` → 双方 `meeting:join` 主会 → 房主 `meeting:breakout` create → 成员 `meeting:leave` 主会 + `meeting:join` 子会 → 房主 `meeting:end` 级联。
+**三重"不 panic"证明**：① 显式判 `meta.life == nil`（P0 原形直接点名失败）② **panic 登记表**为空 ③ 成功信号本身在 panic 路径上不可达。
+
+### 🔬 Mutation 证据（证明绿灯不是"没跑到"）
+把 `newMeetingMeta` 里的 `life:` 注释掉 → 两个 breakout 测试**立刻红**，崩溃栈正是原事故链：
+```
+panic: invalid memory address or nil pointer dereference [recovered, repanicked]
+  internal/meeting.(*Machine).Phase(...)            lifecycle.go:59
+  internal/handler.enterMeetingLive(...)            meeting_registry.go:293   ← 生产 join 触点
+  internal/handler.handleMeetingJoin(...)           websocket.go:1018
+（第二帧：cleanupMeetingClientID → meta.life.Phase()  websocket.go:1512，断线清理触点）
+```
+植入游离 `&meetingMeta{}` → 守卫测试**点名文件并 FAIL**。两者还原后全绿。
+
+### 附带修掉的一个"帮凶"（Worker 主动报告）
+测试 harness 原本 `recover()` 后**静默吞掉 panic**（**X4 违规**）—— 它正是 nil 解引用隐身的帮凶。已改为 `serverPanics.record(ts, recover())`（一行等量，文件行数 ±0）+ panic 登记 registry，测试断言登记表为空。
+
+### Architect G1（亲跑）
+| 检查 | 结果 |
+|---|---|
+| `build` / `vet` / `test -count=1` | ✅ 全绿 |
+| `gofmt -l`（改动文件）| ✅ 干净 |
+| **全仓 `meetingMeta{` 字面量** | ✅ **恰好 1 处**，在 `newMeetingMeta` 内（守卫测试的主张核实成立）|
+| `websocket.go` | 4855 → **4851（净 −4）** |
+| 新文件 | 216 ≤ 400 ✅ |
+| 函数行数 | `handleCallSFUJoin` 50→**48**、`handleMeetingCreate` 50→**48**（**解除零余量**）、`handleMeetingBreakout` 104→103、无恶化 |
+
+### 阈值台账更新（Architect）
+- `websocket.go` 4851 行（持续下降）
+- **`meeting_registry.go` 现 400 行 = 阈值边界、零余量** → 已登记：后续片**触碰前必须先下沉**
+- 函数级台账：`handleCallSFUJoin` / `handleMeetingCreate` 从 50 → 48，**解除零余量**；`handleMeetingKick` 仍 50（零余量，待下沉）
+
+### 下一步
+V1a 已交 **Reviewer(`glm-5.3`)** 走 G2，重点让它查：**P0 是否真堵住 + 守卫测试可否被绕过**、**相位模型与 §4.6 跃迁表逐行一致性**、**超出授权的并发变更（`hostMu` 叶锁）与行为变更（`cleanupMeetingClientID` 的 `!ok` 分支）**、以及**协议零变化的真实边界**。
