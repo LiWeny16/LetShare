@@ -1282,3 +1282,73 @@ Reviewer 判"非阻塞"（最终仍可靠空置宽限到期回收）。**Archite
 
 ### 非阻塞登记（9 条，全部入台账将于下次汇总）
 breakout 不武装 TTL（已裁决为改表）· 守卫测试残余绕过形态（`var`/`new`/内嵌/空格）· `Reserved→Grace` 表外跃迁 + reason 漂移 · **空会议重入后陈旧房主（已升级为阻塞）** · `assertNoServerPanics` 只接进 2 个测试 · C-17「SFU 已拆则重建」/C-21 相位日志/recall 信令接线各缺专项测试 · 协议收件人边缘差异（更正确）· `meeting_registry.go` 零余量 · C-19 分支③是防御死分支
+
+---
+
+## V1a · 收尾轮（房主权威）：G1 + **后端上线** —— 最后一个用户可感知修复落地
+
+### Worker 对 Architect 指令的**反驳（经亲验采纳）**
+我的指令是"进入 `PhaseLive` 时若 `Host` 不在册就转移"。**它指出我的字面口径有反例并拒绝照做**，收窄为 `phaseFrom != PhaseReserved && Parent == "" && Host ∉ 在册`：
+1. **breakout 子房间的 `Host` 按设计就是主会议房主**，而 `BreakoutMembers` 明确排除房主（**我亲验：`websocket.go:3206`** `if uid == hostUniqID || !mainMembers[uid] ... { continue }`）⇒ 子房间 `Host` **永远不在册**；我的口径会让主会议房主**在成员进分组那一刻失去对子房间的控制权**
+2. **`PhaseReserved` 的"登记房主未到场"是被支持的合法态**（`isMeetingHost` 对"仅持 `HostClientID`"有明确回退）⇒ 我的口径会让**第一个 join 的人夺走发起人的席位，且发起人后到永远拿不回**
+
+它把判据总结为一句我认为比我原话更准的话：**"未到场 ≠ 已离场"**。
+**⇒ 契约由我改：** `ARCHITECTURE.md` §4.6 的不变式改为"**主会议一旦离开 `PhaseReserved`**，只要有在册成员就必有在册房主"，并**显式列出上述两个设计例外**。
+
+### 它还根因修了两处我没想到的
+1. **`enterMeetingLive` 必须把成员登记上移到同一临界区** —— 否则复活时唯一成员被判"不在册"、转移目标也不在册 ⇒ **席位无处可去，A1 根本修不好**；顺带堵住"join 进行中被并发空表拆除"的窗口（让 C-19 的"进行中 join"占用来源**真正成立**）
+2. **`AddParticipant` 失败出口新增回滚** —— 否则会留幽灵在册成员顶住 `enterMeetingGrace` 的空判
+
+### 负向自证（修前红 / 修后绿）
+未修形态下 **4 条**新测试变红，含最直白的一条：
+```
+meeting_host_authority_test.go:152: meeting:end 必须被接受（房主权威失守 = 阻塞项）: 仅房主可结束会议
+```
+修后 **8 条 + 4 条边界测试全绿**，全部走生产信令、全部接入 `assertNoServerPanics`。
+
+### G1（Architect 亲跑）
+| 检查 | 结果 |
+|---|---|
+| `build` / `vet` / `test -count=1` | ✅ 全绿（6 包）|
+| `gofmt -l` | ✅ 干净 |
+| **`meeting_registry.go`** | ✅ **400 → 261**（下沉到新文件 `meeting_phase_lifecycle.go` 184）⇒ **零余量硬前置解除** |
+| `websocket.go` | 4851 → **4850** |
+
+### 后端上线（G5）
+| 项 | 值 |
+|---|---|
+| 提交 | server `2b8a58e` · 顶层 `cebf48a` |
+| 部署 | `node scripts/deploy.cjs --backend --no-sync-docs` · 33s |
+| 二进制 | `f43ebe556e511229d86b6d6ea391d82c` · 20:02 |
+| V1a 符号 | `newMeetingMeta` / `restoreMeetingHostSeat` / `enterMeetingLive` / `logMeetingPhase` / `onMeetingEmptyTimerFired` / `emptyGen` **全部 FOUND** |
+| 服务 | `active` · 启动 **20:02:08** |
+
+---
+
+## ⛔ 收口：Architect 宣布停止门槛升级并交回给负责人
+
+### 新增硬规则（即刻生效）
+> **只拦「用户可感知的功能退化或崩溃」。其余一律登记、不拦。**
+
+原因：本轮 V1a 跑了 **5 轮**，其中两轮是**我过度把关**：
+- **第 2 轮（阈值）**：3 个函数各长 3~4 行，而根因是**我自己的行数口径写错**（把下一个函数的文档注释算进上一个函数）
+- **第 5 轮（房主转移）**：Reviewer 判**非阻塞**（可自愈），我升级成阻塞
+
+⇒ 这两轮约占 1.5 小时。**其余 3 轮是真必要**（其中第 3 轮挖出 P0）。
+
+### 已上线 vs 未做
+| 用户要求的 6 类 | 状态 |
+|---|---|
+| 通话稳定性的**状态**问题 | ✅ **已上线**（20:02）|
+| 播放客户端**组件**代码问题 | ✅ 已上线 |
+| **保活**问题 | ✅ 已上线 |
+| **静音**问题 | ✅ 已上线 |
+| **双重播放回声**问题 | ✅ 已上线 |
+| 清理无效/错误**注释** | 📋 清单已产出（`COMMENT_AUDIT.md`：11 条确认 + 4 条待核），**未执行** |
+
+### 登记但**未做**（Architect 不主动开片，等负责人决定）
+1. **V4 注释卫生**（在范围内）—— `COMMENT_AUDIT.md` 的 11 条已确认项
+2. **V1b `sessionId` 贯穿**（**不在范围内**，旧 PLAN 残留）—— 建议砍掉
+3. **V0.2 连接清理竞态**（P0 级但**无人报过症状**）—— `internal/service` 的既有竞态
+4. 探测日志洪水（8,640 行/天/连接）—— 需服务端把该 event 降为 Debug
+5. 十几条 `handleRename` 旁路 / `supersede` 语义 / 测试接缝等登记项
