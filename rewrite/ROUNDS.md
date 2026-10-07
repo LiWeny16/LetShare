@@ -534,3 +534,54 @@ meeting-end:reason=disconnect-grace-armed action=schedule-grace  grace_ms=120000
 | V0.1b（`sessionId` 贯穿 / 日志轮转）| 未开始 | — |
 
 **Architect 的自我复盘**：本轮我犯了两个错 —— ① 部署 flag 读反（已留档，无破损）② G1 只查文件行数、漏查函数行数（被 Reviewer 抓住）。两次都靠"独立审查 + 亲验"兜住，说明流程本身在起作用。
+
+---
+
+## V1a · 服务端会议号保活（Worker: `mimo-v2.6-pro`）— 派单
+
+派单：2026-10-07 · **第一个改行为的切片**
+
+### 目标故障（线上实事故，精确时间戳）
+```
+02:33:23  成员 WD 主动离开（meeting:leave，显式）
+02:33:29  ROG13 重连 → 404「会议不存在或已结束」
+```
+**根因（Architect 从代码定位）**：`finishMeetingMemberLeave`（`websocket.go:1330`）在
+`membersRemaining == 0 && explicitLeave == true` 时**直接 `teardownMeeting`** —— 会议号当场释放。
+6 秒后 `handleMeetingJoin` 的 `activeMeetingRooms.Load` 失败 → 404。
+**第二根因（F10）**：`scheduleMeetingEnd`（`websocket.go:1550+`）到点被跳过后 `meta.endTimer` **仍非 nil**，
+此后 `if meta.endTimer == nil` 恒为假 → **该会议宽限永久失效**。
+
+### Architect 定下的设计（写死在简报里，避免 Worker 自创模型）
+1. **一个概念一个计时器**：`endTimer`(2min) + `reservationTimer`(5min) 合并为唯一 `emptyTimer`；TTL 由**进入的相位**决定。删除 `hostLeaveGrace`（2min 不覆盖真实重连窗口；其语义被 `meetingGrace`(5min) **严格包含**）
+2. **唯一 `End(reason)` 且幂等**（C-18）：只有它能停表 / 置 `PhaseEnded` / `RemoveRoomWithReason` / `meetings.clear` / 级联 breakout / 释放会议号
+3. **策略表**：最后一个成员**显式**离开 → `PhaseGrace`（**不再立即回收 ← 核心修复**）；`meeting:end` 仍**立即** `End`
+4. **`PhaseGrace` 期间重入必须成功**（C-17），SFU 房间已拆则重建
+5. **协议零变化**（消息 / 字段 / 文案 / reason 字符串一字不改）
+6. **偿还 V0.1 债务**：会议层 12 处接线必产 reason 日志 + **带测试**；恰好一条 `action=teardown`；3 处无痕点
+
+### ⚠️ Architect 自己制造的一次契约冲突（已纠正，留档）
+我在简报里临时起了 `PhaseActive / PhaseEmpty` 两个相位名，**但 `ARCHITECTURE.md` §4.6 早就定好了
+`PhaseReserved / PhaseLive / PhaseGrace / PhaseEnded` 四相位 + `EndReason` 枚举 + 「`End` 是唯一入口」**。
+**我违反了自己写的契约。** 发现后立即 `steer_subagent` 纠正（Worker 仅 8 tool uses，时机正好），
+并保留四相位模型（它比我临时想的更精确：`PhaseReserved` 与 `PhaseGrace` 是两种不同的空置，应分开）。
+**教训：派单前必须先读自己的契约文件，不能凭记忆起名。**
+
+### Architect 同步修订的契约（契约是我的属地，不让 Worker 改）
+1. **`ARCHITECTURE.md` §4.6**：
+   - `EndReason` 从 3 个扩为 7 个（补 `empty-grace-expired` / `parent-meeting-teardown` / `breakout-recalled` / `server-teardown`）——原先 3 个不足以归类实际路径
+   - 新增**相位跃迁表**（状态 / 触发 / 动作）
+   - 明确「**全生命周期只有一个计时器字段**，TTL 由进入的相位决定」+「**reason 词汇表分两套，不得混用**」（`EndReason` vs 进入 `PhaseGrace` 的触发原因 —— 后者复用 V0.1 已上线枚举）
+   - 标注 `sessionId` 属 **V1b** 缺口
+2. **`CONFORMANCE.md` §5**：C-17~C-21 措辞按相位精确化；新增
+   - **C-20b 事故原形回归**（离开后立即重入必须成功）
+   - **C-23** 只有一个计时器字段
+   - **C-24** 恰好一条 `action=teardown`
+   - **C-25** 每条拆除路径必产 reason 日志且带测试（V0.1 债务）
+
+### Worker 被要求回报的关键项
+- 相位状态机图 + C-17/C-18/C-19/C-20 各自由哪个测试哪行代码保证
+- `go test -race` 原始输出（本片引入相位状态与定时器，竞态是首要风险）
+- `hostLeaveGrace` 删除后所有引用点（含 2 个测试文件）的处置 + 2min→5min 的行为差异评估
+- **协议零变化的证明**（列出检查过的面向客户端的消息/reason/文案）
+- 若认为 Architect 的设计有反例，**先实现最小正确版本，同时在回报里写明分歧与证据**（要求它敢反驳）

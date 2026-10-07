@@ -185,16 +185,43 @@ const (
 
 type EndReason string
 const (
-    EndReasonHostEnded    EndReason = "host-ended"
-    EndReasonReservation  EndReason = "reservation-expired"
-    EndReasonCapacity     EndReason = "capacity-reclaimed"
+    EndReasonHostEnded    EndReason = "host-ended"           // 房主显式结束会议
+    EndReasonReservation  EndReason = "reservation-expired"  // 登记后从未 join，到期回收
+    EndReasonCapacity     EndReason = "capacity-reclaimed"   // 容量回收
+    // V1a 新增（实际需要，经 Architect 批准）—— 之前只有前三个，实现无处归类：
+    EndReasonEmptyGraceExpired EndReason = "empty-grace-expired"    // PhaseGrace 到点且仍无人
+    EndReasonParentTeardown    EndReason = "parent-meeting-teardown" // 主会议拆 → 级联拆 breakout
+    EndReasonBreakoutRecalled  EndReason = "breakout-recalled"      // 房主召回 breakout
+    EndReasonServerTeardown    EndReason = "server-teardown"        // 其余服务端拆除（兜底）
 )
 
 // End 是唯一拆除入口。所有既有路径（主动离开、超时、容量回收）都必须经此。
 func (m *Machine) End(reason EndReason)
 ```
 
+#### 相位跃迁表（V1a 实现依据）
+
+| 当前 | 触发 | 下一相位 | 动作 |
+|---|---|---|---|
+| （创建登记）| `meeting:create` | `PhaseReserved` | 武装 `emptyTimer`，TTL = `meetingReservationTTL`（5min）|
+| `PhaseReserved` | 首个成员 join | `PhaseLive` | **停表** |
+| `PhaseReserved` | `emptyTimer` 到点 | `PhaseEnded` | `End(reservation-expired)` |
+| `PhaseLive` | 在册成员数变 0（**无论显式离开还是断线**）| `PhaseGrace` | **重新武装** `emptyTimer`，TTL = `meetingGrace` |
+| `PhaseGrace` | 有成员重入（C-17）| `PhaseLive` | 停表 |
+| `PhaseGrace` | `emptyTimer` 到点且房间非空 | `PhaseGrace` | **重新武装下一次**（C-19 / F10 修复：不得静默跳过）|
+| `PhaseGrace` | `emptyTimer` 到点且房间空 | `PhaseEnded` | `End(empty-grace-expired)` |
+| 任意非 Ended | 房主 `meeting:end` | `PhaseEnded` | `End(host-ended)` —— **立即，不进宽限** |
+| 任意非 Ended | 父会议拆除 / breakout 召回 | `PhaseEnded` | `End(parent-meeting-teardown / breakout-recalled)` |
+
+**计时器**：全生命周期**只有一个**计时器字段（`emptyTimer`），TTL 由**进入的相位**决定。禁止再出现两个计时器靠守卫对齐（那正是 `DIVERGENCE.md` F10 的成因）。
+
+**reason 词汇表分两套，不得混用**：
+- `EndReason` —— 只传给 `End`
+- **进入 `PhaseGrace` 的触发原因** —— 复用 `internal/handler/meeting_diagnostics.go` 已上线的枚举（`last-member-left` / `disconnect-grace-armed` 等）；它们**不是** `EndReason`
+
 **不变量**：
-- `PhaseGrace` 期间任何成员重入必须成功（返回 200 而非 404）。
-- `End` 幂等；重复调用不产生第二次副作用。
-- 每个跃迁必须落一条 Info 日志，含 `reason` 与 `sessionId`。
+- `PhaseGrace` 期间任何成员重入必须成功（返回 200 而非 404），SFU 房间已拆则**重建**。
+- `End` 幂等；重复调用不产生第二次副作用（不重复广播、不重复 `clear`）。
+- 每个跃迁必须落一条 Info 日志，含 `reason`；**每次会议结束恰好一条** `action=teardown` 权威记录。
+- **会议号生命周期与房间占用彻底解耦**（§3 所述“最关键的一次解耦”）：房间空置不等于会议结束。
+- **`sessionId` 缺口**：本节与 `CONFORMANCE.md` C-21 要求的 `sessionId` 属 **V1b**（跨 WS→meeting→SFU→客户端的横切改动）。V1a 先落 `roomID` + `participantID` + `clientID`。
