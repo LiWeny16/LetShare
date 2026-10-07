@@ -24,11 +24,13 @@
 
 | ID | 契约 | 断言方式 | 关联坑 |
 |---|---|---|---|
-| C-08 | 任何时刻**至少一条**发声通路可用（元素 or 管线，不可两者皆不可用）| 单测：遍历 (ctxState × elementState) 组合 | Q17 / B1 |
+| C-08 | 有内容（`stream !== null`）时**裁决永不为 `none`**；且元素与管线双保险互斥。**这是“至少一条通路可用”的正确形式化** —— 物理命题“任何时刻至少一条通路在**响**”在 autoplay 被拒时对任何实现都不可满足 | 属性测试：穷举 `ctxState × elementState × volume`（80 组合）逐项断言 `audibleVia ≠ "none"`；仅 `absent`（无流）允许 `none` | Q17 / B1 |
 | C-09 | 任何时刻**至多一条**发声通路（不可双路叠加）| 单测：断言 (element.muted ∨ volume=0) ⊕ pipelineRunning | Q02 / B2 |
 | C-10 | `ctxState` 变为非 `running` 后，**≤1s** 内元素自动恢复发声 | 单测：mock ctx 状态回落，推进 ≤1000ms，断言元素可用 | Q17 / B1 |
 | C-11 | 会话内部 sink 永远不参与发声 | 单测：断言 sink `muted === true` | Q01/Q02 |
 | C-12 | 存在可用 sink（保证 Chromium 解码），即使元素静音 | 单测：断言 sink 存在于 DOM 且 `srcObject` 非空 | Q01 |
+| **C-10b** | **反抖动**：ctx 恢复 `running` 后**不自动切回**管线；切回**仅**发生于 `setStream`（新流）/ `setPrefs`（用户改设置）/ `unlock`（用户手势）| 单测：ctx 恢复后断言仍为 `element`；三个显式时机各自可切回 | V3 实测 |
+| **C-12b** | **失败可见降级**：发声被拒（元素 `play()` 或 `ctx.resume()` 被拒）**且导致没有任何通路真的在响**时，`autoplayBlocked = true` 且 UI 有可见提示；任一通路恢复即清除 | 单测双向：双双被拒 → 必置 true；恢复 → 清除 | V3 实测 |
 
 ## 4. 媒体会话（call 与 meeting **共用**）
 

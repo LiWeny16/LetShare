@@ -1009,3 +1009,42 @@ Worker 的测试用了测试接缝 `registerBreakoutChild`，它**显式建了 `
 2. **消灭接缝与生产的分叉**：抽单一构造入口，使"漏字段"难以发生
 3. **补覆盖生产构造路径的测试**（create → join → 级联拆除，全程不 panic）
 4. 明确要求：若做不到覆盖生产路径，**如实报告残余缺口，不得用一个走接缝的测试冒充** —— 那正是本次 bug 的成因
+
+---
+
+## V3 · G2 契约门（Reviewer `glm-5.3`）—— PASS-WITH-CONDITIONS
+
+Reviewer：65 tool uses / 120.9k token / 11.1 分钟。它**自己实跑了测试**并复现了真机 RMS 数值（元素 0.3591 / 管线 0.3636 / 两负控 0）。
+
+### 核心裁决：机制层全部成立
+| Q | 结论 |
+|---|---|
+| Q1 单写者 | **PASS —— 穷举零漏网**。除 `video.muted`（视频域）外，`el.muted`/`el.volume`/`el.srcObject`(音频)/`el.play()`(音频)/`el.pause()`/`createElement("audio")` 在 `src/core/audio/` 之外**全部零处**；**连间接写法也查了**（`setAttribute` / `Object.assign` / 展开赋值 / `["muted"]` / `defineProperty` / prototype 补丁 → 全仓零命中）；JSX 属性向量（`<audio muted …>`）也无。`audioRef` 只用于 `host.bindElement(...)`，未外传给任何子组件。React 重挂/key 绕过路径已逐一排除 |
+| Q2 `decide` 纯函数 | **PASS**。浅冻结足够（`AudioPrefs` 四字段全原始类型，无嵌套可变面）。**80 组合无虚增覆盖**（`n/a`/`interrupted`/`blocked`/`error` 逐一核实为真实可达态）|
+| Q3 看门狗双通道 | **PASS**。两条通道都真挂；时钟确为注入。**"500ms 是否绑定实现常量"** —— 它独立复算：若周期改 600ms → 接管发生在 1200ms → `advance(1000)` 内不接管 → **测试必红** ⇒ 断言绑定的是 **C-10 的 1000ms 预算**而非实现常量 ✅ |
+| Q4 反抖动 | **PASS**（附 2 项登记）|
+| Q5 D5 收紧 | **PASS**。它**穷举了"全哑但 blocked=false"的更危险方向**，找到唯一理论窟窿（`output===null ∧ stream≠null`）需 `document.body` 与 `documentElement` 同时为 null ⇒ 实际不可达 |
+| Q6 真机 RMS | **PASS-WITH-CONDITIONS**（见下）|
+| Q7 其他 | `MeetingRoom.tsx` 净 −16 且**无藏逻辑避行数**；`remoteAudioPlayback` 只读转发**不构成 X2** |
+
+### G2 抓到两处真问题（我已裁决）
+1. **⚠ 诊断字段说谎**：`host.snapshot().elements` 顺序是 `[sink, output]`，而 `remotePlaybackReport()` 取 `elements[0]` = **恒静音的 sink** → 转发的 `muted/volume/paused/readyState` **描述错对象**。现在只因为 e2e 硬门只消费 `state/error` 才没爆雷。
+   ⇒ **裁定：必须修**（一个以"可诊断"为目的的切片里，诊断字段说谎比没有字段更危险）。要求 dump **不可能被误读**（发声元素 vs sink 显式分键），并补一条"还原成 `elements[0]` 就变红"的负向自证测试。
+2. **`gainCapped` 零消费**：用户设 >100% 音量、回退元素通路后增益**静默**钳到 100% —— 与 **C-12b**「降级必须可见」精神相悖。
+   ⇒ **裁定**：本片只做 **dump 暴露**（诊断可达）；**UI chip 不做**（UX 决策，用户未要求）→ 登记为 **V3.1**。
+
+### Q6 的关键裁定：真机证据的**真实强度**（Reviewer 判得比我更准）
+- tap **确实在发声路径上**（负控把源轨 `stop()` 后同一 tap 采到 0 → 证明 tap 跟随内容而非常数）；**不是自证旁路**
+- 但 **"RMS>0 ⇒ 用户能听到"不成立**：`captureStream()` 不反映 `muted/volume`（实测 muted 后仍 ~0.356）；`muted/volume → 扬声器` 这一跳**依赖浏览器属性语义，未被测量**
+- ⇒ **真实强度 = 「真机出声路径存在信号 + 可听配置成立」，弱于「实测用户可听」**。测试名"真机可听性"**按强读法是过誉，按弱读法成立**
+- 它同时指出三条证据缺口：① 真机"真 `ctx suspended` → 元素接管"回退**未在真机覆盖**（真机用例是人为禁管线逼出 element 裁决）② 启动参数 `--autoplay-policy=no-user-gesture-required` **恰好屏蔽了最敌意的场景** ③ 元素通路可听性只能靠三层合成
+**⇒ Architect 采纳：把宣称从「真机可听性」收窄为「真机发声路径存在信号 + 可听配置成立」，并已在 V3 收尾轮要求把这三条边界写进测试文件头注释（防后人误当"用户能听到"的证明）。**
+
+### G2 判定的合入前置条件（**全部是我的活，已完成**）
+Reviewer 指出一批**语义改写只存在于代码注释里**（按 X7 纪律属"用注释当契约"）。已回写：
+1. `CONFORMANCE.md` **C-08** 改为**正确形式化**：「有内容时裁决永不为 `none` + 双保险互斥」—— 并写明「物理命题"任何时刻至少一条通路在**响**"在 autoplay 被拒时对任何实现都不可满足」，即**不是绕过契约，而是把它形式化对了**
+2. `CONFORMANCE.md` 新增 **C-10b（反抖动）** 与 **C-12b（失败可见降级）**
+3. `ARCHITECTURE.md` **§4.5** 接口补齐：`bindElement`（V3 新增，附理由）· `snapshot` · `invariants` · `unlock` · `autoplayBlocked`；并加**硬性要求**：双通道看门狗 · 反抖动 · 单写者 · **危险 getter `isActive` 禁令**（点名 F17）
+
+### 下一步
+V3 收尾轮已派出（A1 诊断字段 + A2 gainCapped 暴露 + A3 双 `audibleVia` 文档化 + B 节消除 Reviewer 的"600ms 变红"不确定性）。

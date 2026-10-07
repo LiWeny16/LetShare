@@ -161,19 +161,35 @@ export interface MediaSession {
 
 ```ts
 export interface RemoteAudioHost {
-  /** 唯一允许"决定谁发声"的入口。元素与管线互斥，且任何时刻至少一条通路可用。 */
+  /** 唯一允许"决定谁发声"的入口。元素与管线互斥（C-09），且 `stream !== null` 时裁决永不为 `none`（C-08）。 */
   setStream(stream: MediaStream | null): void;
   setPrefs(prefs: { volume: number; clarity: boolean; widen: boolean; sinkId?: string }): void;
+  /** UI 注入发声元素（**本接口为 V3 实现新增**）：保留 UI 的 DOM 位置与生命周期，
+   *  否则 `tests/e2e/diag-*.mts` 用 `document.querySelector("audio")` 会测到静音 sink（假阴性）。
+   *  注入后**写权仍 100% 在 host** —— UI 只传引用，不得自行写 `muted/volume/srcObject/play()`。 */
+  bindElement(el: HTMLAudioElement): void;
   readonly state: {
     audibleVia: "pipeline" | "element" | "none";
     ctxState: AudioContextState | "n/a";
     lastFallbackAt: number | null;
+    /** 发声被拒且导致没有任何通路真的在响（C-12b）—— 可见降级的依据 */
+    autoplayBlocked: boolean;
   };
+  /** 只读快照与不变量自检（供 `window.__ls.dump()` 与测试直接断言 C-11/C-12） */
+  snapshot(): RemoteAudioSnapshot;
+  invariants(): { sink: { muted: boolean; connected: boolean; srcObjectSet: boolean }; exclusivity: { bothAudible: boolean; pipelineRunning: boolean } };
+  /** 用户手势解锁（同时恢复 `muted`/`volume`，不只 `resume()`）—— PR 看门狗的另一半 */
+  unlock(): void;
   dispose(): void;
 }
 ```
 
-**硬性要求**：`setStream` 之后必须启动存活看门狗（间隔 ≤ 1000ms）；一旦 `ctxState !== "running"`，**在同一 tick 内**把元素恢复为可发声（`muted=false`, `volume = min(1, prefs.volume)`），并令 `audibleVia = "element"`。
+**硬性要求**：
+1. `setStream` 之后必须启动存活看门狗（**双通道**：`ctx` 的 `statechange` 事件 + 间隔 ≤ 1000ms 的轮询兜底 —— 部分平台/路由切换不发 `statechange`）；一旦 `ctxState !== "running"`，**在同一 tick 内**把元素恢复为可发声（`muted=false`, `volume = min(1, prefs.volume)`），并令 `audibleVia = "element"`。
+2. **反抖动（C-10b）**：ctx 恢复 `running` 后**不自动切回**管线（否则会在后台↔前台之间抖动）；切回只发生在 `setStream` / `setPrefs` / `unlock` 三类显式时机。
+3. **单写者**：`el.muted` / `el.volume` / `el.srcObject`（音频）/ `el.play()`（音频）/ `gain.gain.value` / `audibleVia` **只允许 host 内部写**。UI 与会话层一律不得直接触碰。
+4. **危险 getter 禁令**：❌ 不得提供 `isActive`（= `ctx !== null`）这种会被误读为"在发声"的 getter —— 它正是 B1 永久静音自锁的入口（`DIVERGENCE.md` **F17**）。建图与否只能叫 `hasGraph()` 且文档必须明示 **≠ 发声**。
+5. **一个概念一个计时器 / 一个状态源**：可用性判据只能是 `state.audibleVia`，不得再造第二个"是否在发声"的推导。
 
 ### 4.6 会议生命周期（服务端）
 
