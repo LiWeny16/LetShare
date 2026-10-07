@@ -1196,3 +1196,51 @@ V2 报告时是 571/571/0，但我首次复跑看到 **571/568/3**。我**没有
 ⇒ 结论：3 个失败是 **V3 Worker 在途编辑**造成的瞬态，非回归。
 **并且 Worker 自己也报告了同一现象**：它首跑 eslint 只有 1 条违规，改完复跑冒出 2 条**新**违规 —— 都在 `src/core/audio/`（`remoteAudioHost.ts` **401 行超 1 行**、`diagnostics/index.ts` 的 `buildPlaybackDump` **复杂度 21**），mtime 证明是并发 Worker 正在落盘。它**据属地纪律停手 + 取证 + 交接**（未踩掉任何人的工作）。
 ⇒ **这 2 条正是新机械门抓到的**（人工审查从未发现过 `remoteAudioHost.ts` 多 1 行、复杂度 21）——**再一次印证：人工审查作为唯一闸门不可靠。**
+
+---
+
+## V3 收尾轮 + **前端上线**（G5）
+
+V3 收尾 Worker：116 tool uses / 205.7k token / 43.1 分钟（其回报已被 Agent 回收，Architect **不依赖自述**，以下全部来自亲跑终态）
+
+### V3 收尾的三项（Architect 亲验）
+1. **⚠ A1 诊断字段说谎 —— 修法是结构性的，不是"改个索引"**
+   `snapshot()` 原本返回 `elements: [sink, output]` 的**无名数组**，下游取 `audioElements[0]` = 恒静音 sink。
+   现改为**显式命名槽位** `output`（唯一发声元素）+ `sink`，**`elements` 数组已被删除** ⇒ **"第 0 个元素"这种取法在结构上不存在了**。`callSfuSession.ts:884` 保留了旧陷阱的说明注释。
+2. **A2 `gainCapped` 进 dump**（用户可从 `window.__ls.dump().playback` 看出 ">100% 音量被钳"）；UI chip 登记为 **V3.1**（UX 决策，用户未要求）。
+3. **A3 双 `audibleVia` 文档化**（dump 的=物理推导 / host 的=裁决意图，允许瞬态不一致）。
+4. **B 节**：消除了 Reviewer 的"600ms 变红"不确定性（改常量实跑→红→还原→绿）；并把真机 RMS 的**三条证据边界**写进测试文件头（防止后人当"用户能听到"的证明）。
+
+### 最终 G1（Architect 亲跑，三片合一）
+| 检查 | 结果 |
+|---|---|
+| 前端 `tsc --noEmit` / `tsc -p tsconfig.core.json --noEmit` | ✅ EXIT 0 / EXIT 0 |
+| **机械门** `eslint src/core src/diagnostics --max-warnings 0` | ✅ EXIT 0 |
+| 后端 `go build` / `go vet` / `go test -count=1 ./...` | ✅ 全绿（6 包）|
+| `gofmt -l`（全部改动文件）| ✅ 干净 |
+| **前端 `pnpm test`** | ✅ **571 + 35 = 606 通过 / 0 失败** |
+| SIZE-EXEMPT 台账核对 | ✅ `websocket.go` 4911→**4851** · `participant.go` 501→497 · `subscriber.go` 420→423（已登记）· `MeetingRoom.tsx` 1959→**1943** · `meetingManager.ts` 2495（未动）· **`meeting_registry.go` 400 = 阈值边界（已登记）** |
+
+### 上线记录（G5）—— **分两步，后端压住**
+**决策**：V2/V3 已过 G2；**V1a（唯一改服务端行为的切片）的 `reviewer-v1a` 尚未回来** ⇒ **先只上前端，后端压住等 G2**。
+
+| 步骤 | 结果 |
+|---|---|
+| 提交 | server `2e7eaa0`（特性分支 `rewrite/v0-diagnostics`，**标注未部署**）· 顶层 `cb8da74` |
+| 前端部署 | `node scripts/deploy.cjs --frontend --no-sync-docs` · 34s |
+| CDN 验证 | 线上 `index.html` 指向 `static/index-CAOMdXGw.js` = **与本地构建逐字一致**；该 chunk **200** |
+| 版本戳 | `version.json` = `2026-10-07T10:51:52Z-vgr25`（新鲜）|
+| **缓存用户不破裂** | 旧 chunk `static/index-Cifwh40V.js` 仍 **200** ✅ |
+| 后端 | **未部署**（落后端 G2）|
+
+### 用户可感知的变化（前端已上线）
+① **不再双重声音**（会话 sink 整体废除，写权收进唯一权威）
+② **不再永久静音自锁**（`isActive` 陷阱删除 + 双通道看门狗 ≤1s 回退）
+③ **重连必然性**（重连死锁修复；半开连接最坏 20.85s 必重连）
+④ **后台会议不再被断**（三类豁免收敛为唯一判定）
+⑤ **1:1 通话也有诊断出口**（V0a 的不完整已补）
+⑥ 自动播放被拒时**可见降级**（不再静默无声）
+
+### 本轮最值得留档的一件事
+补齐 `eslintrc` 机械门后，**它抓到 3 条人工审查从未发现的违规**（`ReconnectController` 复杂度 14、`remoteAudioHost.ts` **401 行超 1 行**、`buildPlaybackDump` 复杂度 21）。
+⇒ **"eslint 0 告警"此前是空心的**（`no-explicit-any` 甚至是 `off`），所有阈值实际只靠人工。**这证明"人工审查作为唯一闸门不可靠"** —— 这不是"多抓几个违规"，而是**治理层面的结构性缺陷被修**。
