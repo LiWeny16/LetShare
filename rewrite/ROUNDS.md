@@ -585,3 +585,40 @@ meeting-end:reason=disconnect-grace-armed action=schedule-grace  grace_ms=120000
 - `hostLeaveGrace` 删除后所有引用点（含 2 个测试文件）的处置 + 2min→5min 的行为差异评估
 - **协议零变化的证明**（列出检查过的面向客户端的消息/reason/文案）
 - 若认为 Architect 的设计有反例，**先实现最小正确版本，同时在回报里写明分歧与证据**（要求它敢反驳）
+
+---
+
+## 并行化决策（人类负责人要求"多分几个并行 Agent 加快速度"）
+
+### 决策方法：看**文件冲突**，不看"谁有空"
+盲目堆写手 = 两个 Worker 对**同一个症状**设计出不兼容的修法 + 不可评审的 diff。所以先做冲突分析：
+
+| 切片 | 主要文件 | 与 V1a（服务端）冲突 | 与 V2（客户端）冲突 |
+|---|---|---|---|
+| **V1a**（运行中）| `server/internal/handler/websocket.go` · `meeting_diagnostics.go` · 服务端测试 | — | 无 |
+| **V2** 客户端保活重连 | `src/app/libs/connection/**` · `src/core/**` · `src/app/pages/**` | 无 | — |
+| **V3** 播放权威 | `src/app/libs/call/**` · `MeetingRoom.tsx` · `CallBar.tsx` | 无 | **抢 `meetingManager.ts` / 会议音频面** |
+| **V4** 注释卫生 | 含 `server/internal/handler/websocket.go`（服务端）| **冲突** | 部分 |
+
+### 本批并发阵容（1 写手 + 3 只读）
+| Agent | 类型 | 产出 | 是否需要 G2 门 |
+|---|---|---|---|
+| `worker-v1a` | 写手（服务端）| V1a 会议号保活 | ✅ 需要 |
+| `worker-v2` | 写手（客户端）| V2 保活与重连必然性 | ✅ 需要 |
+| `research-v1b-sessionid` | **只读** | `sessionId` 贯穿逐跳映射 + 语义抉择（V1b 设计前置）| ❌ 只需 Architect 核验声明 |
+| `research-v3-audio` | **只读** | 远端音频"3 个主人"所有权地图 + 冲突矩阵 + `RemoteAudioHost` 设计（V3 设计前置）| ❌ 同上 |
+| `research-comments` | **只读** | 失效/错误注释清单（V4 输入）| ❌ 同上 |
+
+### 为什么 **V3 不并行**（尽管它是纯客户端）
+V2 与 V3 **共享会议音频/会话所有权面**：V3 的核心动作是"**会话内部 sink 一律静音**"，而 V2 正在做会话代次与重连。让它们盲并行，风险是**对同一个症状（双声/静音）各自设计出互不兼容的修法**。
+这也符合红队第 2 条判定：「先接入**一条**端到端恢复路径、证明共性后再抽」—— 设计边界上要**串行**，不是并行。
+替代做法：用 `research-v3-audio` 把 V3 的设计前置风险先探明，等 V2 落地后立刻开 V3。
+
+### 文件属地划分（硬约束，已写进各 Worker 简报）
+- `worker-v1a`：只碰 `server/**`
+- `worker-v2`：只碰 `src/app/libs/connection/**` · `src/core/**` · `src/app/pages/**` · 自己的新测试
+- **禁止 V2 触碰**：`src/app/libs/call/**` · `src/components/meeting/MeetingRoom.tsx` · `src/components/call/CallBar.tsx` · `src/diagnostics/**`（属 V3）
+- 跨边界需求：**写进回报由 Architect 裁决**，不许自行越界
+
+### 审核带宽评估（为什么这个规模是安全的）
+只有 2 个写手需要走完整 G1→G2→G3；3 个只读 Agent 只产出知识，我只需**核验其声明**（trust but verify），不需要评审门。
