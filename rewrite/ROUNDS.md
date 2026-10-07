@@ -1048,3 +1048,50 @@ Reviewer 指出一批**语义改写只存在于代码注释里**（按 X7 纪律
 
 ### 下一步
 V3 收尾轮已派出（A1 诊断字段 + A2 gainCapped 暴露 + A3 双 `audibleVia` 文档化 + B 节消除 Reviewer 的"600ms 变红"不确定性）。
+
+---
+
+## V2 · G2 契约门（Reviewer `glm-5.3`）—— PASS-WITH-CONDITIONS，**无阻塞项**
+
+Reviewer：73 tool uses / 161.1k token / 11.9 分钟。它**本地复跑了 46 个 V2 测试全绿**，并**亲验了服务端三条主张**。
+
+### 核心裁决
+| Q | 结论 |
+|---|---|
+| Q1 机制结构性 | **PASS** —— 它**穷举了 `RetrySupervisor` 全部 8 条退出路径**，逐条核对落点，确认**没有第三条出口**；每个 `detach` 都伴随事件，"链没了但没事件"的窗口不存在。`attemptTimeoutMs` 的真实收敛有**两层兜底**（生产 policy 30s + 真实连接尝试自带 10s 超时） |
+| Q2 C-01~C-04 | **PASS**（C-02 附条件）。C-01 的 `baseMs/capMs` 确实**直接 import 自唯一出处**，无第二份拷贝；C-03 的 `assertTwoWayExit` **不是假绿**（两分支互斥，并存即 FAIL）。**C-04 的 `coreInjection.test.ts` 虽是静态扫源码，但不属"冒充测试"** —— 它是 X5 的结构补充，而 C-04 本体由真行为测试锁（含异种子 must-differ 断言） |
+| Q3 半开探测真实性 | **PASS —— 且它推翻了我预设的怀疑方向**。我担心"fake 简化掉了唯一的自然出口"，它核实：真实半开时 `readyState` 保持 OPEN、**`send()` 不抛错**（仅 `bufferedAmount` 增长）、`onclose` 不触发，**唯一自然出口是 TCP 重传超时（十几分钟级）** ⇒ `HalfOpenTransport` 是**准确建模**，**探测必要性没有被高估** |
+| Q4 会话代次 | **PASS** —— 两条风险路径确认可达；**僵尸 socket 被真正 `close()`**（不是遗忘）；它**穷举了所有 await 后的写操作**，主路径全覆盖 |
+| Q5 缺陷③收敛 | **PASS** —— 全仓唯一判定、唯一 re-arm 落点；**"isCallActive 只看通话"的论证成立**（忙线与豁免确是两个不变量，消费者分别是会议邀请弹窗与后台豁免）；用户报的"后台满 10 分钟被断"**确实修了**（有行为测试） |
+| Q6 `colabLib` +112 | **PASS** —— 逐块核对：**没有退避数学/抖动/超时/代次逻辑写回 app 层**，全部在 core；旧重连定时器机制确认删除；`setupVisibilityWatcher` 97→44 的逻辑**迁入 core 而非藏起来** |
+| Q7 该测未测 | **PASS**（缺口登记）。`tests/testClock.ts` 确认**不会被误当测试执行**（`run-tests.cjs` 过滤 `.test.ts`）也不会被漏 |
+
+### 服务端三条主张 —— Reviewer 只读 `server/` 亲验为真
+零副作用（`event="liveness:probe"` 走 `delete(client.Events, …)` 分支，**从不触房**）· 空房间可用（不校验在册）· **回执绕过限流**（`sendMessage` 内**无** `errorRateLimiter.Allow`，限流只在 `sendError`/`sendChannelError`/`sendFileTransferError`）。
+
+### 🔴 Architect 亲验的两条"越界观察"—— 一条是真成本，一条是**我自己的治理漏洞**
+#### ① 日志洪水（真成本，V2 引入）
+`server/internal/service/websocket.go:337-341` 对**每次 `unsubscribe`** 打一条 **Info** 日志。V2 的探测每 10s 用一次 ⇒ **8,640 行/天/连接（≈2MB/天）**。
+**裁定**：**登记为 V0.2/V1b 的必改项**，不阻塞本次部署（属运维成本，不是产品退化；且 `PUREPOSE` 的 A 类目标是可靠性）。修复方式：该 event 降级为 Debug，或给探测一个专属消息类型（V2 已提 S1/S2）。**部署时显式记录该成本。**
+
+#### ② 🔴 `STANDARDS.md` 的"机械检查"**从来没有实现过**（我的治理漏洞）
+Reviewer 观察：`.eslintrc.cjs`（23 行）不含 §4 承诺的任何机械检查。**我亲验并更糟**：
+| STANDARDS 承诺 | 实际 |
+|---|---|
+| 禁 `any`（`no-explicit-any: error`）| **`"off"` ← 完全相反** |
+| `no-restricted-syntax` 禁裸定时器 | **不存在** |
+| `max-lines` / `max-lines-per-function` / `complexity` | **不存在** |
+
+⇒ **"eslint 0 告警"一直是空心的 enforcement**，所有阈值实际只靠人工审查。**这解释了早先那些阈值违规为何能溜过我的 G1。**
+**Architect 已修**：给 `.eslintrc.cjs` 加 `overrides`，作用域与 `tsconfig.core.json` 一致（只覆盖 `src/core/**` + `src/diagnostics/**`，不动存量），实现 §4 全部机械检查 + 注入边界白名单（`systemClock.ts` / `remoteAudioClock.ts`）。
+
+**修完立刻抓到一个此前人工漏掉的违规**：
+```
+src/core/transport/ReconnectController.ts:65
+  error  Function 'phaseAfterRetryEvent' has a complexity of 14. Maximum allowed is 12
+```
+⇒ **这是本轮最有价值的收获之一**：不是"多抓了一个违规"，而是**证明了"人工审查"作为唯一闸门是不可靠的** —— 复杂度这类指标肉眼查不出来。
+
+### Architect 裁决与派单
+V2 **无阻塞项**，但需一轮小修：**A1 `phaseAfterRetryEvent` 复杂度 14→≤12**（附映射对照证明行为不变）+ **A2 处理 `attemptTimeoutMs<=0` 这个无守卫的逃生门**（我倾向收紧语义：`PURPOSE.md` 的原则是"机械保证优于人工承诺"，而这个逃生门正是一个人工承诺）。
+另要求它给出 **B1 `handleRename` 旁路的下一片施工图**（该路径既不校验代次也不启动 `ServerLiveness`，是"半开探测全覆盖"的一个洞）。
