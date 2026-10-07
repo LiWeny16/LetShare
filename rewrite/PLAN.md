@@ -55,6 +55,24 @@
   - **F10 行为本体**：宽限到点若房间非空必须**重排**而非静默跳过（V0.1 只留痕未修）
 - **上线**：服务端独立部署，协议向后兼容
 
+### V1b · `sessionId` 贯穿 + 日志轮转（V0.1b，已由侦察修正范围）
+- **原假设被推翻（侦察 + Architect 亲验）**：我说过「SFU 日志用 `uniqId`、WS 日志用 `client_id`，**跨层无法对账**」—— **不完全对**。已验证：
+  - `server/internal/handler/websocket.go:388-401`：`userID := userIdParam；若空 → = uniqIdParam`。客户端不发 `userId`（已核验 `CustomConnectionProvider.ts:37-41` 只发 `token/uniqId/userName/pro_token`）⇒ **`user_id` 值 == `uniqId`**
+  - `websocket.go:436-440`：连接建立日志**已同时带** `client_id` + `user_id` ⇒ **桥本来就存在**
+- **真正的缺口（已核实）**：
+  1. **SFU 层日志完全没有连接级标识**（只带 `participantID` = uniqId + roomID）⇒ 同一 `uniqId` 重连时旧/新两条 WS 连接短暂共存，**无法区分某个 SFU 事件属于哪一条连接** —— 这正是「重连拿到 404」类事故的盲区
+  2. 字段名三层三个样（`user_id` / `uniqID` / `participantID`），靠「值相等」对账
+  3. **多数 WS 日志只带 `client_id` 不带 `user_id`** ⇒ 对账链在那里断掉
+- **语义裁定（Architect）**：`sessionId` = **一次 WS 连接**（即 `client_id` 语义），**不**另造在场期 ID。理由：与 V2「会话代次」（旧异步结果不得覆盖新连接）天然对齐，且与 S2a 已交付的 `src/core/transport/ConnectionState.ts:9` 的 `{k:"ready"; since; sessionId}` 语义一致。在场期语义（`attendanceId`）若需要，单列后续片，且必须挂到 `meetingMeta` 级而非 `meetingMembership`（后者断线即删→会静默退化成 sessionId）
+- **最小可行切片（排序）**：
+  1. 命名定调 + 握手桥接日志补 `uniqID`（`websocket.go` 连接/断开日志）—— 一行级，立刻救回断链
+  2. SFU `Participant` 挂 `sessionId`（`participant.go` struct + `room.go` `AddParticipant` 传入，唯一生产调用点；**改签名会波及 `_test.go`，需 grep 补齐**）
+  3. SFU 三个高价值日志点补字段：`diagnostics.go` 主连接跃迁、`diagnostics_subscriber.go` 订阅跃迁、`room.go` 参与者离开
+  4. 会议日志在 `meeting_diagnostics.go` 的 merged map **统一注入**（一处改，各调用点免改）
+- **协议要求：字节零变化**（`client_id` 本就不进任何下行消息体，已核实成员表/`meeting:info`/SDP `to` 均无）
+- **附带**：`server_error.log` 轮转（已 43MB 无轮转）
+- **待核**：签名的 `_test.go` 调用点数量；是否真存在发 `userId` 的旧客户端
+
 ### V2 · 客户端保活与重连必然性（R1 + R3）
 - **故障**：
   - **4 分 25 秒零连接尝试**（实测）

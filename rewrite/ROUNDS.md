@@ -622,3 +622,41 @@ V2 与 V3 **共享会议音频/会话所有权面**：V3 的核心动作是"**�
 
 ### 审核带宽评估（为什么这个规模是安全的）
 只有 2 个写手需要走完整 G1→G2→G3；3 个只读 Agent 只产出知识，我只需**核验其声明**（trust but verify），不需要评审门。
+
+---
+
+## 只读侦察 ① · `sessionId` 贯穿映射（Architect 核验后入库）
+
+Agent：`research-v1b-sessionid`（71 tool uses / 101.7k token / 13 分钟，全程只读）
+
+### 它推翻了我的前提 —— 而我已亲验其修正
+| 我原来的说法 | 实际情况（Architect 亲验） |
+|---|---|
+| "SFU 日志用 `uniqId`、WS 日志用 `client_id`，**跨层无法对账**" | **不完全对**。`websocket.go:388-401` 的 `userID := userIdParam; 若空 → = uniqIdParam` + 客户端不发 `userId`（核验 `CustomConnectionProvider.ts:37-41`）⇒ **`user_id` == `uniqId`**；且 `websocket.go:436-440` 的连接日志**已同时带** `client_id` + `user_id` ⇒ **桥本来就存在** |
+
+**真正的缺口**（已核实）：
+1. **SFU 层日志完全没有连接级标识** → 同一 `uniqId` 重连时旧/新连接共存，**无法区分 SFU 事件属于哪一条**（"重连 404"类事故的盲区）
+2. 字段名三层三个样（`user_id` / `uniqID` / `participantID`），靠"值相等"对账
+3. 多数 WS 日志只带 `client_id` 不带 `user_id` → 链在那里断
+
+### Architect 语义裁定
+`sessionId` = **一次 WS 连接**（≈ `client_id` 语义），**不**另造在场期 ID。依据：
+- 与 V2「会话代次」（旧异步结果不得覆盖新连接）天然对齐 —— 在场期语义**无法**区分同一在场期内的旧/新连接
+- 与 S2a 已交付的 `ConnectionState.ts:9` 的 `{k:"ready"; since; sessionId}` 语义一致
+- 反例风险：在场期 ID 若挂在 `meetingMembership` 上会**静默退化成 sessionId**（该结构断线即删）→ 真要做必须挂 `meetingMeta` 级，单列后续片
+
+### 入库产物
+`PLAN.md` 新增 **V1b 小节**：修正后的缺口清单 · 语义裁定 · **最小可行切片 4 步**（排序）· 协议零变化要求 · 待核项
+
+### 附带观察（对本轮 V1a 的早期正向信号）
+侦察在 `websocket.go:148` 看到 **`emptyGen uint64`**，注释为「递增代次：已被替换/停掉的陈旧回调据此作废，不得拆除新计时器保护的会议」
+⇒ **V1a 正在用代次守卫正确地修 F10**（不只是补 `endTimer = nil`），方向正确。待其交付后正式验证。
+
+---
+
+## 两条流程教训（留档防复发）
+
+1. **Agent 读到的是"正在被编辑的树"，其行号不可靠。** 本轮侦察报告的行号普遍漂移（我按它给的行号去读 `websocket.go:370-385`，读到的却是 auth/upgrade 段 —— 因为 V1a 正在改同一文件）。
+   → **规则**：只读侦察报告的行号一律当作"线索"而非"证据"；Architect 核验必须以 grep 定位（`grep -n "<独特字串>" -B/-A`），不以行号直接读。
+2. **grep 必须排除构建产物。** 我执行 `grep -rn "new WebSocket(" src/ android/` 时未排除 `android/app/build/**` 与 `docs/**`，把压缩后的 bundle 整段 dump 了出来（单次输出 50KB 上限被击穿，浪费一轮）。
+   → **规则**：全仓 grep 一律带 `--include=*.ts --include=*.tsx` 并显式排除 `android/app/build`、`docs`、`node_modules`。
