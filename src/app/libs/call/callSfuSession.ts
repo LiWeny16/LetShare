@@ -7,6 +7,7 @@ import type {
 } from "./callSession";
 import type { VideoCodecPrioritySetting } from "./videoCapture";
 import { configurePublishPeerConnection } from "../meeting/meetingSdp";
+import { dump } from "../../../diagnostics/index";
 
 type CallSfuSessionOptions = {
   callId: string;
@@ -65,11 +66,7 @@ export class CallSfuSession {
   private subscriberAnswerCache = new Map<string, { offer: string; answer: string }>();
   private pendingIce = new Map<string, RTCIceCandidateInit[]>();
   private remoteStreams = new Map<string, MediaStream>();
-  private remoteAudioEl: HTMLAudioElement | null = null;
   private remoteVideoEl: HTMLVideoElement | null = null;
-  private remoteAudioSinkOwned = false;
-  private remoteAudioPlaybackState = "waiting-for-track";
-  private remoteAudioPlayError: string | null = null;
   private readonly previousAudioRtp = new Map<string, AudioRtpCounters>();
   private localAudioMuted = false;
   private localVideoEnabled: boolean;
@@ -168,50 +165,11 @@ export class CallSfuSession {
     return this.localVideoEnabled;
   }
 
-  attachRemoteAudio(el: HTMLAudioElement): void {
-    this.remoteAudioEl = el;
-    el.autoplay = true;
-    this.bindRemoteAudio();
-  }
-
   attachRemoteVideo(el: HTMLVideoElement): void {
     this.remoteVideoEl = el;
     el.autoplay = true;
     el.playsInline = true;
     this.bindRemoteVideo();
-  }
-
-  private ensureRemoteAudioSink(): HTMLAudioElement | null {
-    if (this.remoteAudioEl) return this.remoteAudioEl;
-    if (typeof document === "undefined") return null;
-    const el = document.createElement("audio");
-    el.autoplay = true;
-    el.style.display = "none";
-    const host = document.body ?? document.documentElement;
-    if (!host) return null;
-    host.appendChild(el);
-    this.remoteAudioEl = el;
-    this.remoteAudioSinkOwned = true;
-    return el;
-  }
-
-  private bindRemoteAudio(): void {
-    const stream = this.remoteStreams.get(this.opts.peerId);
-    if (!stream) return;
-    const el = this.ensureRemoteAudioSink();
-    if (!el) return;
-    el.srcObject = stream;
-    this.remoteAudioPlaybackState = "starting";
-    this.remoteAudioPlayError = null;
-    void el.play().then(() => {
-      if (this.ended || this.remoteAudioEl !== el) return;
-      this.remoteAudioPlaybackState = "playing";
-      this.remoteAudioPlayError = null;
-    }).catch((error: unknown) => {
-      if (this.ended || this.remoteAudioEl !== el) return;
-      this.remoteAudioPlaybackState = "blocked";
-      this.remoteAudioPlayError = error instanceof Error ? error.message : String(error);
-    });
   }
 
   private bindRemoteVideo(): void {
@@ -417,7 +375,6 @@ export class CallSfuSession {
         };
       }
       this.events.onRemoteStream(target, event.track.kind === "video" ? "video" : "audio");
-      if (event.track.kind === "audio") this.bindRemoteAudio();
       if (event.track.kind === "video") this.bindRemoteVideo();
       this.maybeActivate();
     };
@@ -744,7 +701,6 @@ export class CallSfuSession {
 
   getDebugInfo(): Record<string, unknown> {
     const audioTracks = this.remoteStreams.get(this.opts.peerId)?.getAudioTracks() ?? [];
-    const audioEl = this.remoteAudioEl;
     const senders = (this.publishPc?.getSenders() ?? []).map((sender) => ({
       kind: sender.track?.kind ?? null,
       readyState: sender.track?.readyState ?? null,
@@ -762,14 +718,7 @@ export class CallSfuSession {
         enabled: track.enabled,
         muted: track.muted,
       })),
-      remoteAudioPlayback: {
-        state: this.remoteAudioPlaybackState,
-        error: this.remoteAudioPlayError,
-        paused: audioEl?.paused ?? null,
-        readyState: audioEl?.readyState ?? null,
-        muted: audioEl?.muted ?? null,
-        volume: audioEl?.volume ?? null,
-      },
+      remoteAudioPlayback: remotePlaybackReport(),
     };
   }
 
@@ -919,17 +868,33 @@ export class CallSfuSession {
     this.subscribed.clear();
     for (const track of this.localStream?.getTracks() ?? []) track.stop();
     this.localStream = null;
-    if (this.remoteAudioEl) {
-      this.remoteAudioEl.srcObject = null;
-      if (this.remoteAudioSinkOwned) this.remoteAudioEl.remove();
-    }
     if (this.remoteVideoEl) this.remoteVideoEl.srcObject = null;
-    this.remoteAudioEl = null;
     this.remoteVideoEl = null;
-    this.remoteAudioSinkOwned = false;
     this.previousAudioRtp.clear();
     this.setState("ended");
   }
+}
+
+/**
+ * V3 起远端音频播放权归 RemoteAudioHost（唯一权威）；`__lsPc().remoteAudioPlayback` 是存量 E2E
+ * 契约（tests/e2e/call-prod*.test.ts 以 state === "playing" 作为可听门），此处从
+ * `window.__ls.dump().playback` 只读转发，避免两套播放状态并存（X2）。不参与任何控制流。
+ *
+ * A1：muted/volume/paused/readyState **只转发发声元素**（dump.outputElement）。旧代码取
+ * `audioElements[0]`，那个位置上是恒静音的解码 sink —— 转发出去的字段描述的是 sink 而不是
+ * 发声元素（会说谎的诊断）。sink 自己的状态在 dump.playback.sink（C-11/C-12 断言对象）。
+ */
+function remotePlaybackReport(): Record<string, unknown> {
+  const playback = dump().playback;
+  const audible = playback.outputElement;
+  return {
+    state: playback.playbackState,
+    error: playback.playError,
+    paused: audible ? audible.paused : null,
+    readyState: audible ? audible.readyState : null,
+    muted: audible ? audible.muted : null,
+    volume: audible ? audible.volume : null,
+  };
 }
 
 void MediaTrack;

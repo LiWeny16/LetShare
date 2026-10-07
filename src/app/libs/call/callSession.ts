@@ -135,9 +135,6 @@ export class CallSession {
   private state: CallSessionState = "idle";
   private peer: RTCPeerConnectionLike | null = null;
   private localStream: MediaStream | null = null;
-  private remoteAudioEl: HTMLAudioElement | null = null;
-  /** bindRemoteStream 自动创建的静音 <audio> sink 归属标记（UI 未 attachRemoteAudio 时为 true） */
-  private remoteAudioSinkOwned = false;
   private remoteVideoEl: HTMLVideoElement | null = null;
   private localAudioMuted = false;
   private localVideoEnabled: boolean;
@@ -248,32 +245,10 @@ export class CallSession {
 
   // ─── 远端媒体渲染 ─────────────────────────────────────────────────
 
-  attachRemoteAudio(el: HTMLAudioElement): void {
-    this.remoteAudioEl = el;
-    el.autoplay = true;
-  }
-
   attachRemoteVideo(el: HTMLVideoElement): void {
     this.remoteVideoEl = el;
     el.autoplay = true;
     el.playsInline = true;
-  }
-
-  /** 会话自有的静音 sink：仅用于驱动浏览器开始渲染远端音频（无 sink 时 Chromium 不解码 → 单通）。
-   *  静音是为了与 UI 的 <audio> 共存时不产生双重播放。 */
-  private ensureRemoteAudioSink(): HTMLAudioElement | null {
-    if (this.remoteAudioEl) return this.remoteAudioEl;
-    if (typeof document === "undefined") return null; // 单测环境无 DOM
-    const el = document.createElement("audio");
-    el.autoplay = true;
-    el.muted = true;
-    el.style.display = "none";
-    const host = document.body ?? document.documentElement;
-    if (!host) return null;
-    host.appendChild(el);
-    this.remoteAudioEl = el;
-    this.remoteAudioSinkOwned = true;
-    return el;
   }
 
   private bindRemoteStream(stream: MediaStream, kind: MediaKind): void {
@@ -286,11 +261,9 @@ export class CallSession {
       }
     }
     if (kind === "audio") {
-      const el = this.ensureRemoteAudioSink();
-      if (el) {
-        el.srcObject = stream;
-        console.log("[Call] audio stream bound to session sink (muted), audioTracks=", stream.getAudioTracks().map(t => ({ enabled: t.enabled, muted: t.muted })));
-      }
+      // V3：远端音频的 sink/发声/播放全部移交给 RemoteAudioHost（UI 侧单一权威），
+      // 会话不再自建 <audio>——两份 sink 同播就是 B2 双声的机制（DIVERGENCE F12）。此处只上报可观测信号。
+      console.log("[Call] remote audio stream announced (playback owned by RemoteAudioHost), audioTracks=", stream.getAudioTracks().map(t => ({ enabled: t.enabled, muted: t.muted })));
     }
     if (kind === "video" && this.remoteVideoEl) {
       this.remoteVideoEl.srcObject = stream;
@@ -914,14 +887,8 @@ export class CallSession {
       for (const track of this.localStream.getTracks()) track.stop();
       this.localStream = null;
     }
-    if (this.remoteAudioEl) {
-      this.remoteAudioEl.srcObject = null;
-      if (this.remoteAudioSinkOwned) this.remoteAudioEl.remove();
-    }
     if (this.remoteVideoEl) this.remoteVideoEl.srcObject = null;
-    this.remoteAudioEl = null;
     this.remoteVideoEl = null;
-    this.remoteAudioSinkOwned = false;
     this.setState("ended");
     void reason;
   }

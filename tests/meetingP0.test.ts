@@ -230,7 +230,7 @@ test("Go server: 订阅幂等 + closed participant 不残留 + 迟发布自动�
   // 发布者离开 → 其余成员对其的订阅 PC 被拆除
   assert.match(
     roomSrc,
-    /RemoveParticipant\(participantID string\)/,
+    /func \(\w+ \*Room\) RemoveParticipant\(/,
     "RemoveParticipant 存在",
   );
   // 迟发布（publisher 尚未 ready）：首个 track 发布时为未订阅成员自动建立订阅并推送 offer

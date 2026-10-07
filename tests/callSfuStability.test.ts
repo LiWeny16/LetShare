@@ -376,7 +376,7 @@ test("AC-006: SFU audio stats use inbound RTP counters and packet-loss deltas", 
   });
 });
 
-test("AC-006: remote audio playback rejection is visible in call diagnostics", async () => {
+test("AC-006(迁移): SFU 会话不再自建 <audio> sink —— 播放权整体移交 RemoteAudioHost（C-11/C-12）", async () => {
   await withFakeRTC(async () => {
     const previousDocument = (globalThis as Record<string, unknown>).document;
     const previousMediaStream = (globalThis as Record<string, unknown>).MediaStream;
@@ -388,18 +388,19 @@ test("AC-006: remote audio playback rejection is visible in call diagnostics", a
       addTrack(track: MediaStreamTrack) { this.tracks.push(track); }
     }
     (globalThis as Record<string, unknown>).MediaStream = FakeMediaStream;
-    const audio = {
-      autoplay: false, paused: true, readyState: 0, muted: false, volume: 1, srcObject: null,
-      style: {}, play: async () => { throw new Error("autoplay blocked"); }, remove: () => {},
-    };
-    const host = { appendChild: () => {} };
+    // D4/C-11：会话层只要碰 createElement 就立刻抛——sink/发声元素只允许 RemoteAudioHost 创建
+    const created: string[] = [];
+    const domHost = { appendChild: () => {} };
     (globalThis as Record<string, unknown>).document = {
-      createElement: () => audio, body: host, documentElement: host,
+      createElement: (tag: string) => {
+        created.push(tag);
+        throw new Error(`会话层不得自建元素: ${tag}`);
+      },
+      body: domHost, documentElement: domHost,
     };
     try {
       const session = makeSession([], []);
       await session.startOutgoing();
-      session.attachRemoteAudio(audio as unknown as HTMLAudioElement);
       session.handleSignal("meeting:membership:snapshot", { members: ["peer:uid"] });
       session.handleSignal("meeting:sdp", { type: "offer", to: "peer:uid", sdp: "subscriber-offer" });
       await flushMicrotasks();
@@ -407,9 +408,11 @@ test("AC-006: remote audio playback rejection is visible in call diagnostics", a
         track: { id: "remote-audio", kind: "audio", readyState: "live", enabled: true, muted: false } as unknown as MediaStreamTrack,
       });
       await flushMicrotasks();
-      const debug = session.getDebugInfo() as { remoteAudioPlayback: { state: string; error: string | null } };
-      assert.equal(debug.remoteAudioPlayback.state, "blocked");
-      assert.match(debug.remoteAudioPlayback.error ?? "", /autoplay blocked/);
+      assert.deepEqual(created, [], "C-11：会话内 sink 已整体移交 RemoteAudioHost，会话不得再 createElement");
+      // 播放状态的唯一写者是 host（断言迁至 tests/remoteAudioHost.test.ts 的 D5 用例）；
+      // __lsPc().remoteAudioPlayback 现在从 window.__ls.dump().playback 只读转发，无 host 时不得伪造。
+      const debug = session.getDebugInfo() as { remoteAudioPlayback: { state: string | null } };
+      assert.equal(debug.remoteAudioPlayback.state, null);
       session.hangup();
     } finally {
       if (previousDocument === undefined) delete (globalThis as Record<string, unknown>).document;

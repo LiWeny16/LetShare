@@ -132,7 +132,14 @@ function AudioRow(props: {
   );
 }
 import { createInputLevelMeter, createRemoteSpeakingDetector, listAudioDevices } from "@App/libs/call/audioCapture";
-import { RemoteAudioPipeline, clampSpeakerVolume, SPEAKER_VOLUME_MAX } from "@App/libs/call/remoteAudioPipeline";
+import {
+  RemoteAudioHost,
+  RemoteAudioPipeline,
+  SPEAKER_VOLUME_MAX,
+  toAudioPrefs,
+  type RemoteAudioHostState,
+} from "../../core/audio/index";
+import { buildPlaybackDump, registerDiagnosticsProvider } from "../../diagnostics/index";
 import {
   listVideoDevices,
   VIDEO_QUALITY_OPTIONS,
@@ -319,6 +326,7 @@ export function ActiveCallPanel(props: ActiveCallProps) {
   const mainRef = useRef<HTMLVideoElement>(null);
   const pipBoxRef = useRef<HTMLDivElement>(null);
   const pipVideoRef = useRef<HTMLVideoElement>(null);
+  // 发声元素由 React 持有（DOM 位置保留给 DOM 侧工具链），写权全在 RemoteAudioHost
   const audioRef = useRef<HTMLAudioElement>(null);
   const [pipSwapped, setPipSwapped] = useState(false);
   /** 小窗位置（容器内像素，右上角初始）；拖拽直改 CSS 变量，避免 60fps 重渲染 */
@@ -348,10 +356,24 @@ export function ActiveCallPanel(props: ActiveCallProps) {
   const [echoCancelType, setEchoCancelType] = useState<"browser" | "system">(() => settingsStore.get("echoCancelType") ?? "browser");
   const [nsMode, setNsMode] = useState<NsModeSetting>(() => settingsStore.get("nsMode") ?? "browser");
   const levelBarRef = useRef<HTMLDivElement>(null);
-  const pipelineRef = useRef<RemoteAudioPipeline | null>(null);
-  useEffect(() => () => {
-    pipelineRef.current?.detach();
-    pipelineRef.current = null;
+  // ── 远端音频唯一权威（V3）：元素/管线/gain/srcObject/play 全在 host 内，本组件只推偏好与读状态 ──
+  const audioHostRef = useRef<RemoteAudioHost | null>(null);
+  const [audioBlocked, setAudioBlocked] = useState(false);
+  useEffect(() => {
+    const host = new RemoteAudioHost(new RemoteAudioPipeline());
+    audioHostRef.current = host;
+    host.bindElement(audioRef.current);
+    setAudioBlocked(host.state.autoplayBlocked);
+    const unsubscribe = host.subscribe((s: RemoteAudioHostState) => setAudioBlocked(s.autoplayBlocked));
+    // D6：1:1 通话的 window.__ls.dump() playback 段（复用 buildPlaybackDump + host 快照，不另造一套）
+    const unregister = registerDiagnosticsProvider({ playback: () => buildPlaybackDump(host.snapshot()) });
+    return () => {
+      host.bindElement(null);
+      unsubscribe();
+      unregister();
+      host.dispose();
+      audioHostRef.current = null;
+    };
   }, []);
 
   // ── Apple 式设置行的当前值显示（空设备 = "系统默认"，不空白）──
@@ -371,36 +393,16 @@ export function ActiveCallPanel(props: ActiveCallProps) {
         : nsMode === "rnnoise" ? t("call.nsRnnoise", "RNNoise 实验室")
           : t("call.nsGtcrn", "GTCRN 实验室");
 
-  /** 应用扬声器/音量到远端发声通道（管线优先，元素路径兜底 clamp 0..1）。 */
+  /** 把扬声器/音量/处理偏好推给 RemoteAudioHost（唯一写者）；元素与管线属性本组件不再直接触碰。 */
   const applySpeakerSettings = useCallback((): void => {
-    const el = audioRef.current;
-    const vol = clampSpeakerVolume(Number(settingsStore.get("speakerVolume") ?? 1));
-    const pipeline = pipelineRef.current;
-    if (pipeline?.isActive) {
-      // 管线接管发声：热更增益 + 扬声器选择；元素静音防双路出声
-      pipeline.update({ volume: vol });
-      const sinkId = settingsStore.get("speakerDeviceId");
-      if (sinkId && el) {
-        void pipeline.setSinkId(sinkId).then((ok) => {
-          if (!ok && el && typeof el.setSinkId === "function") {
-            try { void el.setSinkId(sinkId).catch(() => undefined); } catch { /* ignore */ }
-          }
-        });
-      }
-      if (el) el.volume = 0;
-      return;
-    }
-    if (!el) return;
-    const sinkId = settingsStore.get("speakerDeviceId");
-    if (sinkId && typeof el.setSinkId === "function") {
-      try {
-        void el.setSinkId(sinkId).catch((err) => console.warn("[CallBar] setSinkId failed:", err));
-      } catch (err) {
-        console.warn("[CallBar] setSinkId failed:", err);
-      }
-    }
-    // 元素路径上限仍是 1（浏览器约束增强音量只能经 Web Audio 管线）
-    el.volume = Math.min(1, Math.max(0, Math.min(vol, 1)));
+    audioHostRef.current?.setPrefs(
+      toAudioPrefs({
+        volume: settingsStore.get("speakerVolume"),
+        clarity: settingsStore.get("voiceClarityEnabled"),
+        widen: settingsStore.get("spatialAudioEnabled"),
+        sinkId: settingsStore.get("speakerDeviceId"),
+      }),
+    );
   }, []);
 
   useEffect(() => {
@@ -418,33 +420,11 @@ export function ActiveCallPanel(props: ActiveCallProps) {
     const pipStream = pipSwapped ? props.remoteStream : props.localStream;
     if (mainRef.current) mainRef.current.srcObject = mainStream ?? null;
     if (pipVideoRef.current) pipVideoRef.current.srcObject = pipStream ?? null;
-    // 独立 audio 元素同样绑定远端流，保证纯语音通话（video display:none）也能出声
-    if (audioRef.current && props.remoteStream) {
-      audioRef.current.srcObject = props.remoteStream;
-      // 3.7.0 Web Audio 播放管线：音量 0..200% 增益 + 清晰度 + 空间展宽。
-      // 管线接管发声时元素静音防双路；管线不可用自动回退元素路径（clamp 0..1）。
-      const pipeline = (pipelineRef.current ??= new RemoteAudioPipeline());
-      const pipelineActive = pipeline.attach(props.remoteStream, {
-        volume: clampSpeakerVolume(Number(settingsStore.get("speakerVolume") ?? 1)),
-        clarity: settingsStore.get("voiceClarityEnabled") ?? true,
-        widen: settingsStore.get("spatialAudioEnabled") ?? false,
-      });
-      if (pipelineActive) {
-        pipeline.resume(); // 接听/拨打手势链内补一次 resume（自动播放策略兜底）
-      }
-      applySpeakerSettings(); // srcObject 换绑后补设扬声器/音量（元素属性不随流变化，此处幂等兜底）
-      console.log("[CallBar] audio element srcObject set, pipeline=", pipelineActive, "autoplay=", audioRef.current.autoplay, "audioTracks=", props.remoteStream.getAudioTracks().map(t => ({ enabled: t.enabled, readyState: t.readyState })));
-    } else if (audioRef.current) {
-      audioRef.current.srcObject = null;
-    }
-    // 显式 play()：流异步到达时 autoplay 可能被自动播放策略拦下
-    // （Android WebView 尤甚）；接听点击是用户手势，但手势不跨异步边界，必须补一次。
-    // muted 元素播放不受策略限制；远端 audio 元素绝不静音，失败只能靠重试/日志暴露。
-    if (audioRef.current && props.remoteStream) {
-      audioRef.current.play().catch((err) => {
-        console.warn("[CallBar] remote audio play() rejected:", err?.name, err?.message);
-      });
-    }
+    // 远端音频唯一权威是 RemoteAudioHost（自建解码 sink + 发声元素 + 管线）：
+    // 纯语音通话（video display:none）也保证出声；play()/muted/volume/gain/srcObject 只在 host 内部写。
+    audioHostRef.current?.setStream(props.open ? props.remoteStream : null);
+    applySpeakerSettings(); // 流换绑后补推偏好（幂等；也覆盖首次挂载）
+    console.log("[CallBar] remote audio bound to RemoteAudioHost, audioTracks=", props.remoteStream ? props.remoteStream.getAudioTracks().map(t => ({ enabled: t.enabled, readyState: t.readyState })) : []);
     if (mainRef.current && mainStream && mainStream.getVideoTracks().length > 0) {
       mainRef.current.play().catch(() => undefined);
     }
@@ -801,6 +781,24 @@ export function ActiveCallPanel(props: ActiveCallProps) {
           音频统一由 <audio> 承载，<video> 必须静音（否则视频通话双路出声 → 音量翻倍且回声）。 */}
       <Box sx={{ flex: 1, position: "relative", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
         <audio ref={audioRef} autoPlay playsInline />
+        {/* D5 可见降级：自动播放被拒 → 常驻琥珀 chip（非阻断式，不挡通话操作）。
+            点击 = 手势上下文内 resume()+play() 并按当前裁决复原 muted/volume。 */}
+        {audioBlocked && (
+          <Box
+            role="alert"
+            data-testid="call-audio-blocked"
+            onClick={() => { void audioHostRef.current?.unlock(); }}
+            sx={{
+              position: "absolute", top: 12, left: "50%", transform: "translateX(-50%)", zIndex: 6,
+              display: "flex", alignItems: "center", gap: 1, bgcolor: "warning.main", color: "warning.contrastText",
+              borderRadius: 999, px: 2, py: 0.75, boxShadow: 3, cursor: "pointer", userSelect: "none",
+            }}
+          >
+            <Typography variant="caption" sx={{ fontWeight: 600 }}>
+              {t("call.audioBlocked", "🔇 声音未开启 · 点此恢复")}
+            </Typography>
+          </Box>
+        )}
         {/* GPU 渲染异常提示（非阻断式，可关闭）：远端在推帧但画面未呈现 → 大概率浏览器图形加速故障 */}
         {gpuHintVisible && (
           <Box
@@ -1045,7 +1043,7 @@ export function ActiveCallPanel(props: ActiveCallProps) {
                     setVolume(v);
                     settingsStore.update("speakerVolume", v / 100); // 持久化 0..2（>1 = 增益增强）
                     applySpeakerSettings();
-                    pipelineRef.current?.resume(); // 手势内补 resume（自动播放策略兜底）
+                    void audioHostRef.current?.unlock(); // 手势内 resume + 按裁决复原 muted/volume
                   }}
                 />
                 <Typography variant="caption" color="text.secondary" sx={{ lineHeight: 1.5, display: "block" }}>
@@ -1061,7 +1059,7 @@ export function ActiveCallPanel(props: ActiveCallProps) {
                     const on = e.target.checked;
                     setVoiceClarity(on);
                     settingsStore.update("voiceClarityEnabled", on);
-                    pipelineRef.current?.update({ clarity: on });
+                    applySpeakerSettings();
                   }}
                 />
               </AudioRow>
@@ -1074,7 +1072,7 @@ export function ActiveCallPanel(props: ActiveCallProps) {
                     const on = e.target.checked;
                     setSpatialAudio(on);
                     settingsStore.update("spatialAudioEnabled", on);
-                    pipelineRef.current?.update({ widen: on });
+                    applySpeakerSettings();
                   }}
                 />
               </AudioRow>
