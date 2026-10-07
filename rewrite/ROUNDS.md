@@ -819,3 +819,34 @@ go test -race ./internal/handler/           → FAIL（5 个测试红，WARNING:
 ### 下一步
 修复 Worker 已派出（同一模型，含 D 节 4 项补答要求：`hostMu` 锁序论证 / `cleanupMeetingClientID` 行为变更定性 / 级联广播数断言 / 失效 action 常量残留引用）。
 修完 → G1 复跑 → **G2 Reviewer(glm-5.3)** → G3 → 部署（这是**第一个改行为的服务端切片**，部署后要盯线上）
+
+#### V1a · 收尾轮（A 节抽取）—— G1 复跑通过
+
+Worker：`mimo-v2.6-pro` · 90 tool uses / 219.7k token / 24.5 分钟
+
+| 函数 | 前 → 后 | 目标 |
+|---|---|---|
+| `handleMeetingJoin` | 114 → **92** | ≤110 ✅（少 18 —— 抽取单元只能是整个相位临界区）|
+| `handleMeetingBreakout` | 109 → **104** | ≤106 ✅ |
+| `TestMeetingEndDoesNotLeakToSubscribedNonMember` | 56 → **50** | ≤53 ✅ |
+
+**G1 复跑（Architect 亲跑）**：`build/vet/test` ✅ 全绿 · `gofmt` ✅ 干净 · `websocket.go` **4904 → 4855（净 −49）** · 新文件均 <400 · **函数恶化复核：无恶化、无新超限**
+
+**顺带的正面副作用**：新抽函数与既有 `enterMeetingGrace` **对偶成对**（`meeting_registry.go` 的 `enterMeetingLive`），生命周期的两个入口现在是同一形态 —— 这比"压回原值"更好。
+
+#### V1a · 第三轮（Architect 授权补三项回归测试）
+Worker 在 D 节**主动承认三处没有测试守护**（并发修复 / 级联广播数 / `!ok` 分支），并请求授权。**批准**，理由：这三处正是 G2 契约门必会追问的地方，且都是**不可自愈**的后果（并发撕裂 / 通知丢失 / 会议号永久泄漏）。
+| 测试 | 目的 |
+|---|---|
+| **T1** `TestMeetingHostSeatConcurrentAccess` | 把 Worker 的一次性 A/B 探针固化为常驻测试（纯 registry，不起 WS → 可在 service 层竞态未修时独立 `-race`）|
+| **T2** 级联广播数 | 断言子房间成员**恰好一条** `meeting:ended`（现有测试只断言日志数，**收件人集合为空** → 广播面未被直接断言）|
+| **T3** `!ok` 分支 | 显式移除 SFU 房间后调 `cleanupMeetingClientID`，断言宽限**被武装** + `sfu_room_missing` 字段 |
+
+**对 T2 的额外要求**：若级联路径**实际上不会**给子房间成员发广播，Worker 必须立刻报告 —— 那说明我上一轮 Q3 的裁决基于错误前提。
+
+#### Worker 诚实报告的两处"好消息式坏消息"（值得留档）
+1. **`meeting:ended` 去重的 D3 回答**：它明确说"现有测试断言的不是广播数" —— **主动否掉了自己交付物看起来覆盖的地方**。这种反方向的自证比多写几句总结有用。
+2. **D1 承认"没有常驻测试"**，并给出原因（包级 `-race` 因既有 service 竞态必红）**和**解法（纯 registry 探针可独立 `-race`）。承认缺口 + 给出可行路径 = 正确的工程姿态。
+
+#### Architect 同步更新
+`STANDARDS.md` SIZE-EXEMPT 表：`websocket.go` 行数更新为 4855（自 4911 持续下降）；新增**函数级台账**记录两个"恰在 50、零余量"的函数（`handleMeetingKick` / `handleCallSFUJoin`），供后续片保持警惕。

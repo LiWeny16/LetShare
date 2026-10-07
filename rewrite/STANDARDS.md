@@ -30,13 +30,20 @@ G2 审查指出：`websocket.go` 等文件早已超标，却**无任何 `SIZE-EX
 
 | 文件 | 当前行数 | 豁免理由 | 收敛归属 |
 |---|---|---|---|
-| `server/internal/handler/websocket.go` | 4911 | 巨型信令中枢，V0a/V0.1 被 PLAN 授权为 **in-place 观测例外**；拆它本身属于大重构，已超出本次收窄后的范围 | 不做全拆；仅要求**后续片不得再增加净行数** |
-| `server/internal/sfu/participant.go` | 497 | 同上；V0.1 净减 2 行（删 F16）——**已满足“不得恶化”** | V2（订阅/主连接观测重构时顺势下沉） |
+| `server/internal/handler/websocket.go` | **4855**（V1a 后，自 4911 持续下降）| 巨型信令中枢，V0a/V0.1/V1a 被 PLAN 授权为 **in-place 例外**；拆它本身属于大重构，已超出本次收窄后的范围 | 仅要求**后续片不得再增加净行数**（V0a −7 · V1a −49 已持续改善）|
+| `server/internal/sfu/participant.go` | 497 | 同上；V0.1 净减 2 行（删 F16）| V2 |
 | `server/internal/sfu/subscriber.go` | 423 | 同上；V0.1 +3（connTrace 字段）| V2 |
 | `src/app/libs/meeting/meetingManager.ts` | 2495 | 同上；V3 播放权威收敛时拆 | **V3** |
 | `src/components/meeting/MeetingRoom.tsx` | 1959 | 同上；V3 | **V3** |
 
-**硬规则**：新增文件**一律不得**引用本表；本表只用于存量。任何片若使表内文件行数**净增**，G1 即打回。
+**函数级台账（仅记“已到上限、零余量”的函数，供后续片保持警惕）**
+
+| 函数 | 当前函数体行数 | 备注 |
+|---|---|---|
+| `websocket.go:handleMeetingKick` | **50** | 恰在线内，**零余量**；下次触碰必须先下沉 |
+| `websocket.go:handleCallSFUJoin` | **50** | 同上 |
+
+**硬规则**：新增文件**一律不得**引用本表；本表只用于存量。任何片若使表内文件行数**净增**、或使**任何**既有超限函数/文件**行数增加**，G1 即打回。
 
 TypeScript 基线：
 - `strict: true`
