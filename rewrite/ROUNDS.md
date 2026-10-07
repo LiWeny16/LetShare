@@ -660,3 +660,46 @@ Agent：`research-v1b-sessionid`（71 tool uses / 101.7k token / 13 分钟，全
    → **规则**：只读侦察报告的行号一律当作"线索"而非"证据"；Architect 核验必须以 grep 定位（`grep -n "<独特字串>" -B/-A`），不以行号直接读。
 2. **grep 必须排除构建产物。** 我执行 `grep -rn "new WebSocket(" src/ android/` 时未排除 `android/app/build/**` 与 `docs/**`，把压缩后的 bundle 整段 dump 了出来（单次输出 50KB 上限被击穿，浪费一轮）。
    → **规则**：全仓 grep 一律带 `--include=*.ts --include=*.tsx` 并显式排除 `android/app/build`、`docs`、`node_modules`。
+
+---
+
+## 只读侦察 ② · 远端音频所有权地图（Architect 亲验后入库）
+
+Agent：`research-v3-audio`（34 tool uses / 94.4k token / 30 分钟，全程只读）
+
+### Architect 逐行亲验的三条（**全部成立，且比侦察描述的更严重**）
+
+**① `attach()` 两条分支不对称 → 永久静音自锁（我亲自读到）**
+```ts
+// 分支 A：复用已有 ctx + source
+if (this.ctx && this.source) {
+    if (this.ctx.state === "suspended") void this.ctx.resume().catch(() => undefined);
+    this.applyConnectionOptions();
+    return this.ctx.state === "running";   // ← resume 异步，紧接着同步读 state 必为 false；且【不 detach】
+}
+// 分支 B：新建 ctx
+if (ctx.state !== "running") { this.detach(); return false; }   // ← 这条【会清理】
+```
+⇒ `attach()` 返回 `false`（调用方以为"该回退元素"），但 `ctx` 非 null ⇒ `isActive === true`
+⇒ `CallBar.tsx:390` 的 `el.volume = 0` 生效，而管线是 suspended ⇒ **管线静音 + 元素零音量 = 全哑**
+⇒ **全仓零处监听 `ctx.state`**（grep 穷举：无 `statechange`、无轮询）⇒ **永不复查、无法自愈**
+
+**② F12 成立且更严重（我亲自读到）**
+`callSession.ts:269` 有 `el.muted = true`；`callSfuSession.ts:184-195` **没有**，且 `bindRemoteAudio` 额外 `void el.play()`。
+**关键放大**：`callManager.attachRemoteAudio`（`callManager.ts:527`）**生产零调用方**（全仓仅 `tests/callSfuStability.test.ts:402`）⇒ 两个会话的 sink **必然走 `createElement` 分支** ⇒ SFU 场景 = 未静音自建 sink **＋** UI `<audio>` **双元素同播** ⇒ **B2 双重声音的机制闭环成立**，且"如何启动播放"也分叉了（`autoplay` vs 显式 `play()`）
+
+**③ 手势补偿救不回声音**
+`MeetingRoom.tsx` 的 `unlockRemoteAudio`（≈539-550）只 `resume()` + `play()`，**不恢复 `muted`/`volume`** ⇒ ctx suspended 后手势也无效；`play()` 的 reject 被 `catch(() => undefined)` **静默吞** ⇒ 用户完全不可见。
+
+### 附带的 V0a 不完整（属我自己的切片）
+`registerDiagnosticsProvider` 只有会议侧两处 ⇒ **1:1 通话场景 `window.__ls.dump()` 的 `playback` 段是空的**。
+而 `callSfuSession` 已在维护 `remoteAudioPlaybackState` / `remoteAudioPlayError`，**只是没暴露**。→ 已并入 V3 D6 修复。
+
+### 入库产物
+- `DIVERGENCE.md`：**F12 修正**（补 `play()` 分叉 + `attachRemoteAudio` 零调用方这一放大因素）· 新增 **F17**（"管线是否可用"两个真相源：`attach()` 返回值 vs `isActive` getter）· 新增 **F18**（`ctx.state` 零复查）
+- `PLAN.md` V3 小节：症状机制闭环表 · `RemoteAudioHost` 单一写者设计 · 删除 `isActive` · 双通道看门狗（≤1s）· 可见降级 · 补 1:1 诊断 · 真机可听性（RMS > 0）验收 · 边界声明（`share.tsx` 属 V2）
+- **V3 Worker 已派出**（`worker-v3`，`mimo-v2.6-pro`）—— 与 V2 并行，文件面仅 `share.tsx` 重叠，已明确划归 V2 并由 V3 走"跨边界请求"
+
+### 对本轮并行决策的验证
+先前我判定"V3 不与 V2 并行"（怕两者对同一症状设计出互不兼容的修法）。**现在改判为可并行** —— 理由：只读侦察已把 V3 的**设计前置风险探明**（所有权地图 + 冲突矩阵 + 失效条件穷举 + 设计建议），V3 不再是"盲并行"，而是带着完整证据与既定设计开工；且文件面冲突只剩 `share.tsx` 一个，可定向隔离。
+⇒ **教训：并行度不是由"切片数量"决定，而是由"设计不确定性是否已被前置探明"决定。**

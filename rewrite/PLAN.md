@@ -91,13 +91,23 @@
 
 ### V3 · 远端音频播放权威（R2 + R4 + R5）
 - **故障**：永久静音 / 双重声音 / 回声（全部线上取证）
-- **结构缺陷**：远端音频有 **3 个可能的主人**（会话 sink / UI `<audio>` / Web Audio 管线），靠"谁先声明接管"协商；且**声明后永不复查**（`DIVERGENCE.md` F12）
+- **结构缺陷**：远端音频有 **3 个可能的主人**（会话 sink / UI `<audio>` / Web Audio 管线），靠"谁先声明接管"协商；且**声明后永不复查**（`DIVERGENCE.md` F12 / **F17** / **F18** —— 已由只读侦察穷举 + Architect 逐行亲验）
+- **已核实的症状机制闭环**
+  | 症状 | 机制 |
+  |---|---|
+  | **双重声音（B2）** | `callSession.ts:269` 有 `el.muted = true`，`callSfuSession.ts:184-195` **漏了**且额外 `play()`；`callManager.attachRemoteAudio` **生产零调用方** ⇒ 自建 sink **必然**与 UI `<audio>` 同时发声 |
+  | **永久静音（B1）** | `attach()` 两分支不对称 → 返回 `false` 但 `ctx` 非 null ⇒ `isActive === true` 假象 ⇒ `CallBar.tsx:390` 把元素 `volume = 0` 而管线 suspend ⇒ **全哑且无人复查** |
+  | **静音无法自愈** | **全仓零处**监听 `ctx.state`；手势补偿只 `resume()+play()`、**不恢复 `muted`/`volume`**；`play()` reject 被 `catch(() => undefined)` **静默吞** |
 - **交付**
-  - 收敛为唯一 `RemoteAudioHost`：元素与管线**互斥**，任何时刻**至少一条通路可用**
-  - **存活看门狗**：`ctxState !== "running"` → **≤1s 内**元素自动接管
-  - 会话内部 sink **一律静音**（只用于驱动解码）
-  - 自动播放被拒 → **可见降级**（用户能看到提示，而不是静默无声）
-- **验收**（C-08/C-09/C-10/C-11/C-12 + **真机可听性**）：恰 1 路可听；管线失效 ≤1s 回退；**真机 E2E 断言声音存在**（红队第 8 条：模拟状态断言证明不了可听）
+  - 收敛为唯一 `RemoteAudioHost`（**单一写者**：`muted`/`volume`/`gain`/`srcObject`/`play()` 只允许 host 内部写；`audibleVia` 是唯一状态；转移函数为**纯函数**）
+  - 元素与管线**结构性互斥**（切 pipeline：元素 `muted=true && volume=0` 双保险；切 element：gain 置 0 并 `suspend()` 管线），任何时刻**至少一条通路可用**
+  - **删除危险 getter `isActive`** —— `ctx !== null` 被当成"在发声"就是 CallBar 栽的那个坑（F17）
+  - **存活看门狗**：`statechange` 事件 + ≤1000ms 轮询双通道；失效 ≤1s 元素接管（**时钟可注入**）
+  - 会话内部 sink **一律静音**（C-11），两 session 共用**同一份**实现（X2）
+  - 自动播放被拒 → **可见降级**（常驻琥珀色 chip "🔇 声音未开启 · 点此恢复"，点击在手势上下文内恢复）
+  - **补 1:1 通话的诊断出口**（V0a 的不完整：`window.__ls.dump()` 的 `playback` 段在通话场景为空）
+- **验收**（C-08/C-09/C-10/C-11/C-12 + **真机可听性**）：恰 1 路可听（属性测试穷举 `ctxState × elementState`）；管线失效 ≤1s 回退；**真机 E2E 用 `AnalyserNode` 采 RMS > 0 断言声音存在**（红队第 8 条：模拟状态断言证明不了"可听"）
+- **边界**：V3 与 V2 并行，但 **`share.tsx` 属 V2 属地** → V3 若需改它必须在回报里请求跨边界
 
 ### V4 · 注释卫生（R6，贯穿 V0–V3 + 终审）
 - **规则**：每条被改/删的"教训注释"必须二选一 —— **转成测试** 或 **删除**（禁止用注释代替测试，X7）
