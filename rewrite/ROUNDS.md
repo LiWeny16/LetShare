@@ -1150,3 +1150,49 @@ panic: invalid memory address or nil pointer dereference [recovered, repanicked]
 
 ### 下一步
 V1a 已交 **Reviewer(`glm-5.3`)** 走 G2，重点让它查：**P0 是否真堵住 + 守卫测试可否被绕过**、**相位模型与 §4.6 跃迁表逐行一致性**、**超出授权的并发变更（`hostMu` 叶锁）与行为变更（`cleanupMeetingClientID` 的 `!ok` 分支）**、以及**协议零变化的真实边界**。
+
+#### V2 · 收尾轮（复杂度 + 逃生门）—— G1 通过
+
+Worker：`mimo-v2.6-pro` · 58 tool uses / 165.3k token / 34.9 分钟
+
+### A1 `phaseAfterRetryEvent` 复杂度 **14 → 8**，且给了**机械等价证明**
+改法：抽 4 个纯函数（`phaseAfterAttemptStarted` / `phaseAfterAttemptSucceeded` / `terminalUnlessSettled` / `phaseAfterTerminalEvent`），主函数只留分派。**没用对象字面量 dispatch**（避免表本身变成新的复杂度源），每个新函数复杂度 2~3。
+**等价证明不是嘴上说**：它把旧实现逐字拷进一次性对拍脚本，与新实现跑「全表 + 2000 组固定种子随机交叉」，**连副作用调用次数一起比**：
+```
+cells=7880 mismatched=0
+sideEffects before: newSessionId=159 classifyTerminal=628
+sideEffects after : newSessionId=159 classifyTerminal=628
+VERDICT: 改前/改后逐格语义等价（含副作用调用次数）
+```
+**它还顺手补了测试缺口**：原 C-02 只覆盖一条真实轨迹（踩到 8 个格子），它补了 **10 事件 × 6 相位 = 60 格逐格 `deepEqual`** + 一条**副作用惰性**测试（不写相位时 `newSessionId`/`classifyTerminal` 调用数必须为 0）。⇒ 这正好补上了"拆纯函数不得提前求值"这个最易犯的错。
+
+### A2 逃生门：**选 (a) 收紧语义，删除**
+`attemptTimeoutMs <= 0`（"调用方自证收敛"）被删；两层防御：`resolveAttemptTimeout` 缺省 30s、显式值**必须有限正数**否则抛 `InvalidAttemptTimeoutError`（`0/-1/NaN/±Infinity` 全拒），且 `schedule()` **第一行**就解析（fail-fast，不留半初始化链）；`runAttempt` 直调同样拒。
+**理由**：唯一生产调用方传 `30000`，**反例不存在**；而这个口子正是 `PURPOSE.md` 说的"人工承诺" —— 传 0 + task 永不 settle = **A3 死锁原样回归**。
+
+### 它把三条登记项查得比 Reviewer 更深（**这是本轮最有价值的补充**）
+#### B1 `handleRename` 旁路：不是漏 2 项，是漏 **5** 项
+Reviewer 说漏「代次校验 + `startServerLiveness`」。Worker 核实：该 `else` 分支是 **`connectToServer` 的手写复制品**，还漏了 ③ **`onDisconnected` 注册**（全新页面直接改名建连 = **掉线无自愈无重连、UI 卡在 connected**）④ `resetFailureCount()`（`maxFailures=1` 时改名重连被拒 → **"不刷新就连不上"**）⑤ 还硬写 `transportOnlyConnection = false`（**打翻会议 transport-only 语义**）。
+**建议方案 a（改走 `connectToServer`）而非 b（就地补）**，理由是我认同的结构性论证：b 会把"建立连接的必做清单"复制**第三份**（`connectToServer` / `attemptReconnect` / `handleRename` 各一份），**而清单腐化正是本次漏网的结构性原因** —— 下一次 `connectToServer` 加护栏，`handleRename` 照样漏。a 是**删代码**（四个洞一次全补）。
+
+#### B2 `supersede` 语义 wart —— 判定"会咬人"
+三点：① **reason 说谎**（"被手动连接接管"被记成 `user-left`）→ 将来按终止原因做审计（C-21/C-22 日志因果链）会把接管统计成离开；② `terminal`（吸收态）被当"链已取消"的标记用 → 链生命周期与会话生命周期**混进同一相位机**；③ `requestReconnect` 换机静默 → 缓存 phase 的消费者拿着旧机的 terminal 做判断。已给出最小改法（约 4 行 + 2 测试）。
+
+#### B3 `disconnect()` 尾部写入 —— **比表面更严重**
+不只是"写脏状态"：窗口内 `connectionManager.disconnect()` 本身会 `slot.release()` + **关掉新建立的那条 provider** —— **误杀新连接，而调用方以为成功**。且 `transportOnlyConnection` 被改写 → 下次重连走错路由。会让 `autoReconnectAllowed=false` 产出**"零连接尝试"的表象**。
+
+### Architect G1（亲跑）
+| 检查 | 结果 |
+|---|---|
+| `tsc --noEmit` / `tsc -p tsconfig.core.json --noEmit` | ✅ EXIT 0 / EXIT 0 |
+| **`eslint src/core src/diagnostics --max-warnings 0`** | ✅ **EXIT 0**（机械门现在真的在拦）|
+| `pnpm test` | ✅ **571 + 35 = 606 通过 / 0 失败** |
+| `remoteAudioHost.ts` / `src/diagnostics/index.ts` 行数 | ✅ 396 / 264（均 ≤400）|
+
+### ⚠️ 一次"瞬态失败"的取证（值得留档：**并行的基线是移动的**）
+V2 报告时是 571/571/0，但我首次复跑看到 **571/568/3**。我**没有假设是 V3 的锅**，而是取证：
+- `find src tests -newermt '-5 minutes'` → **`src/core/audio/remoteAudioHost.ts` 与 `tests/remoteAudioHost.test.ts`**（正是 V3 收尾轮在改的两个文件）
+- 重跑全量 → **606/0 全绿**
+⇒ 结论：3 个失败是 **V3 Worker 在途编辑**造成的瞬态，非回归。
+**并且 Worker 自己也报告了同一现象**：它首跑 eslint 只有 1 条违规，改完复跑冒出 2 条**新**违规 —— 都在 `src/core/audio/`（`remoteAudioHost.ts` **401 行超 1 行**、`diagnostics/index.ts` 的 `buildPlaybackDump` **复杂度 21**），mtime 证明是并发 Worker 正在落盘。它**据属地纪律停手 + 取证 + 交接**（未踩掉任何人的工作）。
+⇒ **这 2 条正是新机械门抓到的**（人工审查从未发现过 `remoteAudioHost.ts` 多 1 行、复杂度 21）——**再一次印证：人工审查作为唯一闸门不可靠。**
