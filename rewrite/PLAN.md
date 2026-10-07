@@ -73,6 +73,15 @@
 - **附带**：`server_error.log` 轮转（已 43MB 无轮转）
 - **待核**：签名的 `_test.go` 调用点数量；是否真存在发 `userId` 的旧客户端
 
+### V0.2 · 连接清理竞态（**P0 级，V1a 期间发现**）
+- **发现**：V1a 的 G1 要跑 `go test -race`，结果在**基线 HEAD 上就红**。Architect 建独立 worktree 在 `d0092f9`（= 当时线上代码）复现，竞态栈**全部**落在 `internal/service/websocket.go`：**84 / 101 / 134 / 144 / 415 / 435 / 465 / 466 / 662**
+- **性质**：`cleanupClientResources` 把 `client.Events` / `client.Connection` / `client.Metadata` 置 nil 与 `sendToClient` / `writeToClient` 并发；`Shutdown` 写 `onClientDisconnect` 与清理路径读 —— **这是生产活路径，可能丢消息或 panic**，不是测试噪声
+- **为什么单独开一片**：它牵连 `model.Client` 全字段访问审计（handler 里 `client.Metadata` 处处在用），**与 meeting 生命周期正交**，不应混进 V1a
+- **交付**：`Client` 字段的单一属主 + 关闭顺序状态机；`onClientDisconnect` 写入守卫；拒绝“置 nil 后还会被读”的形态
+- **验收**：`go test -race ./internal/handler/ -count=1` **全绿**（基线红 → 绿，可量化）+ `./internal/service` 自有一套 `-race` 测试
+- **与 V1b 的关系**：两者都落 `internal/service` 层 ⇒ **同批做，但分开过门**（V0.2 只改并发安全，不动协议字段）
+- **优先级**：**高于 V1b 与 V3**。理由：它可能正在线上造成“偶发的消息丢失/断连”—— 正是用户报的症状类
+
 ### V2 · 客户端保活与重连必然性（R1 + R3）
 - **故障**：
   - **4 分 25 秒零连接尝试**（实测）

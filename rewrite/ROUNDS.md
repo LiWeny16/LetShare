@@ -746,3 +746,76 @@ Agent：`research-comments`（150 tool uses / 200.8k token / 42.5 分钟，全�
 | ③ 注释审计 | 12 条确认 + 4 条待核 | V4 有了可执行输入；发现 A6 这类"注释即错误规格" |
 
 ⇒ **三个只读 Agent 都产生了"改变主 Agent 决策"的产出**（一个推翻前提、一个改判并行度、一个产出高危死代码清单）。这验证了并行预算花在**只读侦察**上比花在更多写手上更划算。
+
+---
+
+## V1a · 交付 + G1（Architect 亲跑）—— 修线上实事故的核心切片
+
+Worker：`mimo-v2.6-pro` · 153 tool uses / 483.7k token / **118.5 分钟**（全程最重）
+
+### 交付物
+| 文件 | 前 → 后 | 说明 |
+|---|---|---|
+| `internal/handler/websocket.go`（SIZE-EXEMPT）| 4904 → **4882（净 −22）** | 删 `scheduleMeetingEnd`/`expireMeetingReservation`/`teardownMeeting*`/`hostLeaveGrace` |
+| `internal/handler/meeting_registry.go` | 210 → 321 | emptyTimer 机制（arm/stop/enterMeetingGrace/onMeetingEmptyTimerFired）|
+| `internal/handler/meeting_diagnostics.go` | 139 → 180 | +`logMeetingPhase`、+2 相位 reason；删 2 个失效 action 常量 |
+| `internal/sfu/room.go` | 196 → 203 | `RemoveParticipant(id, reason)`（V0.1 无痕点③）|
+| **`internal/meeting/lifecycle.go`**（新）| — → 98 | §4.6 相位状态机（属主表「internal/meeting/lifecycle」唯一写者）|
+| **`internal/meeting/lifecycle_test.go`**（新）| — → 74 | 状态机单测 |
+| **`internal/handler/meeting_lifecycle_test.go`**（新）| — → 397 | 事故原形 + C-17/18/19/20 + F10 专项 |
+| **`internal/handler/meeting_teardown_log_test.go`**（新）| — → 173 | 拆除路径日志覆盖（6 路径 + 踢人）|
+| + 4 个既有测试文件跟随签名/注入迁移 | | |
+
+### 核心修复（两个根因都按代次守卫根治）
+1. **最后一个成员显式离开不再立即回收会议号** —— `enterMeetingGrace` 无"立即 teardown"分支；显式/非显式**一律** `ToGrace` + 重装计时器
+2. **F10 根修**：`emptyGen` 代次。旧 bug 是"到点跳过 → `endTimer` 永非 nil → 宽限永久失效"；现在每次进入 Grace 都**新建**计时器，且**陈旧回调（gen 不匹配）直接作废**
+   - Worker 主动报告：后者是它在测试中**实测到的真实竞态**（旧计时器在飞回调会误拆刚重排的会议）—— 即它发现了 F10 之外的**第二个**定时器缺陷
+
+### G1 结果 —— Architect 亲自执行
+| 检查 | 结果 |
+|---|---|
+| `go build` / `go vet` / `go test -count=1 ./...` | ✅ 全绿（含新增 `internal/meeting` 包）|
+| `gofmt -l`（14 个改动/新增文件）| ✅ 干净 |
+| `websocket.go` 行数 | ✅ 4904 → 4882（**净 −22**，满足"不得净增"）|
+| 新增函数 ≤50 / 新文件 ≤400 | ✅（最大新文件 397）|
+| **函数行数（本片是否使既有超限函数恶化）** | ❌ **3 项恶化**（见下）|
+
+### ❌ G1 发现：3 个既有超限函数被恶化（**打回，已派修复**）
+| 位置 | 函数体行数（正确口径）|
+|---|---|
+| `websocket.go` | `handleMeetingJoin` **110 → 114** |
+| `websocket.go` | `handleMeetingBreakout` **106 → 109** |
+| `meeting_lifecycle_isolation_test.go` | `TestMeetingEndDoesNotLeakToSubscribedNonMember` **53 → 56** |
+
+**裁决：打回最小抽取。** 理由：与 V0.1 的处理**必须一致**（那片因 `handleMeetingKick` 超 1 行即打回），否则规则失效。
+**同时承认这是我的度量定义不清造成** —— 我原先的口径会把"**下一个函数的文档注释**"计入上一个函数（例如 `currentMeetingReservationTTL` 被算出 A=53，其函数体其实只有 5 行），这是**错误度量**：它把"后继函数写得好"惩罚成"前驱函数超限"。
+
+### `-race` 主张的独立复核（**Worker 正确，我的派单有缺陷**）
+Worker 声称"`-race` 在 HEAD 上就红、与本片无关"。Architect **建独立 worktree**（不碰工作区）在 `d0092f9` 复现：
+```
+git worktree add -f /tmp/server-head HEAD   # d0092f9 = 当时线上代码
+go test -race ./internal/handler/           → FAIL（5 个测试红，WARNING: DATA RACE 多处）
+```
+竞态栈**全部**落在 `internal/service/websocket.go` 的 84/101/134/144/415/435/465/466/662 行。
+且 V1a 自己的包：`go test -race ./internal/meeting/ ./internal/sfu/` → **ok / ok**。
+⇒ **结论**：我的硬约束 #3（"`-race` 必须过"）**在基线上就不可满足**，是派单缺陷。新约束改为 **"本片新增/修改的包必须 `-race` 干净，且不得引入新竞态"**。
+⇒ 但那批既有竞态**升级为独立切片 V0.2**（活路径上的 P0 级缺陷，可能正在线上造成偶发丢消息/断连）。
+
+### Architect 的 5 项裁决（已发回 Worker）
+| # | 裁决 |
+|---|---|
+| Q1 `-race` 全量 | **接受**（约束本身有缺陷）；既有竞态 → 开 **V0.2** |
+| Q2 `meeting:ended` 2 条 → 1 条 | **接受，且不算"例外"而是修 bug**（同一终止连发两条 = F11 同类病，用户看两次 toast）。已登记为**有意为之的流量级变化** |
+| Q3 级联子房间现在会收到 `meeting:ended{reason:"ended"}` | **认可为改进**（旧行为静默拆房 → 子房间成员**挂死**）|
+| Q4 `meetingGrace` 5 分钟 | **接受**（purpose A 优先；10000 号池成本可忽略；恢复窗口从"0~2min、最后一人显式离开时为 0"→ 恒 5min）|
+| Q5 C-19 测试用"登记层幽灵成员"构造非空 | **接受**；占用判定覆盖在册成员/SFU 参与者/在途 join 三者，比 F10 原条件更宽更正确 |
+
+### Architect 同步修正的**自己的契约错误**（Worker 报的 5 条全部接受）
+1. **`STANDARDS.md`**：新增「度量的精确定义」—— 函数行数 = `func` 行到匹配收尾 `}`（**不含**上方文档注释、不含下一函数）；并明确存量超限的规则是**"不得恶化"**（与文件级同源）
+2. **`CONFORMANCE.md` C-20**：到期释放的是**空置宽限期（`meetingGrace`）**，**不是 reservation**（reservation 只管"创建但从未 join"）
+3. **`ARCHITECTURE.md` §4.6**：`PhaseGrace` 注释改为"**在册成员清零**"（删"房主缺席"）；**明确 `PhaseGrace ⇔ 在册成员清零`** 并给出理由（房主可转移 + 既有测试锁定"房主离开不得结束会议"）；`EndReason` 表按实现补齐（复用 V0.1 既有词汇、零新造词），并标注 `capacity-reclaimed` **当前无调用点、不得当作已有能力**；补注实现为两层（`Machine.End() bool` 相位 CAS + handler 层唯一拆除入口）
+4. 顺带修正我自己在 §4.6 表格编辑时**误删了一行**（`PhaseGrace → PhaseLive` 重入行）并留下重复行 —— 已修复
+
+### 下一步
+修复 Worker 已派出（同一模型，含 D 节 4 项补答要求：`hostMu` 锁序论证 / `cleanupMeetingClientID` 行为变更定性 / 级联广播数断言 / 失效 action 常量残留引用）。
+修完 → G1 复跑 → **G2 Reviewer(glm-5.3)** → G3 → 部署（这是**第一个改行为的服务端切片**，部署后要盯线上）

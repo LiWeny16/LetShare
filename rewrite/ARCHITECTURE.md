@@ -177,9 +177,9 @@ export interface RemoteAudioHost {
 ```go
 type Phase int
 const (
-    PhaseReserved Phase = iota // 已登记会议号，尚无 SFU 房间
+    PhaseReserved Phase = iota // 已登记会议号，尚无 SFU 房间（含"创建但从未 join"）
     PhaseLive
-    PhaseGrace                 // 无人/房主缺席，等待重入
+    PhaseGrace                 // 在册成员清零，等待重入；**会议号仍保留**
     PhaseEnded
 )
 
@@ -187,15 +187,19 @@ type EndReason string
 const (
     EndReasonHostEnded    EndReason = "host-ended"           // 房主显式结束会议
     EndReasonReservation  EndReason = "reservation-expired"  // 登记后从未 join，到期回收
-    EndReasonCapacity     EndReason = "capacity-reclaimed"   // 容量回收
-    // V1a 新增（实际需要，经 Architect 批准）—— 之前只有前三个，实现无处归类：
-    EndReasonEmptyGraceExpired EndReason = "empty-grace-expired"    // PhaseGrace 到点且仍无人
+    // V1a 实际落地（Architect 已批准）：
+    EndReasonGraceExpired      EndReason = "host-left-grace-expired" // 空置宽限到点且仍空
     EndReasonParentTeardown    EndReason = "parent-meeting-teardown" // 主会议拆 → 级联拆 breakout
     EndReasonBreakoutRecalled  EndReason = "breakout-recalled"      // 房主召回 breakout
-    EndReasonServerTeardown    EndReason = "server-teardown"        // 其余服务端拆除（兜底）
+    EndReasonServerTeardown    EndReason = "server-teardown"        // 其余（防御性兜底）
+    // EndReasonCapacity = "capacity-reclaimed" —— 契约草案里的词，**当前无调用点**
+    // （本仓无容量回收路径）。保留为预留定义，但不得当作已有能力。
 )
 
 // End 是唯一拆除入口。所有既有路径（主动离开、超时、容量回收）都必须经此。
+// 实现分两层（V1a）：Machine.End() bool 只做相位 CAS；handler 层
+// End(roomID, reason, ctx...) 是唯一拆除入口（停表·广播·RemoveRoomWithReason·
+// clear·级联·释放会议号）。语义与本契约一致，签名按需落地。
 func (m *Machine) End(reason EndReason)
 ```
 
@@ -203,15 +207,20 @@ func (m *Machine) End(reason EndReason)
 
 | 当前 | 触发 | 下一相位 | 动作 |
 |---|---|---|---|
-| （创建登记）| `meeting:create` | `PhaseReserved` | 武装 `emptyTimer`，TTL = `meetingReservationTTL`（5min）|
+| （创建登记）| `meeting:create` / breakout 创建 | `PhaseReserved` | 武装 `emptyTimer`，TTL = `meetingReservationTTL`（5min）|
 | `PhaseReserved` | 首个成员 join | `PhaseLive` | **停表** |
 | `PhaseReserved` | `emptyTimer` 到点 | `PhaseEnded` | `End(reservation-expired)` |
-| `PhaseLive` | 在册成员数变 0（**无论显式离开还是断线**）| `PhaseGrace` | **重新武装** `emptyTimer`，TTL = `meetingGrace` |
-| `PhaseGrace` | 有成员重入（C-17）| `PhaseLive` | 停表 |
+| `PhaseLive` | 在册成员数变 0（**无论显式离开 / 断线 / 踢人**）| `PhaseGrace` | **重新武装** `emptyTimer`，TTL = `meetingGrace` |
+| `PhaseGrace` | 有成员重入（C-17）| `PhaseLive` | 停表（会议号从未释放 → 重入必成功）|
 | `PhaseGrace` | `emptyTimer` 到点且房间非空 | `PhaseGrace` | **重新武装下一次**（C-19 / F10 修复：不得静默跳过）|
-| `PhaseGrace` | `emptyTimer` 到点且房间空 | `PhaseEnded` | `End(empty-grace-expired)` |
+| `PhaseGrace` | `emptyTimer` 到点且房间空 | `PhaseEnded` | `End(host-left-grace-expired)` |
 | 任意非 Ended | 房主 `meeting:end` | `PhaseEnded` | `End(host-ended)` —— **立即，不进宽限** |
 | 任意非 Ended | 父会议拆除 / breakout 召回 | `PhaseEnded` | `End(parent-meeting-teardown / breakout-recalled)` |
+
+> **⚠ 房主缺席不单独进 `PhaseGrace`**（V1a 实现 + Architect 批准）：房主角色**可转移**，`transferMeetingHost` 保证只要还有成员就一定存在房主 ⇒ "房主缺席"不是稳定态；且既有测试 `TestMeetingHostLeaveTransfersHostAndPreservesMeeting` 锁定"房主离开不得结束会议"。
+> ⇒ **不变式：`PhaseGrace ⇔ 在册成员清零`**。若未来要"房主缺席即 Grace"，必须一并改那条测试的不变量。
+>
+> **空置判定的三个来源**（V1a 实现，比 F10 原条件 `room.Count() > 0` 更宽、更正确）：在册成员 · SFU 参与者 · 进行中的 join。
 
 **计时器**：全生命周期**只有一个**计时器字段（`emptyTimer`），TTL 由**进入的相位**决定。禁止再出现两个计时器靠守卫对齐（那正是 `DIVERGENCE.md` F10 的成因）。
 
