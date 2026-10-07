@@ -111,15 +111,29 @@
 
 ### V4 · 注释卫生（R6，贯穿 V0–V3 + 终审）
 - **规则**：每条被改/删的"教训注释"必须二选一 —— **转成测试** 或 **删除**（禁止用注释代替测试，X7）
-- **明确清单（已核实为错/过时）**
+- **完整清单已迁至 `rewrite/COMMENT_AUDIT.md`**（只读侦察产出，150 tool uses 全仓扫描 + Architect 抽验）：
+  **A 类（描述已不存在的机制 / 危险心智模型）6 条** · **B 类（数值/引用错误）4 条** · **C 类（注释冒充测试 X7）1 条** · **待核实 4 条**
+- **其中 3 条已由 Architect 亲验为真**：
+  | # | 位置 | 核心事实 |
+  |---|---|---|
+  | **A1** | `MeetingChat.tsx` 附近（`服务器零存储`）| 服务端 **真的存 200 条并回放**（`meetingChatHistoryMax = 200` + `appendMeetingChatHistory` + `sendMeetingChatHistory`），注释两个半句都假 |
+  | **A6** | `callSignaling.ts` / `callManager.ts` / `websocket.go` 的 `handleMediaFrame`（"公网兜底轨道"）| **与实现直接矛盾**：`share.tsx` **无条件**注入 `sfu` ⇒ 生产通话**永远**走 `CallSfuSession` ⇒ 媒体帧隧道（`new CallSession`）**只有单测可达**。而 `callSfuSession.ts:585` 同时又说它"已退役" |
+  | **B1** | `websocket.go`（`512KB 限制`）| 真实读上限是 **8MB**（`SetReadLimit(8 * 1024 * 1024)`），全仓无 512KB 限制 —— **会让人据此错误设计分片** |
+  | **C1** | `src/app/libs/tools/alert.ts` | **教科书级 X7**：整个 `/* */` 块标注"测试用例"、含断言与"预期输出"，**永不执行**；而 `tests/` 对 alert 的引用全是 grep 源码字符串 |
+- **覆盖缺口（必须显式声明，不得当成"全仓已审计"）**：`tests/**` 未逐条核 · `src/pages/share.tsx`（2827 行）仅关键词扫描 · 若干 i18n/landing/聊天面板文件浅扫
+- **验收**：清单全部关闭；每条要么有对应测试，要么已删除/改写；**A5 需连同 `pendingChunkIndex` 字段本身一起删**（原清单只列了注释）
+- **明确清单（已核实为错/过时）**：完整版见 `rewrite/COMMENT_AUDIT.md`（A 类 6 + B 类 4 + C 类 1 + 待核 4）。原 5 条中已验证的 3 条在本表保留并交叉引用：
   | 注释 | 问题 |
   |---|---|
-  | `websocket.go:3756` 帧头 `[callId 16B\|seq 2B\|track 1B\|padding 5B]` | **漏掉 4B 魔数**，与实际布局（`medi`+16+2+1+1=24）不符；连同 `frame[18]`（应为 `22`）一起误导重写者 |
+  | `websocket.go` 帧头 `[callId 16B\|seq 2B\|track 1B\|padding 5B]` | **漏掉 4B 魔数**，与实际布局（`medi`+16+2+1+1=24）不符；连同 `frame[18]`（应为 `22`）一起误导重写者 |
   | `callSignaling.ts:12` 写 `[18)` vs `:136` 写 `22` | 同文件自相矛盾 |
-  | `websocket.go:1951-1957` 聊天"纯转发、不存历史" | 实现存 200 条并在 join 回放 |
-  | `ServerFileTransfer.ts:1739` `pendingChunkIndex` "Bug1 修复" | 描述的机制已不存在 |
+  | `websocket.go` 聊天"纯转发、不存历史" | 实现存 200 条并在 join 回放（**客户端副本**：`MeetingChat.tsx` 的 `服务器零存储` —— `COMMENT_AUDIT.md` **A1**）|
+  | `ServerFileTransfer.ts` `pendingChunkIndex` "Bug1 修复" | 描述机制已不存在；**且字段本身零读者，需连同字段一起删**（**A5**）|
   | `reconnectPolicy.ts:12-18` "抖动由调用方叠加" | 调用方并未加抖动 |
-- **验收**：清单全部关闭；每条要么有对应测试，要么已删除
+  | **新增** `websocket.go` 的 `512KB 限制` | 真实读上限 **8MB**，会误导分片设计（**B1**，已亲验）|
+  | **新增** `callSignaling.ts` / `callManager.ts` / `handleMediaFrame` 的"公网兜底轨道" | 生产**不可达**（`share.tsx` 无条件注入 sfu），与 `callSfuSession.ts` 的"已退役"**直接矛盾**（**A6**，已亲验）|
+  | **新增** `alert.ts` 的注释"测试用例" | **X7 违规**：永不执行的假测试（**C1**，已亲验）|
+- **验收**：清单全部关闭；每条要么有对应测试，要么已删除/改写；**A5 需连同 `pendingChunkIndex` 字段本身一起删**（原清单只列了注释）
 - **附带零风险修正**：`frame[18]` → `frame[22]`（仅日志失真，一行）
 
 ---
