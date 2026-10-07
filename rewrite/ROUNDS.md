@@ -1244,3 +1244,41 @@ V3 收尾 Worker：116 tool uses / 205.7k token / 43.1 分钟（其回报已被 
 ### 本轮最值得留档的一件事
 补齐 `eslintrc` 机械门后，**它抓到 3 条人工审查从未发现的违规**（`ReconnectController` 复杂度 14、`remoteAudioHost.ts` **401 行超 1 行**、`buildPlaybackDump` 复杂度 21）。
 ⇒ **"eslint 0 告警"此前是空心的**（`no-explicit-any` 甚至是 `off`），所有阈值实际只靠人工。**这证明"人工审查作为唯一闸门不可靠"** —— 这不是"多抓几个违规"，而是**治理层面的结构性缺陷被修**。
+
+---
+
+## V1a · G2 契约门（Reviewer `glm-5.3`）—— **PASS-WITH-CONDITIONS，无阻塞项**
+
+Reviewer：75 tool uses / 200.8k token / 19.3 分钟。**逐行对照 §4.6 跃迁表**核对实现，并**自跑 `-race`**。
+
+### 核心裁决：全部成立
+| Q | 结论 |
+|---|---|
+| Q1 P0 修复 | **PASS** —— `newMeetingMeta` 独立字段判定表：**两个真正不可零值的字段（`life` / `minutes.RequireConsent`）都被强制覆盖**。`PhaseReserved` 作为子房间初值**正确**（create 时确实不建 SFU 房间，首个 join 才懒建）|
+| Q2 相位模型 | **PASS** —— 跃迁表逐行核对；**`emptyGen` 代次守卫三层防线闭环**（`meetingLifecycleMu` 串行 + `current == meta` 身份校验 + `Phase()` 复核），Reviewer **未找到能击穿它的交错** |
+| Q3 C-17/18/19/20/20b | **PASS** —— **C-20/C-20b 走生产信令**（`processMessage` 驱动）；C-19 的非空判定三来源（在册成员/SFU 参与者/进行中 join）**各有测试**；分支③ Reviewer 判定**"不算假绿"**（被测函数/计时器均为真实生产件，但它如实标注"该状态生产不可达，是防御死分支的固化"）|
+| Q4 超出授权的两处 | **两处均判 PASS（修 bug）**。`hostMu` 自锁调用链**属实**（`handleMeetingPresentation` 持 `meta.mu` 时调 `isMeetingHost`）；**穷举 10 处 `hostMu.Lock()` 未发现反向锁序** |
+| Q5 协议零变化 | **PASS** —— 逐项核查：**错误文案字面量排序 diff 完全一致** · `MessageType*` 集合 diff 一致 · `internal/model/` 零改动 · 级联广播测试**断言的是真实 WS 收到的广播**（不是只数日志）|
+| Q7 阈值 | **PASS** —— `websocket.go` 实测 4904 → **4851（−53）**；触碰的超限函数全部收缩 |
+
+### 🔴 Reviewer 挖出一个**真问题**：空会议重入后的「有成员但无主」
+**时序**：全员离开 → `PhaseGrace` → **非房主**成员在宽限期内重入（C-17 保证必成功）→ `PhaseLive`，但 **`meta.Host` 仍指向已离场的原房主**。
+**根因**：全员清零时 `transferMeetingHost` 因 `members == 0` **早退**（websocket.go:1295-1297）；`isMeetingHost` 第一条判定 `meta.Host != client.UniqID → false` ⇒ 重入者**不是房主** ⇒ **`meeting:end` / kick / breakout 无人可触发**。
+Reviewer 判"非阻塞"（最终仍可靠空置宽限到期回收）。**Architect 改判为阻塞**，三条理由：
+1. **它是 V1a 的核心修复直接造成的** —— 修之前"最后一人显式离开 → 立即 teardown"，该状态**不可能持久**；是"空置后重入"被变成受支持路径（C-17/C-20b）才让它可持久
+2. **它使会议在"有人但无主"期间丧失全部管理能力**，而 `PURPOSE.md` 的 A 类目标是"让真实用户的通话可信赖"，不是"最终会自动回收"
+3. **V1a 自己的事故原形测试就在制造这个状态**（最后一人离开 → 另一人重入成功），却未断言房主归属 ⇒ 它是**被漏测**的，不是被论证过可以接受的
+**处置**：已派修复轮 —— 进入 `PhaseLive` 时若 `Host` 不在册，**必须在同一临界区内转移房主**（复用 `setMeetingHost` + 既有 trigger，不另造第二套挑选规则），并补事故原形扩展测试（重入后必须能成功 `meeting:end`，且**未修形态下必须变红**）。
+
+### Architect 的契约修订（两处裁决）
+1. **§4.6 跃迁表「创建登记」行拆分**：`meeting:create`（主会议）武装 TTL；**breakout 子房间不单独武装**，其生命周期由父会议级联/召回收敛。
+   ⇒ **采纳 Worker 上一轮的判断，Reviewer 指出的"表-实现分歧"由我改表解决**（Worker 的理由成立：武装 5min TTL 会造成"分组创建后成员迟到即被拆"的回归）。Reviewer 点出的"无人加入的子房间在父会议存活期内永不回收"是**有界的**（父会议 End 即级联），登记为已知成本。
+2. **§4.6 新增不变式（必须先满足）**：**只要有在册成员，就必定存在一个在册的房主** —— 把上面那条真问题写成契约，防止复发。
+3. **`STANDARDS.md` 台账升级**：`meeting_registry.go` 400 行从"触碰前先下沉"升级为**硬性前置**（Reviewer 的论证：它是本片不变量的物理载体，且 V1b 的 `sessionId` 注入必到；+1 行即超标）。
+
+### Reviewer 的诚实声明（值得留档）
+- 它**未能证实也未证伪** Worker 关于"3 处测试接缝此前漏 `minutes.RequireConsent`"的自报 —— 因为那是**本片开发中间态**，新测试未入库、无 git 历史可 diff。它明确写了"我既未证实也未证伪"。
+- 它**没有实跑** hostMu 竞态测试的 B 面（还原裸读 → `-race` 必红），因为那要改源码、**超出只读授权**；结论基于 Go 内存模型与 race detector 语义的静态推断。**这是正确的纪律：宣示自己没做什么，而不是把推断说成实测。**
+
+### 非阻塞登记（9 条，全部入台账将于下次汇总）
+breakout 不武装 TTL（已裁决为改表）· 守卫测试残余绕过形态（`var`/`new`/内嵌/空格）· `Reserved→Grace` 表外跃迁 + reason 漂移 · **空会议重入后陈旧房主（已升级为阻塞）** · `assertNoServerPanics` 只接进 2 个测试 · C-17「SFU 已拆则重建」/C-21 相位日志/recall 信令接线各缺专项测试 · 协议收件人边缘差异（更正确）· `meeting_registry.go` 零余量 · C-19 分支③是防御死分支

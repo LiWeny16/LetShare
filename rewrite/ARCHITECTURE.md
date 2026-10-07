@@ -226,7 +226,8 @@ func (m *Machine) End(reason EndReason)
 
 | 当前 | 触发 | 下一相位 | 动作 |
 |---|---|---|---|
-| （创建登记）| `meeting:create` / breakout 创建 | `PhaseReserved` | 武装 `emptyTimer`，TTL = `meetingReservationTTL`（5min）|
+| （创建登记）| `meeting:create`（主会议）| `PhaseReserved` | 武装 `emptyTimer`，TTL = `meetingReservationTTL`（5min）|
+| （创建登记）| **breakout 子房间创建** | `PhaseReserved` | **不单独武装 `emptyTimer`** —— 其生命周期由**父会议级联拆除 / recall** 收敛 |
 | `PhaseReserved` | 首个成员 join | `PhaseLive` | **停表** |
 | `PhaseReserved` | `emptyTimer` 到点 | `PhaseEnded` | `End(reservation-expired)` |
 | `PhaseLive` | 在册成员数变 0（**无论显式离开 / 断线 / 踢人**）| `PhaseGrace` | **重新武装** `emptyTimer`，TTL = `meetingGrace` |
@@ -236,8 +237,13 @@ func (m *Machine) End(reason EndReason)
 | 任意非 Ended | 房主 `meeting:end` | `PhaseEnded` | `End(host-ended)` —— **立即，不进宽限** |
 | 任意非 Ended | 父会议拆除 / breakout 召回 | `PhaseEnded` | `End(parent-meeting-teardown / breakout-recalled)` |
 
-> **⚠ 房主缺席不单独进 `PhaseGrace`**（V1a 实现 + Architect 批准）：房主角色**可转移**，`transferMeetingHost` 保证只要还有成员就一定存在房主 ⇒ "房主缺席"不是稳定态；且既有测试 `TestMeetingHostLeaveTransfersHostAndPreservesMeeting` 锁定"房主离开不得结束会议"。
+> **⚠ 房主缺席不单独进 `PhaseGrace`**（V1a 实现 + Architect 批准）：房主角色**可转移**，`transferMeetingHost` 保证"只要还有成员就一定存在房主"；且既有测试 `TestMeetingHostLeaveTransfersHostAndPreservesMeeting` 锁定"房主离开不得结束会议"。
 > ⇒ **不变式：`PhaseGrace ⇔ 在册成员清零`**。若未来要"房主缺席即 Grace"，必须一并改那条测试的不变量。
+>
+> **⚠ 不变式（G2 后补登，**必须先满足**）：只要有在册成员，就必定存在一个在册的房主**（即 `Host` 必须是在册成员）。
+> 为什麽要写死：全员清零时 `transferMeetingHost` 因 `members == 0` 早退，**不会**转移房主；若此时另一个非房主成员在宽限期内重入（C-17 保证必成功），就会出现「**有成员但 Host 指向已离场者**」⇒ `meeting:end` / `meeting:kick` / `meeting:breakout` **无人可触发**（即代码注释里要避免的"无人管控的僵尸会议"）。
+> ⇒ **进入 `PhaseLive` 时若 `meta.Host` 不在在册成员中，必须在同一临界区内转移房主**（复用 `setMeetingHost` 与既有 trigger，不得另造第二套挑选规则）。
+> 注：该状态是 V1a 的核心修复（把"空置后重入"变成受支持路径）**直接造成**的；修之前不可能持久存在。
 >
 > **空置判定的三个来源**（V1a 实现，比 F10 原条件 `room.Count() > 0` 更宽、更正确）：在册成员 · SFU 参与者 · 进行中的 join。
 
