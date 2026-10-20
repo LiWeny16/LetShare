@@ -1,12 +1,18 @@
 ﻿import { IConnectionProvider, ConnectionConfig } from "./IConnectionProvider";
 import { CustomConnectionProvider } from "./CustomConnectionProvider";
 import settingsStore from "../../mobx/mobx";
+import { ConnectionSlot } from "../../../../core/transport";
 // import { CleaningServices } from "@mui/icons-material";
 
 type ServerMode = 'ably' | 'custom';
 
 export class ConnectionManager implements IConnectionProvider {
-  private currentProvider: IConnectionProvider | null = null;
+  /**
+   * 会话代次（ARCHITECTURE §1 红队第 6 条）：`await provider.connect()` 之后的写入
+   * 必须先校验代次，否则后完成的旧连接会把新连接顶掉（旧 socket 留着、新 socket 被遗忘），
+   * 症状与「半开连接永远不重连」同源。
+   */
+  private readonly slot = new ConnectionSlot<IConnectionProvider>();
   private config: ConnectionConfig;
   private failureCount: Map<string, number> = new Map();
   private maxFailures = 1;
@@ -14,6 +20,11 @@ export class ConnectionManager implements IConnectionProvider {
   private messageCallback: ((message: any) => void) | null = null;
   private binaryCallbacks: Array<(data: ArrayBuffer) => void> = [];
   private disconnectedCallback: ((reason?: string) => void) | null = null;
+
+  /** 当前连接的唯一读写槽：旧代次的异步结果不可能从这里覆盖新连接。 */
+  private get currentProvider(): IConnectionProvider | null {
+    return this.slot.value;
+  }
 
   constructor(config: ConnectionConfig) {
     this.config = config;
@@ -29,9 +40,11 @@ export class ConnectionManager implements IConnectionProvider {
   }
 
   async disconnect(soft?: boolean): Promise<void> {
-    if (this.currentProvider) {
-      await this.currentProvider.disconnect(soft);
-      this.currentProvider = null;
+    // 先作废所有在途 connect 代次，再断开：否则一个还在 await 的旧 connect 会把连接复活。
+    const provider = this.currentProvider;
+    this.slot.release();
+    if (provider) {
+      await provider.disconnect(soft);
     }
   }
 
@@ -91,6 +104,11 @@ export class ConnectionManager implements IConnectionProvider {
     return !!this.currentProvider?.sendBinary;
   }
 
+  /** 是否支持应用层 JSON 发送（服务端存活探测只在这种通道上跑）。 */
+  canSend(): boolean {
+    return typeof this.currentProvider?.send === "function";
+  }
+
   getBufferedAmount(): number {
     return this.currentProvider?.getBufferedAmount?.() ?? 0;
   }
@@ -144,10 +162,17 @@ export class ConnectionManager implements IConnectionProvider {
       return false;
     }
 
+    // 新代次：此后旧的在途 connect 一律不得再写入当前连接。
+    const gen = this.slot.begin();
+
     try {
       // 清理旧连接
       if (this.currentProvider) {
         await this.currentProvider.disconnect();
+      }
+      if (this.slot.generation !== gen) {
+        // 已有更新的 connect 发起：本次让位，不得再动任何连接状态。
+        return false;
       }
 
       // 创建新提供者
@@ -175,38 +200,42 @@ export class ConnectionManager implements IConnectionProvider {
 
       // 尝试连接
       const success = await provider.connect(roomId, options);
-      
-      if (success) {
-        this.currentProvider = provider;
-        
-        // 连接成功后再次确保所有回调已设置
-        if (this.signalCallback) {
-          this.currentProvider.onSignalReceived(this.signalCallback);
-        }
-        if (this.messageCallback && this.currentProvider.onMessageReceived) {
-          this.currentProvider.onMessageReceived(this.messageCallback);
-        }
-        if (this.binaryCallbacks.length > 0 && this.currentProvider.onBinaryReceived) {
-          this.bindBinaryFanout(this.currentProvider);
-        }
-        if (this.disconnectedCallback && this.currentProvider.onDisconnected) {
-          this.currentProvider.onDisconnected(this.disconnectedCallback);
-        }
-        
-        this.failureCount.set(providerType, 0); // 重置失败计数
-        console.debug(` 成功连接到 ${providerType} 提供者`);
-        return true;
-      } else {
+
+      if (!success) {
         // 连接失败，增加失败计数
         this.failureCount.set(providerType, failures + 1);
         console.warn(` ${providerType} 提供者连接失败 (${failures + 1}/${this.maxFailures})`);
         return false;
       }
 
+      if (!this.slot.adopt(gen, provider)) {
+        // 会话代次：旧异步结果不得覆盖新连接。这次建起来的 socket 立即释放，不留僵尸。
+        console.warn(` ${providerType} 旧代次连接结果作废，立即释放`);
+        await provider.disconnect();
+        return false;
+      }
+
+      // 连接成功后再次确保所有回调已设置
+      if (this.signalCallback) {
+        provider.onSignalReceived(this.signalCallback);
+      }
+      if (this.messageCallback && provider.onMessageReceived) {
+        provider.onMessageReceived(this.messageCallback);
+      }
+      if (this.binaryCallbacks.length > 0 && provider.onBinaryReceived) {
+        this.bindBinaryFanout(provider);
+      }
+      if (this.disconnectedCallback && provider.onDisconnected) {
+        provider.onDisconnected(this.disconnectedCallback);
+      }
+
+      this.failureCount.set(providerType, 0); // 重置失败计数
+      console.debug(` 成功连接到 ${providerType} 提供者`);
+      return true;
     } catch (error) {
       // 连接异常，增加失败计数
-      const failures = this.failureCount.get(providerType) || 0;
-      this.failureCount.set(providerType, failures + 1);
+      const failuresNow = this.failureCount.get(providerType) || 0;
+      this.failureCount.set(providerType, failuresNow + 1);
       console.error(` ${providerType} 提供者连接异常:`, error);
       return false;
     }

@@ -9,11 +9,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import {
-  RemoteAudioPipeline,
-  clampSpeakerVolume,
-  SPEAKER_VOLUME_MAX,
-} from "../src/app/libs/call/remoteAudioPipeline";
+import { RemoteAudioPipeline } from "../src/core/audio/remoteAudioPipeline";
+import { clampSpeakerVolume, SPEAKER_VOLUME_MAX } from "../src/core/audio/remoteAudioDecision";
 
 // ─── Fake AudioContext / 节点 ───────────────────────────────────────
 
@@ -107,7 +104,7 @@ test("管线建图: clarity on + widen off → source→highpass→shelf→gain�
   const fake = makeFakeCtx();
   const pipeline = new RemoteAudioPipeline(() => fake.ctx as unknown as AudioContext);
   assert.equal(pipeline.attach(makeFakeStream(), { volume: 1.2, clarity: true, widen: false }), true);
-  assert.equal(pipeline.isActive, true);
+  assert.equal(pipeline.hasGraph(), true);
 
   const kinds = chainKinds(fake.source!);
   // [highpass, shelf, gain(volume), compressor, upmix(gain, 双声道), destination]
@@ -127,7 +124,7 @@ test("管线建图: clarity on + widen off → source→highpass→shelf→gain�
   assert.equal(upmix.channelCount, 2, "末端上混节点须强制双声道");
   assert.equal(upmix.channelCountMode, "explicit", "双声道上混须为 explicit");
   pipeline.detach();
-  assert.equal(pipeline.isActive, false);
+  assert.equal(pipeline.hasGraph(), false);
 });
 
 test("管线建图: widen on + 单声道 → 展宽子图（L 干声 / R 延迟）插入 gain 前，双端都有信号源", () => {
@@ -181,7 +178,7 @@ test("无 AudioContext 环境: attach 返回 false 不抛（元素路径兜底�
   // 不注入工厂 → 默认工厂在 Node（window undefined）返回 null
   const pipeline = new RemoteAudioPipeline(() => null);
   assert.equal(pipeline.attach(makeFakeStream()), false);
-  assert.equal(pipeline.isActive, false);
+  assert.equal(pipeline.hasGraph(), false);
   pipeline.update({ volume: 2 }); // 无图时 no-op 不抛
   pipeline.detach();
 });
@@ -194,10 +191,20 @@ test("suspended ctx: attach 时补 resume（自动播放策略兜底）", () => 
   pipeline.detach();
 });
 
-test("suspended ctx that cannot resume: attach reports fallback instead of claiming active playback", () => {
+test("D2 回归：attach 语义唯一（返回值=音频图已建立），复用 suspended ctx 不得留下 isActive=true 的发声假象", async () => {
+  let created = 0;
   const { ctx } = makeFakeCtx({ suspended: true, resumeSucceeds: false });
-  const pipeline = new RemoteAudioPipeline(() => ctx as unknown as AudioContext);
-  assert.equal(pipeline.attach(makeFakeStream()), false);
-  assert.equal((ctx as unknown as { state: string }).state, "suspended");
+  const pipeline = new RemoteAudioPipeline(() => {
+    created += 1;
+    return ctx as unknown as AudioContext;
+  });
+  assert.equal(pipeline.attach(makeFakeStream()), true, "图已建立（≠ 在发声）");
+  assert.equal(pipeline.attach(makeFakeStream()), true, "复用分支与新建分支同一语义（旧实现这里同步判 state 恒 false）");
+  assert.equal(created, 1, "复用已有 ctx，不得重建");
+  assert.equal(pipeline.hasGraph(), true);
+  assert.equal(pipeline.ctxState, "suspended", "suspended 是合法状态，不得伪装成 running");
+  assert.equal("isActive" in pipeline, false, "危险 getter isActive（ctx≠null 被当成在发声）不得复活");
+  assert.equal(await pipeline.resume(), false, "resume 失败必须如实上报（D5 可见降级的输入）");
   pipeline.detach();
+  assert.equal(pipeline.hasGraph(), false, "detach 后不得残留图");
 });

@@ -12,7 +12,20 @@ import settingsStore from "../mobx/mobx";
 import i18n from "../i18n/i18n";
 import { ConnectionConfig } from "./providers/IConnectionProvider";
 import { ConnectionManager } from "./providers/ConnectionManager";
-import { reconnectDelayMs } from "./reconnectPolicy";
+import { RECONNECT_BASE_MS, RECONNECT_CAP_MS } from "./reconnectPolicy";
+import {
+  BackgroundGuard,
+  ReconnectController,
+  RetryAbandonedError,
+  ServerLiveness,
+  SessionEpoch,
+  isLivenessProbeAck,
+  systemClock,
+  systemRng,
+  type ExemptionSignals,
+  type RetryPolicy,
+  type TerminalKind,
+} from "../../../core/transport";
 import { decidePresenceProbe } from "./presenceProbe";
 import { isTransientMeetingError } from "../meeting/meetingSignalFilter";
 import {
@@ -91,6 +104,32 @@ const CONFIG = {
  DISCOVER_REPLY_DELAY: 500,     // discover回复延迟
  TRANSFER_COMPLETE_DELAY: 1500    // 传输完成延迟
 } as const;
+
+/**
+ * 重连退避策略（唯一入口是 RetrySupervisor，P1）。
+ * 与 reconnectPolicy.ts 的 1/2/4/8/16/30s 同参（base/cap 直接取自它的唯一定义，X2），
+ * 另叠加 0.2 抖动去齐步重连；
+ * attemptTimeoutMs 保证单次尝试必然在有限时间内结算（永不 settle 的 Promise
+ * 不再能饿死重试链 —— 与 Q20 同源的第二个缺口）。
+ */
+const RECONNECT_RETRY_POLICY: RetryPolicy = {
+ baseMs: RECONNECT_BASE_MS,
+ capMs: RECONNECT_CAP_MS,
+ jitterRatio: 0.2,
+ maxAttempts: null,
+ attemptTimeoutMs: 30000,
+};
+
+/** 服务端存活探测节奏：最坏探测上界 = interval + timeout = 20s < 30s（C-01）。 */
+const SERVER_LIVENESS_PROBE_INTERVAL_MS = 10_000;
+const SERVER_LIVENESS_PROBE_TIMEOUT_MS = 10_000;
+
+/** 重连终止态归类（契约 4.1 只允许三值）。 */
+function classifyReconnectTerminal(reason: string): TerminalKind {
+ if (reason.startsWith("auth-rejected")) return "auth-rejected";
+ if (reason.startsWith("user-left")) return "user-left";
+ return "unsupported";
+}
 
 function formatSize(bytes: number): string {
  if (bytes >= 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
@@ -701,10 +740,12 @@ export class RealTimeColab {
   // 3.7.0：发起新连接前清除失败锁（maxFailures=1 会让一次失败后的所有重试被 ConnectionManager
   // 直接拒绝 —— "不刷新页面就连不上"的第二根因）。同时停止自动重连调度、标记本次为主动连接。
   this.connectionManager.resetFailureCount();
-  this.cancelReconnect();
+  // 由重连链自身发起的连接不得取消自己那条链：否则失败后无人排下一次 = 静默死锁（Q20）。
+  if (!this.reconnectAttemptInFlight) this.cancelReconnect("superseded-by-manual-connect");
   this.pendingRejoin = false;
   this.autoReconnectAllowed = true;
   this.transportOnlyConnection = transportOnly;
+  const connectEpoch = this.connectEpoch.next();
   settingsStore.updateUnrmb("serverConnState", "connecting");
 
   // 重要：必须在连接之前设置所有回调！
@@ -738,6 +779,7 @@ export class RealTimeColab {
   // 设置二进制数据处理器
   if (this.connectionManager.onBinaryReceived) {
    this.connectionManager.onBinaryReceived((data) => {
+    this.noteServerTraffic();
     this.serverFileTransfer?.handleBinaryData(data);
    });
    console.debug(`[ColabLib] 二进制数据回调已设置`);
@@ -747,10 +789,16 @@ export class RealTimeColab {
 
   // 现在连接到服务器
   const success = await this.connectionManager.connect(roomId!, { transportOnly });
+  // 会话代次：旧异步结果不得覆盖新连接 —— 状态/广播/会议通知一律不得写。
+  if (!this.connectEpoch.isCurrent(connectEpoch)) {
+   console.warn("[ColabLib] 旧代次 connectToServer 结果作废，不再写入任何连接状态");
+   return false;
+  }
   if (success) {
    settingsStore.updateUnrmb("isConnectedToServer", true);
    settingsStore.updateUnrmb("serverConnState", "connected");
-   this.reconnectAttempt = 0;
+   // 半开连接兜底：连接一建立就开始服务端存活探测（缺陷②）。
+   this.startServerLiveness();
    this.lastConnectedProToken =
     this.connectionManager.getConnectionType() === "custom"
      ? getProToken()
@@ -777,7 +825,10 @@ export class RealTimeColab {
  public async disconnect(soft?: boolean, sendLeave?: boolean): Promise<void> {
   // 主动断开（离开房间/切换设置/后台省流定时器）：关闭自动重连语义，绝不静默重连
   this.autoReconnectAllowed = false;
-  this.cancelReconnect();
+  this.stopServerLiveness("disconnect");
+  this.terminateReconnect("user-left", "manual-disconnect");
+  // 会话代次：在途 connectToServer 的结果一律作废，不得复活已断开的连接。
+  this.connectEpoch.next();
   settingsStore.updateUnrmb("serverConnState", "disconnected");
 
   // 在断开连接前广播离开消息（仅在明确指定时）
@@ -880,6 +931,8 @@ export class RealTimeColab {
  }
 
   private handleServerMessage(message: any): void {
+   this.noteServerTraffic();
+   if (isLivenessProbeAck(message)) return; // 存活探测回执：只用于存活判定，不入业务分支
    if (message.type && message.type.startsWith("file:transfer:")) {
     const actualData = message.data?.transfer_id ? message.data : message;
     this.serverFileTransfer?.handleFileTransferMessage(message.type, actualData);
@@ -1162,6 +1215,8 @@ export class RealTimeColab {
 
   // 活跃通话查询（由 CallManager.isInCall 注入）：后台省流定时器据此豁免通话中断连。
   private callActivityProvider: (() => boolean) | null = null;
+  /** 活跃会议查询（由 meetingManager.getState().inMeeting 注入）：与通话同属豁免事实。 */
+  private meetingActivityProvider: (() => boolean) | null = null;
 
   /**
    * 注册"是否存在活跃通话/视频"查询（由 UI 层注入）。
@@ -1171,8 +1226,17 @@ export class RealTimeColab {
    this.callActivityProvider = provider;
   }
 
+  /** 注册"是否存在活跃会议"查询（由 UI 层注入）。会议与通话对后台省流必须等价。 */
+  public registerMeetingActivityProvider(provider: (() => boolean) | null): void {
+   this.meetingActivityProvider = provider;
+  }
+
   private hasActiveCall(): boolean {
    return this.callActivityProvider?.() ?? false;
+  }
+
+  private hasActiveMeeting(): boolean {
+   return this.meetingActivityProvider?.() ?? false;
   }
 
   /** 是否存在活跃通话/视频（供会议邀请弹窗等判断“忙线”）。 */
@@ -1181,42 +1245,116 @@ export class RealTimeColab {
   }
 
   // ─── WS 自动重连（3.7.0：断线自愈，对标 Discord）──────────────────
-  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  private reconnectAttempt = 0;
   /** 意外断开才自动重连；主动 disconnect()（后台省流等）置 false 后永不静默重连 */
   private autoReconnectAllowed = false;
+  /** 重连链自身发起的 connectToServer 不得取消自己那条链（否则失败后无下一次 = 静默死锁）。 */
+  private reconnectAttemptInFlight = false;
+  /** 会话代次：旧异步 connectToServer 的结果不得覆盖新连接的状态/广播/会议通知。 */
+  private readonly connectEpoch = new SessionEpoch();
+  /** 服务端存活探测（缺陷②）：半开连接的唯一兜底。 */
+  private serverLiveness: ServerLiveness | null = null;
+  /** 重连调度唯一入口（A4/P1/P2）：所有退出路径二选一 —— 已排下一次 或 终止态+原因。 */
+  private readonly reconnectController = new ReconnectController({
+   clock: systemClock,
+   rng: systemRng,
+   policy: RECONNECT_RETRY_POLICY,
+   attempt: () => this.attemptReconnect(),
+   isWanted: () => this.autoReconnectAllowed,
+   newSessionId: () => `session-${systemClock.now()}`,
+   classifyTerminal: classifyReconnectTerminal,
+  });
 
-  /** 指数退避调度（1/2/4/8/16/30s 封顶 + 校验房间）——只服务意外断开场景。 */
+  /** 排下一次重连：二选一 —— scheduled（已排下一次）或 terminal（终止态+原因），都留事件。 */
   private scheduleReconnect(): void {
-   if (!this.autoReconnectAllowed || this.reconnectTimer != null) return;
-   const delay = reconnectDelayMs(this.reconnectAttempt);
-   this.reconnectAttempt += 1;
+   const outcome = this.reconnectController.requestReconnect("ws-lost");
+   if (outcome.kind === "terminal") {
+    // 终止态也必须带原因（A5）：不再重连的那一刻要能从事件流里读到为什么。
+    settingsStore.updateUnrmb("serverConnState", "disconnected");
+    return;
+   }
    settingsStore.updateUnrmb("serverConnState", "reconnecting");
-   console.debug(`[ColabLib] 自动重连 ${delay}ms 后（第 ${this.reconnectAttempt} 次）`);
-   this.reconnectTimer = setTimeout(() => {
-    this.reconnectTimer = null;
-    void this.attemptReconnect();
-   }, delay);
+   console.debug(`[ColabLib] 自动重连已排入调度（第 ${outcome.attempt + 1} 次）`);
   }
 
-  private cancelReconnect(): void {
-   if (this.reconnectTimer == null) return;
-   clearTimeout(this.reconnectTimer);
-   this.reconnectTimer = null;
+  /** 作废当前退避链（会话未终止）：被更新的主动连接取代时用。 */
+  private cancelReconnect(reason: string): void {
+   this.reconnectController.supersede(reason);
   }
 
- private async attemptReconnect(): Promise<void> {
-   if (!this.autoReconnectAllowed) return;
+  /** 会话终止（terminal 相位 + 终止态事件）：用户离开等不再重连的场景。 */
+  private terminateReconnect(kind: TerminalKind, reason: string): void {
+   this.reconnectController.stop(kind, reason);
+  }
+
+  private async attemptReconnect(): Promise<boolean> {
+   if (!this.autoReconnectAllowed) {
+    // P2：不是 return，而是显式放弃 + 终止态 + 原因。旧代码这里是静默 early-return，
+    // 线上因此出现 4 分 25 秒零连接尝试（Q20 / A3）。
+    throw new RetryAbandonedError("user-left", "reconnect-no-longer-wanted");
+   }
    // A direct Meeting route deliberately has no ordinary LetShare roomId.
    // Reconnect that authenticated transport independently; otherwise one
    // transient websocket close permanently kills the meeting session.
    const transportOnly = this.transportOnlyConnection;
    const roomId = transportOnly ? "" : settingsStore.get("roomId");
-   if (!transportOnly && (!roomId || !validateRoomName(roomId).isValid)) return; // 无有效房间不空转
-   // silent：失败不弹 toast、不打扰，返回值经 connectToServer 内部再次 schedule（退避递增）
-   await this.connectToServer({ silent: true, transportOnly });
- }
+   if (!transportOnly && (!roomId || !validateRoomName(roomId).isValid)) {
+    // P2：无有效房间也不得静默 return —— 收敛为终止态 + 原因，而不是无限空转。
+    throw new RetryAbandonedError("unsupported", "no-valid-room");
+   }
+   // silent：失败不弹 toast、不打扰；失败由 RetrySupervisor 退避后自动排下一次。
+   this.reconnectAttemptInFlight = true;
+   try {
+    const ok = await this.connectToServer({ silent: true, transportOnly });
+    if (!ok) {
+     throw new Error("reconnect-attempt-failed");
+    }
+    return true;
+   } finally {
+    this.reconnectAttemptInFlight = false;
+   }
+  }
 
+  // ─── 服务端存活探测（应用层，缺陷②）────────────────────────────
+  /**
+   * WebSocket 协议级 Ping 帧由浏览器/服务端自己处理，JS 看不见；NAT 重绑定造成的
+   * 半开连接不触发 onclose，必须靠应用层探测兜底。任一下行帧都算存活。
+   */
+  private startServerLiveness(): void {
+   this.stopServerLiveness("restart");
+   if (!this.connectionManager.canSend()) {
+    // 不支持应用层发送的通道（Ably）自建心跳，不跑本探测，避免误判。
+    return;
+   }
+   const liveness = new ServerLiveness({
+    clock: systemClock,
+    probeIntervalMs: SERVER_LIVENESS_PROBE_INTERVAL_MS,
+    probeTimeoutMs: SERVER_LIVENESS_PROBE_TIMEOUT_MS,
+    send: (frame) => this.connectionManager.send(frame),
+    channel: () => (this.transportOnlyConnection ? "" : settingsStore.get("roomId") ?? null),
+    onDead: (reason) => this.handleServerLivenessDead(reason),
+   });
+   this.serverLiveness = liveness;
+   liveness.start();
+  }
+
+  private stopServerLiveness(reason: string): void {
+   this.serverLiveness?.stop(reason);
+   this.serverLiveness = null;
+  }
+
+  /** 任意下行帧都算服务端存活（协议 Pong 对 JS 不可见，只能靠应用层帧）。 */
+  private noteServerTraffic(): void {
+   this.serverLiveness?.noteInbound();
+  }
+
+  private handleServerLivenessDead(reason: string): void {
+   // 半开判定后必然触发重连（经 RetrySupervisor），不得静默。
+   console.warn(`[ColabLib] 服务端连接半开：${reason} —— 触发重连`);
+   this.stopServerLiveness("half-open");
+   settingsStore.updateUnrmb("isConnectedToServer", false);
+   this.autoReconnectAllowed = true;
+   this.scheduleReconnect();
+  }
   // ─── 在线探活 / 拨号前探测（3.8.x，通话与文件传输统一消费同一份状态）──────────
   /**
    * 周期性探活：对"非 disconnected、且未建立活跃 P2P data channel"的用户
@@ -1304,6 +1442,7 @@ export class RealTimeColab {
  }
 
   private async handleSignal(event: MessageEvent): Promise<void> {
+  this.noteServerTraffic();
   try {
    const data = JSON.parse(event.data);
    // console.debug(` 接收到信号:`, data.type, `来自:`, data.from);
@@ -1352,7 +1491,7 @@ export class RealTimeColab {
       this.userProbeFails.set(signalData.from, 0);
       this.userServerProbeTs.delete(signalData.from);
       break;
-     case "membership:snapshot":
+     case "membership:snapshot": { 
       // 服务器权威成员快照（uniqId[]）：presence 中心化，替换客户端互发现的初始状态
        const snapshot = data.data ?? data;
        this.handleMembershipSnapshot(snapshot);
@@ -1363,7 +1502,8 @@ export class RealTimeColab {
         this.meetingHandler?.("membership:snapshot", snapshot, signalData.channel);
        }
       break;
-     case "membership:changed":
+     }
+     case "membership:changed": { 
       // 服务器权威成员增删（join/leave）：presence 中心化的增量通知
        const changed = data.data ?? data;
        this.handleMembershipChanged(changed);
@@ -1373,6 +1513,7 @@ export class RealTimeColab {
         this.meetingHandler?.("membership:changed", changed, signalData.channel);
        }
       break;
+     }
       default:
         if (typeof data.type === "string" && data.type.startsWith("meeting:")) {
          const payload = signalData.data ?? signalData;
@@ -4555,103 +4696,74 @@ private isLetShareZip(file: File): boolean {
  }
 
  private setupVisibilityWatcher() {
-  let backgroundStartTime: number | null = null;
-  let ablyTimeoutHandle: ReturnType<typeof setTimeout> | null = null;
   const overtime = CONFIG.BACKGROUND_TIMEOUT;
-  // 后台超时处理（省流机制）：到点后停传输并断开连接。
-  // 通话/视频进行中完全豁免 —— 重挂定时器（通话结束后若仍在后台，下一轮才生效）。
-  const handleBackgroundTimeout = () => {
-   const now = Date.now();
-   const backgroundDurationMs = backgroundStartTime ? now - backgroundStartTime : 0;
-   if (this.hasActiveCall()) {
-    console.debug("[Visibility] Call active — background timeout exempted, keeping connection alive");
-    ablyTimeoutHandle = setTimeout(handleBackgroundTimeout, overtime);
-    return;
-   }
-   if (this.hasPendingDirectSaveRequest()) {
-    console.debug("[Visibility] Direct-to-disk save request pending, keeping connection alive");
-    return;
-   }
-   const activeTransferCount = this.getActiveFileTransferCount();
-   if (shouldStopTransfersForPageLifecycle({
-    backgroundDurationMs,
-    timeoutMs: overtime,
-    activeTransferCount,
-    deviceType: getDeviceType(),
-   })) {
-    this.stopActiveFileTransfersForLifecycle(
-     t('alert.p2pBackgroundTimeout')
-    );
-    // 仅当没有活跃的服务器传输时才断开 WebSocket
-    // 服务器传输走 WebSocket 不依赖页面焦点，可以继续在后台运行
-    const serverActiveCount =
-     this.serverFileTransfer?.getActiveTransferCount() ?? 0;
-    if (serverActiveCount === 0) {
-     // 后台省流主动断开：标记"回前台应重连"，区别于用户主动离开
-     this.pendingRejoin = true;
-     void runTransferHandlerSafely(
-      () => this.disconnect(),
-      (error) => console.warn("Background disconnect failed:", error)
-     );
-    } else {
-     console.debug(
-      `[Visibility] 公网传输活跃，保持 WebSocket 连接在后台继续`
-     );
-    }
-   } else if (backgroundStartTime && backgroundDurationMs >= overtime) {
-    alertUseMUI(
-     React.createElement(React.Fragment, null,
+  // 后台超时（省流机制）到点后停传输并断开连接。
+  // 「是否应继续豁免」只有一处判定（X2）：通话 / 会议 / 直写磁盘挂起三者等价；
+  // 「不断开 ⇒ 必重挂」只有一个落点（BackgroundGuard.rearm），F15 的两分支不对称不可能再现。
+  const guard = new BackgroundGuard({
+   clock: systemClock,
+   timeoutMs: overtime,
+   sample: ({ backgroundDurationMs }) => {
+    // 唯一的豁免事实采集点：三类活跃事实在此汇合，不得在别处再写一份判定。
+    const signals: ExemptionSignals = {
+     callActive: this.hasActiveCall(),
+     meetingActive: this.hasActiveMeeting(),
+     directSavePending: this.hasPendingDirectSaveRequest(),
+    };
+    const activeTransferCount = this.getActiveFileTransferCount();
+    return {
+     signals, backgroundDurationMs, timeoutMs: overtime, activeTransferCount,
+     serverActiveTransferCount: this.serverFileTransfer?.getActiveTransferCount() ?? 0,
+     shouldStopTransfers: shouldStopTransfersForPageLifecycle({
+      backgroundDurationMs, timeoutMs: overtime, activeTransferCount, deviceType: getDeviceType(),
+     }),
+    };
+   },
+   onStopTransfers: (reason) => {
+    console.debug(`[Visibility] 后台超时：停止活跃传输（${reason}）`);
+    this.stopActiveFileTransfersForLifecycle(t('alert.p2pBackgroundTimeout'));
+   },
+   onDisconnect: (reason) => {
+    if (reason === "background-timeout") {
+     alertUseMUI(React.createElement(React.Fragment, null,
       React.createElement(TimerIcon, { sx: { mr: 0.5, verticalAlign: 'middle', fontSize: '1.1em' } }),
-      t("background.timeout", { seconds: overtime / 1000 })
-     ),
-     3000
-    );
-    // 后台省流主动断开：标记"回前台应重连"
+      t("background.timeout", { seconds: overtime / 1000 })), 3000);
+    }
+    // 后台省流主动断开：标记"回前台应重连"，区别于用户主动离开
     this.pendingRejoin = true;
     void runTransferHandlerSafely(
      () => this.disconnect(),
      (error) => console.warn("Background disconnect failed:", error)
     );
-   }
-  };
-  document.addEventListener("visibilitychange", () => {
-   if (document.visibilityState === "hidden") {
-    backgroundStartTime = Date.now();
-    ablyTimeoutHandle = setTimeout(handleBackgroundTimeout, overtime);
-   } else if (document.visibilityState === "visible") {
-    if (ablyTimeoutHandle) {
-     clearTimeout(ablyTimeoutHandle);
-     ablyTimeoutHandle = null;
-    }
-    if (!this.isConnected()) {
-     // 移动端重连后清理残留的发送会话和传输进度状态
-     // 服务器在断开期间可能已清理会话, 本地残留的 sending session 需要清除
-     this.serverFileTransfer?.cancelAllSendingSessions();
-     this.setFileTransferProgress(null);
-     this.setFileTransferStatus(null, "info");
-     // 3.7.0：回前台且连接因意外断开丢失 → 取消退避等待，立即重连
-     if (this.autoReconnectAllowed) {
-      this.cancelReconnect();
-      void this.attemptReconnect();
-     }
-     // 3.8.x：后台省流（主动断开）后回前台 → 自动重连（区别于用户主动离开房间）
-     if (this.pendingRejoin) {
-      this.pendingRejoin = false;
-      console.debug("[ColabLib] 回前台：省流断开，自动重连");
-      void this.connectToServer({ silent: true });
-     }
-    }
-   }
+   },
   });
-
-  // window.addEventListener("focus", () => {
-  //   if (!this.isConnected()) {
-  //     console.debug(" focus 检测触发连接");
-  //     this.connectToServer();
-  //   }
-  // });
+  document.addEventListener("visibilitychange", () => this.handleVisibilityChange(guard));
  }
 
+ private handleVisibilityChange(guard: BackgroundGuard): void {
+  if (document.visibilityState === "hidden") {
+   guard.onHidden();
+   return;
+  }
+  guard.onVisible();
+  if (this.isConnected()) return;
+  // 移动端重连后清理残留的发送会话和传输进度状态
+  // 服务器在断开期间可能已清理会话, 本地残留的 sending session 需要清除
+  this.serverFileTransfer?.cancelAllSendingSessions();
+  this.setFileTransferProgress(null);
+  this.setFileTransferStatus(null, "info");
+  // 3.7.0：回前台且连接因意外断开丢失 → 取消退避等待、立即重排（仍经 RetrySupervisor，P1）
+  if (this.autoReconnectAllowed) {
+   this.cancelReconnect("foreground-reconnect");
+   this.scheduleReconnect();
+  }
+  // 3.8.x：后台省流（主动断开）后回前台 → 自动重连（区别于用户主动离开房间）
+  if (this.pendingRejoin) {
+   this.pendingRejoin = false;
+   console.debug("[ColabLib] 回前台：省流断开，自动重连");
+   void this.connectToServer({ silent: true });
+  }
+ }
  private setupPageUnloadHandler() {
   // 页面卸载前发送离开广播
   const sendLeaveMessage = () => {

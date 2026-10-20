@@ -59,7 +59,13 @@ import CenterFocusStrongIcon from "@mui/icons-material/CenterFocusStrong";
 import PictureInPictureAltIcon from "@mui/icons-material/PictureInPictureAlt";
 import realTimeColab from "@App/libs/connection/colabLib";
 import settingsStore from "@App/libs/mobx/mobx";
-import { RemoteAudioPipeline, clampSpeakerVolume } from "@App/libs/call/remoteAudioPipeline";
+import {
+  RemoteAudioHost,
+  RemoteAudioPipeline,
+  toAudioPrefs,
+  type RemoteAudioHostState,
+} from "../../core/audio/index";
+import { buildPlaybackDump, registerDiagnosticsProvider } from "../../diagnostics/index";
 import { useTranslation } from "react-i18next";
 import alertUseMUI from "@App/libs/tools/alert";
 import { meetingManager, type PresentationFocusTarget } from "@App/libs/meeting/meetingManager";
@@ -124,7 +130,7 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
     };
     window.addEventListener("meeting-minutes-member-preferences", onMemberMinutesPreferences);
     return () => window.removeEventListener("meeting-minutes-member-preferences", onMemberMinutesPreferences);
-  }, []);
+  }, [selfId]);
   const inBreakout = /\d{4}B\d+$/.test(state.roomId ?? "");
   const meetingId = state.roomId || "";
   const title = state.title || t("meeting.untitled", "未命名会议");
@@ -487,9 +493,28 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
     }
     return stream;
   }, [state.remoteTracks]);
-  const remoteAudioPipelineRef = useRef<RemoteAudioPipeline | null>(null);
+  // V3：远端音频唯一权威 RemoteAudioHost —— 元素/管线/gain/srcObject/play 单一写者（P6），
+  // 本组件只绑发声元素（bindElement）、推偏好（setPrefs）与读状态（state/snapshot）。
+  const remoteAudioHostRef = useRef<RemoteAudioHost | null>(null);
+  const [audioBlocked, setAudioBlocked] = useState(false);
   const previousRemoteAudioTrackKeyRef = useRef<string | null>(null);
   const previousMediaSettingsVersionRef = useRef<number | null>(null);
+  useEffect(() => {
+    const host = new RemoteAudioHost(new RemoteAudioPipeline());
+    remoteAudioHostRef.current = host;
+    host.bindElement(audioRef.current);
+    setAudioBlocked(host.state.autoplayBlocked);
+    const unsubscribe = host.subscribe((s: RemoteAudioHostState) => setAudioBlocked(s.autoplayBlocked));
+    // 诊断出口（window.__ls.dump 的 playback 段）：复用 buildPlaybackDump + host 快照（D6），不另造一套
+    const unregister = registerDiagnosticsProvider({ playback: () => buildPlaybackDump(host.snapshot()) });
+    return () => {
+      host.bindElement(null);
+      unsubscribe();
+      unregister();
+      host.dispose();
+      remoteAudioHostRef.current = null;
+    };
+  }, []);
   useEffect(() => {
     const audioTracksChanged = previousRemoteAudioTrackKeyRef.current !== remoteAudioTrackKey;
     const settingsChanged = previousMediaSettingsVersionRef.current !== mediaSettingsVersion;
@@ -498,50 +523,25 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
     // Video/screen tracks are stored in the same remoteTracks array. They must
     // not tear down an otherwise healthy remote audio decoder/playback graph.
     if (!audioTracksChanged && !settingsChanged) return;
-
-    const audio = audioRef.current;
-    const pipeline = (remoteAudioPipelineRef.current ??= new RemoteAudioPipeline());
-    pipeline.detach();
-    if (remoteAudioStream.getAudioTracks().length === 0) {
-      if (audio) audio.srcObject = null;
-      return;
-    }
-    const active = pipeline.attach(remoteAudioStream, {
-      volume: Number(settingsStore.get("speakerVolume") ?? 1),
-      clarity: settingsStore.get("voiceClarityEnabled") ?? true,
-      widen: settingsStore.get("spatialAudioEnabled") ?? false,
-    });
-    const sinkId = settingsStore.get("speakerDeviceId") ?? "";
-    if (active) {
-      pipeline.resume();
-      if (sinkId) void pipeline.setSinkId(sinkId);
-      if (audio) {
-        // Keep the same hidden native sink used by ordinary calls. Chromium
-        // may otherwise stop driving remote NetEq/decoder output when the
-        // WebAudio graph is rebuilt or a second remote track arrives.
-        audio.srcObject = remoteAudioStream;
-        audio.muted = true;
-        audio.volume = 0;
-        void audio.play().catch(() => undefined);
-      }
-    } else if (audio) {
-      audio.srcObject = remoteAudioStream;
-      audio.muted = false;
-      audio.volume = Math.min(1, clampSpeakerVolume(Number(settingsStore.get("speakerVolume") ?? 1)));
-      const setSinkId = (audio as HTMLAudioElement & { setSinkId?: (id: string) => Promise<void> }).setSinkId;
-      if (sinkId && setSinkId) void setSinkId.call(audio, sinkId).catch(() => undefined);
-      void audio.play().catch(() => undefined);
-    }
+    const host = remoteAudioHostRef.current;
+    if (!host) return;
+    // 解码 sink / 发声 / C-10 存活看门狗 / 结构性互斥全部在 host 内部，这里只换流 + 推偏好。
+    host.setStream(remoteAudioStream.getAudioTracks().length > 0 ? remoteAudioStream : null);
+    host.setPrefs(
+      toAudioPrefs({
+        volume: settingsStore.get("speakerVolume"),
+        clarity: settingsStore.get("voiceClarityEnabled"),
+        widen: settingsStore.get("spatialAudioEnabled"),
+        sinkId: settingsStore.get("speakerDeviceId"),
+      }),
+    );
   }, [remoteAudioStream, remoteAudioTrackKey, mediaSettingsVersion]);
 
-  // Browsers may create the remote audio context after the route transition,
-  // outside the original join gesture. Retry both playback paths on the next
-  // user gesture so a suspended context cannot leave the meeting silent.
+  // 手势补偿（B1“手势也救不回声音”的修复点）：unlock 在手势上下文内 resume()+play()
+  // 并按当前裁决复原 muted/volume；被拒 → D5 可见降级，不再 catch(() => undefined) 静默吞。
   useEffect(() => {
     const unlockRemoteAudio = () => {
-      remoteAudioPipelineRef.current?.resume();
-      const audio = audioRef.current;
-      if (audio?.srcObject && audio.paused) void audio.play().catch(() => undefined);
+      void remoteAudioHostRef.current?.unlock();
     };
     window.addEventListener("pointerdown", unlockRemoteAudio, { passive: true });
     window.addEventListener("keydown", unlockRemoteAudio);
@@ -549,11 +549,6 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
       window.removeEventListener("pointerdown", unlockRemoteAudio);
       window.removeEventListener("keydown", unlockRemoteAudio);
     };
-  }, []);
-
-  useEffect(() => () => {
-    remoteAudioPipelineRef.current?.detach();
-    remoteAudioPipelineRef.current = null;
   }, []);
 
   const applyMeetingMediaSettings = async () => {
@@ -700,6 +695,24 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
       }}
     >
       <audio ref={audioRef} autoPlay playsInline style={{ display: "none" }} />
+      {/* D5 可见降级：自动播放被拒 → 常驻琥珀 chip（非阻断式，不挡会议操作）；
+          点击 = 手势上下文内 resume()+play() 并按当前裁决复原 muted/volume。 */}
+      {audioBlocked && (
+        <Box
+          role="alert"
+          data-testid="meeting-audio-blocked"
+          onClick={() => { void remoteAudioHostRef.current?.unlock(); }}
+          sx={{
+            position: "absolute", top: 64, left: "50%", transform: "translateX(-50%)", zIndex: 1400,
+            display: "flex", alignItems: "center", gap: 1, bgcolor: "warning.main", color: "warning.contrastText",
+            borderRadius: 999, px: 2, py: 0.75, boxShadow: 3, cursor: "pointer", userSelect: "none",
+          }}
+        >
+          <Typography variant="caption" sx={{ fontWeight: 600 }}>
+            {t("meeting.audioBlocked", "🔇 声音未开启 · 点此恢复")}
+          </Typography>
+        </Box>
+      )}
 
       {hasGlobalSharing && (
         <Box

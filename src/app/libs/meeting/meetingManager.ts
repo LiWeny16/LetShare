@@ -49,6 +49,7 @@ import {
   type MeetingInviteStatusMsg,
 } from "./meetingInviteBus";
 import { sanitizeMeetingAiConfig, type MeetingAiConfig, type MeetingMinutesPublicState, type MeetingTranscriptSegment } from "./meetingAi";
+import { installDiagnostics, registerDiagnosticsProvider, type MeetingDump } from "../../../diagnostics/index";
 // 来电式弹窗全局自挂载（share 页 / meeting 页跨路由可见）；依赖 deferred 引用，无初始化环。
 import "../../../components/meeting/components/IncomingMeetingInviteDialog";
 
@@ -426,6 +427,17 @@ class MeetingManagerImpl implements MeetingManager {
   }
   getState(): MeetingState {
     return { ...this.state, members: [...this.state.members], remoteTracks: [...this.state.remoteTracks], minutes: { ...this.state.minutes } };
+  }
+
+  /** 只读诊断快照（window.__ls.dump）：不写任何状态、不改变任何会话行为。 */
+  diagnosticsSnapshot(): MeetingDump {
+    return {
+      roomId: this.state.roomId ?? null,
+      stage: this.state.stage,
+      remoteTracks: this.state.remoteTracks.map(remoteTrackDump),
+      subscribers: [...this.subscribers].map(([publisherId, pc]) => ({ publisherId, connectionState: pc.connectionState })),
+      publishPcState: this.pc?.connectionState ?? null,
+    };
   }
 
   private isMeetingRoom(roomId: string | undefined): roomId is string {
@@ -2450,5 +2462,34 @@ class MeetingManagerImpl implements MeetingManager {
   }
 }
 
+/**
+ * 远端轨道诊断快照：track 缺失时对应字段置 null（诊断不得反向影响采集/订阅行为）。
+ * kind 归一为 audio|video，会议层语义（screen）保留在 source。
+ */
+function remoteTrackDump(remote: RemoteTrack): MeetingDump["remoteTracks"][number] {
+  const track = remote.track ?? null;
+  return {
+    uniqId: remote.uniqId,
+    kind: remote.kind === "audio" ? "audio" : "video",
+    source: remote.kind,
+    trackId: track ? track.id : null,
+    readyState: track ? track.readyState : null,
+    muted: track ? track.muted : null,
+    enabled: track ? track.enabled : null,
+  };
+}
+
 /** 前端会议 SFU 接入的共享单例。 */
-export const meetingManager: MeetingManager = new MeetingManagerImpl();
+const meetingManagerImpl = new MeetingManagerImpl();
+export const meetingManager: MeetingManager = meetingManagerImpl;
+
+// 诊断出口注册（window.__ls.dump）：只读汇聚，不参与任何会话逻辑。
+registerDiagnosticsProvider({
+  meeting: () => meetingManagerImpl.diagnosticsSnapshot(),
+  connection: () => ({
+    phaseOrState: settingsStore.getUnrmb("serverConnState") ?? null,
+    // 重连尝试次数暂无公开读口（colabLib 私有计数，属 V2 RetrySupervisor 域）→ 留 null。
+    reconnectAttempt: null,
+  }),
+});
+installDiagnostics();

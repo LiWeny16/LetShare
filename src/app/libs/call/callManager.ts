@@ -524,9 +524,8 @@ export class CallManager {
     return call.session.getQualitySample();
   }
 
-  attachRemoteAudio(callId: string, el: HTMLAudioElement): void {
-    this.calls.get(callId)?.session.attachRemoteAudio(el);
-  }
+  /** V3：远端音频 sink/发声元素已整体移交给 RemoteAudioHost（唯一权威）；
+   *  会话层不再持有 <audio>，旧 attachRemoteAudio 死 API（生产零调用方）随之一并删除。 */
 
   attachRemoteVideo(callId: string, el: HTMLVideoElement): void {
     this.calls.get(callId)?.session.attachRemoteVideo(el);

@@ -36,6 +36,13 @@ export default function MeetingPage() {
 
   useEffect(() => meetingManager.subscribe(setManagerState), [])
 
+  // 后台省流豁免：直接进会议页时 share 页已卸载，会议活跃事实必须照常供给同一份判定
+  // （判定只有 core/transport 的 shouldExemptBackgroundTimeout 一份，X2 —— 这里只给事实）。
+  useEffect(() => {
+    realTimeColab.registerMeetingActivityProvider(() => meetingManager.getState().inMeeting)
+    return () => realTimeColab.registerMeetingActivityProvider(null)
+  }, [])
+
   // E2E/调试钩子（仅 dev 构建）：暴露 manager 单例供 CDP 断言内部状态
   if (import.meta.env.DEV) {
     (window as any).__meeting = meetingManager

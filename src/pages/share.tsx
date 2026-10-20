@@ -398,9 +398,12 @@ const Share = observer(() => {
     realTimeColab.registerCallSFUHandler((type, data, channel) => manager.handleSfuSignal(type, data, channel));
     // 对端离开（页面关闭/刷新广播 leave）：立即结束与其的通话（其 bye 已不可能到达）
     realTimeColab.registerCallPeerLeaveHandler((peerId) => manager.peerLeft(peerId));
-    // 后台省流定时器豁免：通话/视频进行中注入活跃查询，后台 10 分钟到点也不断开连接
+    // 后台省流定时器豁免：通话**与会议**都算活跃会话，后台 10 分钟到点也不断开连接。
+    // 这里只供给事实；「是否豁免」的判定只有 core/transport 的 shouldExemptBackgroundTimeout 一份（X2）。
     realTimeColab.registerCallActivityProvider(() => manager.isInCall());
+    realTimeColab.registerMeetingActivityProvider(() => meetingManager.getState().inMeeting);
     return () => {
+      realTimeColab.registerMeetingActivityProvider(null);
       realTimeColab.registerCallActivityProvider(null);
       realTimeColab.registerCallSFUHandler(null);
       meetingManager.setBusyProvider(null);
@@ -561,8 +564,9 @@ const Share = observer(() => {
   }, []);
 
   // 中继状态轮询：每 3s 采样一次并写回 activeCall.isRelayed；面板关闭即停
+  const activeCallId = activeCall?.callId ?? null;
   React.useEffect(() => {
-    if (!activeCall) return;
+    if (activeCallId === null) return;
     let cancelled = false;
     const poll = (): void => {
       void getCallRelay().then((v) => {
@@ -573,7 +577,7 @@ const Share = observer(() => {
     poll();
     const timer = window.setInterval(poll, 3000);
     return () => { cancelled = true; window.clearInterval(timer); };
-  }, [activeCall?.callId, getCallRelay]);
+  }, [activeCallId, getCallRelay]);
 
   // 通话中换麦克风：重新采集首选麦克风 → replaceTrack 原子换轨（不动协商），旧轨停止。
   const handleMicChange = React.useCallback(async (deviceId: string) => {
