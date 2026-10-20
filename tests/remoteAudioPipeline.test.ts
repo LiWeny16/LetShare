@@ -48,6 +48,7 @@ function makeNode(kind: string, params: Record<string, number> = {}): FakeNode &
 
 function makeFakeCtx(opts: { channelCount?: number; suspended?: boolean; resumeSucceeds?: boolean } = {}) {
   const nodes: (FakeNode & AudioNode)[] = [];
+  const sourceStreams: MediaStream[] = [];
   let source: (FakeNode & AudioNode) | null = null;
   const ctx = {
     state: opts.suspended ? "suspended" : "running",
@@ -56,9 +57,10 @@ function makeFakeCtx(opts: { channelCount?: number; suspended?: boolean; resumeS
     closeCalls: 0,
     async resume() { this.resumeCalls += 1; if (opts.resumeSucceeds !== false) this.state = "running"; },
     async close() { this.closeCalls += 1; },
-    createMediaStreamSource() {
+    createMediaStreamSource(stream: MediaStream) {
       source = makeNode("source");
       source.channelCount = opts.channelCount ?? 1;
+      sourceStreams.push(stream);
       nodes.push(source);
       return source;
     },
@@ -69,7 +71,7 @@ function makeFakeCtx(opts: { channelCount?: number; suspended?: boolean; resumeS
     createChannelMerger: () => { const n = makeNode("merger"); nodes.push(n); return n; },
     createDynamicsCompressor: () => { const n = makeNode("compressor"); nodes.push(n); return n; },
   };
-  return { ctx, get source() { return source; }, nodes };
+  return { ctx, get source() { return source; }, nodes, sourceStreams };
 }
 
 function makeFakeStream(): MediaStream {
@@ -207,4 +209,32 @@ test("D2 回归：attach 语义唯一（返回值=音频图已建立），复用
   assert.equal(await pipeline.resume(), false, "resume 失败必须如实上报（D5 可见降级的输入）");
   pipeline.detach();
   assert.equal(pipeline.hasGraph(), false, "detach 后不得残留图");
+});
+
+test("FIX-AC-002: attach rebinds a changed remote stream without prefs and is idempotent for the same stream", () => {
+  const fake = makeFakeCtx();
+  let contextFactories = 0;
+  const pipeline = new RemoteAudioPipeline(() => {
+    contextFactories += 1;
+    return fake.ctx as unknown as AudioContext;
+  });
+  const streamA = makeFakeStream();
+  const streamB = makeFakeStream();
+
+  assert.equal(pipeline.attach(streamA), true);
+  const sourceA = fake.source;
+  assert.equal(pipeline.attach(streamB), true);
+  const sourceB = fake.source;
+
+  assert.notEqual(sourceB, sourceA, "a changed remote stream gets a new source node");
+  assert.equal(fake.sourceStreams.length, 2, "the new stream is rebound without a preference update");
+  assert.equal(fake.sourceStreams[0], streamA);
+  assert.equal(fake.sourceStreams[1], streamB);
+  assert.equal(contextFactories, 1, "stream replacement preserves the existing AudioContext");
+  assert.equal(fake.ctx.closeCalls, 0);
+
+  assert.equal(pipeline.attach(streamB), true);
+  assert.equal(fake.sourceStreams.length, 2, "attaching the identical stream again does not rebuild the graph");
+  assert.equal(contextFactories, 1);
+  pipeline.detach();
 });

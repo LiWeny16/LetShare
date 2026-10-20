@@ -8,6 +8,7 @@ import type {
 import type { VideoCodecPrioritySetting } from "./videoCapture";
 import { configurePublishPeerConnection } from "../meeting/meetingSdp";
 import { dump } from "../../../diagnostics/index";
+import { mergeRemoteCallStream } from "./remoteStream";
 
 type CallSfuSessionOptions = {
   callId: string;
@@ -356,10 +357,7 @@ export class CallSfuSession {
     };
     pc.ontrack = (event) => {
       if (this.ended || this.subscribers.get(publisherId) !== pc) return;
-      const stream = new MediaStream([event.track]);
-      const previous = this.remoteStreams.get(publisherId);
-      const target = previous ?? stream;
-      if (previous && !previous.getTracks().some((track) => track.id === event.track.id)) target.addTrack(event.track);
+      const target = mergeRemoteCallStream(this.remoteStreams.get(publisherId) ?? null, new MediaStream([event.track]));
       this.remoteStreams.set(publisherId, target);
       if (event.track.kind === "audio") {
         event.track.onunmute = () => {
@@ -588,6 +586,8 @@ export class CallSfuSession {
   }
 
   async updateIceServers(config: RTCConfiguration): Promise<void> {
+    // 来电凭据可能在接听/创建订阅 PC 前到达；重建连接也必须用最新配置。
+    this.opts.rtcConfig = config;
     for (const pc of [this.publishPc, ...this.subscribers.values()]) {
       if (!pc) continue;
       try { pc.setConfiguration(config); } catch { /* browser may reject mid-call updates */ }

@@ -77,18 +77,19 @@ export class RemoteAudioPipeline {
    */
   attach(stream: MediaStream, opts?: Partial<RemoteAudioPipelineOptions> | undefined): boolean {
     if (!stream) return false;
+    const previousStream = this.stream;
     this.stream = stream;
     if (opts) this.opts = { ...this.opts, ...opts, volume: clampSpeakerVolume(opts.volume ?? this.opts.volume) };
-    if (this.ctx && this.source) {
-      void this.resume();
-      this.applyConnectionOptions();
-      return true;
-    }
-    const ctx = this.createCtx();
+    const ctx = this.ctx ?? this.createCtx();
     if (!ctx) return false;
     try {
       this.ctx = ctx;
-      this.buildGraph(ctx, stream);
+      if (this.source && previousStream === stream) {
+        this.applyConnectionOptions();
+      } else {
+        // MediaStreamAudioSourceNode 固定消费建图时的音轨；换流必须重新绑定。
+        this.rebuildGraph(ctx, stream);
+      }
       void this.resume();
       return true;
     } catch (err) {
@@ -280,7 +281,7 @@ export class RemoteAudioPipeline {
     if (this.gain) this.gain.gain.value = this.opts.volume;
   }
 
-  /** 拓扑变化时重建 source 之后的链路（source 保留以免二次消费流问题；旧链先断开）。 */
+  /** 换流/拓扑变化时断开旧 source，再按当前流重建音频图。 */
   private rebuildGraph(ctx: AudioContext, stream: MediaStream): void {
     if (this.source) {
       try {

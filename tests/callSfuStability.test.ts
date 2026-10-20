@@ -10,6 +10,7 @@ import { setCallToneForState, stopAllCallTones } from "../src/app/libs/call/ring
 
 class FakeRTCPeerConnection {
   static instances: FakeRTCPeerConnection[] = [];
+  config: RTCConfiguration;
   connectionState = "new";
   signalingState = "stable";
   localDescription: RTCSessionDescription | null = null;
@@ -20,8 +21,10 @@ class FakeRTCPeerConnection {
   createOfferOptions: (RTCOfferAnswerOptions | undefined)[] = [];
   createAnswerCount = 0;
   stats = new Map<string, unknown>();
+  setConfigurationCalls: RTCConfiguration[] = [];
 
-  constructor(_config?: RTCConfiguration) {
+  constructor(config: RTCConfiguration = {}) {
+    this.config = config;
     FakeRTCPeerConnection.instances.push(this);
   }
   addTrack(_track: MediaStreamTrack, _stream: MediaStream) { return { track: _track } as unknown as RTCRtpSender; }
@@ -45,7 +48,10 @@ class FakeRTCPeerConnection {
   }
   async addIceCandidate(_candidate: RTCIceCandidateInit | null) {}
   async getStats() { return this.stats; }
-  setConfiguration(_config: RTCConfiguration) {}
+  setConfiguration(config: RTCConfiguration) {
+    this.config = config;
+    this.setConfigurationCalls.push(config);
+  }
   close() { this.connectionState = "closed"; }
 }
 
@@ -175,7 +181,7 @@ test("AC-005: caller and callee rejoin SFU before their ICE-restart offer", asyn
         broadcast: (signal) => broadcasted.push(signal),
         getSelfId: () => role === "caller" ? "caller:uid" : "callee:uid",
         isConnected: () => true,
-        fetchTurn: async () => { throw new Error("ordinary audio must not request TURN"); },
+        fetchTurn: async () => ({ ice_servers: [], ttl_seconds: 0 }),
         sfu: { available: () => true, send: (type, data, channel) => sent.push({ type, data, channel }) },
       }, {
         onIncoming: () => {}, onCallState: () => {}, onRemoteStream: () => {}, onLocalStream: () => {},
@@ -525,5 +531,179 @@ test("AC-011: a failed subscribe offer clears the subscribed marker so the downl
     );
     assert.ok(retry, "a failed subscription must be retryable after the subscribed marker is cleared");
     session.hangup();
+  });
+});
+
+test("FIX-AC-001: incoming TURN credentials reach publisher, subscriber, and a recreated subscriber", async () => {
+  await withFakeRTC(async () => {
+    mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+    const oldStorage = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      value: { getItem: () => null },
+    });
+
+    let releaseInitialFetch!: (value: { ice_servers: RTCIceServer[]; ttl_seconds: number }) => void;
+    let initialFetchStarted = false;
+    let markInitialFetchDone!: () => void;
+    const initialFetchDone = new Promise<void>((resolve) => { markInitialFetchDone = resolve; });
+    const initialFetchResult = new Promise<{ ice_servers: RTCIceServer[]; ttl_seconds: number }>((resolve) => {
+      releaseInitialFetch = resolve;
+    });
+    let fetchCount = 0;
+    const initialTurn = {
+      ice_servers: [{ urls: "turn:initial.example.test", username: "initial-user", credential: "initial-key" }],
+      ttl_seconds: 60,
+    };
+    const refreshedTurn = {
+      ice_servers: [{ urls: "turn:refreshed.example.test", username: "refreshed-user", credential: "refreshed-key" }],
+      ttl_seconds: 86_400,
+    };
+    const manager = new CallManager({
+      broadcast: () => {},
+      getSelfId: () => "self:uid",
+      isConnected: () => true,
+      fetchTurn: async () => {
+        fetchCount += 1;
+        if (fetchCount === 1) {
+          initialFetchStarted = true;
+          const result = await initialFetchResult;
+          markInitialFetchDone();
+          return result;
+        }
+        return refreshedTurn;
+      },
+      sfu: { available: () => true, send: () => {} },
+    }, {
+      onIncoming: () => {}, onCallState: () => {}, onRemoteStream: () => {}, onLocalStream: () => {},
+      onTransportChange: () => {}, onCallEnded: () => {},
+    });
+
+    const assertTurn = (config: RTCConfiguration, username: string, credential: string) => {
+      const server = (config.iceServers ?? []).find((candidate) =>
+        JSON.stringify(candidate).toLowerCase().includes("turn:"),
+      );
+      assert.ok(server, "each call PC keeps TURN as a relay fallback");
+      assert.equal(server.username, username);
+      assert.equal(server.credential, credential);
+    };
+
+    try {
+      manager.handleSignal("peer:uid", buildInvite("c_turn_refresh", "audio"));
+      await flushMicrotasks();
+      assert.ok(initialFetchStarted, "incoming invite starts TURN credential fetch before acceptance");
+      assert.equal(FakeRTCPeerConnection.instances.length, 0, "incoming invite has no PCs before acceptance");
+      releaseInitialFetch(initialTurn);
+      await initialFetchDone;
+      await flushMicrotasks();
+
+      await manager.acceptCall("c_turn_refresh", emptyStream());
+      const publisher = FakeRTCPeerConnection.instances[0]!;
+      assertTurn(publisher.config, "initial-user", "initial-key");
+
+      const session = manager.getCallByPeer("peer:uid") as unknown as CallSfuSession;
+      session.handleSignal("meeting:membership:snapshot", { members: ["peer:uid"] });
+      session.handleSignal("meeting:sdp", { type: "offer", to: "peer:uid", sdp: "subscriber-offer-1" });
+      await flushMicrotasks();
+      const subscriber = FakeRTCPeerConnection.instances[1]!;
+      assertTurn(subscriber.config, "initial-user", "initial-key");
+
+      // Keep setup health from expiring while the fake clock reaches the first TURN refresh.
+      publisher.connectionState = "connected";
+      publisher.onconnectionstatechange?.();
+      const remoteTrack = {
+        id: "peer-audio", kind: "audio", readyState: "live", enabled: true, muted: true,
+      } as unknown as MediaStreamTrack & { muted: boolean; onunmute?: () => void };
+      subscriber.ontrack?.({
+        track: remoteTrack,
+      });
+      subscriber.connectionState = "connected";
+      subscriber.onconnectionstatechange?.();
+      remoteTrack.muted = false;
+      remoteTrack.onunmute?.();
+
+      mock.timers.tick(120_000);
+      await flushMicrotasks();
+      assert.ok(fetchCount > 1, "TURN credentials refresh after the invite's initial credential response");
+      assert.ok(publisher.setConfigurationCalls.some((config) =>
+        JSON.stringify(config.iceServers ?? []).includes("refreshed-key"),
+      ), "an active publisher receives refreshed TURN credentials");
+      assert.ok(subscriber.setConfigurationCalls.some((config) =>
+        JSON.stringify(config.iceServers ?? []).includes("refreshed-key"),
+      ), "an active subscriber receives refreshed TURN credentials");
+
+      session.handleSignal("meeting:membership:changed", { type: "leave", uniqId: "peer:uid" });
+      session.handleSignal("meeting:membership:changed", { type: "join", uniqId: "peer:uid" });
+      session.handleSignal("meeting:sdp", { type: "offer", to: "peer:uid", sdp: "subscriber-offer-2" });
+      await flushMicrotasks();
+      const replacementSubscriber = FakeRTCPeerConnection.instances[2]!;
+      assertTurn(replacementSubscriber.config, "refreshed-user", "refreshed-key");
+    } finally {
+      manager.leaveRoom();
+      mock.timers.reset();
+      if (oldStorage) Object.defineProperty(globalThis, "localStorage", oldStorage);
+      else delete (globalThis as Record<string, unknown>).localStorage;
+    }
+  });
+});
+
+test("FIX-AC-002: subscriber track arrivals publish immutable snapshots and replace same-id audio", async () => {
+  await withFakeRTC(async () => {
+    const sent: Array<{ type: string; data: any; channel: string }> = [];
+    const remoteStreams: MediaStream[] = [];
+    const session = new CallSfuSession({
+      callId: "c_remote_merge",
+      peerId: "peer:uid",
+      selfId: "self:uid",
+      rtcConfig: { iceServers: [] },
+      localStream: emptyStream(),
+      wantVideo: false,
+      send: (type, data, channel) => sent.push({ type, data, channel }),
+    }, {
+      ...quietEvents,
+      onRemoteStream: (stream) => remoteStreams.push(stream),
+    });
+    try {
+      await session.startOutgoing();
+      session.handleSignal("meeting:membership:snapshot", { members: ["peer:uid"] });
+      session.handleSignal("meeting:sdp", { type: "offer", to: "peer:uid", sdp: "subscriber-offer" });
+      await flushMicrotasks();
+      const subscriber = FakeRTCPeerConnection.instances[1]!;
+      const audioA = {
+        id: "same-audio-track-id", kind: "audio", readyState: "live", stopCalls: 0,
+        stop() { this.stopCalls += 1; },
+      } as unknown as MediaStreamTrack & { stopCalls: number };
+      const videoV = {
+        id: "video-track-id", kind: "video", readyState: "live", stopCalls: 0,
+        stop() { this.stopCalls += 1; },
+      } as unknown as MediaStreamTrack & { stopCalls: number };
+      const audioB = {
+        id: "same-audio-track-id", kind: "audio", readyState: "live", stopCalls: 0,
+        stop() { this.stopCalls += 1; },
+      } as unknown as MediaStreamTrack & { stopCalls: number };
+
+      subscriber.ontrack?.({ track: audioA });
+      const audioSnapshot = remoteStreams.at(-1)!;
+      subscriber.ontrack?.({ track: videoV });
+      const audioVideoSnapshot = remoteStreams.at(-1)!;
+      subscriber.ontrack?.({ track: audioB });
+      const replacedSnapshot = remoteStreams.at(-1)!;
+
+      assert.notEqual(audioVideoSnapshot, audioSnapshot, "adding video changes stream identity");
+      assert.notEqual(replacedSnapshot, audioVideoSnapshot, "replacing audio changes stream identity");
+      assert.deepEqual(audioSnapshot.getTracks(), [audioA], "an earlier event snapshot is not mutated by later tracks");
+      assert.deepEqual(audioVideoSnapshot.getAudioTracks(), [audioA]);
+      assert.deepEqual(audioVideoSnapshot.getVideoTracks(), [videoV]);
+      assert.deepEqual(replacedSnapshot.getAudioTracks(), [audioB], "new audio replaces the prior same-id track object");
+      assert.deepEqual(replacedSnapshot.getVideoTracks(), [videoV], "unrelated video remains in the merged stream");
+
+      subscriber.ontrack?.({ track: audioB });
+      assert.equal(remoteStreams.at(-1), replacedSnapshot, "an exact duplicate notification preserves stream identity");
+      assert.equal(audioA.stopCalls, 0, "merging must not stop peer-owned tracks");
+      assert.equal(audioB.stopCalls, 0);
+      assert.equal(videoV.stopCalls, 0);
+    } finally {
+      session.hangup();
+    }
   });
 });

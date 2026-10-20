@@ -1,7 +1,7 @@
 {
   "name": "letshare",
   "private": true,
-  "version": "3.8.45",
+  "version": "3.8.46",
   "type": "module",
   "scripts": {
     "d": "vite",
@@ -20,6 +20,7 @@
     "test:db": "node --import tsx --test tests/fileBlobStore.test.ts",
     "test:e2e": "node --import tsx --test tests/fileMessage-e2e.test.ts",
     "test:e2e:call": "node --import tsx --test --test-force-exit tests/e2e/call-relay.test.ts",
+    "test:e2e:call-audio-repair": "node --import tsx --test --test-force-exit tests/e2e/call-audio-repair.e2e.mts",
     "gen-img": "npx @capacitor/assets generate",
     "prepare": "husky"
   },

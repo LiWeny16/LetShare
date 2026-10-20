@@ -1,0 +1,191 @@
+{
+  "mode": "direct",
+  "closedDownlink": {
+    "index": 2,
+    "trackId": "c392505c-d9a9-4cba-8edc-89d420ccb1ab",
+    "streamId": "fbf9cfdc-efb9-497a-a824-d5b42e929741",
+    "eventNudge": "connectionstatechange after native close"
+  },
+  "replacement": {
+    "oldPcClosed": true,
+    "oldTrackId": "c392505c-d9a9-4cba-8edc-89d420ccb1ab",
+    "oldTrackState": "ended",
+    "oldTrackMuted": false,
+    "oldStreamId": "fbf9cfdc-efb9-497a-a824-d5b42e929741",
+    "replacementPcIndex": 3,
+    "replacementTrackId": "c392505c-d9a9-4cba-8edc-89d420ccb1ab",
+    "replacementTrackState": "live",
+    "replacementTrackMuted": false,
+    "replacementStreamId": "1e819e7f-22cb-43ef-b9a6-0bf73a6b69ff",
+    "iceUrls": [
+      "stun:ecs.letshare.fun:3478",
+      "stun:stun.l.google.com:19302",
+      "turn:127.0.0.1:3478?transport=udp",
+      "turn:127.0.0.1:3478?transport=tcp"
+    ],
+    "iceTransportPolicy": "all",
+    "selectedCandidateTypes": [
+      {
+        "local": "host",
+        "remote": "prflx"
+      }
+    ],
+    "uiTrackIds": [
+      "c392505c-d9a9-4cba-8edc-89d420ccb1ab"
+    ],
+    "uiStreamFound": true,
+    "actualReceiverTrackMatchesUi": true,
+    "sameTrackObjectAsBefore": false,
+    "sameStreamObjectAsBefore": false,
+    "audioTrackCount": 1,
+    "inboundAudioPackets": 13,
+    "inboundAudioBytes": 919,
+    "inboundAudioEnergy": 0,
+    "inboundAudioLevel": 0,
+    "inboundSamples": 12000
+  },
+  "recoveredPlayback": {
+    "found": true,
+    "streamId": "1e819e7f-22cb-43ef-b9a6-0bf73a6b69ff",
+    "trackId": "c392505c-d9a9-4cba-8edc-89d420ccb1ab",
+    "trackState": "live",
+    "trackMuted": false,
+    "paused": false,
+    "elementMuted": true,
+    "readyState": 4,
+    "audioContextState": "running",
+    "rms": 0.15967903192589653
+  },
+  "recoveredPipeline": {
+    "pipelineCount": 1,
+    "tapCount": 1,
+    "rms": 0.18075772326599265,
+    "contextStates": [
+      "running"
+    ],
+    "tapKeys": [
+      [
+        "analyser",
+        "detach"
+      ]
+    ]
+  },
+  "chromePeers": [
+    {
+      "index": 0,
+      "connectionState": "connected",
+      "signalingState": "stable",
+      "iceUrls": [
+        "stun:stun.l.google.com:19302",
+        "stun:stun.counterpath.net",
+        "stun:stun.internetcalls.com",
+        "stun:stun.voip.aebc.com",
+        "stun:stun.voipbuster.com",
+        "stun:stun.xten.com",
+        "stun:global.stun.twilio.com:3478"
+      ],
+      "iceTransportPolicy": "all",
+      "selectedCandidateTypes": [
+        {
+          "local": "host",
+          "remote": "host"
+        }
+      ],
+      "inboundAudioBytes": 0,
+      "inboundAudioPackets": 0,
+      "inboundAudioEnergy": 0,
+      "inboundAudioLevel": 0,
+      "inboundSamples": 0,
+      "outboundAudioBytes": 0,
+      "outboundAudioPackets": 0,
+      "outboundAudioEnergy": 0,
+      "outboundSamples": 0,
+      "audioReceiverTrackIds": []
+    },
+    {
+      "index": 1,
+      "connectionState": "connected",
+      "signalingState": "stable",
+      "iceUrls": [
+        "stun:ecs.letshare.fun:3478",
+        "stun:stun.l.google.com:19302",
+        "turn:127.0.0.1:3478?transport=udp",
+        "turn:127.0.0.1:3478?transport=tcp"
+      ],
+      "iceTransportPolicy": "all",
+      "selectedCandidateTypes": [
+        {
+          "local": "host",
+          "remote": "prflx"
+        }
+      ],
+      "inboundAudioBytes": 0,
+      "inboundAudioPackets": 0,
+      "inboundAudioEnergy": 0,
+      "inboundAudioLevel": 0,
+      "inboundSamples": 0,
+      "outboundAudioBytes": 5829,
+      "outboundAudioPackets": 93,
+      "outboundAudioEnergy": 0,
+      "outboundSamples": 0,
+      "audioReceiverTrackIds": [
+        "335050f0-6dd0-450b-a87f-e90ecfda4291"
+      ]
+    },
+    {
+      "index": 2,
+      "connectionState": "closed",
+      "signalingState": "closed",
+      "iceUrls": [
+        "stun:ecs.letshare.fun:3478",
+        "stun:stun.l.google.com:19302",
+        "turn:127.0.0.1:3478?transport=udp",
+        "turn:127.0.0.1:3478?transport=tcp"
+      ],
+      "iceTransportPolicy": "all",
+      "selectedCandidateTypes": [],
+      "inboundAudioBytes": 0,
+      "inboundAudioPackets": 0,
+      "inboundAudioEnergy": 0,
+      "inboundAudioLevel": 0,
+      "inboundSamples": 0,
+      "outboundAudioBytes": 0,
+      "outboundAudioPackets": 0,
+      "outboundAudioEnergy": 0,
+      "outboundSamples": 0,
+      "audioReceiverTrackIds": [
+        "c392505c-d9a9-4cba-8edc-89d420ccb1ab"
+      ]
+    },
+    {
+      "index": 3,
+      "connectionState": "connected",
+      "signalingState": "stable",
+      "iceUrls": [
+        "stun:ecs.letshare.fun:3478",
+        "stun:stun.l.google.com:19302",
+        "turn:127.0.0.1:3478?transport=udp",
+        "turn:127.0.0.1:3478?transport=tcp"
+      ],
+      "iceTransportPolicy": "all",
+      "selectedCandidateTypes": [
+        {
+          "local": "host",
+          "remote": "prflx"
+        }
+      ],
+      "inboundAudioBytes": 919,
+      "inboundAudioPackets": 13,
+      "inboundAudioEnergy": 0,
+      "inboundAudioLevel": 0,
+      "inboundSamples": 12000,
+      "outboundAudioBytes": 0,
+      "outboundAudioPackets": 0,
+      "outboundAudioEnergy": 0,
+      "outboundSamples": 0,
+      "audioReceiverTrackIds": [
+        "c392505c-d9a9-4cba-8edc-89d420ccb1ab"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,2206 @@
+{
+  "mode": "forced-relay",
+  "snapshots": {
+    "edge": [
+      {
+        "index": 0,
+        "connectionState": "connected",
+        "signalingState": "stable",
+        "iceUrls": [
+          "stun:stun.l.google.com:19302",
+          "stun:stun.counterpath.net",
+          "stun:stun.internetcalls.com",
+          "stun:stun.voip.aebc.com",
+          "stun:stun.voipbuster.com",
+          "stun:stun.xten.com",
+          "stun:global.stun.twilio.com:3478"
+        ],
+        "iceTransportPolicy": "all",
+        "selectedCandidateTypes": [
+          {
+            "local": "host",
+            "remote": "host"
+          }
+        ],
+        "candidatePairs": [
+          {
+            "state": "waiting",
+            "local": "host",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 0,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "waiting",
+            "local": "host",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 0,
+            "responsesReceived": 0,
+            "requestsReceived": 3,
+            "responsesSent": 3
+          },
+          {
+            "state": "succeeded",
+            "local": "host",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 3,
+            "responsesReceived": 3,
+            "requestsReceived": 4,
+            "responsesSent": 4
+          },
+          {
+            "state": "succeeded",
+            "local": "host",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 3,
+            "responsesReceived": 3,
+            "requestsReceived": 3,
+            "responsesSent": 3
+          },
+          {
+            "state": "in-progress",
+            "local": "host",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 3,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "in-progress",
+            "local": "host",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 3,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "in-progress",
+            "local": "host",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 4,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "waiting",
+            "local": "host",
+            "remote": "srflx",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 0,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "waiting",
+            "local": "host",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 0,
+            "responsesReceived": 0,
+            "requestsReceived": 3,
+            "responsesSent": 3
+          },
+          {
+            "state": "succeeded",
+            "local": "host",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 4,
+            "responsesReceived": 4,
+            "requestsReceived": 4,
+            "responsesSent": 4
+          },
+          {
+            "state": "waiting",
+            "local": "host",
+            "remote": "srflx",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 0,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "waiting",
+            "local": "host",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 0,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "in-progress",
+            "local": "host",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 4,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "waiting",
+            "local": "host",
+            "remote": "srflx",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 0,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "waiting",
+            "local": "host",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 0,
+            "responsesReceived": 0,
+            "requestsReceived": 3,
+            "responsesSent": 3
+          },
+          {
+            "state": "in-progress",
+            "local": "host",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 4,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "waiting",
+            "local": "host",
+            "remote": "srflx",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 0,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "succeeded",
+            "local": "host",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 3,
+            "responsesReceived": 3,
+            "requestsReceived": 3,
+            "responsesSent": 3
+          },
+          {
+            "state": "in-progress",
+            "local": "host",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 3,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "waiting",
+            "local": "host",
+            "remote": "srflx",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 0,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "succeeded",
+            "local": "host",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 3,
+            "responsesReceived": 3,
+            "requestsReceived": 3,
+            "responsesSent": 3
+          },
+          {
+            "state": "in-progress",
+            "local": "host",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 3,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "waiting",
+            "local": "host",
+            "remote": "srflx",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 0,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "in-progress",
+            "local": "host",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 3,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "waiting",
+            "local": "host",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 0,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "waiting",
+            "local": "host",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 0,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "succeeded",
+            "local": "host",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 3,
+            "responsesReceived": 3,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "succeeded",
+            "local": "host",
+            "remote": "host",
+            "selected": true,
+            "nominated": true,
+            "requestsSent": 6,
+            "responsesReceived": 6,
+            "requestsReceived": 6,
+            "responsesSent": 6
+          },
+          {
+            "state": "waiting",
+            "local": "host",
+            "remote": "srflx",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 0,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "waiting",
+            "local": "host",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 0,
+            "responsesReceived": 0,
+            "requestsReceived": 3,
+            "responsesSent": 3
+          },
+          {
+            "state": "in-progress",
+            "local": "host",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 1,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "waiting",
+            "local": "host",
+            "remote": "srflx",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 0,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "waiting",
+            "local": "host",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 0,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          }
+        ],
+        "inboundAudioBytes": 0,
+        "inboundAudioPackets": 0,
+        "inboundAudioEnergy": 0,
+        "inboundAudioLevel": 0,
+        "inboundSamples": 0,
+        "outboundAudioBytes": 0,
+        "outboundAudioPackets": 0,
+        "outboundAudioEnergy": 0,
+        "outboundSamples": 0,
+        "audioReceiverTrackIds": []
+      },
+      {
+        "index": 1,
+        "connectionState": "connected",
+        "signalingState": "stable",
+        "iceUrls": [
+          "stun:ecs.letshare.fun:3478",
+          "stun:stun.l.google.com:19302",
+          "turn:127.0.0.1:3478?transport=udp",
+          "turn:127.0.0.1:3478?transport=tcp"
+        ],
+        "iceTransportPolicy": "relay",
+        "selectedCandidateTypes": [
+          {
+            "local": "relay",
+            "remote": "host"
+          }
+        ],
+        "candidatePairs": [
+          {
+            "state": "waiting",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 0,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "waiting",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 0,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "succeeded",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": true,
+            "requestsSent": 3,
+            "responsesReceived": 3,
+            "requestsReceived": 4,
+            "responsesSent": 4
+          },
+          {
+            "state": "waiting",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 0,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "waiting",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 0,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "waiting",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 0,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "in-progress",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 1,
+            "responsesReceived": 0,
+            "requestsReceived": 1,
+            "responsesSent": 1
+          },
+          {
+            "state": "waiting",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 0,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "waiting",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 0,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "succeeded",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 1,
+            "responsesReceived": 1,
+            "requestsReceived": 3,
+            "responsesSent": 3
+          },
+          {
+            "state": "waiting",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 0,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "waiting",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 0,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "in-progress",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 1,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "in-progress",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 1,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "in-progress",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 1,
+            "responsesReceived": 0,
+            "requestsReceived": 1,
+            "responsesSent": 1
+          },
+          {
+            "state": "in-progress",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 1,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "waiting",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 0,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "succeeded",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": true,
+            "requestsSent": 3,
+            "responsesReceived": 3,
+            "requestsReceived": 4,
+            "responsesSent": 4
+          },
+          {
+            "state": "waiting",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 0,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "waiting",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 0,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "waiting",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 0,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "succeeded",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": true,
+            "requestsSent": 3,
+            "responsesReceived": 3,
+            "requestsReceived": 4,
+            "responsesSent": 4
+          },
+          {
+            "state": "waiting",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 0,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "waiting",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 0,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "waiting",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 0,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "succeeded",
+            "local": "relay",
+            "remote": "host",
+            "selected": true,
+            "nominated": true,
+            "requestsSent": 5,
+            "responsesReceived": 5,
+            "requestsReceived": 6,
+            "responsesSent": 6
+          },
+          {
+            "state": "waiting",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 0,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "waiting",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 0,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "waiting",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 0,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "waiting",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 0,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "in-progress",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 1,
+            "responsesReceived": 0,
+            "requestsReceived": 1,
+            "responsesSent": 1
+          },
+          {
+            "state": "waiting",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 0,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          }
+        ],
+        "inboundAudioBytes": 0,
+        "inboundAudioPackets": 0,
+        "inboundAudioEnergy": 0,
+        "inboundAudioLevel": 0,
+        "inboundSamples": 0,
+        "outboundAudioBytes": 14061,
+        "outboundAudioPackets": 205,
+        "outboundAudioEnergy": 0,
+        "outboundSamples": 0,
+        "audioReceiverTrackIds": [
+          "3445363d-b12f-41b2-aa3b-028a71212bd5"
+        ]
+      },
+      {
+        "index": 2,
+        "connectionState": "connected",
+        "signalingState": "stable",
+        "iceUrls": [
+          "stun:ecs.letshare.fun:3478",
+          "stun:stun.l.google.com:19302",
+          "turn:127.0.0.1:3478?transport=udp",
+          "turn:127.0.0.1:3478?transport=tcp"
+        ],
+        "iceTransportPolicy": "relay",
+        "selectedCandidateTypes": [
+          {
+            "local": "relay",
+            "remote": "host"
+          }
+        ],
+        "candidatePairs": [
+          {
+            "state": "in-progress",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 1,
+            "responsesReceived": 0,
+            "requestsReceived": 1,
+            "responsesSent": 1
+          },
+          {
+            "state": "waiting",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 0,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "waiting",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 0,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "waiting",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 0,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "in-progress",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 1,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "waiting",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 0,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "waiting",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 0,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "waiting",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 0,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "succeeded",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 1,
+            "responsesReceived": 1,
+            "requestsReceived": 2,
+            "responsesSent": 2
+          },
+          {
+            "state": "in-progress",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 1,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "in-progress",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 1,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "in-progress",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 1,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "succeeded",
+            "local": "relay",
+            "remote": "host",
+            "selected": true,
+            "nominated": true,
+            "requestsSent": 3,
+            "responsesReceived": 3,
+            "requestsReceived": 3,
+            "responsesSent": 3
+          },
+          {
+            "state": "waiting",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 0,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "waiting",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 0,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "waiting",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 0,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "succeeded",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 3,
+            "responsesReceived": 3,
+            "requestsReceived": 2,
+            "responsesSent": 2
+          },
+          {
+            "state": "waiting",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 0,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "waiting",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 0,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "waiting",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 0,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "waiting",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 0,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "waiting",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 0,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "waiting",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 0,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "waiting",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 0,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "succeeded",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 3,
+            "responsesReceived": 3,
+            "requestsReceived": 2,
+            "responsesSent": 2
+          },
+          {
+            "state": "in-progress",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 1,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "in-progress",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 1,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "in-progress",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 1,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "in-progress",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 1,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "in-progress",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 1,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "in-progress",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 1,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "in-progress",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 1,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "succeeded",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 1,
+            "responsesReceived": 1,
+            "requestsReceived": 2,
+            "responsesSent": 2
+          },
+          {
+            "state": "in-progress",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 1,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "in-progress",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 1,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "in-progress",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 1,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "succeeded",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 4,
+            "responsesReceived": 4,
+            "requestsReceived": 1,
+            "responsesSent": 1
+          },
+          {
+            "state": "in-progress",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 1,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "in-progress",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 1,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "in-progress",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 1,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "in-progress",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 3,
+            "responsesReceived": 1,
+            "requestsReceived": 2,
+            "responsesSent": 2
+          },
+          {
+            "state": "in-progress",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 1,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "in-progress",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 1,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "in-progress",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 1,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "in-progress",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 1,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "in-progress",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 1,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "in-progress",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 1,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "in-progress",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 1,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          }
+        ],
+        "inboundAudioBytes": 649,
+        "inboundAudioPackets": 9,
+        "inboundAudioEnergy": 0,
+        "inboundAudioLevel": 0,
+        "inboundSamples": 8160,
+        "outboundAudioBytes": 0,
+        "outboundAudioPackets": 0,
+        "outboundAudioEnergy": 0,
+        "outboundSamples": 0,
+        "audioReceiverTrackIds": [
+          "e3d8674b-0a7a-4b1f-a297-e86429f619d7"
+        ]
+      }
+    ],
+    "chrome": [
+      {
+        "index": 0,
+        "connectionState": "connected",
+        "signalingState": "stable",
+        "iceUrls": [
+          "stun:stun.l.google.com:19302",
+          "stun:stun.counterpath.net",
+          "stun:stun.internetcalls.com",
+          "stun:stun.voip.aebc.com",
+          "stun:stun.voipbuster.com",
+          "stun:stun.xten.com",
+          "stun:global.stun.twilio.com:3478"
+        ],
+        "iceTransportPolicy": "all",
+        "selectedCandidateTypes": [
+          {
+            "local": "host",
+            "remote": "host"
+          }
+        ],
+        "candidatePairs": [
+          {
+            "state": "succeeded",
+            "local": "host",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 4,
+            "responsesReceived": 4,
+            "requestsReceived": 4,
+            "responsesSent": 4
+          },
+          {
+            "state": "waiting",
+            "local": "host",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 0,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "in-progress",
+            "local": "host",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 4,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "waiting",
+            "local": "host",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 0,
+            "responsesReceived": 0,
+            "requestsReceived": 3,
+            "responsesSent": 3
+          },
+          {
+            "state": "waiting",
+            "local": "host",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 0,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "waiting",
+            "local": "host",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 0,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "succeeded",
+            "local": "host",
+            "remote": "host",
+            "selected": true,
+            "nominated": true,
+            "requestsSent": 6,
+            "responsesReceived": 6,
+            "requestsReceived": 6,
+            "responsesSent": 6
+          },
+          {
+            "state": "waiting",
+            "local": "host",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 0,
+            "responsesReceived": 0,
+            "requestsReceived": 3,
+            "responsesSent": 3
+          },
+          {
+            "state": "in-progress",
+            "local": "host",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 3,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "in-progress",
+            "local": "host",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 3,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "in-progress",
+            "local": "host",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 3,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "succeeded",
+            "local": "host",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 3,
+            "responsesReceived": 3,
+            "requestsReceived": 3,
+            "responsesSent": 3
+          },
+          {
+            "state": "waiting",
+            "local": "host",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 0,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "waiting",
+            "local": "host",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 0,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "succeeded",
+            "local": "host",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 3,
+            "responsesReceived": 3,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "in-progress",
+            "local": "host",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 3,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "succeeded",
+            "local": "host",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 3,
+            "responsesReceived": 3,
+            "requestsReceived": 3,
+            "responsesSent": 3
+          },
+          {
+            "state": "in-progress",
+            "local": "host",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 3,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "waiting",
+            "local": "host",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 0,
+            "responsesReceived": 0,
+            "requestsReceived": 3,
+            "responsesSent": 3
+          },
+          {
+            "state": "succeeded",
+            "local": "host",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 3,
+            "responsesReceived": 3,
+            "requestsReceived": 3,
+            "responsesSent": 3
+          },
+          {
+            "state": "in-progress",
+            "local": "host",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 3,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "in-progress",
+            "local": "host",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 3,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "waiting",
+            "local": "host",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 0,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "waiting",
+            "local": "host",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 0,
+            "responsesReceived": 0,
+            "requestsReceived": 3,
+            "responsesSent": 3
+          },
+          {
+            "state": "succeeded",
+            "local": "host",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 4,
+            "responsesReceived": 4,
+            "requestsReceived": 3,
+            "responsesSent": 3
+          }
+        ],
+        "inboundAudioBytes": 0,
+        "inboundAudioPackets": 0,
+        "inboundAudioEnergy": 0,
+        "inboundAudioLevel": 0,
+        "inboundSamples": 0,
+        "outboundAudioBytes": 0,
+        "outboundAudioPackets": 0,
+        "outboundAudioEnergy": 0,
+        "outboundSamples": 0,
+        "audioReceiverTrackIds": []
+      },
+      {
+        "index": 1,
+        "connectionState": "connected",
+        "signalingState": "stable",
+        "iceUrls": [
+          "stun:ecs.letshare.fun:3478",
+          "stun:stun.l.google.com:19302",
+          "turn:127.0.0.1:3478?transport=udp",
+          "turn:127.0.0.1:3478?transport=tcp"
+        ],
+        "iceTransportPolicy": "relay",
+        "selectedCandidateTypes": [
+          {
+            "local": "relay",
+            "remote": "host"
+          }
+        ],
+        "candidatePairs": [
+          {
+            "state": "in-progress",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 1,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "succeeded",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 1,
+            "responsesReceived": 1,
+            "requestsReceived": 1,
+            "responsesSent": 1
+          },
+          {
+            "state": "in-progress",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 1,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "in-progress",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 1,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "in-progress",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 1,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "succeeded",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 1,
+            "responsesReceived": 1,
+            "requestsReceived": 1,
+            "responsesSent": 1
+          },
+          {
+            "state": "in-progress",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 1,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "in-progress",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 1,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "in-progress",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 1,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "succeeded",
+            "local": "relay",
+            "remote": "host",
+            "selected": true,
+            "nominated": true,
+            "requestsSent": 5,
+            "responsesReceived": 5,
+            "requestsReceived": 5,
+            "responsesSent": 5
+          },
+          {
+            "state": "in-progress",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 1,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "in-progress",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 1,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "in-progress",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 1,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "succeeded",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 1,
+            "responsesReceived": 1,
+            "requestsReceived": 1,
+            "responsesSent": 1
+          },
+          {
+            "state": "in-progress",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 1,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "in-progress",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 1,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          }
+        ],
+        "inboundAudioBytes": 0,
+        "inboundAudioPackets": 0,
+        "inboundAudioEnergy": 0,
+        "inboundAudioLevel": 0,
+        "inboundSamples": 0,
+        "outboundAudioBytes": 11942,
+        "outboundAudioPackets": 158,
+        "outboundAudioEnergy": 0,
+        "outboundSamples": 0,
+        "audioReceiverTrackIds": [
+          "69748a71-6fbb-4333-9124-6adb51728520"
+        ]
+      },
+      {
+        "index": 2,
+        "connectionState": "connected",
+        "signalingState": "stable",
+        "iceUrls": [
+          "stun:ecs.letshare.fun:3478",
+          "stun:stun.l.google.com:19302",
+          "turn:127.0.0.1:3478?transport=udp",
+          "turn:127.0.0.1:3478?transport=tcp"
+        ],
+        "iceTransportPolicy": "relay",
+        "selectedCandidateTypes": [
+          {
+            "local": "relay",
+            "remote": "host"
+          }
+        ],
+        "candidatePairs": [
+          {
+            "state": "in-progress",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 1,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "in-progress",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 1,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "in-progress",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 1,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "succeeded",
+            "local": "relay",
+            "remote": "host",
+            "selected": true,
+            "nominated": true,
+            "requestsSent": 5,
+            "responsesReceived": 5,
+            "requestsReceived": 3,
+            "responsesSent": 3
+          },
+          {
+            "state": "in-progress",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 2,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "in-progress",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 2,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "in-progress",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 2,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "succeeded",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 4,
+            "responsesReceived": 4,
+            "requestsReceived": 1,
+            "responsesSent": 1
+          },
+          {
+            "state": "in-progress",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 2,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "in-progress",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 2,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "in-progress",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 2,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "succeeded",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 4,
+            "responsesReceived": 4,
+            "requestsReceived": 2,
+            "responsesSent": 2
+          },
+          {
+            "state": "in-progress",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 1,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "in-progress",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 1,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "in-progress",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 1,
+            "responsesReceived": 0,
+            "requestsReceived": 0,
+            "responsesSent": 0
+          },
+          {
+            "state": "succeeded",
+            "local": "relay",
+            "remote": "host",
+            "selected": false,
+            "nominated": false,
+            "requestsSent": 2,
+            "responsesReceived": 2,
+            "requestsReceived": 2,
+            "responsesSent": 2
+          }
+        ],
+        "inboundAudioBytes": 4775,
+        "inboundAudioPackets": 66,
+        "inboundAudioEnergy": 0,
+        "inboundAudioLevel": 0,
+        "inboundSamples": 62880,
+        "outboundAudioBytes": 0,
+        "outboundAudioPackets": 0,
+        "outboundAudioEnergy": 0,
+        "outboundSamples": 0,
+        "audioReceiverTrackIds": [
+          "66228b2d-0320-4eef-8803-8baba2945a47"
+        ]
+      }
+    ],
+    "edgeLocalInput": {
+      "found": true,
+      "trackId": "66228b2d-0320-4eef-8803-8baba2945a47",
+      "trackState": "live",
+      "audioContextState": "running",
+      "rms": 0.19302666018958514
+    },
+    "chromeLocalInput": {
+      "found": true,
+      "trackId": "e3d8674b-0a7a-4b1f-a297-e86429f619d7",
+      "trackState": "live",
+      "audioContextState": "running",
+      "rms": 0.19459203690551466
+    },
+    "edgePlayback": {
+      "found": true,
+      "streamId": "8106d127-c87d-4105-88f6-cdc518fb2ce7",
+      "trackId": "e3d8674b-0a7a-4b1f-a297-e86429f619d7",
+      "trackState": "live",
+      "trackMuted": false,
+      "paused": false,
+      "elementMuted": true,
+      "readyState": 4,
+      "audioContextState": "running",
+      "rms": 0.16031627344925506
+    },
+    "chromePlayback": {
+      "found": true,
+      "streamId": "1d1ad62f-560d-4656-a5ee-21809b151557",
+      "trackId": "66228b2d-0320-4eef-8803-8baba2945a47",
+      "trackState": "live",
+      "trackMuted": false,
+      "paused": false,
+      "elementMuted": true,
+      "readyState": 4,
+      "audioContextState": "running",
+      "rms": 0.15558805394701705
+    },
+    "edgePipelineOutput": {
+      "pipelineCount": 1,
+      "tapCount": 1,
+      "rms": 0.1893941323235247,
+      "contextStates": [
+        "running"
+      ],
+      "tapKeys": [
+        [
+          "analyser",
+          "detach"
+        ]
+      ]
+    },
+    "chromePipelineOutput": {
+      "pipelineCount": 1,
+      "tapCount": 1,
+      "rms": 0.1844846601211726,
+      "contextStates": [
+        "running"
+      ],
+      "tapKeys": [
+        [
+          "analyser",
+          "detach"
+        ]
+      ]
+    },
+    "edgePipelineHook": {
+      "installed": true,
+      "exportName": "RemoteAudioPipeline"
+    },
+    "chromePipelineHook": {
+      "installed": true,
+      "exportName": "RemoteAudioPipeline"
+    },
+    "edgeReceiverPlayback": {
+      "matched": true,
+      "pcIndex": 2,
+      "receiverTrackId": "e3d8674b-0a7a-4b1f-a297-e86429f619d7",
+      "uiTrackIds": [
+        "e3d8674b-0a7a-4b1f-a297-e86429f619d7"
+      ],
+      "streamId": "8106d127-c87d-4105-88f6-cdc518fb2ce7"
+    },
+    "chromeReceiverPlayback": {
+      "matched": true,
+      "pcIndex": 2,
+      "receiverTrackId": "66228b2d-0320-4eef-8803-8baba2945a47",
+      "uiTrackIds": [
+        "66228b2d-0320-4eef-8803-8baba2945a47"
+      ],
+      "streamId": "1d1ad62f-560d-4656-a5ee-21809b151557"
+    },
+    "edgeWireTypes": [
+      "received:connected",
+      "sent:custom",
+      "sent:subscribe",
+      "received:message",
+      "received:subscribed",
+      "sent:publish",
+      "sent:call:sfu:join",
+      "received:meeting:membership:snapshot",
+      "received:meeting:info",
+      "sent:meeting:sdp",
+      "sent:meeting:ice",
+      "received:meeting:sdp",
+      "received:meeting:ice",
+      "received:meeting:membership:changed",
+      "received:error"
+    ],
+    "chromeWireTypes": [
+      "received:connected",
+      "sent:custom",
+      "sent:subscribe",
+      "received:message",
+      "received:subscribed",
+      "sent:publish",
+      "sent:call:sfu:join",
+      "received:meeting:membership:snapshot",
+      "sent:meeting:sdp",
+      "received:meeting:info",
+      "received:meeting:ice",
+      "received:meeting:sdp",
+      "sent:meeting:ice"
+    ],
+    "turnResponse": {
+      "status": 200,
+      "urls": [
+        "turn:127.0.0.1:3478?transport=udp",
+        "turn:127.0.0.1:3478?transport=tcp"
+      ],
+      "afterCallStart": true,
+      "beforeAccept": true
+    }
+  }
+}

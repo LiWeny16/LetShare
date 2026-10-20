@@ -69,6 +69,7 @@ import settingsStore from "@App/libs/mobx/mobx";
 import { isApp } from "@App/libs/capacitor/user";
 import { Trans, useTranslation } from "react-i18next";
 import { CallManager } from "@App/libs/call/callManager";
+import { mergeRemoteCallStream } from "@App/libs/call/remoteStream";
 import type { CallQualitySample } from "@App/libs/call/callSession";
 import { startRingtone, stopRingtone, setCallToneForState, stopAllCallTones, playDisconnectTone } from "@App/libs/call/ringtone";
 import { acquireCallAudio, mergedAudioConstraints } from "@App/libs/call/audioCapture";
@@ -352,24 +353,11 @@ const Share = observer(() => {
           // 依赖 activeCallRef.current 会互相覆盖，必须链式基于最新 state 合并
           setActiveCall((prev) => (prev && prev.peerId === peerId ? { ...prev, state } : prev));
         },
-        onRemoteStream: (peerId, stream, kind) => {
+        onRemoteStream: (peerId, stream) => {
           setActiveCall((prev) => {
             if (!prev || prev.peerId !== peerId) return prev;
-            // 防御：浏览器可能把 audio/video 拆成两个 stream 且 video 先到，
-            // 此时后到的音频流若被丢弃即无声 —— 把缺失 kind 的轨道并入现有流
-            // （保持 stream 引用稳定，UI 绑定不重挂）。
-            const existing = prev.remoteStream;
-            if (existing && existing !== stream) {
-              const existingTracks = existing.getTracks();
-              const missing = stream.getTracks().filter((t) => !existingTracks.some((e) => e.kind === t.kind));
-              if (missing.length > 0) {
-                for (const track of missing) existing.addTrack(track);
-                // 触发重渲染（同一流对象，UI effect 依赖引用不变，需要手动 kick）
-                return { ...prev };
-              }
-              return prev; // 轨道已齐（重复事件），不动
-            }
-            return { ...prev, remoteStream: kind === "video" ? stream : (prev.remoteStream ?? stream) };
+            const remoteStream = mergeRemoteCallStream(prev.remoteStream, stream);
+            return remoteStream === prev.remoteStream ? prev : { ...prev, remoteStream };
           });
         },
         onLocalStream: (peerId, stream) => {

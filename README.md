@@ -187,7 +187,7 @@ node scripts/deploy.cjs --backend
 
 ### TURN relay (configured WebRTC paths)
 
-In the custom-server deployment, ordinary one-to-one audio calls use the public LetShare SFU: each browser sends and receives media over its own WebRTC connection to the ECS. Signaling uses the existing WebSocket. Pure-audio calls do not use browser-to-browser P2P or TURN. This keeps the media route predictable, but networks that block UDP may still prevent a call; ordinary audio currently has no TCP/TURN fallback.
+In the custom-server deployment, ordinary one-to-one audio calls use the public LetShare SFU: each browser publishes and subscribes over separate WebRTC connections to the ECS. Signaling uses the existing WebSocket. Media can reach the SFU directly or through the configured TURN relay, including TURN over TCP when UDP is unavailable. New and rebuilt connections use the latest fetched TURN configuration. The embedded relay currently listens on UDP/TCP 3478; TURN over TLS on port 443 is not included.
 
 Other WebRTC paths can still use the embedded TURN relay (`internal/turnserver`, `pion/turn/v2`) when configured. Short-lived TURN credentials are issued by `GET /api/turn-credentials` (RFC 5766 use-auth-secret, shared HMAC logic in `internal/turnauth`).
 
@@ -198,17 +198,51 @@ Production checklist:
 3. Open firewall / security-group ports: `3478/udp` + `3478/tcp` (TURN/STUN listener) and `49160-49200/udp` (relay port range, adjustable via `turn.relay_port_min/max`).
 4. Restart the backend; verify `curl https://<host>/api/turn-credentials` returns `ice_servers` (not 404).
 
-When TURN is disabled (`turn.enabled: false`), the endpoint returns 404 and clients degrade to pure STUN — calls still start, but symmetric-NAT peers may fail to connect.
+When TURN is disabled (`turn.enabled: false`), the endpoint returns 404 and clients use STUN and direct ICE candidates. Calls can still start, but clients that cannot reach the SFU directly have no relay fallback.
 
-Local E2E (two headless clients, forced through the embedded TURN relay):
+Local E2E (two isolated browser clients through the local SFU; set `LETSHARE_E2E_FORCE_RELAY=1` to require the embedded TURN relay):
 
 ```bash
 pnpm test:e2e:call
 ```
 
+### Targeted call audio recovery regression (Windows)
+
+`pnpm test:e2e:call-audio-repair` uses installed Edge and Chrome in visible, isolated profiles. It checks both directions with synthetic microphone audio, actual SFU signaling, received samples, playback track replacement, and subscriber recovery. Browser audio is muted during the test; this does not check physical speakers or a Singapore–China route. The test closes one native subscriber PC and emits its connection-state notification to trigger recovery.
+
+Start the test backend in a separate PowerShell terminal from the repository root (ports 27771 and TURN 3478 must be free, with relay ports 49160–49200/udp available). Use this machine's active LAN IPv4 for the advertised SFU/relay address; a loopback address can leave forced-relay ICE checks unable to reach the SFU's interface-bound sockets. TURN listener URLs remain local to the fixture.
+
+```powershell
+$env:MODE = "local"
+$env:LETSHARE_SERVER_PORT = "27771"
+$env:SERVER_AUTH_SECRET = "call-repair-local" # local fixture only
+Get-NetIPAddress -AddressFamily IPv4 | Select-Object InterfaceAlias, IPAddress
+$env:LETSHARE_TURN_PUBLIC_IP = "192.168.1.20" # replace with this machine's active LAN IPv4
+Set-Location server
+go run ./cmd/server
+```
+
+Start the frontend in another PowerShell terminal from the repository root:
+
+```powershell
+$env:LETSHARE_DEV_BACKEND_HTTP = "http://127.0.0.1:27771"
+pnpm exec vite --host 127.0.0.1 --port 27772 --strictPort
+```
+
+Run the regression from a third terminal. The test expects these local services and removes only its own temporary browser profiles:
+
+```powershell
+$env:LETSHARE_E2E_FORCE_RELAY = "0"
+pnpm test:e2e:call-audio-repair
+$env:LETSHARE_E2E_FORCE_RELAY = "1"
+pnpm test:e2e:call-audio-repair
+```
+
+Results and screenshots are written under `Harness/wf-browser/runs/call-audio-repair/`. Stop the two local services after testing. Repeated runs may exhaust the small local relay range while allocations expire; restart only the test backend before a fresh run if allocation errors occur.
+
 ## Known Constraints
 
-- File-transfer P2P and legacy direct WebRTC paths depend on NAT traversal, browser support, and network policy; TURN is a fallback only for paths configured to use it. Ordinary pure-audio calls use the SFU without a TURN or TCP fallback.
+- File-transfer P2P and legacy direct WebRTC paths depend on NAT traversal, browser support, and network policy. Ordinary pure-audio calls use the SFU with the configured TURN UDP/TCP fallback; TURN/TLS 443 and regional media failover require additional infrastructure.
 - Public relay transfer requires the Custom WebSocket provider; Ably is signaling only.
 - Free public relay transfers above 50 MB are rejected by the backend.
 - PRO authorization for relay transfer is evaluated by server-side token state.
