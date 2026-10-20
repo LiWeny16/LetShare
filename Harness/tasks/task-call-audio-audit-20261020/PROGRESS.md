@@ -32,3 +32,10 @@
 - New package runner and README setup expose the regression for future runs. Independent code/architecture/test/runner review: PASS; independent spec/acceptance reflector: PASS for FIX-AC-001..004. Accepted review corrections: ignore ended incoming tracks, expose runnable test setup, tap the current graph tail, and clean profiles on failed browser launch.
 - Controller independently checked final native candidate pairs, receiver object/stream identity, decoded samples, and pipeline output in JSON, and viewed active/recovered screenshots. Test writer/verifier did not edit product source.
 - Closeout: local repair and validation complete; own backend/Vite services stopped, no test browser processes remain. Existing docs build artifacts and unrelated Harness runtime edits preserved. No deployment, commit, push, firewall change, or actual cross-border/physical-speaker acceptance.
+
+## User-authorized production rollout
+
+- User subsequently requested full frontend/backend production deployment. Release worktree on main preserves the original developer branch and pre-existing docs/runtime modifications.
+- Published frontend v3.8.46/build `2026-10-20T11:43:31Z-7muyr`; origin, mainland CDN and direct GitHub Pages edge agree. Page, SW and call-chunk checksums match the built artifacts. Source/artifact history and server submodule published to main without force push; Pages successful.
+- Initial CI exposed existing WebSocket cleanup races. Independent regression test reproduced loss of an already-claimed disconnect callback at shutdown; minimal lifecycle correction passed full local `go test -race ./internal/...` and independent review. Corrected server commit `052e483` is included for the final backend rollout/CI.
+- Full release details, backup path, validation boundaries and rollout evidence are in DEPLOYMENT.md. No new TLS443/region/relay-capacity configuration was deployed.
