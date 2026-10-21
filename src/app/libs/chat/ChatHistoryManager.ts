@@ -72,6 +72,14 @@ export function isFileMessage(msg: ChatMessage): msg is FileChatMessage {
   return msg.type === 'file' || msg.type === 'image';
 }
 
+function waitForTransactionCommit(transaction: IDBTransaction): Promise<void> {
+  return new Promise((resolve, reject) => {
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error || new Error('IndexedDB transaction failed'));
+    transaction.onabort = () => reject(transaction.error || new Error('IndexedDB transaction aborted'));
+  });
+}
+
 class ChatHistoryManager {
   private static instance: ChatHistoryManager | null = null;
   private static isCreating = false; // 防止并发创建
@@ -293,11 +301,9 @@ class ChatHistoryManager {
       }
       history.userName = otherUserName;
 
-      await new Promise<void>((resolve, reject) => {
-        const putRequest = store.put(history);
-        putRequest.onsuccess = () => resolve();
-        putRequest.onerror = () => reject(putRequest.error);
-      });
+      const committed = waitForTransactionCommit(transaction);
+      store.put(history);
+      await committed;
 
       console.log(`[CHAT DB] File message saved: ${file.name} (${messageId})`);
       return { success: true, messageId };
@@ -347,8 +353,22 @@ class ChatHistoryManager {
   public async deleteMessage(
     userId: string,
     messageId: string,
+    options: { preserveFile?: boolean } = {},
   ): Promise<{ success: boolean; error?: string }> {
     try {
+      let preparedV2FileKey: string | null = null;
+      if (!options.preserveFile) {
+        const currentHistory = await this.getChatHistory(userId);
+        const currentMessage = currentHistory?.messages.find((message) => message.id === messageId);
+        if ((currentMessage?.type === 'file' || currentMessage?.type === 'image')
+          && currentMessage.fileMetadata.fileKey?.startsWith('filev2:')) {
+          const FileBlobStore = (await import('./FileBlobStore')).default;
+          const prepared = await FileBlobStore.prepareDeleteFile(currentMessage.fileMetadata.fileKey);
+          if (!prepared) return { success: false, error: 'File transfer could not be paused for deletion' };
+          preparedV2FileKey = currentMessage.fileMetadata.fileKey;
+        }
+      }
+
       const db = await this.ensureDB();
       const transaction = db.transaction([this.storeName], 'readwrite');
       const store = transaction.objectStore(this.storeName);
@@ -373,15 +393,21 @@ class ChatHistoryManager {
           ? history.messages[history.messages.length - 1].timestamp
           : history.lastMessageTime;
 
-        await new Promise<void>((resolve, reject) => {
-          const putRequest = store.put(history);
-          putRequest.onsuccess = () => resolve();
-          putRequest.onerror = () => reject(putRequest.error);
-        });
+        const committed = waitForTransactionCommit(transaction);
+        store.put(history);
+        await committed;
 
-        if (fileKey) {
+        if (fileKey && !options.preserveFile) {
           const FileBlobStore = (await import('./FileBlobStore')).default;
-          await FileBlobStore.deleteFile(fileKey);
+          const deleted = await FileBlobStore.deleteFile(fileKey);
+          if (!deleted.success) {
+            return {
+              success: false,
+              error: preparedV2FileKey === fileKey
+                ? 'History entry was deleted, but file cleanup is pending; retry from the file transfers list'
+                : 'History entry was deleted, but the associated file could not be deleted',
+            };
+          }
         }
         console.log(`[CHAT DB] Deleted message ${messageId}`);
         return { success: true };
@@ -392,11 +418,9 @@ class ChatHistoryManager {
         ? history.messages[history.messages.length - 1].timestamp
         : history.lastMessageTime;
 
-      await new Promise<void>((resolve, reject) => {
-        const putRequest = store.put(history);
-        putRequest.onsuccess = () => resolve();
-        putRequest.onerror = () => reject(putRequest.error);
-      });
+      const committed = waitForTransactionCommit(transaction);
+      store.put(history);
+      await committed;
 
       console.log(`[CHAT DB] Deleted message ${messageId}`);
       return { success: true };
@@ -516,11 +540,9 @@ class ChatHistoryManager {
       const transaction = db.transaction([this.storeName], 'readwrite');
       const store = transaction.objectStore(this.storeName);
 
-      await new Promise<void>((resolve, reject) => {
-        const deleteRequest = store.delete(userId);
-        deleteRequest.onsuccess = () => resolve();
-        deleteRequest.onerror = () => reject(deleteRequest.error);
-      });
+      const committed = waitForTransactionCommit(transaction);
+      store.delete(userId);
+      await committed;
 
       console.log(`[CHAT DB] Chat history deleted for user ${userId}`);
       return { success: true };
@@ -538,15 +560,14 @@ class ChatHistoryManager {
       const transaction = db.transaction([this.storeName], 'readwrite');
       const store = transaction.objectStore(this.storeName);
 
-      await new Promise<void>((resolve, reject) => {
-        const clearRequest = store.clear();
-        clearRequest.onsuccess = () => resolve();
-        clearRequest.onerror = () => reject(clearRequest.error);
-      });
+      const committed = waitForTransactionCommit(transaction);
+      store.clear();
+      await committed;
 
       console.log('[CHAT DB] All chat histories cleared');
     } catch (error) {
       console.error('Failed to clear all chat histories from IndexedDB:', error);
+      throw error;
     }
   }
 

@@ -937,6 +937,7 @@ const Share = observer(() => {
   }) => (
     <MenuItem
       key={title}
+      data-testid={Icon === DownloadIcon ? "open-download-manager" : undefined}
       disableRipple
       onClick={() => { setFabMenuAnchor(null); onClick(); }}
       sx={{
@@ -1017,6 +1018,57 @@ const Share = observer(() => {
   const hasConnectedUsers = connectedUsers.some(user =>
     user.status !== 'disconnected'
   );
+
+  const p2pDisabledForTestRef = useRef<{
+    disabledPeers: Set<string>;
+    adapterOptions: { isP2PVerified: (peerId: string) => boolean } | null;
+    originalVerifier: ((peerId: string) => boolean) | null;
+    patchedVerifier: ((peerId: string) => boolean) | null;
+  }>({ disabledPeers: new Set(), adapterOptions: null, originalVerifier: null, patchedVerifier: null });
+  const setP2PDisabledForTest = (peerId: string, disabled: boolean): boolean => {
+    const state = p2pDisabledForTestRef.current;
+    const adapter = (realTimeColab as any).fileTransferV2;
+    const adapterOptions = adapter?.options as { isP2PVerified: (peerId: string) => boolean } | undefined;
+    if (!adapterOptions || typeof adapterOptions.isP2PVerified !== "function") return false;
+    if (disabled) {
+      if (!state.originalVerifier) {
+        state.adapterOptions = adapterOptions;
+        state.originalVerifier = adapterOptions.isP2PVerified;
+        const originalVerifier = state.originalVerifier;
+        state.patchedVerifier = (id: string) => !state.disabledPeers.has(id) && originalVerifier(id);
+        adapterOptions.isP2PVerified = state.patchedVerifier;
+      }
+      state.disabledPeers.add(peerId);
+    } else {
+      state.disabledPeers.delete(peerId);
+      if (state.disabledPeers.size === 0 && state.adapterOptions && state.originalVerifier) {
+        if (state.adapterOptions.isP2PVerified === state.patchedVerifier) {
+          state.adapterOptions.isP2PVerified = state.originalVerifier;
+        }
+        state.adapterOptions = null;
+        state.originalVerifier = null;
+        state.patchedVerifier = null;
+      }
+    }
+    adapter.engine?.notifyPathsChanged();
+    return true;
+  };
+
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    const maskState = p2pDisabledForTestRef.current;
+    return () => {
+      if (!maskState.originalVerifier) return;
+      if (maskState.adapterOptions?.isP2PVerified === maskState.patchedVerifier) {
+        maskState.adapterOptions.isP2PVerified = maskState.originalVerifier;
+      }
+      maskState.disabledPeers.clear();
+      maskState.adapterOptions = null;
+      maskState.originalVerifier = null;
+      maskState.patchedVerifier = null;
+      (realTimeColab as any).fileTransferV2?.engine?.notifyPathsChanged();
+    };
+  }, []);
 
   // 是否连接到服务器
   const isConnectedToServer = settingsStore.getUnrmb("isConnectedToServer") === true;
@@ -1157,6 +1209,55 @@ const Share = observer(() => {
         channel.close();
         return true;
       },
+      setP2PDisabledForTest,
+      // Test-only access to the exact module instances this component closes over.
+      getFileTransferV2RuntimeForTest: () => ({
+        colab: realTimeColab,
+        chatIntegration: ChatIntegration,
+      }),
+      getFileTransferV2State: async () => ({
+        snapshots: realTimeColab.getFileTransferV2Snapshots(),
+        tasks: await realTimeColab.getFileTransferV2Tasks(),
+      }),
+      supportsFileTransferV2Peer: (peerId: string): boolean =>
+        (realTimeColab as any).fileTransferV2?.supportsPeer(peerId) ?? false,
+      getFileTransferV2PathDiagnostics: (transferId: string) => {
+        const engine = (realTimeColab as any).fileTransferV2?.engine;
+        const runtime = engine?.tasks?.get(transferId);
+        if (!runtime) return null;
+        const pathStats: Record<string, { ackCount: number; ackBytes: number; queuedBytes: number; failures: number; acks: Array<{ at: number; bytes: number }> }> = {};
+        for (const [pathId, stats] of runtime.pathStats as Map<string, any>) {
+          pathStats[pathId] = {
+            ackCount: stats.ackSamples.length,
+            ackBytes: stats.ackSamples.reduce((sum: number, sample: { bytes: number }) => sum + sample.bytes, 0),
+            queuedBytes: stats.queuedBytes,
+            failures: stats.failures,
+            acks: stats.ackSamples.map((sample: { at: number; bytes: number }) => ({ ...sample })),
+          };
+        }
+        return {
+          attachedPaths: Array.from(runtime.attachedPaths as Set<string>),
+          acceptedPaths: Array.from(runtime.acceptedPaths as Set<string>),
+          inFlight: runtime.inFlight.size,
+          pathStats,
+        };
+      },
+      setFileTransferPriorityForTest: (priority: "p2p" | "server") => {
+        settingsStore.update("transferPriority", priority);
+      },
+      failNextFileTransferV2HistoryCommit: (): boolean => {
+        const original = ChatIntegration.commitV2ReceivedFile;
+        ChatIntegration.commitV2ReceivedFile = async () => {
+          ChatIntegration.commitV2ReceivedFile = original;
+          throw new Error("Injected one-time v2 history commit failure");
+        };
+        return true;
+      },
+      pauseFileTransferV2: (transferId: string) => realTimeColab.pauseFileTransferV2(transferId),
+      resumeFileTransferV2: (transferId: string) => realTimeColab.resumeFileTransferV2(transferId),
+      resumeFileTransferV2WithSource: (transferId: string, file: File) =>
+        realTimeColab.resumeFileTransferV2WithSource(transferId, file),
+      cancelFileTransferV2: (transferId: string) => realTimeColab.cancelFileTransferV2(transferId),
     };
 
     (window as any).__LET_SHARE_E2E__ = e2eApi;
@@ -1380,7 +1481,7 @@ const Share = observer(() => {
         if (transferPriority === 'server') {
           // 用户偏好：优先公网传输
           console.log(" 用户偏好公网传输，使用服务器转发文件");
-          await realTimeColab.sendFileViaServer(targetUserId, selectedFile);
+          await realTimeColab.sendFileAuto(targetUserId, selectedFile);
         } else {
           // 3.8.2 统一发送入口：probe 验证后走 P2P；探针失败/ACK 卡死自动切公网 relay
           await realTimeColab.sendFileAuto(targetUserId, selectedFile);

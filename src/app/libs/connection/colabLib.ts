@@ -49,15 +49,30 @@ import {
  type FileTransferUiUpdate,
 } from "./ServerFileTransfer";
 import {
+ FileTransferV2ApplicationAdapter,
+ getFileTransferV2Store,
+ installFileTransferV2ApplicationAdapter,
+ unwrapP2PFileTransferV2Control,
+ withFileTransferV2DiscoveryCapability,
+} from "./fileTransferV2/applicationAdapter";
+import type { FileTransferV2Snapshot } from "./fileTransferV2/engine";
+import type { FileTransferV2Task } from "./fileTransferV2/store";
+import {
 	getProToken,
 	isPro,
 	showProUpgradeDialog,
 	PRO_SIZE_LIMIT,
 } from "./proUpgrade";
 import {
+ BoundedSerialTransferQueue,
+ OrderedChunkCommitQueue,
+ calculateRollingTransferRate,
  DirectFileWriteSink,
+ getTransferMessageByteLength,
+ MAX_P2P_RECEIVE_QUEUE_BYTES,
  type FileSystemWritableFileStreamLike,
  type ReceiveBufferWriteResult,
+ type TransferRateSample,
  TransferAckTracker,
  TransferReceiveBuffer,
  TransferTimeoutError,
@@ -71,9 +86,10 @@ import {
   encodeTransferFrame,
  extractTransferIdFromFrameSafely,
  getEffectiveDataChannelChunkSize,
+ getConservativeReceiveCacheByteLimit,
+ getConservativeReceiveMemoryLimit,
  getP2PChannelFailureImpact,
  getResendRecoveryFailureMessage,
- getSafeReceiveSizeLimit,
  getSafeTransferConfig,
  getTransferCompletionAckTimeoutMs,
  isP2PSendTransferCurrent,
@@ -119,6 +135,7 @@ const RECONNECT_RETRY_POLICY: RetryPolicy = {
  maxAttempts: null,
  attemptTimeoutMs: 30000,
 };
+const P2P_RECEIVE_CREDIT_WINDOW_BYTES = 1024 * 1024;
 
 /** 服务端存活探测节奏：最坏探测上界 = interval + timeout = 20s < 30s（C-01）。 */
 const SERVER_LIVENESS_PROBE_INTERVAL_MS = 10_000;
@@ -156,6 +173,7 @@ type P2PNormalizedFileMeta = {
  hash?: string;
  /** 发送端声明完成后补发 file-hash 控制帧 */
  hashPending?: boolean;
+ supportsReceiveCredit?: boolean;
 };
 
 // 创建一个类型安全的事件发射器类型
@@ -167,6 +185,7 @@ type ColabEvents = {
  'file-saved-to-disk': { from: string; fileName: string; fileSize: number };
  'file-progress': { to: string; progress: number };
  'file-transfer-ui': FileTransferUiUpdate;
+ 'file-transfer-v2-update': FileTransferV2Snapshot;
  'transfer-record': TransferRecord;
 };
 
@@ -222,8 +241,13 @@ interface P2PReceivingFile {
   expectedHash?: string;
   /** 接收端增量 hash（expectedHash 存在时创建；direct-to-disk 同样按分块累积） */
   hasher?: IncrementalSha256;
+  hashChunks: Map<number, { payload: Uint8Array; frameBytes: number }>;
+  nextHashChunk: number;
+  pendingHashBytes: number;
   /** 发送端声明稍后补发 file-hash（3.8.2+ 对端）；完成时需等待 hash 再定稿 */
   hashPending?: boolean;
+  supportsReceiveCredit?: boolean;
+  completionPromise?: Promise<void>;
   /** 全部块已到但 hash 未到的等待定时器（旧对端无 hash → 最多等 5s） */
   hashWaitTimer?: ReturnType<typeof setTimeout>;
   /** 分块 ACK 节拍状态（发送端依赖 ACK 推进真实进度与卡死检测） */
@@ -242,6 +266,7 @@ export interface P2PDirectSaveRequest {
   /** 发送端期望的 SHA-256（3.8.2+ 对端；缺省跳过校验） */
   expectedHash?: string;
   hashPending?: boolean;
+  supportsReceiveCredit?: boolean;
 }
 
 export type DirectSaveRequest = P2PDirectSaveRequest | ServerDirectSaveRequest;
@@ -257,6 +282,8 @@ interface P2PSendContext {
  transferId: string;
  totalChunks: number;
  resendChunks: (chunkIndexes: number[]) => Promise<void>;
+ receiveCreditEnabled: boolean;
+ receiveCreditBytes: number;
 }
 
 export interface ActiveOutgoingFileTransferStats {
@@ -266,6 +293,7 @@ export interface ActiveOutgoingFileTransferStats {
  targetUserId: string;
  transport: "p2p" | "server";
  bytesTransferred: number;
+ queuedBytes: number;
  bytesPerSecond: number;
  startedAt: number;
  updatedAt: number;
@@ -316,6 +344,61 @@ export class RealTimeColab {
   
   // 初始化服务器文件传输
   this.serverFileTransfer = new ServerFileTransfer(this.connectionManager);
+  const fileTransferV2Store = getFileTransferV2Store();
+  if (fileTransferV2Store) {
+   this.fileTransferV2 = new FileTransferV2ApplicationAdapter({
+    selfId: () => this.getUniqId() || "",
+    roomId: () => settingsStore.get("roomId") || "default-room",
+    getDataChannel: peerId => this.dataChannels.get(peerId) || null,
+    getMaxSctpMessageSize: peerId => RealTimeColab.peers.get(peerId)?.sctp?.maxMessageSize ?? undefined,
+    isP2PVerified: peerId => this.isConnectedToUser(peerId),
+    getConnectionType: () => this.connectionManager.getConnectionType(),
+    isServerConnected: () => this.connectionManager.isConnected(),
+    isTransportOnly: () => this.transportOnlyConnection,
+    getServerBufferedAmount: () => this.connectionManager.getBufferedAmount(),
+    sendServerControl: control => this.connectionManager.send({
+     type: "file:v2:control",
+     channel: settingsStore.get("roomId") || "default-room",
+     data: control,
+    }),
+    sendServerFrame: frame => this.connectionManager.sendBinary(frame),
+    sendP2PControl: (peerId, control) => {
+     const channel = this.dataChannels.get(peerId);
+     if (!channel || channel.readyState !== "open") throw new Error("P2P data channel is unavailable");
+     channel.send(JSON.stringify({ type: "file:v2:control", data: control }));
+    },
+    sendP2PFrame: (peerId, frame) => {
+     const channel = this.dataChannels.get(peerId);
+     if (!channel || channel.readyState !== "open") throw new Error("P2P data channel is unavailable");
+     channel.send(frame.buffer.slice(frame.byteOffset, frame.byteOffset + frame.byteLength) as ArrayBuffer);
+    },
+    onUpdate: snapshot => {
+     this.emitter.emit("file-transfer-v2-update", snapshot);
+     this.updateUI();
+    },
+    onReceived: async (task, file) => {
+     const integration = await import("../chat/ChatIntegration");
+     await integration.default.commitV2ReceivedFile(task, file);
+     const fullKey = `${task.peerParticipantId}::${file.name}`;
+     this.receivedFiles.set(fullKey, file);
+     this.receivedFilesVersion++;
+     this.addTransferRecord("received-file", file.name, `← ${task.peerParticipantId.split(":")[0]}`);
+     this.emitter.emit("file-received", {
+      from: task.peerParticipantId,
+      fileName: file.name,
+      fileSize: file.size,
+      file,
+     });
+    },
+    onError: (reason, transferId) => {
+     this.setFileTransferStatus(reason, "error", { autoClearMs: 12_000 });
+     alertUseMUI(reason, 4000, { kind: "error", category: "transfer-status" });
+     if (transferId) console.warn(`[FILE TRANSFER V2] ${transferId}: ${reason}`);
+    },
+    store: fileTransferV2Store,
+   });
+   installFileTransferV2ApplicationAdapter(this.fileTransferV2);
+  }
  }
  // In RealTimeColab
  private connectionManager: ConnectionManager;
@@ -324,6 +407,12 @@ export class RealTimeColab {
  
  // 服务器文件传输
  private serverFileTransfer: ServerFileTransfer | null = null;
+ private fileTransferV2: FileTransferV2ApplicationAdapter | null = null;
+ private readonly serverBinaryReceivedHandler = (data: ArrayBuffer): void => {
+  this.noteServerTraffic();
+  if (this.fileTransferV2?.handleRelayFrame(data)) return;
+  this.serverFileTransfer?.handleBinaryData(data);
+ };
 
  // 加密相关属性
  private secureWrapper: SecureMessageWrapper;
@@ -362,6 +451,7 @@ export class RealTimeColab {
   private p2pReceiveTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
   private p2pSendingTransferIds = new Map<string, string>();
   private p2pSendContexts = new Map<string, P2PSendContext>();
+  private p2pUnexpectedCloseErrors = new Map<string, Error>();
   private p2pUnknownTransferIssueKeys = new Set<string>();
   private pendingDirectSaveRequests = new Map<string, P2PDirectSaveRequest>();
   private p2pAckTracker = new TransferAckTracker();
@@ -387,9 +477,11 @@ export class RealTimeColab {
     lastLocalSendAt: number;
     lastReportedProgress: number;
     startedAt: number;
+    ackSamples: Array<{ at: number; bytes: number }>;
     timer: ReturnType<typeof setInterval>;
    }
   >();
+ private serverAckRateSamples = new Map<string, TransferRateSample[]>();
  private timeoutHandles = new Set();
  private connectionQueue = new Map<string, boolean>();
  private pendingOffers = new Set<string>();
@@ -532,6 +624,7 @@ export class RealTimeColab {
    targetUserId: options.targetUserId,
    transport: options.transport,
    bytesTransferred: 0,
+   queuedBytes: 0,
    bytesPerSecond: 0,
    startedAt: now,
    updatedAt: now,
@@ -542,6 +635,8 @@ export class RealTimeColab {
  private updateActiveOutgoingFileTransfer(options: {
   transferId: string;
   bytesTransferred?: number;
+  queuedBytes?: number;
+  bytesPerSecond?: number;
   status?: ActiveOutgoingFileTransferStats["status"];
  }): void {
   const current = this.activeOutgoingFileTransfer;
@@ -556,13 +651,18 @@ export class RealTimeColab {
   );
   const elapsedMs = Math.max(1, now - current.updatedAt);
   const deltaBytes = Math.max(0, nextBytes - current.bytesTransferred);
-  const bytesPerSecond = deltaBytes > 0
+  const bytesPerSecond = options.bytesPerSecond ?? (current.transport === "server" && deltaBytes > 0
    ? (deltaBytes * 1000) / elapsedMs
-   : current.bytesPerSecond;
+   : current.bytesPerSecond);
+  const queuedBytes = Math.max(
+   current.queuedBytes,
+   Math.min(options.queuedBytes ?? current.queuedBytes, current.fileSize)
+  );
 
   this.activeOutgoingFileTransfer = {
    ...current,
    bytesTransferred: nextBytes,
+   queuedBytes,
    bytesPerSecond,
    updatedAt: now,
    status: options.status ?? current.status,
@@ -607,20 +707,44 @@ export class RealTimeColab {
      if (activeTransfer?.transport === "server") {
       this.updateActiveOutgoingFileTransfer({
        transferId: activeTransfer.transferId,
-       bytesTransferred: Math.floor(activeTransfer.fileSize * Math.min(progress, 99) / 100),
        status: progress >= 99 ? "awaiting-confirmation" : "transferring",
       });
      }
      this.emitter.emit('file-progress', { to: this.sendingToUserId, progress });
     }
    });
+   this.serverFileTransfer.setAcknowledgedProgressCallback((ack) => {
+    const active = this.activeOutgoingFileTransfer;
+    if (!active || active.transport !== "server" || active.transferId !== ack.transferId
+      || active.targetUserId !== ack.peerId || active.fileName !== ack.fileName || active.fileSize !== ack.fileSize) return;
+    const samples = this.serverAckRateSamples.get(ack.transferId) || [{ at: active.startedAt, bytes: 0 }];
+    const previous = samples[samples.length - 1];
+    if (ack.acknowledgedBytes <= previous.bytes) return;
+    samples.push({ at: ack.at, bytes: ack.acknowledgedBytes });
+    while (samples.length > 2 && samples[1].at < ack.at - 1_500) samples.shift();
+    this.serverAckRateSamples.set(ack.transferId, samples);
+    this.updateActiveOutgoingFileTransfer({
+     transferId: ack.transferId,
+     bytesTransferred: ack.acknowledgedBytes,
+     bytesPerSecond: calculateRollingTransferRate(samples, ack.at),
+     status: ack.acknowledgedBytes >= ack.fileSize ? "awaiting-confirmation" : "transferring",
+    });
+   });
    this.serverFileTransfer.setTransferUiUpdateCallback((update) => {
+    if (update.direction === "send" && update.status === "pending") {
+     const active = this.activeOutgoingFileTransfer;
+     if (active?.transport === "server" && active.targetUserId === update.peerId
+       && active.fileName === update.fileName && active.fileSize === update.fileSize) {
+      this.activeOutgoingFileTransfer = { ...active, transferId: update.transferId };
+      this.serverAckRateSamples.set(update.transferId, [{ at: active.startedAt, bytes: 0 }]);
+     }
+    }
     this.emitter.emit('file-transfer-ui', update);
    });
    
-   this.serverFileTransfer.setFileReceivedCallback((file, fromUserId) => {
+   this.serverFileTransfer.setFileReceivedCallback(async (file, fromUserId) => {
     console.debug(`[ColabLib] File received from ${fromUserId}:`, file.name);
-    this.handleReceivedFile(file, fromUserId);
+    await this.handleReceivedFile(file, fromUserId);
    });
 
    this.serverFileTransfer.setFileSavedToDiskCallback((fileName, fileSize, fromUserId) => {
@@ -755,6 +879,7 @@ export class RealTimeColab {
 
   // 注册 WebSocket 断连回调, 确保 UI 状态与实际连接同步
   this.connectionManager.onDisconnected?.((reason) => {
+   this.fileTransferV2?.endServerConnection();
    settingsStore.updateUnrmb("isConnectedToServer", false);
    this.lastConnectedProToken = null;
    console.warn(`[ColabLib] WebSocket 连接丢失, 已更新 UI 状态: ${reason}`);
@@ -778,10 +903,7 @@ export class RealTimeColab {
   
   // 设置二进制数据处理器
   if (this.connectionManager.onBinaryReceived) {
-   this.connectionManager.onBinaryReceived((data) => {
-    this.noteServerTraffic();
-    this.serverFileTransfer?.handleBinaryData(data);
-   });
+   this.connectionManager.onBinaryReceived(this.serverBinaryReceivedHandler);
    console.debug(`[ColabLib] 二进制数据回调已设置`);
   } else {
    console.warn(`[ColabLib] ConnectionManager 不支持 onBinaryReceived 回调`);
@@ -795,6 +917,7 @@ export class RealTimeColab {
    return false;
   }
   if (success) {
+   this.fileTransferV2?.beginServerConnection(roomId || "", !transportOnly && this.connectionManager.canSendBinary());
    settingsStore.updateUnrmb("isConnectedToServer", true);
    settingsStore.updateUnrmb("serverConnState", "connected");
    // 半开连接兜底：连接一建立就开始服务端存活探测（缺陷②）。
@@ -809,6 +932,7 @@ export class RealTimeColab {
    this.broadcastSignal({
     type: "discover",
     userType: getDeviceType(),
+    fileTransferV2: this.fileTransferV2?.getDiscoveryCapability(),
     publicKeys: myPublicKeys // 在discover信号中包含公钥
    });
   } else {
@@ -829,6 +953,7 @@ export class RealTimeColab {
   this.terminateReconnect("user-left", "manual-disconnect");
   // 会话代次：在途 connectToServer 的结果一律作废，不得复活已断开的连接。
   this.connectEpoch.next();
+  this.fileTransferV2?.endServerConnection();
   settingsStore.updateUnrmb("serverConnState", "disconnected");
 
   // 在断开连接前广播离开消息（仅在明确指定时）
@@ -904,9 +1029,7 @@ export class RealTimeColab {
     }
 
     if (this.connectionManager.onBinaryReceived) {
-     this.connectionManager.onBinaryReceived((data) => {
-      this.serverFileTransfer?.handleBinaryData(data);
-     });
+     this.connectionManager.onBinaryReceived(this.serverBinaryReceivedHandler);
     }
 
     this.transportOnlyConnection = false;
@@ -918,10 +1041,15 @@ export class RealTimeColab {
     settingsStore.updateUnrmb("isConnectedToServer", true);
     settingsStore.updateUnrmb("serverConnState", "connected");
    }
+   this.fileTransferV2?.beginServerConnection(newRoomId!, this.connectionManager.canSendBinary());
 
    // 等待一小段时间确保连接完全建立，然后广播discover信号
    await new Promise(resolve => setTimeout(resolve, CONFIG.DISCOVER_REPLY_DELAY));
-   this.broadcastSignal({ type: "discover", userType: getDeviceType() }); // 切换/连接成功后广播
+   this.broadcastSignal({
+    type: "discover",
+    userType: getDeviceType(),
+    fileTransferV2: this.fileTransferV2?.getDiscoveryCapability(),
+   }); // 切换/连接成功后广播
    console.debug(` 房间切换/连接完成，已广播discover信号`);
   } catch (error) {
    alertUseMUI(t("alert.roomSwitchFailed", { error: (error as Error).message }), 2000, {
@@ -932,6 +1060,7 @@ export class RealTimeColab {
 
   private handleServerMessage(message: any): void {
    this.noteServerTraffic();
+   if (this.fileTransferV2?.handleServerEnvelope(message)) return;
    if (isLivenessProbeAck(message)) return; // 存活探测回执：只用于存活判定，不入业务分支
    if (message.type && message.type.startsWith("file:transfer:")) {
     const actualData = message.data?.transfer_id ? message.data : message;
@@ -1032,7 +1161,11 @@ export class RealTimeColab {
  public broadcastSignal(signal: any): void {
   // userType 等应用层数据应在 RealTimeColab 层面添加到 signal 对象中
   // ConnectionProvider 只负责添加 'from'
-  this.connectionManager.broadcastSignal(signal);
+  const outgoingSignal = withFileTransferV2DiscoveryCapability(
+   signal,
+   this.fileTransferV2?.getDiscoveryCapability(),
+  );
+  this.connectionManager.broadcastSignal(outgoingSignal);
  }
 
  /**
@@ -1629,6 +1762,7 @@ export class RealTimeColab {
   const fromId = data.from;
   const isReply = data.isReply;
   if (!fromId || fromId === this.getUniqId()) return;
+  this.fileTransferV2?.setPeerDiscoveryCapability(fromId, data.fileTransferV2);
 
   const now = Date.now();
   let user = this.userList.get(fromId);
@@ -1683,6 +1817,7 @@ export class RealTimeColab {
     to: fromId,
     isReply: true,
     userType: getDeviceType(),
+    fileTransferV2: this.fileTransferV2?.getDiscoveryCapability(),
     publicKeys: myPublicKeys // 在回复中包含公钥
    });
   }
@@ -1873,12 +2008,13 @@ export class RealTimeColab {
   */
  public clearCache(id: string, options: { clearEncryption?: boolean } = {}): void {
   console.warn(` Cleaning up connection-related state for ${id}`);
+  this.peerManager.clearPeerTimers(id);
 
   // 关闭并移除 PeerConnection
   const peer = RealTimeColab.peers.get(id);
   if (peer) {
-   peer.close();
    RealTimeColab.peers.delete(id);
+   peer.close();
   }
 
   // 关闭并移除 DataChannel
@@ -1887,9 +2023,11 @@ export class RealTimeColab {
    channel.close();
    this.dataChannels.delete(id);
   }
+  this.fileTransferV2?.onPeerDataChannelChanged(id);
 
   // 协商、连接队列
   this.negotiationMap.delete(id);
+  this.resetPeerIceState(id);
   this.pendingOffers.delete(id);
   this.connectionQueue.delete(id);
 
@@ -2012,8 +2150,8 @@ export class RealTimeColab {
     );
     this.recentlyResetPeers.set(peerId, now);
 
-    peer.close();
     RealTimeColab.peers.delete(peerId);
+    peer.close();
 
     const newPeer = this.peerManager.createPeerConnection(peerId);
     RealTimeColab.peers.set(peerId, newPeer);
@@ -2094,6 +2232,11 @@ export class RealTimeColab {
  private candidateCache: Map<string, RTCIceCandidateInit[]> = new Map();
  private processedCandidates: Map<string, Set<string>> = new Map();
 
+ public resetPeerIceState(id: string): void {
+  this.candidateCache.delete(id);
+  this.processedCandidates.delete(id);
+ }
+
  private async handleCandidate(data: any): Promise<void> {
   const peer = RealTimeColab.peers.get(data.from);
   const fromId = data.from;
@@ -2124,6 +2267,7 @@ export class RealTimeColab {
 
    try {
     await peer.addIceCandidate(new RTCIceCandidate(candidateInit));
+    if (RealTimeColab.peers.get(fromId) !== peer) return;
     seenSet.add(key);
    } catch (err) {
     console.error("Error adding ICE candidate:", err);
@@ -2189,6 +2333,7 @@ export class RealTimeColab {
 
    // ── 3.8.2 通道验证：probe（控制帧）+ 探测二进制帧，双 ACK 后才算 P2P ──
    this.startChannelVerification(id, channel);
+   this.fileTransferV2?.onPeerDataChannelChanged(id);
   };
 
   // 用于每个用户维护独立的文件接收状态
@@ -2196,9 +2341,24 @@ export class RealTimeColab {
    this.receivingFiles = new Map();
   }
 
+  const receiveQueue = new BoundedSerialTransferQueue(MAX_P2P_RECEIVE_QUEUE_BYTES);
   channel.onmessage = (event) => {
-   void runTransferHandlerSafely(async () => {
+   if (this.dataChannels.get(id) !== channel) return;
+   const messageBytes = getTransferMessageByteLength(event.data);
+   const queued = receiveQueue.enqueue(messageBytes, async () => {
+    if (this.dataChannels.get(id) !== channel) return;
+    await runTransferHandlerSafely(async () => {
    if (typeof event.data === "string") {
+    try {
+     const possibleV2 = JSON.parse(event.data);
+     const v2Control = unwrapP2PFileTransferV2Control(possibleV2);
+     if (v2Control.recognized) {
+      this.fileTransferV2?.handleP2PControl(id, v2Control.control);
+      return;
+     }
+    } catch {
+     // Legacy control parsing below reports malformed non-v2 JSON.
+    }
     const parsedMessage = parseDataChannelControlMessage(event.data);
     if (!parsedMessage.valid) {
      console.warn(`[P2P] Ignoring malformed control message from ${id}: ${parsedMessage.reason}`);
@@ -2256,26 +2416,33 @@ export class RealTimeColab {
        break;
       }
 
-      const receiveLimit = getSafeReceiveSizeLimit(getDeviceType());
+      const deviceType = getDeviceType();
+      const receiveLimit = getConservativeReceiveMemoryLimit(deviceType);
       if (normalizedMeta.fileSize > receiveLimit) {
        this.queueDirectDiskReceive(id, channel, {
         ...normalizedMeta,
         hash: typeof message.hash === "string" ? message.hash : undefined,
         hashPending: message.hashPending === true,
+       supportsReceiveCredit: message.supportsReceiveCredit === true,
        });
        break;
       }
       const cacheGuard = canRetainReceivedFiles(
        this.getReceivedFileCacheCandidates(normalizedMeta.fileSize),
-       getDeviceType()
+       deviceType
       );
-      if (!cacheGuard.allowed) {
-       const cacheLimitMessage = this.getReceivedCacheLimitMessage(cacheGuard);
+      const cacheMemoryLimit = getConservativeReceiveCacheByteLimit(deviceType);
+      if (!cacheGuard.allowed || cacheGuard.totalBytes > cacheMemoryLimit) {
+       const cacheLimitMessage = this.getReceivedCacheLimitMessage({
+        ...cacheGuard,
+        maxBytes: Math.min(cacheGuard.maxBytes, cacheMemoryLimit),
+       });
        console.warn(`[P2P FILE] ${cacheLimitMessage}`);
        this.queueDirectDiskReceive(id, channel, {
         ...normalizedMeta,
         hash: typeof message.hash === "string" ? message.hash : undefined,
         hashPending: message.hashPending === true,
+        supportsReceiveCredit: message.supportsReceiveCredit === true,
        }, cacheLimitMessage);
        break;
       }
@@ -2291,18 +2458,12 @@ export class RealTimeColab {
       } catch (err) {
        const reason = t('alert.insufficientMemory');
        console.error(`[P2P FILE] ${reason}:`, err);
-       if (channel.readyState === "open") {
-        channel.send(JSON.stringify({
-         type: "abort",
-         transferId: message.transferId,
-         reason,
-        }));
-       }
-       alertUseMUI(reason, 4000, { kind: "error", category: "transfer-status" });
-       this.setFileTransferProgress(null);
-       this.setFileTransferStatus(reason, "error", {
-        autoClearMs: 10_000,
-       });
+       this.queueDirectDiskReceive(id, channel, {
+        ...normalizedMeta,
+        hash: typeof message.hash === "string" ? message.hash : undefined,
+        hashPending: message.hashPending === true,
+        supportsReceiveCredit: message.supportsReceiveCredit === true,
+       }, reason);
        break;
       }
       this.receivingFiles.set(id, {
@@ -2322,7 +2483,11 @@ export class RealTimeColab {
        hasher: (typeof message.hash === "string" || message.hashPending === true)
         ? new IncrementalSha256()
         : undefined,
+       hashChunks: new Map(),
+       nextHashChunk: 0,
+       pendingHashBytes: 0,
        hashPending: message.hashPending === true,
+       supportsReceiveCredit: message.supportsReceiveCredit === true,
        lastAckedCount: 0,
        lastChunkAckAt: Date.now(),
       });
@@ -2331,7 +2496,11 @@ export class RealTimeColab {
       }
       this.setFileTransferStatus(t('alert.receivingFile'), "info", { showPanel: false });
       this.refreshP2PReceiveTimeout(id);
-      this.sendP2PFileReady(channel, normalizedMeta.transferId);
+      this.sendP2PFileReady(
+       channel,
+       normalizedMeta.transferId,
+       message.supportsReceiveCredit === true
+      );
 
       realTimeColab.fileMetaInfo.name = normalizedMeta.fileName;
       this.setDownloadPageState(true);
@@ -2376,9 +2545,40 @@ export class RealTimeColab {
       break;
      case "file-ready":
       if (message.transferId) {
+       const context = this.p2pSendContexts.get(id);
+       if (context && context.transferId === message.transferId) {
+        if (
+         message.receiveCreditVersion === 1 &&
+         Number.isSafeInteger(message.receiveCreditBytes) &&
+         message.receiveCreditBytes > 0
+        ) {
+         context.receiveCreditEnabled = true;
+         context.receiveCreditBytes = Math.min(
+          message.receiveCreditBytes,
+          P2P_RECEIVE_CREDIT_WINDOW_BYTES
+         );
+        }
+       }
        this.p2pAckTracker.acknowledge(message.transferId);
       }
       break;
+     case "file-credit": {
+      const creditTransferId = typeof message.transferId === "string" ? message.transferId : "";
+      const context = this.p2pSendContexts.get(id);
+      const creditBytes = Number(message.bytes);
+      if (
+       context?.transferId === creditTransferId &&
+       context.receiveCreditEnabled &&
+       Number.isSafeInteger(creditBytes) &&
+       creditBytes > 0
+      ) {
+       context.receiveCreditBytes = Math.min(
+        P2P_RECEIVE_CREDIT_WINDOW_BYTES,
+        context.receiveCreditBytes + creditBytes
+       );
+      }
+      break;
+     }
      // ── 3.8.2 通道验证协议（probe → probe-ack → 测试数据 → test-ack）──
      case "file-probe": {
       const probeId = typeof message.probeId === "string" ? message.probeId : "";
@@ -2418,19 +2618,39 @@ export class RealTimeColab {
       if (!watchdog) break;
       const receivedChunks = Number(message.receivedChunks);
       const bytesReceived = Number(message.bytesReceived);
+      const ackedTransfer = this.activeOutgoingFileTransfer;
       if (
-       !Number.isFinite(receivedChunks) ||
-       !Number.isFinite(bytesReceived) ||
-       bytesReceived <= watchdog.lastAckedBytes
+       !Number.isSafeInteger(receivedChunks) ||
+       receivedChunks < 0 ||
+       !Number.isSafeInteger(bytesReceived) ||
+       bytesReceived <= watchdog.lastAckedBytes ||
+       !ackedTransfer ||
+       ackedTransfer.transferId !== ackTransferId ||
+       ackedTransfer.targetUserId !== id ||
+       bytesReceived > ackedTransfer.fileSize
       ) {
        break;
       }
+      const now = Date.now();
       watchdog.lastAckedBytes = bytesReceived;
-      watchdog.lastAckAdvanceAt = Date.now();
+      watchdog.lastAckAdvanceAt = now;
+      watchdog.ackSamples.push({ at: now, bytes: bytesReceived });
+      while (
+       watchdog.ackSamples.length > 2 &&
+       watchdog.ackSamples[1].at < now - 1_500
+      ) {
+       watchdog.ackSamples.shift();
+      }
+      const bytesPerSecond = calculateRollingTransferRate(watchdog.ackSamples, now);
       // ACK 驱动的真实进度：已确认到达的字节（不会因本地 send 缓冲虚高）
-      const meta = this.activeOutgoingFileTransfer;
-      if (meta && meta.fileSize > 0) {
-       this.reportP2PProgress(ackTransferId, id, Math.min((bytesReceived / meta.fileSize) * 100, 99));
+      if (ackedTransfer.fileSize > 0) {
+       this.reportP2PProgress(
+        ackTransferId,
+        id,
+        Math.min((bytesReceived / ackedTransfer.fileSize) * 100, 99),
+        bytesReceived,
+        bytesPerSecond
+       );
       }
       break;
      }
@@ -2460,6 +2680,7 @@ export class RealTimeColab {
      }
      case "resend-chunks":
       await this.handleP2PResendChunksRequest(id, channel, message);
+      if (this.dataChannels.get(id) !== channel) return;
       break;
      case "ping":
       this.lastPingTimes.set(id, Date.now());
@@ -2489,6 +2710,7 @@ export class RealTimeColab {
              // 处理可能的加密消息
        try {
         const unwrappedMessage = await this.secureWrapper.unwrapIncomingMessage(id, message);
+        if (this.dataChannels.get(id) !== channel) return;
         let finalMessage;
         if (unwrappedMessage.message) {
          finalMessage = unwrappedMessage.message;
@@ -2535,6 +2757,8 @@ export class RealTimeColab {
     } else {
      // 非文本消息：二进制数据
      const buffer = event.data as ArrayBuffer;
+
+     if (this.fileTransferV2?.handleP2PFrame(id, buffer)) return;
 
      // 3.8.2 通道验证探测帧：不进入分块流水线，直接回 ACK（二进制通路确认）
      const probeFrame = decodeProbeFrame(buffer);
@@ -2586,6 +2810,7 @@ export class RealTimeColab {
         fileInfo.transferId,
         buffer
        )).result;
+       if (this.dataChannels.get(id) !== channel || this.receivingFiles.get(id) !== fileInfo) return;
       } else {
        if (!fileInfo.receiveBuffer) {
         throw new Error("receive buffer not available");
@@ -2600,6 +2825,7 @@ export class RealTimeColab {
       throw new Error("legacy transfer has no transferId");
      }
     } catch (err) {
+     if (this.dataChannels.get(id) !== channel || this.receivingFiles.get(id) !== fileInfo) return;
      const canTryLegacyFrame =
       fileInfo.storageMode === "memory" &&
       (!(err instanceof Error) ||
@@ -2618,17 +2844,17 @@ export class RealTimeColab {
      }
     }
 
+    if (this.dataChannels.get(id) !== channel || this.receivingFiles.get(id) !== fileInfo) return;
     if (!writeResult.accepted) {
+     this.returnP2PReceiveCredit(channel, fileInfo, buffer.byteLength);
      return;
     }
 
-    // 接收端增量 hash：与写入同批的字节一并累积（completion 时与发送端比对）
+    let returnedCreditBytes = buffer.byteLength;
     if (fileInfo.hasher) {
      try {
-      const { payload: hashedPayload } = decodeTransferFrame(buffer);
-      fileInfo.hasher.update(hashedPayload);
+      returnedCreditBytes = this.updateP2PReceiveHash(fileInfo, buffer);
      } catch (hashDecodeError) {
-      // 写入路径已校验过帧完整性；此处失败按损坏处理
       this.abortP2PReceive(id, channel, fileInfo.transferId, t('alert.chunkCorrupted'), hashDecodeError);
       return;
      }
@@ -2667,19 +2893,40 @@ export class RealTimeColab {
      }
     }
 
+    this.returnP2PReceiveCredit(channel, fileInfo, returnedCreditBytes);
+
     if (writeResult.completed) {
      this.clearP2PReceiveTimeout(id);
      this.finalizeP2PReceive(id, channel);
      return;
     }
    }
-   }, (error) => {
-    this.handleUnhandledP2PMessageError(id, channel, error);
+    }, (error) => {
+     if (this.dataChannels.get(id) !== channel) return;
+     this.handleUnhandledP2PMessageError(id, channel, error);
+    });
    });
+   if (!queued) {
+    receiveQueue.close();
+    const fileInfo = this.receivingFiles.get(id);
+    const queueError = new Error(`P2P receive queue exceeded ${MAX_P2P_RECEIVE_QUEUE_BYTES} bytes`);
+    if (fileInfo) {
+     this.abortP2PReceive(id, channel, fileInfo.transferId, t('alert.unexpectedChunk'), queueError);
+    } else {
+     this.handleUnhandledP2PMessageError(id, channel, queueError);
+    }
+    try {
+     channel.close();
+    } catch {
+     // The channel may already be closed.
+    }
+   }
   };
 
  
   channel.onclose = () => {
+   receiveQueue.close();
+   if (this.dataChannels.get(id) !== channel) return;
    console.warn(` DataChannel closed for ${id}, setting user to text-only status`);
    const hadOpenDataChannel = hasOpened;
    const transferId = this.p2pSendingTransferIds.get(id);
@@ -2688,10 +2935,12 @@ export class RealTimeColab {
     receivingFileActive: this.receivingFiles.has(id),
    });
    if (transferId) {
+    const closeError = new TransferTimeoutError("P2P data channel closed before receiver confirmation");
     this.p2pAckTracker.reject(
      transferId,
-     new TransferTimeoutError("P2P data channel closed before receiver confirmation")
+     closeError
     );
+    this.p2pUnexpectedCloseErrors.set(transferId, closeError);
    this.p2pSendingTransferIds.delete(id);
    this.p2pSendContexts.delete(id);
    this.p2pUnknownTransferIssueKeys.delete(transferId);
@@ -2741,8 +2990,9 @@ export class RealTimeColab {
    this.updateUI();
   };
 
-  channel.onerror = () => {
-   this.cleanupDataChannel(id);
+  channel.onerror = (event) => {
+   if (this.dataChannels.get(id) !== channel) return;
+   this.cleanupDataChannel(id, channel, event);
   };
  }
 
@@ -2794,6 +3044,7 @@ export class RealTimeColab {
    clearTimeout(entry.timer);
    this.channelProbes.delete(id);
    this.channelVerified.add(id);
+   this.fileTransferV2?.onPeerVerificationChanged(id);
    const user = this.userList.get(id);
    if (user) {
     user.status = "connected";
@@ -2833,19 +3084,22 @@ export class RealTimeColab {
   }
  }
 
- private cleanupDataChannel(id: string): void {
-  const channel = this.dataChannels.get(id);
-  if (channel) {
+ private cleanupDataChannel(id: string, channel: RTCDataChannel, event: Event): void {
+  if (this.dataChannels.get(id) === channel) {
+   const channelErrorEvent = event as Event & { error?: unknown; message?: string };
+   const failure = channelErrorEvent.error instanceof Error
+    ? channelErrorEvent.error
+    : new TransferTimeoutError(
+     channelErrorEvent.message || "P2P data channel error before receiver confirmation"
+    );
    const transferId = this.p2pSendingTransferIds.get(id);
    const failureImpact = getP2PChannelFailureImpact({
     sendingTransferId: transferId,
     receivingFileActive: this.receivingFiles.has(id),
    });
    if (transferId) {
-    this.p2pAckTracker.reject(
-     transferId,
-     new TransferTimeoutError("P2P data channel error before receiver confirmation")
-    );
+    this.p2pUnexpectedCloseErrors.set(transferId, failure);
+    this.p2pAckTracker.reject(transferId, failure);
    this.p2pSendingTransferIds.delete(id);
    this.p2pSendContexts.delete(id);
    this.p2pUnknownTransferIssueKeys.delete(transferId);
@@ -2874,6 +3128,7 @@ export class RealTimeColab {
    this.clearP2PReceiveTimeout(id);
    this.clearChannelVerification(id);
    this.channelVerified.delete(id);
+   this.dataChannels.delete(id);
    // 强制关闭通道（触发 onclose）
    channel.close();
    // 清理心跳定时器
@@ -2881,9 +3136,6 @@ export class RealTimeColab {
     clearInterval(this.heartbeatIntervals.get(id)!);
     this.heartbeatIntervals.delete(id);
    }
-   // 删除引用
-   this.dataChannels.delete(id);
-
    // 不删除用户，而是设置为text-only状态
    const user = this.userList.get(id);
    if (user) {
@@ -3110,7 +3362,7 @@ export class RealTimeColab {
   cacheLimitMessage?: string
  ): void {
   if (!metadata.transferId || !this.canUseDirectFileSave()) {
-   const receiveLimit = getSafeReceiveSizeLimit(getDeviceType());
+   const receiveLimit = getConservativeReceiveMemoryLimit(getDeviceType());
    const limitMB = (receiveLimit / 1024 / 1024).toFixed(0);
    const reason = cacheLimitMessage ?? t('alert.fileTooLarge', { limit: limitMB });
    if (channel.readyState === "open") {
@@ -3138,6 +3390,7 @@ export class RealTimeColab {
    chunkSize: metadata.chunkSize,
    expectedHash: metadata.hash,
    hashPending: metadata.hashPending,
+   supportsReceiveCredit: metadata.supportsReceiveCredit,
   };
   this.setPendingDirectSaveRequest(request);
   this.p2pUnknownTransferIssueKeys.delete(metadata.transferId);
@@ -3156,7 +3409,11 @@ export class RealTimeColab {
   alertUseMUI(fullMessage, 9000, { kind: "warning", category: "transfer-status" });
  }
 
- private sendP2PFileReady(channel: RTCDataChannel, transferId?: string): void {
+ private sendP2PFileReady(
+  channel: RTCDataChannel,
+  transferId?: string,
+  supportsReceiveCredit = false
+ ): void {
   if (!transferId || channel.readyState !== "open") {
    return;
   }
@@ -3164,7 +3421,63 @@ export class RealTimeColab {
   channel.send(JSON.stringify({
    type: "file-ready",
    transferId,
+   ...(supportsReceiveCredit ? {
+    receiveCreditVersion: 1,
+    receiveCreditBytes: P2P_RECEIVE_CREDIT_WINDOW_BYTES,
+   } : {}),
   }));
+ }
+
+ private returnP2PReceiveCredit(
+  channel: RTCDataChannel,
+  fileInfo: P2PReceivingFile,
+  bytes: number
+ ): void {
+  if (
+   !fileInfo.supportsReceiveCredit ||
+   !fileInfo.transferId ||
+   !Number.isSafeInteger(bytes) ||
+   bytes <= 0 ||
+   channel.readyState !== "open"
+  ) {
+   return;
+  }
+  try {
+   channel.send(JSON.stringify({
+    type: "file-credit",
+    transferId: fileInfo.transferId,
+    bytes,
+   }));
+  } catch (error) {
+   console.warn("P2P receive credit could not be sent:", error);
+  }
+ }
+
+ private updateP2PReceiveHash(fileInfo: P2PReceivingFile, frame: ArrayBuffer): number {
+  if (!fileInfo.hasher) return frame.byteLength;
+  const { meta, payload } = decodeTransferFrame(frame);
+  const hashedPayload = payload instanceof ArrayBuffer
+   ? new Uint8Array(payload)
+   : new Uint8Array(payload.buffer, payload.byteOffset, payload.byteLength);
+  fileInfo.hashChunks.set(meta.chunk_index, {
+   payload: hashedPayload,
+   frameBytes: frame.byteLength,
+  });
+  fileInfo.pendingHashBytes += hashedPayload.byteLength;
+  if (fileInfo.pendingHashBytes > MAX_P2P_RECEIVE_QUEUE_BYTES) {
+   throw new Error("P2P hash reorder buffer exceeded its byte limit");
+  }
+
+  let creditBytes = 0;
+  while (fileInfo.hashChunks.has(fileInfo.nextHashChunk)) {
+   const next = fileInfo.hashChunks.get(fileInfo.nextHashChunk)!;
+   fileInfo.hasher.update(next.payload);
+   fileInfo.pendingHashBytes -= next.payload.byteLength;
+   creditBytes += next.frameBytes;
+   fileInfo.hashChunks.delete(fileInfo.nextHashChunk);
+   fileInfo.nextHashChunk += 1;
+  }
+  return creditBytes;
  }
 
  /**
@@ -3174,20 +3487,40 @@ export class RealTimeColab {
   */
  private finalizeP2PReceive(id: string, channel: RTCDataChannel): void {
   const fileInfo = this.receivingFiles.get(id);
-  if (!fileInfo) return;
+  if (!fileInfo || this.dataChannels.get(id) !== channel) return;
+  const receiveTracker = this.getP2PReceiveTracker(fileInfo);
+  if (!receiveTracker || receiveTracker.missingCount > 0) return;
+  if (fileInfo.hasher && (fileInfo.nextHashChunk !== fileInfo.totalChunks || fileInfo.hashChunks.size > 0)) {
+   this.abortP2PReceive(
+    id,
+    channel,
+    fileInfo.transferId,
+    "P2P receive hash did not cover every file chunk"
+   );
+   return;
+  }
 
   if (fileInfo.hashPending && !fileInfo.expectedHash) {
    if (!fileInfo.hashWaitTimer) {
     fileInfo.hashWaitTimer = setTimeout(() => {
      const current = this.receivingFiles.get(id);
-     if (!current) return;
+     if (current !== fileInfo || this.dataChannels.get(id) !== channel) return;
      current.hashWaitTimer = undefined;
-     current.hashPending = false;
-     // 兜底：hash 帧迟迟未到（理论不可达/异常路径），按无 hash 定稿
-     console.warn("[P2P FILE] file-hash not received in time; finalizing without hash check");
-     this.completeP2PReceive(id, channel);
+     const reason = "Required P2P file hash was not received";
+     console.warn(`[P2P FILE] ${reason}`);
+     this.abortP2PReceive(id, channel, current.transferId, reason);
     }, 5_000);
    }
+   return;
+  }
+
+  if (fileInfo.expectedHash && !fileInfo.hasher) {
+   this.abortP2PReceive(
+    id,
+    channel,
+    fileInfo.transferId,
+    "Required P2P file hash cannot be verified"
+   );
    return;
   }
 
@@ -3224,9 +3557,28 @@ export class RealTimeColab {
  }
 
  /** 接收端真正的完成路径（原 completed 分支逻辑；hash 已通过或不适用）。 */
- private async completeP2PReceive(id: string, channel: RTCDataChannel): Promise<void> {
+ private completeP2PReceive(id: string, channel: RTCDataChannel): Promise<void> {
   const fileInfo = this.receivingFiles.get(id);
-  if (!fileInfo) return;
+  if (!fileInfo || this.dataChannels.get(id) !== channel) return Promise.resolve();
+  if (fileInfo.completionPromise) return fileInfo.completionPromise;
+  const completion = this.completeP2PReceiveOnce(id, channel);
+  fileInfo.completionPromise = completion;
+  return completion;
+ }
+
+ private async completeP2PReceiveOnce(id: string, channel: RTCDataChannel): Promise<void> {
+  const fileInfo = this.receivingFiles.get(id);
+  if (!fileInfo || this.dataChannels.get(id) !== channel) return;
+  const receiveTracker = this.getP2PReceiveTracker(fileInfo);
+  if (!receiveTracker || receiveTracker.missingCount > 0) {
+   this.abortP2PReceive(
+    id,
+    channel,
+    fileInfo.transferId,
+    "P2P receive completed before every file chunk was written"
+   );
+   return;
+  }
   const completedTransferId = fileInfo.transferId;
   if (fileInfo.storageMode === "direct-to-disk") {
    if (!fileInfo.directSink) {
@@ -3236,9 +3588,11 @@ export class RealTimeColab {
    try {
     await fileInfo.directSink.close();
    } catch (error) {
+    if (this.receivingFiles.get(id) !== fileInfo || this.dataChannels.get(id) !== channel) return;
     this.abortP2PReceive(id, channel, completedTransferId, t('alert.directSaveFailed'), error);
     return;
    }
+   if (this.receivingFiles.get(id) !== fileInfo || this.dataChannels.get(id) !== channel) return;
 
    const fullKey = `${id}::${fileInfo.name}::${Date.now()}`;
    this.directSavedFiles.set(fullKey, {
@@ -3285,6 +3639,15 @@ export class RealTimeColab {
    fileType: "application/octet-stream",
    createFile: (parts, fileName, options) => new File(parts, fileName, options),
   });
+  try {
+   const integration = await import("../chat/ChatIntegration");
+   await integration.default.commitReceivedFile(id, file);
+  } catch (error) {
+   if (this.receivingFiles.get(id) !== fileInfo || this.dataChannels.get(id) !== channel) return;
+   this.abortP2PReceive(id, channel, completedTransferId, "Received file could not be saved to chat history", error);
+   return;
+  }
+  if (this.receivingFiles.get(id) !== fileInfo || this.dataChannels.get(id) !== channel) return;
   const fullKey = `${id}::${file.name}`;
   this.receivedFiles.set(fullKey, file);
   this.addTransferRecord("received-file", file.name, `← ${id.split(":")[0]}`);
@@ -3404,8 +3767,12 @@ export class RealTimeColab {
     receivedChunkCount: 0,
     resendAttempts: 0,
     expectedHash: request.expectedHash,
-    hasher: request.expectedHash ? new IncrementalSha256() : undefined,
+    hasher: (request.expectedHash || request.hashPending) ? new IncrementalSha256() : undefined,
+    hashChunks: new Map(),
+    nextHashChunk: 0,
+    pendingHashBytes: 0,
     hashPending: request.hashPending,
+    supportsReceiveCredit: request.supportsReceiveCredit,
     lastAckedCount: 0,
     lastChunkAckAt: Date.now(),
    });
@@ -3416,7 +3783,7 @@ export class RealTimeColab {
    this.setFileTransferProgress(0);
    this.setFileTransferStatus(t('alert.receivingFile'), "info", { showPanel: false });
    this.refreshP2PReceiveTimeout(request.peerId);
-   this.sendP2PFileReady(channel, request.transferId);
+   this.sendP2PFileReady(channel, request.transferId, request.supportsReceiveCredit === true);
    alertUseMUI(t('alert.directSaveReady', { name: request.fileName }), 3000, {
     kind: "success",
     category: "transfer-status",
@@ -3463,6 +3830,8 @@ export class RealTimeColab {
 
  private removeReceivingFile(id: string, reason?: unknown): void {
   const fileInfo = this.receivingFiles.get(id);
+  fileInfo?.hashChunks.clear();
+  if (fileInfo) fileInfo.pendingHashBytes = 0;
   if (fileInfo?.directSink) {
    void fileInfo.directSink.abort(reason).catch((error) => {
     console.warn("P2P direct file sink abort failed:", error);
@@ -3567,6 +3936,7 @@ export class RealTimeColab {
   channel: RTCDataChannel,
   error: unknown
  ): void {
+  if (this.dataChannels.get(id) !== channel) return;
   const errorDetail = error instanceof Error ? error.message : String(error);
   const receivingFile = this.receivingFiles.get(id);
   const sendingTransferId = this.p2pSendingTransferIds.get(id);
@@ -4120,16 +4490,17 @@ private isLetShareZip(file: File): boolean {
   */
  private async handleReceivedFile(file: File, id: string): Promise<void> {
   const fullKey = `${id}::${file.name}`;
-  this.receivedFiles.set(fullKey, file);
   const postProcessVersion = this.receivedFilesVersion;
-
-  await this.maybeAutoUnzipReceivedFile(file, id, fullKey, postProcessVersion);
-
-   this.addTransferRecord("received-file", file.name, `← ${id.split(":")[0]}`);
-   alertUseMUI(t("alert.fileReceived", { name: id.split(":")[0] }), 2000, { kind: "success" });
-   this.setFileTransferProgress(null);
-   // Emit file-received event for ChatIntegration
-   this.emitter.emit('file-received', { from: id, fileName: file.name, fileSize: file.size, file });
+  const integration = await import("../chat/ChatIntegration");
+  await integration.default.commitReceivedFile(id, file);
+  this.receivedFiles.set(fullKey, file);
+  this.addTransferRecord("received-file", file.name, `← ${id.split(":")[0]}`);
+  this.setFileTransferProgress(null);
+  this.emitter.emit('file-received', { from: id, fileName: file.name, fileSize: file.size, file });
+  void this.maybeAutoUnzipReceivedFile(file, id, fullKey, postProcessVersion).catch(error => {
+   console.warn("Received file post-processing failed:", error);
+  });
+  alertUseMUI(t("alert.fileReceived", { name: id.split(":")[0] }), 2000, { kind: "success" });
  }
  public isConnectedToUser(id: string): boolean {
   // 3.8.2：必须完成 probe 双确认的通道才算 P2P 可用 ——
@@ -4258,7 +4629,12 @@ private isLetShareZip(file: File): boolean {
     if (!this.aborted && this.serverFileTransfer?.isSending() !== true) {
      this.addTransferRecord("sent-file", file.name, `→ ${id.split(":")[0]}`);
     }
-    this.clearActiveOutgoingFileTransfer(syntheticTransferId);
+    const activeTransferId = this.activeOutgoingFileTransfer?.transport === "server"
+     && this.activeOutgoingFileTransfer.targetUserId === id
+     ? this.activeOutgoingFileTransfer.transferId
+     : syntheticTransferId;
+    this.serverAckRateSamples.delete(activeTransferId);
+    this.clearActiveOutgoingFileTransfer(activeTransferId);
     this.sendingToUserId = null;
     this.isSendingFile = false;
    }
@@ -4308,15 +4684,16 @@ private isLetShareZip(file: File): boolean {
   const totalChunks = Math.max(1, Math.ceil(file.size / transferConfig.chunkSize));
   const maxConcurrentReads = transferConfig.maxConcurrentReads;
   const transferId = `p2p_${Date.now()}_${this.generateUUID()}`;
-  let chunksSent = 0;
   let bytesSent = 0;
   let currentIndex = 0;
   // 发送端增量 hash：发送时逐块累积，完成后以 file-hash 控制帧告知接收端校验
   const hasher = new IncrementalSha256();
+  const orderedChunkCommits = new OrderedChunkCommitQueue();
   // 解锁
   this.aborted = false;
   this.isSendingFile = true;
   this.p2pSendingTransferIds.set(id, transferId);
+  this.p2pUnexpectedCloseErrors.delete(transferId);
   this.startActiveOutgoingFileTransfer({
    transferId,
    fileName: file.name,
@@ -4348,6 +4725,7 @@ private isLetShareZip(file: File): boolean {
    size: file.size,
    totalChunks,
    chunkSize: transferConfig.chunkSize,
+   supportsReceiveCredit: true,
    // 3.8.2：hash 在全部块发送完成后以 file-hash 控制帧补发（见发送循环尾部）
    hashPending: true,
   };
@@ -4385,60 +4763,96 @@ private isLetShareZip(file: File): boolean {
    options: { countProgress?: boolean } = {}
   ) => {
    const countProgress = options.countProgress ?? true;
-   if (!isCurrentTransfer()) return;
+   try {
+    if (!isCurrentTransfer()) {
+     orderedChunkCommits.fail(new Error("P2P transfer is no longer current"));
+     return;
+    }
 
-   const chunkBuffer = await readChunk(index);
-   if (!isCurrentTransfer()) return;
+    const chunkBuffer = await readChunk(index);
+    if (!isCurrentTransfer()) {
+     orderedChunkCommits.fail(new Error("P2P transfer is no longer current"));
+     return;
+    }
 
-   // 只在首传时喂 hash（重传块已在首传时计入，避免重复累积）
-   if (countProgress) {
-    hasher.update(new Uint8Array(chunkBuffer));
-   }
+    const bufferWithHeader = encodeTransferFrame(
+     {
+      transfer_id: transferId,
+      chunk_index: index,
+      chunk_size: chunkBuffer.byteLength,
+      total_chunks: totalChunks,
+     },
+     chunkBuffer
+    );
 
-   const bufferWithHeader = encodeTransferFrame(
-    {
-     transfer_id: transferId,
-     chunk_index: index,
-     chunk_size: chunkBuffer.byteLength,
-     total_chunks: totalChunks,
-    },
-    chunkBuffer
-   );
+    const send = async () => {
+     orderedChunkCommits.assertActive();
+     await waitForBufferedAmountBelow({
+      getBufferedAmount: () => channel.bufferedAmount,
+      isOpen: () => channel.readyState === "open",
+      threshold: transferConfig.bufferThreshold,
+      intervalMs: CONFIG.RETRY_SEND_DELAY,
+      timeoutMs: 15_000,
+      lowEventTarget: channel,
+     });
 
-   await waitForBufferedAmountBelow({
-    getBufferedAmount: () => channel.bufferedAmount,
-    isOpen: () => channel.readyState === "open",
-    threshold: transferConfig.bufferThreshold,
-    intervalMs: CONFIG.RETRY_SEND_DELAY,
-    timeoutMs: 15_000,
-    lowEventTarget: channel,
-   });
+     if (!isCurrentTransfer()) {
+      throw new Error("P2P transfer is no longer current");
+     }
+     if (channel.readyState !== "open") {
+      throw new TransferTimeoutError("P2P data channel closed during transfer");
+     }
 
-   if (!isCurrentTransfer()) return;
-   if (channel.readyState !== "open") {
-    throw new TransferTimeoutError("P2P data channel closed during transfer");
-   }
+     const creditWaitStartedAt = Date.now();
+     while (true) {
+      orderedChunkCommits.assertActive();
+      const context = this.p2pSendContexts.get(id);
+      if (context?.transferId !== transferId || !context.receiveCreditEnabled) break;
+      if (context.receiveCreditBytes >= bufferWithHeader.byteLength) {
+       context.receiveCreditBytes -= bufferWithHeader.byteLength;
+       break;
+      }
+      if (!isCurrentTransfer() || channel.readyState !== "open") {
+       throw new TransferTimeoutError("P2P data channel closed while waiting for receive credit");
+      }
+      if (Date.now() - creditWaitStartedAt > 15_000) {
+       throw new TransferTimeoutError("P2P receiver did not return transfer credit in time");
+      }
+      await new Promise((resolve) => setTimeout(resolve, CONFIG.RETRY_SEND_DELAY));
+     }
 
-   this.touchP2PAckWatchdog(transferId);
-   channel.send(bufferWithHeader);
-   if (countProgress) {
-    chunksSent++;
-    bytesSent = Math.min(file.size, bytesSent + chunkBuffer.byteLength);
-    this.updateActiveOutgoingFileTransfer({
-     transferId,
-     bytesTransferred: bytesSent,
-     status: "transferring",
-    });
-    // 本地进度是「已入 SCTP 缓冲」的乐观值；ACK 进度（file-chunk-ack）到达后
-    // 会用真实接收字节数单调覆盖。
-    const progress = Math.min((chunksSent / totalChunks) * 100, 99);
-    this.reportP2PProgress(transferId, id, progress);
+     orderedChunkCommits.assertActive();
+     this.touchP2PAckWatchdog(transferId);
+     channel.send(bufferWithHeader);
+     // First-send hashes follow the exact ordered commit sequence. There is no
+     // await between successful send() and the corresponding hash update.
+     if (countProgress) {
+      hasher.update(new Uint8Array(chunkBuffer));
+      bytesSent = Math.min(file.size, bytesSent + chunkBuffer.byteLength);
+      this.updateActiveOutgoingFileTransfer({
+       transferId,
+       queuedBytes: bytesSent,
+       status: "transferring",
+      });
+     }
+    };
+
+    if (countProgress) {
+     await orderedChunkCommits.run(index, send);
+    } else {
+     await send();
+    }
+   } catch (error) {
+    orderedChunkCommits.fail(error);
+    throw error;
    }
   };
 
   this.p2pSendContexts.set(id, {
    transferId,
    totalChunks,
+   receiveCreditEnabled: false,
+   receiveCreditBytes: 0,
    resendChunks: async (chunkIndexes: number[]) => {
     for (const chunkIndex of chunkIndexes) {
      await sendChunk(chunkIndex, { countProgress: false });
@@ -4462,6 +4876,8 @@ private isLetShareZip(file: File): boolean {
     this.P2P_READY_TIMEOUT_MS
    );
    if (!isCurrentTransfer()) {
+    const closeError = this.p2pUnexpectedCloseErrors.get(transferId);
+    if (closeError) throw closeError;
     console.warn(" File sending aborted before receiver became ready");
     return;
    }
@@ -4469,6 +4885,8 @@ private isLetShareZip(file: File): boolean {
 
    await Promise.all(Array.from({ length: maxConcurrentReads }, () => worker()));
    if (!isCurrentTransfer()) {
+    const closeError = this.p2pUnexpectedCloseErrors.get(transferId);
+    if (closeError) throw closeError;
     console.warn(" File sending aborted");
     return;
    }
@@ -4479,10 +4897,9 @@ private isLetShareZip(file: File): boolean {
     channel.send(encodeP2PControl({ type: "file-hash", transferId, hash: fileHash }));
    }
 
-   this.setFileTransferProgress(99);
    this.updateActiveOutgoingFileTransfer({
     transferId,
-    bytesTransferred: file.size,
+    queuedBytes: file.size,
     status: "awaiting-confirmation",
    });
    await this.p2pAckTracker.waitForAck(
@@ -4504,13 +4921,15 @@ private isLetShareZip(file: File): boolean {
     // Emit file-sent event for ChatIntegration
     this.emitter.emit('file-sent', { to: id, fileName: file.name, fileSize: file.size, transferId });
    } catch (err) {
-    if (!stillOwnsTransfer()) {
+    const closeError = this.p2pUnexpectedCloseErrors.get(transferId);
+    if (!stillOwnsTransfer() && !closeError) {
      console.warn("Ignoring stale P2P transfer worker failure:", err);
      return;
     }
+    const failure = closeError ?? err;
     let message = t('alert.p2pTransferInterrupted');
     if (!this.aborted) {
-     console.error("P2P file transfer stalled:", err);
+     console.error("P2P file transfer stalled:", failure);
      if (channel.readyState === "open") {
       try {
        channel.send(JSON.stringify({
@@ -4522,7 +4941,7 @@ private isLetShareZip(file: File): boolean {
        console.warn("P2P abort message could not be sent:", sendError);
       }
      }
-     message = err instanceof TransferTimeoutError && err.message.includes("receiver")
+     message = failure instanceof TransferTimeoutError && failure.message.includes("receiver")
       ? t('alert.receiverNoAck')
       : t('alert.p2pTransferInterrupted');
      alertUseMUI(message, 4000, { kind: "error", category: "transfer-status" });
@@ -4532,7 +4951,7 @@ private isLetShareZip(file: File): boolean {
     this.setFileTransferStatus(message, "error", {
      autoClearMs: 10_000,
     });
-    throw err;
+    throw failure;
    } finally {
    this.sendingToUserId = null;
    this.stopP2PAckWatchdog(transferId);
@@ -4545,6 +4964,7 @@ private isLetShareZip(file: File): boolean {
     this.isSendingFile = false;
     }
     this.clearActiveOutgoingFileTransfer(transferId);
+    this.p2pUnexpectedCloseErrors.delete(transferId);
    }
 
   // this.abortedMap.delete(id); // 清理状态
@@ -4560,12 +4980,18 @@ private isLetShareZip(file: File): boolean {
     lastLocalSendAt: 0,
     lastReportedProgress: 0,
     startedAt,
+    ackSamples: [{ at: startedAt, bytes: 0 }],
     timer: setInterval(() => {
      const w = this.p2pAckWatchdogs.get(transferId);
      if (!w) return;
+     const now = Date.now();
+     this.updateActiveOutgoingFileTransfer({
+      transferId,
+      bytesPerSecond: calculateRollingTransferRate(w.ackSamples, now),
+     });
      const decision = decideSenderAckWatchdog(
       { lastAckedBytes: w.lastAckedBytes, lastAckAdvanceAt: w.lastAckAdvanceAt, lastLocalSendAt: w.lastLocalSendAt },
-      Date.now(),
+      now,
       this.P2P_ACK_STALL_TIMEOUT_MS,
       w.startedAt
      );
@@ -4577,7 +5003,7 @@ private isLetShareZip(file: File): boolean {
        new TransferTimeoutError("P2P receiver did not acknowledge file progress in time")
       );
      }
-    }, 5_000) as ReturnType<typeof setInterval>,
+    }, 500) as ReturnType<typeof setInterval>,
    };
    this.p2pAckWatchdogs.set(transferId, entry);
   }
@@ -4590,13 +5016,25 @@ private isLetShareZip(file: File): boolean {
   }
 
   /** ACK 驱动的真实进度（单调递增，不回退）。 */
-  private reportP2PProgress(transferId: string, peerId: string, progress: number): void {
+  private reportP2PProgress(
+   transferId: string,
+   peerId: string,
+   progress: number,
+   bytesReceived: number,
+   bytesPerSecond: number
+  ): void {
    const w = this.p2pAckWatchdogs.get(transferId);
    const value = Math.min(progress, 99);
+   const previousProgress = w?.lastReportedProgress ?? 0;
    if (w) {
-    if (value <= w.lastReportedProgress) return;
-    w.lastReportedProgress = value;
+    w.lastReportedProgress = Math.max(w.lastReportedProgress, value);
    }
+   this.updateActiveOutgoingFileTransfer({
+    transferId,
+    bytesTransferred: bytesReceived,
+    bytesPerSecond,
+   });
+   if (value <= previousProgress) return;
    this.setFileTransferProgress(value);
    this.emitter.emit('file-progress', { to: peerId, progress: value });
   }
@@ -4622,6 +5060,36 @@ private isLetShareZip(file: File): boolean {
     return;
    }
    const preferServer = settingsStore.get('transferPriority') === 'server';
+   const fileTransferV2 = this.fileTransferV2;
+   const v2Context = fileTransferV2?.captureSendContext();
+   const v2Ready = !!fileTransferV2?.supportsPeer(id)
+    && !!v2Context
+    && await fileTransferV2.preparePeerForSend(id, file.size, v2Context);
+   if (fileTransferV2 && v2Context && !fileTransferV2.isSendContextCurrent(v2Context)) {
+    throw new Error("The room or connection changed while preparing the file; retry the send");
+   }
+   const v2Send = v2Ready && v2Context
+    ? fileTransferV2?.startSendIfReady(id, file, preferServer, v2Context)
+    : null;
+   if (v2Send) {
+    // Once the engine creates its task, failures stay within v2 to avoid a duplicate legacy send.
+    const transferId = await v2Send;
+    this.sentFiles.set(transferId, {
+     name: file.name,
+     size: file.size,
+     toUserId: id,
+     completedAt: Date.now(),
+    });
+    this.addTransferRecord("sent-file", file.name, `→ ${id.split(":")[0]}`);
+    // The engine resolves only after the receiver verifies and confirms completion.
+    this.emitter.emit('file-sent', {
+     to: id,
+     fileName: file.name,
+     fileSize: file.size,
+     transferId,
+    });
+    return;
+   }
    if (preferServer || !this.canSendFileToUser(id)) {
     await this.sendFileViaServer(id, file);
     return;
@@ -4645,6 +5113,49 @@ private isLetShareZip(file: File): boolean {
     await this.sendFileViaServer(id, file);
    }
   }
+
+ public getFileTransferV2Snapshots(): FileTransferV2Snapshot[] {
+  return this.fileTransferV2?.getSnapshots() ?? [];
+ }
+
+ public getFileTransferV2Tasks(): Promise<FileTransferV2Task[]> {
+  return this.fileTransferV2?.getTasks() ?? Promise.resolve([]);
+ }
+
+ public getFileTransferV2Task(transferId: string): Promise<FileTransferV2Task | null> {
+  return this.fileTransferV2?.getTask(transferId) ?? Promise.resolve(null);
+ }
+
+ public async getFileTransferV2File(transferId: string): Promise<File> {
+  if (!this.fileTransferV2) throw new Error("File transfer v2 is unavailable");
+  return this.fileTransferV2.getFile(transferId);
+ }
+
+ public async pauseFileTransferV2(transferId: string): Promise<void> {
+  if (!this.fileTransferV2) throw new Error("File transfer v2 is unavailable");
+  await this.fileTransferV2.pause(transferId);
+ }
+
+ public async resumeFileTransferV2(transferId: string): Promise<void> {
+  if (!this.fileTransferV2) throw new Error("File transfer v2 is unavailable");
+  await this.fileTransferV2.resume(transferId);
+ }
+
+ public async resumeFileTransferV2WithSource(transferId: string, file: File): Promise<void> {
+  if (!this.fileTransferV2) throw new Error("File transfer v2 is unavailable");
+  await this.fileTransferV2.resumeWithSource(transferId, file);
+ }
+
+ public async cancelFileTransferV2(transferId: string): Promise<void> {
+  if (!this.fileTransferV2) throw new Error("File transfer v2 is unavailable");
+  await this.fileTransferV2.cancel(transferId);
+ }
+
+ /** Permanently delete a task and its durable blocks, unlike cancel's 24-hour tombstone. */
+ public async deleteFileTransferV2(transferId: string): Promise<boolean> {
+  if (!this.fileTransferV2) return false;
+  return this.fileTransferV2.deleteFile(`filev2:${transferId}`);
+ }
 
  public cancelReceivingServerTransfer(transferId: string): boolean {
   return this.serverFileTransfer?.cancelReceivingTransfer(transferId) ?? false;

@@ -30,6 +30,9 @@ import CloseIcon from "@mui/icons-material/Close";
 import DownloadIcon from "@mui/icons-material/Download"; // 确保导入这个
 import UploadFileIcon from "@mui/icons-material/UploadFile";
 import FolderIcon from "@mui/icons-material/Folder";
+import PauseIcon from "@mui/icons-material/Pause";
+import PlayArrowIcon from "@mui/icons-material/PlayArrow";
+import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
 import KeyboardArrowUpIcon from "@mui/icons-material/KeyboardArrowUp";
 import { buttonStyleNormal } from "../pages/share";
@@ -51,6 +54,9 @@ import {
   scheduleObjectUrlRevoke,
 } from "@App/libs/connection/transferReliability";
 import { getDeviceType } from "@App/libs/tools/tools";
+import { FILE_TRANSFER_V2_REMOTE_PAUSE_REASON } from "@App/libs/connection/fileTransferV2/engine";
+import type { FileTransferV2Snapshot } from "@App/libs/connection/fileTransferV2/engine";
+import type { FileTransferV2Task, FileTransferV2TaskStatus } from "@App/libs/connection/fileTransferV2/store";
 import FilePreviewDialog from './FilePreviewDialog';
 
 // 图片扩展名列表（小写）
@@ -124,6 +130,89 @@ type PendingBrowserDownload = {
   size: number;
 };
 
+type FileTransferV2UiRow = {
+  transferId: string;
+  peerId: string;
+  direction: "send" | "receive";
+  fileName: string;
+  fileSize: number;
+  status: FileTransferV2TaskStatus;
+  confirmedBytes: number;
+  queuedBytes: number;
+  bytesPerSecond: number;
+  progress: number;
+  activePaths: Array<"p2p" | "relay">;
+  reason?: string;
+  expiresAt: number;
+  needsSource: boolean;
+  task: FileTransferV2Task | null;
+};
+
+const FILE_TRANSFER_V2_STATUS_LABELS: Record<FileTransferV2TaskStatus, { key: string; zh: string; en: string }> = {
+  preparing: { key: "preparing", zh: "准备中", en: "Preparing" },
+  offering: { key: "offering", zh: "正在发起", en: "Offering" },
+  offered: { key: "offered", zh: "等待接收方确认", en: "Waiting for recipient" },
+  receiving: { key: "receiving", zh: "正在接收", en: "Receiving" },
+  transferring: { key: "transferring", zh: "传输中", en: "Transferring" },
+  paused: { key: "paused", zh: "已暂停", en: "Paused" },
+  reconnecting: { key: "reconnecting", zh: "正在重连", en: "Reconnecting" },
+  "needs-source": { key: "needsSource", zh: "需要原文件", en: "Source file needed" },
+  verifying: { key: "verifying", zh: "正在校验", en: "Verifying" },
+  completed: { key: "completed", zh: "已完成", en: "Completed" },
+  cancelled: { key: "cancelled", zh: "已取消", en: "Cancelled" },
+  failed: { key: "failed", zh: "失败", en: "Failed" },
+};
+
+function getFileTransferV2RouteLabel(activePaths: Array<"p2p" | "relay">, isChinese: boolean): string {
+  const hasP2P = activePaths.includes("p2p");
+  const hasRelay = activePaths.includes("relay");
+  if (hasP2P && hasRelay) return isChinese ? "双链路" : "Hybrid";
+  if (hasP2P) return isChinese ? "P2P 直连" : "P2P";
+  if (hasRelay) return isChinese ? "公网中转" : "Public relay";
+  return isChinese ? "等待连接" : "Waiting for a path";
+}
+
+function getFileTransferV2PeerName(peerId: string, isChinese: boolean): string {
+  const profileName = realTimeColab.userList.get(peerId)?.userName?.trim();
+  if (profileName) return profileName;
+  const shortName = peerId.split(":", 1)[0]?.trim();
+  return shortName || (isChinese ? "对方" : "Other person");
+}
+
+function isFileTransferV2ActionableReason(reason: string | undefined): boolean {
+  return Boolean(reason && /quota|storage|space|hash|mismatch|match|persist|commit|history|save|disk|database|expired|insufficient|not enough/i.test(reason));
+}
+
+function localizeFileTransferV2Error(message: string, isChinese: boolean): string {
+  if (/hash|source file|manifest|does not match/i.test(message)) {
+    return isChinese
+      ? "这不是原来的文件，请重新选择发送时的文件。已接收的内容会保留。"
+      : "That is not the original file. Choose the file you sent earlier; received data will be kept.";
+  }
+  if (/quota|storage|space/i.test(message)) {
+    return isChinese
+      ? "设备可用空间不足，无法保存接收内容。请释放空间后重试。"
+      : "There is not enough free space to save this transfer. Free some space and try again.";
+  }
+  if (/expired/i.test(message)) {
+    return isChinese ? "此传输任务已过期，请重新发送文件。" : "This transfer has expired. Send the file again.";
+  }
+  if (/history|indexeddb|commit|persist|database|save|pin|missing committed/i.test(message)) {
+    return isChinese
+      ? "无法保存接收内容。请检查设备可用空间后重试；已接收的内容会保留。"
+      : "The received file could not be saved. Check your available storage and try again; received data will be kept.";
+  }
+  if (/path|reconnect|connection|unavailable|closed|congested/i.test(message)) {
+    return isChinese
+      ? "连接暂时中断，恢复后会自动继续传输。"
+      : "The connection is temporarily unavailable. The transfer will continue when it returns.";
+  }
+  if (/checkpoint|receive buffer|block saved locally/i.test(message)) {
+    return isChinese ? "接收内容已保存在此设备，正在等待继续传输。" : "Received data is saved on this device while the transfer waits to continue.";
+  }
+  return isChinese ? "文件操作失败，请重试。" : "This file action failed. Please try again.";
+}
+
 function getBrowserDownloadNotice(fileName: string): string {
   return `已交给浏览器下载：${fileName}。Safari/iPhone 可点地址栏旁的下载按钮，或到“文件 App > 下载”查找。网页无法指定保存路径，只能建议文件名。`;
 }
@@ -146,12 +235,19 @@ export default function DownloadDrawerSlide({
   onClose: () => void;
   targetUserId?: string | null;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const theme = useTheme();
+  const isChinese = i18n.language?.toLowerCase().startsWith("zh") ?? true;
   const [visible, setVisible] = React.useState(open);
   const [drawerExpanded, setDrawerExpanded] = React.useState(false);
   const [, forceUpdate] = React.useReducer((x) => x + 1, 0);
   const [persistentFileCount, setPersistentFileCount] = React.useState(0);
+  const [fileTransferV2Snapshots, setFileTransferV2Snapshots] = React.useState<FileTransferV2Snapshot[]>([]);
+  const [fileTransferV2Tasks, setFileTransferV2Tasks] = React.useState<FileTransferV2Task[]>([]);
+  const [fileTransferV2BusyIds, setFileTransferV2BusyIds] = React.useState<Set<string>>(() => new Set());
+  const [fileTransferV2Errors, setFileTransferV2Errors] = React.useState<Record<string, string>>({});
+  const fileTransferV2SourceInputsRef = React.useRef<Map<string, HTMLInputElement>>(new Map());
+  const fileTransferV2ActionVersionsRef = React.useRef<Map<string, number>>(new Map());
 
   // 缩略图缓存：key(receivedFiles key) → dataURL
   const [thumbnails, setThumbnails] = React.useState<Map<string, string>>(new Map());
@@ -187,13 +283,16 @@ export default function DownloadDrawerSlide({
   const directSavedMap = realTimeColab.directSavedFiles as Map<string, { name: string; size: number; fromUserId: string; completedAt: number }>;
   const pendingDirectSaveRequest = realTimeColab.getPendingDirectSaveRequest();
   const receivingList = Array.from(receivingMap.entries());
-  const receivedList = Array.from(receivedMap.entries());
+  const fileTransferV2ReceivedKeys = new Set(fileTransferV2Tasks
+    .filter(task => task.direction === "receive" && task.status === "completed")
+    .map(task => `${task.peerParticipantId}::${task.manifest.name}`));
+  const receivedList = Array.from(receivedMap.entries()).filter(([key]) => !fileTransferV2ReceivedKeys.has(key));
   const directSavedList = Array.from(directSavedMap.entries());
 
   // 按用户分组接收到的文件
   const groupedByUser = React.useMemo(() => {
     const groups: Map<string, { userName: string; files: Array<{ key: string; file: File }> }> = new Map();
-    for (const [key, file] of receivedMap.entries()) {
+    for (const [key, file] of receivedList) {
       const userId = key.split('::')[0] || 'Unknown';
       const userName = userId.split(':')[0] || 'Unknown';
       if (!groups.has(userId)) groups.set(userId, { userName, files: [] });
@@ -201,7 +300,7 @@ export default function DownloadDrawerSlide({
     }
     return groups;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [receivedList.length, realTimeColab.receivedFiles]);
+  }, [receivedList]);
 
   const replacePendingBrowserDownload = React.useCallback((next: PendingBrowserDownload | null) => {
     setPendingBrowserDownload((current) => {
@@ -236,6 +335,45 @@ export default function DownloadDrawerSlide({
   }, []);
 
   // 对 receivedList 里的图片异步生成缩略图，避免阻塞渲染
+  const refreshFileTransferV2 = React.useCallback(async () => {
+    const [snapshots, tasks] = await Promise.all([
+      Promise.resolve(realTimeColab.getFileTransferV2Snapshots()),
+      realTimeColab.getFileTransferV2Tasks(),
+    ]);
+    setFileTransferV2Snapshots(snapshots);
+    setFileTransferV2Tasks(tasks);
+  }, []);
+
+  React.useEffect(() => {
+    if (!open && !visible) return;
+    let disposed = false;
+    let refreshing = false;
+    const refresh = async () => {
+      if (refreshing) return;
+      refreshing = true;
+      try {
+        const [snapshots, tasks] = await Promise.all([
+          Promise.resolve(realTimeColab.getFileTransferV2Snapshots()),
+          realTimeColab.getFileTransferV2Tasks(),
+        ]);
+        if (!disposed) {
+          setFileTransferV2Snapshots(snapshots);
+          setFileTransferV2Tasks(tasks);
+        }
+      } catch (error) {
+        if (!disposed) console.warn("[Download] Could not refresh file transfer v2 tasks:", error);
+      } finally {
+        refreshing = false;
+      }
+    };
+    void refresh();
+    const interval = window.setInterval(() => void refresh(), 700);
+    return () => {
+      disposed = true;
+      window.clearInterval(interval);
+    };
+  }, [open, visible]);
+
   React.useEffect(() => {
     const receivedMap = realTimeColab.receivedFiles as Map<string, File>;
     const entries = Array.from(receivedMap.entries());
@@ -452,6 +590,116 @@ export default function DownloadDrawerSlide({
       forceUpdate();
     }
   };
+
+  const runFileTransferV2Action = async (transferId: string, action: () => Promise<unknown>) => {
+    const actionVersion = (fileTransferV2ActionVersionsRef.current.get(transferId) ?? 0) + 1;
+    fileTransferV2ActionVersionsRef.current.set(transferId, actionVersion);
+    setFileTransferV2BusyIds(previous => new Set(previous).add(transferId));
+    setFileTransferV2Errors(previous => {
+      const next = { ...previous };
+      delete next[transferId];
+      return next;
+    });
+    try {
+      await action();
+      if (fileTransferV2ActionVersionsRef.current.get(transferId) === actionVersion) {
+        await refreshFileTransferV2();
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (fileTransferV2ActionVersionsRef.current.get(transferId) === actionVersion) {
+        setFileTransferV2Errors(previous => ({ ...previous, [transferId]: message }));
+      }
+    } finally {
+      if (fileTransferV2ActionVersionsRef.current.get(transferId) === actionVersion) {
+        setFileTransferV2BusyIds(previous => {
+          const next = new Set(previous);
+          next.delete(transferId);
+          return next;
+        });
+      }
+    }
+  };
+
+  const handleFileTransferV2Source = (transferId: string, event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = "";
+    if (!file) return;
+    void runFileTransferV2Action(transferId, () => realTimeColab.resumeFileTransferV2WithSource(transferId, file));
+  };
+
+  const downloadFileTransferV2 = (row: FileTransferV2UiRow) => {
+    void runFileTransferV2Action(row.transferId, async () => {
+      if (!isApp) {
+        const downloadGuard = canDownloadFileInBrowser(
+          { size: row.fileSize },
+          getDeviceType()
+        );
+        if (!downloadGuard.allowed) {
+          alertUseMUI(
+            `${row.fileName} 较大（${formatSize(row.fileSize)}），为避免浏览器下载时内存溢出，已阻止直接下载。当前设备安全下载上限：${formatSize(downloadGuard.maxBytes)}。请使用桌面端或原生 App，或拆分后重新传输。`,
+            7000,
+            { kind: "warning" }
+          );
+          return;
+        }
+      }
+      const file = await realTimeColab.getFileTransferV2File(row.transferId);
+      if (file.size !== row.fileSize || file.name !== row.fileName) {
+        throw new Error("The stored file does not match this transfer record");
+      }
+      await downloadFile(file);
+    });
+  };
+
+  const fileTransferV2Rows = React.useMemo(() => {
+    const rows = new Map<string, FileTransferV2UiRow>();
+    for (const task of fileTransferV2Tasks) {
+      if (task.expiresAt <= Date.now()) continue;
+      rows.set(task.transferId, {
+        transferId: task.transferId,
+        peerId: task.peerParticipantId,
+        direction: task.direction,
+        fileName: task.manifest.name,
+        fileSize: task.manifest.size,
+        status: task.status,
+        confirmedBytes: task.status === "completed" ? task.manifest.size : 0,
+        queuedBytes: 0,
+        bytesPerSecond: 0,
+        progress: task.status === "completed" ? 100 : 0,
+        activePaths: [],
+        expiresAt: task.expiresAt,
+        needsSource: task.status === "needs-source",
+        task,
+      });
+    }
+    for (const snapshot of fileTransferV2Snapshots) {
+      const previous = rows.get(snapshot.transferId);
+      rows.set(snapshot.transferId, {
+        transferId: snapshot.transferId,
+        peerId: snapshot.peerId,
+        direction: snapshot.direction,
+        fileName: snapshot.fileName,
+        fileSize: snapshot.fileSize,
+        status: snapshot.status,
+        confirmedBytes: Math.max(0, snapshot.confirmedBytes),
+        queuedBytes: Math.max(0, snapshot.queuedBytes),
+        bytesPerSecond: Number.isFinite(snapshot.bytesPerSecond) ? Math.max(0, snapshot.bytesPerSecond) : 0,
+        progress: Number.isFinite(snapshot.progress) ? Math.max(0, Math.min(100, snapshot.progress * 100)) : 0,
+        activePaths: snapshot.activePaths,
+        reason: snapshot.reason,
+        expiresAt: snapshot.expiresAt,
+        needsSource: snapshot.needsSource,
+        task: previous?.task ?? null,
+      });
+    }
+    return [...rows.values()].sort((left, right) => {
+      const leftTerminal = ["completed", "cancelled", "failed"].includes(left.status);
+      const rightTerminal = ["completed", "cancelled", "failed"].includes(right.status);
+      const lastActivity = (row: FileTransferV2UiRow) => row.task?.updatedAt ?? row.task?.createdAt ?? row.expiresAt;
+      return Number(leftTerminal) - Number(rightTerminal) || lastActivity(right) - lastActivity(left);
+    });
+  }, [fileTransferV2Tasks, fileTransferV2Snapshots]);
 
 
   // 文件扩展名映射图标组件
@@ -904,6 +1152,224 @@ export default function DownloadDrawerSlide({
                 gap: 2,
               }}
             >
+            <Box
+              data-testid="file-v2-task-list"
+              role="region"
+              aria-label={t("fileTransferV2.taskList.ariaLabel", { defaultValue: isChinese ? "文件传输" : "File transfers" })}
+            >
+              <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 1, flexWrap: "wrap", mb: 0.75 }}>
+                <Typography variant="subtitle2">{t("fileTransferV2.taskList.title", { defaultValue: isChinese ? "文件传输" : "File transfers" })}</Typography>
+              </Box>
+              {fileTransferV2Rows.length === 0 ? (
+                <Typography variant="body2" color="text.secondary" data-testid="file-v2-empty-state">
+                  {t("fileTransferV2.taskList.empty", { defaultValue: isChinese ? "暂无文件传输。" : "No file transfers." })}
+                </Typography>
+              ) : (
+                <Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
+                  {fileTransferV2Rows.map(row => {
+                    const busy = fileTransferV2BusyIds.has(row.transferId);
+                    const terminal = ["completed", "cancelled", "failed"].includes(row.status);
+                    const remotePaused = row.status === "paused"
+                      && (row.task?.pauseOrigin === "remote" || row.reason === FILE_TRANSFER_V2_REMOTE_PAUSE_REASON);
+                    const canPause = !terminal && row.status !== "paused" && row.status !== "needs-source";
+                    const canResume = row.status === "paused" && !remotePaused;
+                    const statusColor = remotePaused ? "default"
+                      : row.status === "completed" ? "success"
+                      : row.status === "failed" ? "error"
+                      : row.status === "paused" || row.status === "needs-source" ? "warning"
+                      : "default";
+                    const statusLabel = remotePaused
+                      ? (isChinese ? "瀵规柟宸叉殏鍋滐紝绛夊緟瀵规柟缁х画" : "The other person paused; waiting for them to continue")
+                      : row.status === "reconnecting"
+                      ? (isChinese ? "连接恢复后自动继续" : "Will continue when the connection returns")
+                      : row.status === "needs-source"
+                        ? (isChinese ? "需要重新选择文件" : "Choose the original file again")
+                        : t(`fileTransferV2.status.${FILE_TRANSFER_V2_STATUS_LABELS[row.status].key}`, {
+                          defaultValue: isChinese ? FILE_TRANSFER_V2_STATUS_LABELS[row.status].zh : FILE_TRANSFER_V2_STATUS_LABELS[row.status].en,
+                        });
+                    const routeLabel = row.status === "completed" && row.activePaths.length === 0
+                      ? (isChinese ? "\u5df2\u5b8c\u6210" : "Finished")
+                      : getFileTransferV2RouteLabel(row.activePaths, isChinese);
+                    const hasP2P = row.activePaths.includes("p2p");
+                    const hasRelay = row.activePaths.includes("relay");
+                    const routeColor = hasP2P && hasRelay ? "secondary"
+                      : hasP2P ? "success"
+                      : hasRelay ? "info"
+                      : "default";
+                    const retainedWithHistory = row.expiresAt > Date.now() + 365 * 24 * 60 * 60 * 1000;
+                    const expiryLabel = retainedWithHistory
+                      ? (isChinese ? "已保存到历史记录，删除前保留" : "Retained with chat history until deleted")
+                      : new Date(row.expiresAt).toLocaleString();
+                    const errorMessage = fileTransferV2Errors[row.transferId]
+                      || row.reason
+                      || (row.status === "failed" ? (isChinese ? "文件传输失败。请删除任务后重试。" : "File transfer failed. Delete the task and try again.") : "");
+                    const showError = !remotePaused && (Boolean(fileTransferV2Errors[row.transferId])
+                      || row.status === "failed"
+                      || isFileTransferV2ActionableReason(row.reason));
+                    const showSpeed = ["preparing", "offering", "offered", "receiving", "transferring", "verifying"].includes(row.status)
+                      && row.bytesPerSecond > 0;
+                    const peerName = getFileTransferV2PeerName(row.peerId, isChinese);
+
+                    return (
+                      <Box
+                        key={row.transferId}
+                        data-testid={`file-v2-task-${row.transferId}`}
+                        data-transfer-id={row.transferId}
+                        sx={{
+                          border: `1px solid ${theme.palette.divider}`,
+                          borderRadius: 1.5,
+                          p: { xs: 1, sm: 1.25 },
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: 0.75,
+                        }}
+                      >
+                        <Box sx={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 1, flexWrap: "wrap" }}>
+                          <Box sx={{ display: "flex", alignItems: "center", gap: 0.75, minWidth: 0, flex: "1 1 200px" }}>
+                            {row.direction === "send" ? <UploadFileIcon fontSize="small" /> : <DownloadIcon fontSize="small" />}
+                            <Box sx={{ minWidth: 0 }}>
+                              <Typography variant="body2" fontWeight={600} sx={{ overflowWrap: "anywhere" }}>
+                                {row.fileName}
+                              </Typography>
+                              <Typography variant="caption" color="text.secondary" sx={{ overflowWrap: "anywhere" }}>
+                                {row.direction === "send"
+                                  ? t("fileTransferV2.taskList.sendingTo", { defaultValue: isChinese ? "发送给" : "Sending to" })
+                                  : t("fileTransferV2.taskList.receivedFrom", { defaultValue: isChinese ? "来自" : "From" })} {peerName} · {formatSize(row.fileSize)}
+                              </Typography>
+                            </Box>
+                          </Box>
+                          <Chip size="small" label={statusLabel} color={statusColor} variant="outlined" />
+                        </Box>
+
+                        <Box>
+                          {row.status !== "completed" && (
+                            <Typography variant="caption" color="text.secondary" sx={{ display: "block", fontVariantNumeric: "tabular-nums" }}>
+                              {isChinese
+                                ? `已确认 ${formatSize(row.confirmedBytes)} / ${formatSize(row.fileSize)}${showSpeed ? ` · ${formatTransferSpeed(row.bytesPerSecond)}` : ""}`
+                                : `Confirmed ${formatSize(row.confirmedBytes)} / ${formatSize(row.fileSize)}${showSpeed ? ` · ${formatTransferSpeed(row.bytesPerSecond)}` : ""}`}
+                            </Typography>
+                          )}
+                          <LinearProgress
+                            variant="determinate"
+                            value={row.progress}
+                            aria-label={isChinese ? `${row.fileName} 已确认进度` : `${row.fileName} confirmed progress`}
+                            data-testid={`file-v2-progress-${row.transferId}`}
+                            sx={{ height: 6, borderRadius: 4, mt: 0.4 }}
+                          />
+                        </Box>
+
+                        {showError && (
+                          <Alert severity="error" sx={{ py: 0 }} data-testid={`file-v2-error-${row.transferId}`}>
+                            {localizeFileTransferV2Error(errorMessage, isChinese)}
+                          </Alert>
+                        )}
+
+                        <Box sx={{ display: "flex", alignItems: "center", gap: 0.75, flexWrap: "wrap" }}>
+                          {row.needsSource && (
+                            <>
+                              <Typography variant="caption" color="text.secondary" sx={{ flexBasis: "100%" }}>
+                                {isChinese
+                                  ? "刷新页面后，请重新选择发送时的原文件；已接收的部分会保留。"
+                                  : "After refreshing, choose the same original file to continue. Already received parts are kept."}
+                              </Typography>
+                              <input
+                                ref={element => {
+                                  if (element) fileTransferV2SourceInputsRef.current.set(row.transferId, element);
+                                  else fileTransferV2SourceInputsRef.current.delete(row.transferId);
+                                }}
+                                data-testid={`file-v2-source-input-${row.transferId}`}
+                                type="file"
+                                hidden
+                                onChange={event => handleFileTransferV2Source(row.transferId, event)}
+                              />
+                              <Button
+                                size="small"
+                                variant="contained"
+                                disabled={busy}
+                                data-testid={`file-v2-choose-source-${row.transferId}`}
+                                onClick={() => fileTransferV2SourceInputsRef.current.get(row.transferId)?.click()}
+                              >
+                                {t("fileTransferV2.action.chooseSource", { defaultValue: isChinese ? "重新选择文件" : "Choose file again" })}
+                              </Button>
+                            </>
+                          )}
+                          {canPause && (
+                            <Button
+                              size="small"
+                              startIcon={<PauseIcon />}
+                              disabled={busy}
+                              data-testid={`file-v2-pause-${row.transferId}`}
+                              onClick={() => void runFileTransferV2Action(row.transferId, () => realTimeColab.pauseFileTransferV2(row.transferId))}
+                            >{t("fileTransferV2.action.pause", { defaultValue: isChinese ? "暂停" : "Pause" })}</Button>
+                          )}
+                          {canResume && (
+                            <Button
+                              size="small"
+                              startIcon={<PlayArrowIcon />}
+                              disabled={busy}
+                              data-testid={`file-v2-resume-${row.transferId}`}
+                              onClick={() => void runFileTransferV2Action(row.transferId, () => realTimeColab.resumeFileTransferV2(row.transferId))}
+                            >{t("fileTransferV2.action.resume", { defaultValue: isChinese ? "继续" : "Resume" })}</Button>
+                          )}
+                          {!terminal && (
+                            <Button
+                              size="small"
+                              color="inherit"
+                              data-testid={`file-v2-cancel-${row.transferId}`}
+                              onClick={() => void runFileTransferV2Action(row.transferId, () => realTimeColab.cancelFileTransferV2(row.transferId))}
+                            >{t("fileTransferV2.action.cancel", { defaultValue: isChinese ? "取消" : "Cancel" })}</Button>
+                          )}
+                          {row.direction === "receive" && row.status === "completed" && (
+                            <Button
+                              size="small"
+                              startIcon={<DownloadIcon />}
+                              disabled={busy}
+                              data-testid={`file-v2-download-${row.transferId}`}
+                              onClick={() => downloadFileTransferV2(row)}
+                            >{t("fileTransferV2.action.download", { defaultValue: isChinese ? "下载" : "Download" })}</Button>
+                          )}
+                        </Box>
+
+                        <Box
+                          component="details"
+                          data-testid={`file-v2-details-${row.transferId}`}
+                          sx={{ mt: 0.1, "& > summary": { cursor: "pointer", width: "fit-content", py: 0.25 } }}
+                        >
+                          <Typography component="summary" variant="caption" color="text.secondary">
+                            {isChinese ? "详细信息" : "Details"}
+                          </Typography>
+                          <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 0.5, pt: 0.5 }}>
+                            <Chip size="small" label={routeLabel} color={routeColor} variant="outlined" data-testid={`file-v2-route-${row.transferId}`} />
+                            <Typography variant="caption" color="text.secondary" sx={{ overflowWrap: "anywhere" }}>
+                              {isChinese ? "对方 ID：" : "Other party ID: "}{row.peerId}
+                            </Typography>
+                            <Typography variant="caption" color="text.secondary">
+                              {isChinese ? "排队：" : "Queued: "}{formatSize(row.queuedBytes)}
+                            </Typography>
+                            <Typography variant="caption" color="text.secondary">
+                              {retainedWithHistory
+                                ? expiryLabel
+                                : `${isChinese ? "保留至：" : "Expires: "}${expiryLabel}`}
+                            </Typography>
+                            {terminal && (
+                              <Button
+                                size="small"
+                                color="inherit"
+                                startIcon={<DeleteOutlineIcon />}
+                                disabled={busy}
+                                data-testid={`file-v2-delete-${row.transferId}`}
+                                onClick={() => void runFileTransferV2Action(row.transferId, () => realTimeColab.deleteFileTransferV2(row.transferId))}
+                              >{t("fileTransferV2.action.delete", { defaultValue: isChinese ? "删除数据" : "Delete data" })}</Button>
+                            )}
+                          </Box>
+                        </Box>
+                      </Box>
+                    );
+                  })}
+                </Box>
+              )}
+            </Box>
+
             {hasContent && (
               <>
                 {statusMessage && (

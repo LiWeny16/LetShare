@@ -710,8 +710,7 @@ export function getEffectiveDataChannelChunkSize(
 }
 
 export function getSafeReceiveSizeLimit(deviceType: DeviceType): number {
- // This is the safe limit for the current in-memory receive buffer path.
- // Larger P2P files need a direct-to-disk sink, not a larger Uint8Array.
+ // Compatibility limit retained for callers that use the historical threshold.
  if (deviceType === "apple") {
   return 64 * 1024 * 1024;
  }
@@ -721,6 +720,182 @@ export function getSafeReceiveSizeLimit(deviceType: DeviceType): number {
  }
 
  return 3 * 1024 * 1024 * 1024;
+}
+
+export function getConservativeReceiveMemoryLimit(deviceType: DeviceType): number {
+ // Leave room for the receive buffer, the completed File, and browser UI work.
+ // Larger P2P files should use direct-to-disk instead of allocating one large array.
+ if (deviceType === "apple" || deviceType === "android") {
+  return 32 * 1024 * 1024;
+ }
+
+ return 128 * 1024 * 1024;
+}
+
+export function getConservativeReceiveCacheByteLimit(deviceType: DeviceType): number {
+ if (deviceType === "apple" || deviceType === "android") {
+  return 64 * 1024 * 1024;
+ }
+ return 256 * 1024 * 1024;
+}
+
+export const MAX_P2P_RECEIVE_QUEUE_BYTES = 8 * 1024 * 1024;
+
+export function getTransferMessageByteLength(data: unknown): number {
+ if (typeof data === "string") {
+  // UTF-16 is an upper-bound approximation for queued control text.
+  return data.length * 2;
+ }
+ if (data instanceof ArrayBuffer) {
+  return data.byteLength;
+ }
+ if (ArrayBuffer.isView(data)) {
+  return data.byteLength;
+ }
+ if (typeof Blob !== "undefined" && data instanceof Blob) {
+  return data.size;
+ }
+ return Number.POSITIVE_INFINITY;
+}
+
+/** Serializes asynchronous receive work while accounting for queued and active bytes. */
+export class BoundedSerialTransferQueue {
+ private tail: Promise<void> = Promise.resolve();
+ private pendingBytes = 0;
+ private closed = false;
+
+ constructor(private readonly maxBytes = MAX_P2P_RECEIVE_QUEUE_BYTES) {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) {
+   throw new Error("maxBytes must be a positive safe integer");
+  }
+ }
+
+ enqueue(byteLength: number, handler: () => void | Promise<void>): boolean {
+  if (
+   this.closed ||
+   !Number.isSafeInteger(byteLength) ||
+   byteLength < 0 ||
+   byteLength > this.maxBytes ||
+   this.pendingBytes + byteLength > this.maxBytes
+  ) {
+   return false;
+  }
+
+  this.pendingBytes += byteLength;
+  this.tail = this.tail
+   .then(handler, handler)
+   .catch(() => undefined)
+   .finally(() => {
+    this.pendingBytes = Math.max(0, this.pendingBytes - byteLength);
+   });
+  return true;
+ }
+
+ close(): void {
+  this.closed = true;
+ }
+
+ get queuedBytes(): number {
+  return this.pendingBytes;
+ }
+}
+
+interface OrderedChunkCommitEntry {
+ run: () => void | Promise<void>;
+ resolve: () => void;
+ reject: (error: unknown) => void;
+}
+
+/** Commits concurrently prepared chunks to a transport in source index order. */
+export class OrderedChunkCommitQueue {
+ private readonly pending = new Map<number, OrderedChunkCommitEntry>();
+ private nextIndex = 0;
+ private draining = false;
+ private failure: unknown;
+
+ run(index: number, commit: () => void | Promise<void>): Promise<void> {
+  if (!Number.isSafeInteger(index) || index < 0) {
+   return Promise.reject(new Error("chunk index must be a non-negative safe integer"));
+  }
+  if (this.failure !== undefined) return Promise.reject(this.failure);
+  if (index < this.nextIndex || this.pending.has(index)) {
+   return Promise.reject(new Error(`chunk ${index} was committed more than once`));
+  }
+
+  const result = new Promise<void>((resolve, reject) => {
+   this.pending.set(index, { run: commit, resolve, reject });
+  });
+  void this.drain();
+  return result;
+ }
+
+ assertActive(): void {
+  if (this.failure !== undefined) throw this.failure;
+ }
+
+ fail(reason: unknown): void {
+  if (this.failure !== undefined) return;
+  this.failure = reason ?? new Error("ordered chunk commit failed");
+  for (const entry of this.pending.values()) entry.reject(this.failure);
+  this.pending.clear();
+ }
+
+ private async drain(): Promise<void> {
+  if (this.draining || this.failure !== undefined) return;
+  this.draining = true;
+  try {
+   while (this.failure === undefined) {
+    const entry = this.pending.get(this.nextIndex);
+    if (!entry) return;
+    this.pending.delete(this.nextIndex);
+    try {
+     await entry.run();
+     this.assertActive();
+     entry.resolve();
+     this.nextIndex += 1;
+    } catch (error) {
+     entry.reject(error);
+     this.fail(error);
+     return;
+    }
+   }
+  } finally {
+   this.draining = false;
+   if (this.failure === undefined && this.pending.has(this.nextIndex)) {
+    void this.drain();
+   }
+  }
+ }
+}
+
+export interface TransferRateSample {
+ at: number;
+ bytes: number;
+}
+
+export function calculateRollingTransferRate(
+ samples: readonly TransferRateSample[],
+ now: number,
+ windowMs = 1_500,
+ idleMs = windowMs
+): number {
+ if (samples.length < 2 || windowMs <= 0 || idleMs < 0) return 0;
+ const ordered = [...samples].sort((a, b) => a.at - b.at);
+ const latest = ordered[ordered.length - 1];
+ if (now - latest.at > idleMs) return 0;
+
+ const cutoff = now - windowMs;
+ let first = ordered[0];
+ for (const sample of ordered) {
+  if (sample.at >= cutoff) {
+   first = sample;
+   break;
+  }
+ }
+ const durationMs = latest.at - first.at;
+ const deltaBytes = latest.bytes - first.bytes;
+ if (durationMs <= 0 || deltaBytes <= 0) return 0;
+ return Math.max(0, (deltaBytes * 1000) / durationMs);
 }
 
 export function normalizeTransferMetadata(
@@ -1638,6 +1813,7 @@ export class DirectFileWriteSink {
  private receivedIndexes = new Set<number>();
  private receivedByteCount = 0;
  private closed = false;
+ private closing: Promise<void> | null = null;
  private options: {
   fileSize: number;
   totalChunks: number;
@@ -1721,14 +1897,18 @@ export class DirectFileWriteSink {
   if (this.closed) {
    return;
   }
-  await withTransferTimeout(
-   this.options.writable.close(),
-   {
-    timeoutMs: this.options.closeTimeoutMs,
-    timeoutMessage: "direct file close timed out",
-   }
-  );
-  this.closed = true;
+  if (!this.closing) {
+   this.closing = withTransferTimeout(
+    this.options.writable.close(),
+    {
+     timeoutMs: this.options.closeTimeoutMs,
+     timeoutMessage: "direct file close timed out",
+    }
+   ).then(() => {
+    this.closed = true;
+   });
+  }
+  await this.closing;
  }
 
  async abort(reason?: unknown): Promise<void> {

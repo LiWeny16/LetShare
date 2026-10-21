@@ -44,6 +44,15 @@ function formatSize(bytes: number): string {
  return `${bytes} B`;
 }
 
+/** Run the relay completion action only after durable receive persistence succeeds. */
+export async function completeAfterReceivePersistence(
+ persist: () => void | Promise<void>,
+ complete: () => void | Promise<void>,
+): Promise<void> {
+ await persist();
+ await complete();
+}
+
 type FileSystemFileHandleLike = {
  createWritable: () => Promise<FileSystemWritableFileStreamLike>;
 };
@@ -146,6 +155,7 @@ interface TransferSession {
  chunkSize: number;
  sentChunks: number;
  ackedChunks: number;
+ ackedBytes: number;
  flowControl: boolean;
  status: "pending" | "accepted" | "transferring" | "completed" | "cancelled" | "error";
 }
@@ -190,6 +200,15 @@ export interface ServerDirectSaveRequest {
  chunkSize: number;
 }
 
+export interface ServerTransferAckProgress {
+ transferId: string;
+ peerId: string;
+ fileName: string;
+ fileSize: number;
+ acknowledgedBytes: number;
+ at: number;
+}
+
 type TransferStatusKind = "info" | "warning" | "error" | "success";
 
 type SendCompletionWaiter = {
@@ -221,7 +240,8 @@ export class ServerFileTransfer {
  private readonly RELAY_ACK_WINDOW_CHUNKS = 24;
  private readonly RELAY_ACK_STALL_TIMEOUT_MS = 120_000;
  private onProgressCallback: ((progress: number | null) => void) | null = null;
- private onFileReceivedCallback: ((file: File, fromUserId: string) => void) | null = null;
+ private onAcknowledgedProgressCallback: ((progress: ServerTransferAckProgress) => void) | null = null;
+ private onFileReceivedCallback: ((file: File, fromUserId: string) => void | Promise<void>) | null = null;
  private currentSendingTransferId: string | null = null;
  private onDownloadPageStateChange: ((show: boolean) => void) | null = null;
  private onFileMetaInfoChange: ((name: string) => void) | null = null;
@@ -247,10 +267,15 @@ export class ServerFileTransfer {
   this.onProgressCallback = callback;
  }
 
+ /** Reports bytes confirmed by the receiver, for accurate outgoing speed/progress. */
+ public setAcknowledgedProgressCallback(callback: (progress: ServerTransferAckProgress) => void) {
+  this.onAcknowledgedProgressCallback = callback;
+ }
+
  /**
   * 设置文件接收回调
   */
- public setFileReceivedCallback(callback: (file: File, fromUserId: string) => void) {
+ public setFileReceivedCallback(callback: (file: File, fromUserId: string) => void | Promise<void>) {
   this.onFileReceivedCallback = callback;
  }
 
@@ -1045,6 +1070,7 @@ export class ServerFileTransfer {
    chunkSize,
    sentChunks: 0,
    ackedChunks: 0,
+   ackedBytes: 0,
    flowControl: false,
    status: "pending",
   };
@@ -1799,6 +1825,18 @@ export class ServerFileTransfer {
   }
 
   session.ackedChunks = Math.max(session.ackedChunks, normalized.ack.receivedChunks);
+  const acknowledgedBytes = Math.max(session.ackedBytes, Math.min(normalized.ack.bytesReceived, session.file.size));
+  if (acknowledgedBytes > session.ackedBytes) {
+   session.ackedBytes = acknowledgedBytes;
+   this.onAcknowledgedProgressCallback?.({
+    transferId: session.transferId,
+    peerId: session.toUserId,
+    fileName: session.file.name,
+    fileSize: session.file.size,
+    acknowledgedBytes,
+    at: Date.now(),
+   });
+  }
   const progress = Math.min((session.ackedChunks / session.totalChunks) * 100, 99);
   this.onProgressCallback?.(progress);
   this.emitSendingUpdate(session, "transferring", progress);
@@ -1818,6 +1856,20 @@ export class ServerFileTransfer {
     Math.min(data.received_count || 0, sendingSession.totalChunks)
    );
    sendingSession.ackedChunks = Math.max(sendingSession.ackedChunks, serverAcceptedChunks);
+   const resumeBytes = Number.isSafeInteger(data.bytes_received)
+    ? Math.max(0, Math.min(data.bytes_received, sendingSession.file.size))
+    : sendingSession.ackedBytes;
+   if (resumeBytes > sendingSession.ackedBytes) {
+    sendingSession.ackedBytes = resumeBytes;
+    this.onAcknowledgedProgressCallback?.({
+     transferId: sendingSession.transferId,
+     peerId: sendingSession.toUserId,
+     fileName: sendingSession.file.name,
+     fileSize: sendingSession.file.size,
+     acknowledgedBytes: resumeBytes,
+     at: Date.now(),
+    });
+   }
    const progress = Math.min((sendingSession.ackedChunks / sendingSession.totalChunks) * 100, 99);
    this.onProgressCallback?.(progress);
    this.emitSendingUpdate(sendingSession, "transferring", progress);
@@ -2022,12 +2074,16 @@ export class ServerFileTransfer {
     if (!session.directSink) {
      throw new Error("direct file sink not available");
     }
-    await session.directSink.close();
+    await completeAfterReceivePersistence(
+     () => session.directSink!.close(),
+     () => {
+      this.onFileSavedToDiskCallback?.(session.fileName, session.fileSize, session.fromUserId);
+      this.emitReceivingUpdate(session, "completed", 100);
+      this.sendTransferCompleteMessage(session.transferId, session.roomName);
+     },
+    );
     const elapsed = (performance.now() - startTime).toFixed(0);
     console.debug(`[ServerFileTransfer] Direct file saved in ${elapsed}ms: ${session.fileName} (${session.fileSize} bytes)`);
-
-     this.onFileSavedToDiskCallback?.(session.fileName, session.fileSize, session.fromUserId);
-     this.emitReceivingUpdate(session, "completed", 100);
    } else {
     let file: File;
     if (session.receivedChunks && session.receivedChunks.length > 0) {
@@ -2049,10 +2105,17 @@ export class ServerFileTransfer {
     const elapsed = (performance.now() - startTime).toFixed(0);
     console.debug(`[ServerFileTransfer] File ready in ${elapsed}ms: ${file.name} (${file.size} bytes)`);
 
-     this.onFileReceivedCallback?.(file, session.fromUserId);
-     this.emitReceivingUpdate(session, "completed", 100, file);
+     await completeAfterReceivePersistence(
+      async () => {
+       if (!this.onFileReceivedCallback) throw new Error("Received file persistence handler is unavailable");
+       await this.onFileReceivedCallback(file, session.fromUserId);
+      },
+      () => {
+       this.emitReceivingUpdate(session, "completed", 100, file);
+       this.sendTransferCompleteMessage(session.transferId, session.roomName);
+      },
+     );
    }
-   this.sendTransferCompleteMessage(session.transferId, session.roomName);
    this.completedTransferIds.add(session.transferId);
    completed = true;
   } catch (err) {

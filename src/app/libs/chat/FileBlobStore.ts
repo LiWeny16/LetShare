@@ -6,12 +6,17 @@
  */
 
 import ChatHistoryManager from './ChatHistoryManager';
+import {
+  fileTransferV2IdFromHistoryKey,
+  getFileTransferV2ApplicationAdapter,
+} from '../connection/fileTransferV2/applicationAdapter';
 
 const STORE_NAME = 'file_blobs';
 
 export interface StoredFile {
   fileKey: string;
-  blob: ArrayBuffer;
+  /** ArrayBuffer is retained for records written by older releases. */
+  blob: Blob | ArrayBuffer;
   fileName: string;
   mimeType: string;
   fileSize: number;
@@ -56,15 +61,14 @@ class FileBlobStore {
   ): Promise<{ success: boolean; error?: string }> {
     try {
       const db = await this.getDB();
-      const arrayBuffer = await file.arrayBuffer();
 
-      return new Promise((resolve, reject) => {
+      return await new Promise((resolve, reject) => {
         const transaction = db.transaction([STORE_NAME], 'readwrite');
         const store = transaction.objectStore(STORE_NAME);
 
         const storedFile: StoredFile = {
           fileKey,
-          blob: arrayBuffer,
+          blob: file,
           fileName: file instanceof File ? file.name : fileKey,
           mimeType: file.type || 'application/octet-stream',
           fileSize: file.size,
@@ -74,14 +78,16 @@ class FileBlobStore {
         const putRequest = store.put(storedFile);
         putRequest.onsuccess = () => {
           console.log(`[FileBlobStore] Stored: ${fileKey} (${this.formatSize(file.size)})`);
-          resolve({ success: true });
         };
         putRequest.onerror = () => {
           console.error('[FileBlobStore] Put error:', putRequest.error);
-          resolve({ success: false, error: putRequest.error?.message || 'Unknown error' });
         };
+        transaction.oncomplete = () => resolve({ success: true });
         transaction.onerror = () => {
           reject(new Error(transaction.error?.message || 'Transaction failed'));
+        };
+        transaction.onabort = () => {
+          reject(new Error(transaction.error?.message || 'Transaction aborted'));
         };
       });
     } catch (error) {
@@ -93,6 +99,15 @@ class FileBlobStore {
 
   /** Retrieve a file as a Blob (reconstructed from ArrayBuffer). */
   public async getFile(fileKey: string): Promise<File | null> {
+    const transferId = fileTransferV2IdFromHistoryKey(fileKey);
+    if (transferId) {
+      try {
+        return await getFileTransferV2ApplicationAdapter()?.getFile(transferId) ?? null;
+      } catch (error) {
+        console.error('[FileBlobStore] v2 file retrieval failed:', error);
+        return null;
+      }
+    }
     try {
       const db = await this.getDB();
       return new Promise((resolve) => {
@@ -126,65 +141,110 @@ class FileBlobStore {
 
   /** Delete a single file. */
   public async deleteFile(fileKey: string): Promise<{ success: boolean }> {
+    const transferId = fileTransferV2IdFromHistoryKey(fileKey);
+    if (transferId) {
+      try {
+        return { success: await (getFileTransferV2ApplicationAdapter()?.deleteFile(fileKey) ?? Promise.resolve(false)) };
+      } catch {
+        return { success: false };
+      }
+    }
     try {
       const db = await this.getDB();
       return new Promise((resolve) => {
         const transaction = db.transaction([STORE_NAME], 'readwrite');
         const store = transaction.objectStore(STORE_NAME);
-        const request = store.delete(fileKey);
-        request.onsuccess = () => {
+        store.delete(fileKey);
+        transaction.oncomplete = () => {
           console.log(`[FileBlobStore] Deleted: ${fileKey}`);
           resolve({ success: true });
         };
-        request.onerror = () => resolve({ success: false });
+        transaction.onerror = () => resolve({ success: false });
+        transaction.onabort = () => resolve({ success: false });
       });
     } catch {
       return { success: false };
     }
   }
 
+  /** Pause v2 runtime work before changing a history link, without deleting bytes. */
+  public async prepareDeleteFile(fileKey: string): Promise<boolean> {
+    const transferId = fileTransferV2IdFromHistoryKey(fileKey);
+    if (!transferId) return true;
+    const adapter = getFileTransferV2ApplicationAdapter();
+    return adapter ? adapter.prepareFileDeletion(fileKey) : false;
+  }
+
+  public async prepareDeleteFilesByUser(userId: string): Promise<{ success: boolean }> {
+    try {
+      await getFileTransferV2ApplicationAdapter()?.prepareFilesDeletionByUser(userId);
+      return { success: true };
+    } catch (error) {
+      console.error('[FileBlobStore] Failed to pause files before history deletion:', error);
+      return { success: false };
+    }
+  }
+
+  public async prepareClearAll(): Promise<{ success: boolean }> {
+    try {
+      await getFileTransferV2ApplicationAdapter()?.prepareClearAll();
+      return { success: true };
+    } catch (error) {
+      console.error('[FileBlobStore] Failed to pause files before clearing history:', error);
+      return { success: false };
+    }
+  }
+
   /** Delete all files whose keys start with a user prefix. */
   public async deleteFilesByUser(userId: string): Promise<{ success: boolean; deletedCount: number }> {
+    let success = true;
+    let deletedCount = 0;
+    const adapter = getFileTransferV2ApplicationAdapter();
+    try {
+      deletedCount += await (adapter?.deleteFilesByUser(userId) ?? Promise.resolve(0));
+    } catch (error) {
+      success = false;
+      console.error('[FileBlobStore] v2 deleteFilesByUser failed:', error);
+    }
+
     try {
       const db = await this.getDB();
-      const allKeys = await this.getAllFileKeys();
-      const toDelete = allKeys.filter((k) => k.startsWith(userId));
-
-      if (toDelete.length === 0) return { success: true, deletedCount: 0 };
-
-      const transaction = db.transaction([STORE_NAME], 'readwrite');
-      const store = transaction.objectStore(STORE_NAME);
-      let deleted = 0;
-
-      return new Promise((resolve) => {
-        toDelete.forEach((key) => {
-          const req = store.delete(key);
-          req.onsuccess = () => {
-            deleted++;
-            if (deleted === toDelete.length) {
-              console.log(`[FileBlobStore] Deleted ${deleted} files for user ${userId}`);
-              resolve({ success: true, deletedCount: deleted });
-            }
-          };
-          req.onerror = () => {
-            deleted++;
-            if (deleted === toDelete.length) {
-              resolve({ success: true, deletedCount: deleted });
-            }
-          };
-        });
+      const allKeys = await new Promise<string[]>((resolve, reject) => {
+        const transaction = db.transaction([STORE_NAME], 'readonly');
+        const request = transaction.objectStore(STORE_NAME).getAllKeys();
+        let keys: string[] = [];
+        request.onsuccess = () => { keys = request.result as string[]; };
+        request.onerror = () => reject(request.error || new Error('Failed to read stored file keys'));
+        transaction.oncomplete = () => resolve(keys);
+        transaction.onerror = () => reject(transaction.error || new Error('File key read transaction failed'));
+        transaction.onabort = () => reject(transaction.error || new Error('File key read transaction aborted'));
       });
+      const toDelete = allKeys.filter(key => !fileTransferV2IdFromHistoryKey(key) && key.startsWith(userId));
+      if (toDelete.length > 0) {
+        await new Promise<void>((resolve, reject) => {
+          const transaction = db.transaction([STORE_NAME], 'readwrite');
+          const store = transaction.objectStore(STORE_NAME);
+          for (const key of toDelete) store.delete(key);
+          transaction.oncomplete = () => resolve();
+          transaction.onerror = () => reject(transaction.error || new Error('File deletion transaction failed'));
+          transaction.onabort = () => reject(transaction.error || new Error('File deletion transaction aborted'));
+        });
+        deletedCount += toDelete.length;
+        console.log(`[FileBlobStore] Deleted ${toDelete.length} files for user ${userId}`);
+      }
     } catch (error) {
-      console.error('[FileBlobStore] deleteFilesByUser exception:', error);
-      return { success: false, deletedCount: 0 };
+      success = false;
+      console.error('[FileBlobStore] legacy deleteFilesByUser failed:', error);
     }
+    return { success, deletedCount };
   }
 
   /** List all stored file keys (lightweight, no blob data). */
   public async getAllFileKeys(): Promise<string[]> {
+    let legacyKeys: string[];
     try {
       const db = await this.getDB();
-      return new Promise((resolve) => {
+      legacyKeys = await new Promise((resolve) => {
         const transaction = db.transaction([STORE_NAME], 'readonly');
         const store = transaction.objectStore(STORE_NAME);
         const request = store.getAllKeys();
@@ -192,15 +252,20 @@ class FileBlobStore {
         request.onerror = () => resolve([]);
       });
     } catch {
-      return [];
+      legacyKeys = [];
     }
+    const adapter = getFileTransferV2ApplicationAdapter();
+    if (!adapter) return legacyKeys;
+    const tasks = await adapter.listCompletedReceivedTasks();
+    return Array.from(new Set([...legacyKeys, ...tasks.map(task => `filev2:${task.transferId}`)]));
   }
 
   /** Get all file infos using cursor (avoids loading all blobs into memory at once). */
   public async getAllFileInfos(): Promise<FileBlobInfo[]> {
+    let legacyInfos: FileBlobInfo[];
     try {
       const db = await this.getDB();
-      return new Promise((resolve) => {
+      legacyInfos = await new Promise((resolve) => {
         const transaction = db.transaction([STORE_NAME], 'readonly');
         const store = transaction.objectStore(STORE_NAME);
         const results: FileBlobInfo[] = [];
@@ -225,8 +290,21 @@ class FileBlobStore {
         request.onerror = () => resolve(results);
       });
     } catch {
-      return [];
+      legacyInfos = [];
     }
+    const adapter = getFileTransferV2ApplicationAdapter();
+    if (!adapter) return legacyInfos;
+    const tasks = await adapter.listCompletedReceivedTasks();
+    return [
+      ...legacyInfos,
+      ...tasks.map(task => ({
+        fileKey: `filev2:${task.transferId}`,
+        fileName: task.manifest.name,
+        mimeType: task.manifest.type,
+        fileSize: task.manifest.size,
+        storedAt: task.createdAt,
+      })),
+    ];
   }
 
   /** Get total storage size estimate (bytes). Uses cursor count, no blob loading. */
@@ -242,14 +320,7 @@ class FileBlobStore {
   /** Get total file count using IndexedDB count (no data loaded). */
   public async getFileCount(): Promise<number> {
     try {
-      const db = await this.getDB();
-      return new Promise((resolve) => {
-        const transaction = db.transaction([STORE_NAME], 'readonly');
-        const store = transaction.objectStore(STORE_NAME);
-        const request = store.count();
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = () => resolve(0);
-      });
+      return (await this.getAllFileInfos()).length;
     } catch {
       return 0;
     }
@@ -257,6 +328,14 @@ class FileBlobStore {
 
   /** Check if a file with the given key exists (uses count, no blob loaded). */
   public async hasFile(fileKey: string): Promise<boolean> {
+    const transferId = fileTransferV2IdFromHistoryKey(fileKey);
+    if (transferId) {
+      try {
+        return await getFileTransferV2ApplicationAdapter()?.hasCompletedReceivedFile(transferId) ?? false;
+      } catch {
+        return false;
+      }
+    }
     try {
       const db = await this.getDB();
       return new Promise((resolve) => {
@@ -269,6 +348,49 @@ class FileBlobStore {
     } catch {
       return false;
     }
+  }
+
+  /** Pin a v2 receive only after its chat history record has committed. */
+  public async pinForHistory(fileKey: string): Promise<boolean> {
+    const adapter = getFileTransferV2ApplicationAdapter();
+    return adapter ? adapter.pinForHistory(fileKey) : false;
+  }
+
+  /** Recheck a pinned v2 receive after the chat history transaction commits. */
+  public async isHistoryPinCurrent(fileKey: string): Promise<boolean> {
+    const adapter = getFileTransferV2ApplicationAdapter();
+    return adapter ? adapter.isHistoryPinCurrent(fileKey) : false;
+  }
+
+  /** Remove all legacy blobs and v2 task data for a user-triggered history clear. */
+  public async clearAll(): Promise<{ success: boolean; deletedCount: number }> {
+    let success = true;
+    let deletedCount = 0;
+    try {
+      const db = await this.getDB();
+      const legacyCount = await new Promise<number>((resolve) => {
+        const transaction = db.transaction([STORE_NAME], 'readwrite');
+        const store = transaction.objectStore(STORE_NAME);
+        const countRequest = store.count();
+        countRequest.onsuccess = () => { store.clear(); };
+        countRequest.onerror = () => { store.clear(); };
+        transaction.oncomplete = () => resolve(countRequest.result || 0);
+        transaction.onerror = () => resolve(-1);
+        transaction.onabort = () => resolve(-1);
+      });
+      if (legacyCount < 0) success = false;
+      else deletedCount += legacyCount;
+    } catch (error) {
+      success = false;
+      console.error('[FileBlobStore] Legacy clearAll failed:', error);
+    }
+    try {
+      deletedCount += await (getFileTransferV2ApplicationAdapter()?.clearAll() ?? Promise.resolve(0));
+    } catch (error) {
+      success = false;
+      console.error('[FileBlobStore] v2 clearAll failed:', error);
+    }
+    return { success, deletedCount };
   }
 
   private formatSize(bytes: number): string {

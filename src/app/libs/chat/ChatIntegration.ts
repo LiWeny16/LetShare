@@ -3,6 +3,69 @@ import FileBlobStore from './FileBlobStore';
 import realTimeColab from '@App/libs/connection/colabLib';
 import mitt from 'mitt';
 import { guessMimeType } from './mimeTypes';
+import type { FileTransferV2Task } from '../connection/fileTransferV2/store';
+
+type V2ReceivedHistoryCommitDependencies = {
+    selfId: string;
+    getHistory: typeof ChatHistoryManager.getChatHistory;
+    addFileMessage: typeof ChatHistoryManager.addFileMessage;
+    pinForHistory: (fileKey: string) => Promise<boolean>;
+    isHistoryPinCurrent: (fileKey: string) => Promise<boolean>;
+    rollbackHistoryMessage: (peerId: string, messageId: string) => ReturnType<typeof ChatHistoryManager.deleteMessage>;
+};
+
+/** Ensure one durable history link exists and keep it only while the receive remains complete. */
+export async function commitV2ReceivedHistoryLink(
+    task: FileTransferV2Task,
+    file: File,
+    dependencies: V2ReceivedHistoryCommitDependencies,
+): Promise<string> {
+    if (task.direction !== 'receive' || task.localParticipantId !== dependencies.selfId) {
+        throw new Error('Received file task does not belong to this user');
+    }
+    const peerId = task.peerParticipantId;
+    const userName = peerId.split(':')[0] || 'Unknown User';
+    const fileKey = `filev2:${task.transferId}`;
+    const history = await dependencies.getHistory(peerId);
+    const existing = history?.messages.find(message =>
+        (message.type === 'file' || message.type === 'image') && message.fileMetadata.fileKey === fileKey,
+    );
+    let messageId = existing?.id;
+    let createdMessage = false;
+    if (!messageId) {
+        const result = await dependencies.addFileMessage(
+            peerId,
+            userName,
+            peerId,
+            { name: file.name, size: file.size, type: file.type || task.manifest.type },
+            'completed',
+            100,
+            fileKey,
+        );
+        if (!result.success || !result.messageId) {
+            throw new Error(`Failed to create v2 file history message: ${result.error || 'unknown error'}`);
+        }
+        messageId = result.messageId;
+        createdMessage = true;
+    }
+
+    try {
+        if (!(await dependencies.pinForHistory(fileKey)) || !(await dependencies.isHistoryPinCurrent(fileKey))) {
+            throw new Error('Received file is no longer complete and could not be pinned for history');
+        }
+    } catch (error) {
+        // A retry may find a pre-existing link. Only roll back metadata created by
+        // this invocation, preserving the prior link and blocks for another retry.
+        if (createdMessage) {
+            const rollback = await dependencies.rollbackHistoryMessage(peerId, messageId!);
+            if (!rollback.success) {
+                throw new Error(`History rollback failed after v2 pin failure: ${rollback.error || 'unknown error'}`);
+            }
+        }
+        throw error;
+    }
+    return fileKey;
+}
 
 // 为ChatIntegration创建一个事件发射器类型
 type ChatIntegrationEvents = {
@@ -80,11 +143,6 @@ class ChatIntegration {
         realTimeColab.emitter.on('file-sent', async ({ to, fileName, fileSize }) => {
             console.log(`[CHAT INTEGRATION] Event 'file-sent' for ${to}: ${fileName}`);
             await this.handleFileSent(to, fileName, fileSize);
-        });
-
-        realTimeColab.emitter.on('file-received', async ({ from, fileName, fileSize, file }) => {
-            console.log(`[CHAT INTEGRATION] Event 'file-received' from ${from}: ${fileName}`);
-            await this.handleFileReceived(from, fileName, fileSize, file);
         });
 
         realTimeColab.emitter.on('file-saved-to-disk', async ({ from, fileName, fileSize }) => {
@@ -233,43 +291,53 @@ class ChatIntegration {
         }
     }
 
-    /** Handle file-received event: store blob and create completed file message. */
-    private async handleFileReceived(
-        fromUserId: string,
-        fileName: string,
-        fileSize: number,
-        file: File,
-    ): Promise<void> {
-        if (fromUserId === realTimeColab.getUniqId()) return;
+    /** Persist a received file and its history reference before the transport confirms completion. */
+    public async commitReceivedFile(fromUserId: string, file: File): Promise<string> {
+        if (fromUserId === realTimeColab.getUniqId()) throw new Error('Cannot save a file received from the local user');
 
-        try {
-            const userName = fromUserId.split(':')[0] || 'Unknown User';
-
-            // Generate a consistent fileKey and store the blob
-            const now = Date.now();
-            const fileKey = `${fromUserId}_${now}_${fileName.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
-            const storeResult = await FileBlobStore.storeFile(fileKey, file);
-
-            // Create the file message — pass the fileKey so it matches the stored blob
-            const result = await ChatHistoryManager.addFileMessage(
-                fromUserId,
-                userName,
-                fromUserId, // sender is the other user
-                { name: fileName, size: fileSize, type: file.type },
-                'completed',
-                100,
-                fileKey, // ensure the message references the stored blob
-            );
-
-            if (result.success && storeResult.success) {
-                this.emitter.emit('history-updated', { userId: fromUserId });
-                console.log(`[CHAT INTEGRATION] File received and stored: ${fileName} (${fileKey})`);
-            } else {
-                console.error(`[CHAT INTEGRATION] Failed to handle received file: store=${storeResult.success}, msg=${result.success}`);
-            }
-        } catch (error) {
-            console.error('[CHAT INTEGRATION] Failed to handle file-received:', error);
+        const userName = fromUserId.split(':')[0] || 'Unknown User';
+        const fileKey = `${fromUserId}_${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+        const storeResult = await FileBlobStore.storeFile(fileKey, file);
+        if (!storeResult.success) {
+            throw new Error(`Received file could not be committed to IndexedDB: ${storeResult.error || 'unknown error'}`);
         }
+
+        const result = await ChatHistoryManager.addFileMessage(
+            fromUserId,
+            userName,
+            fromUserId,
+            { name: file.name, size: file.size, type: file.type },
+            'completed',
+            100,
+            fileKey,
+        );
+        if (!result.success) {
+            await FileBlobStore.deleteFile(fileKey);
+            throw new Error(`Failed to create file history message: ${result.error || 'unknown error'}`);
+        }
+
+        this.emitter.emit('history-updated', { userId: fromUserId });
+        console.log(`[CHAT INTEGRATION] File received and durably stored: ${file.name} (${fileKey})`);
+        return fileKey;
+    }
+
+    /** Link a completed v2 receive to durable block storage without copying the file blob. */
+    public async commitV2ReceivedFile(task: FileTransferV2Task, file: File): Promise<string> {
+        const peerId = task.peerParticipantId;
+        const fileKey = await commitV2ReceivedHistoryLink(task, file, {
+            selfId: realTimeColab.getUniqId() || '',
+            getHistory: userId => ChatHistoryManager.getChatHistory(userId),
+            addFileMessage: (...args) => ChatHistoryManager.addFileMessage(...args),
+            pinForHistory: key => FileBlobStore.pinForHistory(key),
+            isHistoryPinCurrent: key => FileBlobStore.isHistoryPinCurrent(key),
+            rollbackHistoryMessage: (userId, messageId) => ChatHistoryManager.deleteMessage(
+                userId,
+                messageId,
+                { preserveFile: true },
+            ),
+        });
+        this.emitter.emit('history-updated', { userId: peerId });
+        return fileKey;
     }
 
     // ── Public API ──
@@ -393,12 +461,40 @@ class ChatIntegration {
     /** Delete chat history for a user (messages + associated file blobs). */
     public async deleteChatHistory(userId: string): Promise<{ success: boolean; error?: string }> {
         try {
-            // Also delete associated file blobs
-            await FileBlobStore.deleteFilesByUser(userId);
-            return await ChatHistoryManager.deleteChatHistory(userId);
+            const prepared = await FileBlobStore.prepareDeleteFilesByUser(userId);
+            if (!prepared.success) {
+                return { success: false, error: 'Associated transfers could not be paused for deletion' };
+            }
+            const history = await ChatHistoryManager.deleteChatHistory(userId);
+            if (!history.success) return history;
+            const files = await FileBlobStore.deleteFilesByUser(userId);
+            if (!files.success) {
+                return { success: false, error: 'Chat history was deleted, but some associated file cleanup is pending' };
+            }
+            return history;
         } catch (error) {
             const errorMessage = error instanceof Error ? error.message : 'Unknown error';
             console.error('[CHAT INTEGRATION] Failed to delete chat history:', error);
+            return { success: false, error: errorMessage };
+        }
+    }
+
+    /** Clear file blocks and chat references together so v2 history keys cannot be orphaned. */
+    public async clearAllChatHistories(): Promise<{ success: boolean; error?: string }> {
+        try {
+            const prepared = await FileBlobStore.prepareClearAll();
+            if (!prepared.success) {
+                return { success: false, error: 'Stored transfers could not be paused before clearing history' };
+            }
+            await ChatHistoryManager.clearAllChatHistories();
+            const files = await FileBlobStore.clearAll();
+            if (!files.success) {
+                return { success: false, error: 'Chat history was cleared, but some stored file cleanup is pending' };
+            }
+            this.emitter.emit('history-updated', { userId: realTimeColab.getUniqId() || 'unknown' });
+            return { success: true };
+        } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : 'Unknown error';
             return { success: false, error: errorMessage };
         }
     }

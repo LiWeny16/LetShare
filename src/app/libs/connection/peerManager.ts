@@ -4,6 +4,39 @@ import { t } from "i18next";
 import settingsStore from "../mobx/mobx";
 export class PeerManager {
  private rtc: RealTimeColab;
+ private iceFlushTimers = new Map<string, ReturnType<typeof setTimeout>>();
+ private disconnectedTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+ private clearIceFlush(id: string): void {
+  const timer = this.iceFlushTimers.get(id);
+  if (timer) clearTimeout(timer);
+  this.iceFlushTimers.delete(id);
+ }
+
+ private clearDisconnectedTimer(id: string): void {
+  const timer = this.disconnectedTimers.get(id);
+  if (timer) clearTimeout(timer);
+  this.disconnectedTimers.delete(id);
+ }
+
+ public clearPeerTimers(id: string): void {
+  this.clearIceFlush(id);
+  this.clearDisconnectedTimer(id);
+ }
+
+ private markPeerUnavailable(id: string, peer: RTCPeerConnection): void {
+  if (RealTimeColab.peers.get(id) !== peer) return;
+  this.clearIceFlush(id);
+  this.rtc.clearCache(id);
+  const user = this.rtc.userList.get(id);
+  if (user) {
+   user.status = "text-only";
+   user.lastSeen = Date.now();
+   this.rtc.userList.set(id, user);
+  }
+  this.rtc.updateConnectedUsers(this.rtc.userList);
+ }
+
  public static rtcServers = [
   { urls: "stun:stun.l.google.com:19302" },
   { urls: "stun:stun.counterpath.net" },
@@ -18,6 +51,9 @@ export class PeerManager {
  }
 
  public createPeerConnection(id: string): RTCPeerConnection {
+  this.clearIceFlush(id);
+  this.clearDisconnectedTimer(id);
+  this.rtc.resetPeerIceState(id);
   const peer = new RTCPeerConnection({
    iceServers: PeerManager.rtcServers,
    iceTransportPolicy: "all",
@@ -35,10 +71,10 @@ export class PeerManager {
    /* 可扩展 */
   };
 
-  let iceBuffer: RTCIceCandidate[] = [];
-  let isProcessing = false;
+  const iceBuffer: RTCIceCandidate[] = [];
 
   peer.onicecandidate = (event) => {
+   if (RealTimeColab.peers.get(id) !== peer) return;
    if (event.candidate) {
     const staticIp = settingsStore.getUnrmb("staticIp");
     iceBuffer.push(event.candidate);
@@ -51,28 +87,32 @@ export class PeerManager {
     if (staticIp && ip !== staticIp && type === "srflx") {
      alertUseMUI(t("alert.proxy"));
     }
-    if (!isProcessing) {
-     isProcessing = true;
-     setTimeout(() => {
+    if (!this.iceFlushTimers.has(id)) {
+     const timer = setTimeout(() => {
+      this.iceFlushTimers.delete(id);
+      if (RealTimeColab.peers.get(id) !== peer || iceBuffer.length === 0) return;
+      const candidates = iceBuffer.splice(0, iceBuffer.length);
       this.rtc.broadcastSignal({
        type: "candidate",
-       candidates: iceBuffer,
+       candidates,
        to: id,
       });
-      iceBuffer = [];
-      isProcessing = false;
      }, 400);
+     this.iceFlushTimers.set(id, timer);
     }
    }
   };
 
   peer.ondatachannel = (event) => {
+   if (RealTimeColab.peers.get(id) !== peer) return;
    this.rtc.setupDataChannel(event.channel, id);
   };
    peer.onconnectionstatechange = () => {
+    if (RealTimeColab.peers.get(id) !== peer) return;
     console.debug(`[CONNECT] ${id} 状态:`, peer.connectionState);
 
     if (peer.connectionState === "connected") {
+     this.clearDisconnectedTimer(id);
      console.debug(`[CONNECT] ${id} ICE connected，取消超时`);
      // 3.8.2：ICE connected ≠ P2P 可用。用户状态保持 connecting，
      // 等 DataChannel open + probe 双确认（colabLib.startChannelVerification）
@@ -85,30 +125,23 @@ export class PeerManager {
      clearTimeout(this.rtc.connectionTimeouts.get(id));
     }
 
-   if (["failed", "disconnected", "closed"].includes(peer.connectionState)) {
-    console.warn(`[CONNECT] ${id} 连接失败或断开`);
-    
-    const user = this.rtc.userList.get(id);
-    
-    // 如果用户曾经成功建立过P2P连接，断开时很可能是真的离线了
-    if (user?.hadP2PConnection && peer.connectionState === "disconnected") {
-     console.debug(`[CONNECT] ${id} had P2P connection before, likely offline, removing user`);
-     this.rtc.clearCache(id, { clearEncryption: true });
-     this.rtc.userList.delete(id);
-    } else {
-     // 如果从未建立过P2P连接，可能只是连接失败，降级到text-only
-     console.debug(`[CONNECT] ${id} P2P failed, switching to text-only mode`);
-     this.rtc.clearCache(id);
-     if (user) {
-      user.status = "text-only";
-      user.lastSeen = Date.now();
-      this.rtc.userList.set(id, user);
-     }
+   if (peer.connectionState === "disconnected") {
+    if (!this.disconnectedTimers.has(id)) {
+     const timer = setTimeout(() => {
+      this.disconnectedTimers.delete(id);
+      if (RealTimeColab.peers.get(id) !== peer || peer.connectionState !== "disconnected") return;
+      console.debug(`[CONNECT] ${id} stayed disconnected beyond the recovery grace period`);
+      this.markPeerUnavailable(id, peer);
+     }, 5_000);
+     this.disconnectedTimers.set(id, timer);
     }
-    
-    peer.close();
-    RealTimeColab.peers.delete(id);
-    this.rtc.updateConnectedUsers(this.rtc.userList);
+    return;
+   }
+
+   if (["failed", "closed"].includes(peer.connectionState)) {
+    console.warn(`[CONNECT] ${id} 连接失败或断开`);
+    this.clearDisconnectedTimer(id);
+    this.markPeerUnavailable(id, peer);
    }
   };
  
@@ -119,6 +152,8 @@ export class PeerManager {
  }
 
  public removePeer(id: string): void {
+  this.clearPeerTimers(id);
+  this.rtc.resetPeerIceState(id);
   this.rtc.clearCache(id, { clearEncryption: true });
   this.rtc.negotiationMap.delete(id);
   this.rtc.lastConnectAttempt.delete(id);
