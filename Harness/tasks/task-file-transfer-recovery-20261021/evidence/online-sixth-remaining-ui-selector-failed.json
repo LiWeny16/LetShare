@@ -1,0 +1,169 @@
+{
+  "runId": "mvhybkld-69e24aec",
+  "startedAt": "2026-10-21T10:10:34.370Z",
+  "target": "letshare.fun",
+  "appVersion": "3.8.47",
+  "roomId": "123",
+  "profiles": [
+    {
+      "label": "edge",
+      "appVersion": "3.8.47",
+      "versionJsonVersion": "3.8.47",
+      "roomId": "123",
+      "buildId": "2026-10-21T09:38:27Z-yfndn",
+      "hasDevHook": false,
+      "serviceWorker": {
+        "controller": true,
+        "registrations": 1,
+        "active": 1
+      }
+    },
+    {
+      "label": "chrome",
+      "appVersion": "3.8.47",
+      "versionJsonVersion": "3.8.47",
+      "roomId": "123",
+      "buildId": "2026-10-21T09:38:27Z-yfndn",
+      "hasDevHook": false,
+      "serviceWorker": {
+        "controller": true,
+        "registrations": 1,
+        "active": 1
+      }
+    }
+  ],
+  "cases": [
+    {
+      "name": "dual-path-4mib-exact-download",
+      "result": "skipped",
+      "reason": "FILE_V2_ONLINE_CASE selector"
+    },
+    {
+      "name": "p2p-close-32mib-relay-continuation",
+      "result": "skipped",
+      "reason": "FILE_V2_ONLINE_CASE selector"
+    },
+    {
+      "name": "refresh-pause-wrong-right-source-resume-36mib",
+      "startedAt": "2026-10-21T10:14:01.190Z",
+      "transferId": "1478fb0f-aac0-4b82-839c-5a99d024f79b",
+      "source": {
+        "name": "v2-online-mvhybkld-69e24aec-resume.bin",
+        "size": 37748736,
+        "sha256": "a795150a74c13c091a6cd0d088ac8530a2480fef50a96610f87fac51f6f39396"
+      },
+      "interruptedAtCommittedBytes": 14417920,
+      "durableBlocksBefore": 76,
+      "durableBlocksAfterWrongSource": 76,
+      "persistedSenderRangesBeforeRefresh": [
+        [
+          0,
+          10
+        ],
+        [
+          12,
+          29
+        ],
+        [
+          31,
+          76
+        ]
+      ],
+      "restoredSenderStatus": "needs-source",
+      "restoredReceiverStatus": "paused",
+      "wrongSourceRejected": true,
+      "correctSourceAccepted": true,
+      "download": {
+        "senderStatus": "completed",
+        "receiverStatus": "completed",
+        "bytes": 37748736,
+        "filename": "v2-online-mvhybkld-69e24aec-resume.bin",
+        "sha256": "a795150a74c13c091a6cd0d088ac8530a2480fef50a96610f87fac51f6f39396"
+      },
+      "result": "pass",
+      "finishedAt": "2026-10-21T10:14:25.091Z"
+    },
+    {
+      "name": "pause-cancel-refresh-terminal-16mib",
+      "startedAt": "2026-10-21T10:14:25.092Z",
+      "transferId": "b2d097a5-3d7c-4af6-a677-4071dd51fce5",
+      "nativeHold": [
+        {
+          "peersClosed": 1,
+          "channelsClosed": 1,
+          "at": 1792577665094,
+          "held": true
+        },
+        {
+          "peersClosed": 1,
+          "channelsClosed": 1,
+          "at": 1792577665094,
+          "held": true
+        }
+      ],
+      "interruptedAtCommittedBytes": 262144,
+      "source": {
+        "name": "v2-online-mvhybkld-69e24aec-cancel.bin",
+        "size": 16777216,
+        "sha256": "db96dc784e57fb4b42a742a2388f78bcbba379ab0124b290f1171baf5986c2f7"
+      },
+      "afterRefresh": {
+        "sender": "cancelled",
+        "receiver": "cancelled"
+      },
+      "result": "pass",
+      "finishedAt": "2026-10-21T10:14:38.821Z"
+    },
+    {
+      "name": "relay-only-priority-server-3mib",
+      "startedAt": "2026-10-21T10:14:38.824Z",
+      "result": "fail",
+      "error": "locator.scrollIntoViewIfNeeded: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('button:has(svg[data-testid=\"SettingsIcon\"])').first()\u001b[22m\n",
+      "finishedAt": "2026-10-21T10:15:08.901Z"
+    }
+  ],
+  "failures": [
+    {
+      "name": "relay-only-priority-server-3mib",
+      "error": "locator.scrollIntoViewIfNeeded: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('button:has(svg[data-testid=\"SettingsIcon\"])').first()\u001b[22m\n"
+    }
+  ],
+  "identities": {
+    "edge": "file-v2-online-edge-mvhybl0s:65a7940c-9022-4f32-9b4f-db15ab2d92f8",
+    "chrome": "file-v2-online-chrome-mvhydqjz:07ff3fe5-821e-4bef-aba1-6a9d6c88ec18"
+  },
+  "screenshots": [
+    {
+      "profile": "edge",
+      "transferId": "1478fb0f-aac0-4b82-839c-5a99d024f79b",
+      "outcome": "wrong-source-rejected",
+      "file": "screenshots/mvhybkld-69e24aec-wrong-source-rejected-edge-1478fb0f-aac0-4b82-839c-5a99d024f79b.png"
+    },
+    {
+      "profile": "edge",
+      "transferId": "1478fb0f-aac0-4b82-839c-5a99d024f79b",
+      "outcome": "completed",
+      "file": "screenshots/mvhybkld-69e24aec-completed-edge-1478fb0f-aac0-4b82-839c-5a99d024f79b.png"
+    },
+    {
+      "profile": "chrome",
+      "transferId": "1478fb0f-aac0-4b82-839c-5a99d024f79b",
+      "outcome": "completed",
+      "file": "screenshots/mvhybkld-69e24aec-completed-chrome-1478fb0f-aac0-4b82-839c-5a99d024f79b.png"
+    },
+    {
+      "profile": "chrome",
+      "transferId": "b2d097a5-3d7c-4af6-a677-4071dd51fce5",
+      "outcome": "cancelled",
+      "file": "screenshots/mvhybkld-69e24aec-cancelled-chrome-b2d097a5-3d7c-4af6-a677-4071dd51fce5.png"
+    },
+    {
+      "profile": "edge",
+      "transferId": "b2d097a5-3d7c-4af6-a677-4071dd51fce5",
+      "outcome": "cancelled",
+      "file": "screenshots/mvhybkld-69e24aec-cancelled-edge-b2d097a5-3d7c-4af6-a677-4071dd51fce5.png"
+    }
+  ],
+  "fatal": "locator.scrollIntoViewIfNeeded: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('button:has(svg[data-testid=\"SettingsIcon\"])').first()\u001b[22m\n",
+  "finishedAt": "2026-10-21T10:15:08.901Z"
+}

@@ -1,0 +1,222 @@
+{
+  "runId": "mvhxtiaz-2c6b186e",
+  "startedAt": "2026-10-21T09:56:31.596Z",
+  "target": "letshare.fun",
+  "appVersion": "3.8.47",
+  "roomId": "123",
+  "profiles": [
+    {
+      "label": "edge",
+      "appVersion": "3.8.47",
+      "versionJsonVersion": "3.8.47",
+      "roomId": "123",
+      "buildId": "2026-10-21T09:38:27Z-yfndn",
+      "hasDevHook": false,
+      "serviceWorker": {
+        "controller": true,
+        "registrations": 1,
+        "active": 1
+      }
+    },
+    {
+      "label": "chrome",
+      "appVersion": "3.8.47",
+      "versionJsonVersion": "3.8.47",
+      "roomId": "123",
+      "buildId": "2026-10-21T09:38:27Z-yfndn",
+      "hasDevHook": false,
+      "serviceWorker": {
+        "controller": true,
+        "registrations": 1,
+        "active": 1
+      }
+    }
+  ],
+  "cases": [
+    {
+      "name": "dual-path-4mib-exact-download",
+      "startedAt": "2026-10-21T09:58:57.948Z",
+      "transferId": "62ea3312-2993-4460-bd6c-21f7bbe1eea7",
+      "source": {
+        "name": "v2-online-mvhxtiaz-2c6b186e-dual.bin",
+        "size": 4194304,
+        "sha256": "322558ee93e52d1caa347ff01b2e2605de0a9cf30344876986e5a7a3694ab2e6"
+      },
+      "download": {
+        "senderStatus": "completed",
+        "receiverStatus": "completed",
+        "bytes": 4194304,
+        "filename": "v2-online-mvhxtiaz-2c6b186e-dual.bin",
+        "sha256": "322558ee93e52d1caa347ff01b2e2605de0a9cf30344876986e5a7a3694ab2e6"
+      },
+      "actualPathEvidence": {
+        "sendPaths": [
+          "p2p",
+          "relay"
+        ],
+        "receivePaths": [
+          "p2p",
+          "relay"
+        ],
+        "ackPaths": [
+          "p2p",
+          "relay"
+        ],
+        "p2pFrames": {
+          "count": 240,
+          "bytes": 3932160,
+          "blocks": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            13,
+            14,
+            15
+          ]
+        },
+        "relayFrames": {
+          "count": 16,
+          "bytes": 262144,
+          "blocks": [
+            12
+          ]
+        },
+        "p2pAckBlocks": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15
+        ],
+        "relayAckBlocks": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15
+        ]
+      },
+      "result": "pass",
+      "finishedAt": "2026-10-21T09:59:02.659Z"
+    },
+    {
+      "name": "p2p-close-32mib-relay-continuation",
+      "startedAt": "2026-10-21T09:59:02.660Z",
+      "transferId": "b3285210-30b3-4b5e-904a-7e4fda848fe0",
+      "interruptedAtCommittedBytes": 14417920,
+      "nativeClose": {
+        "edge": {
+          "peersClosed": 1,
+          "channelsClosed": 1,
+          "at": 1792576745749
+        },
+        "chrome": {
+          "peersClosed": 1,
+          "channelsClosed": 1,
+          "at": 1792576745747
+        }
+      },
+      "source": {
+        "name": "v2-online-mvhxtiaz-2c6b186e-failover.bin",
+        "size": 33554432,
+        "sha256": "5c268f6126dcefafae35d086a536ecf7629ede291acb8f93c854882bb05f4827"
+      },
+      "download": {
+        "senderStatus": "completed",
+        "receiverStatus": "completed",
+        "bytes": 33554432,
+        "filename": "v2-online-mvhxtiaz-2c6b186e-failover.bin",
+        "sha256": "5c268f6126dcefafae35d086a536ecf7629ede291acb8f93c854882bb05f4827"
+      },
+      "pathEvidence": {
+        "p2pSentBeforeClose": 1120,
+        "framesAfterNativeClose": {
+          "p2p": 0,
+          "relay": 1136
+        },
+        "receiveFramesAfterNativeClose": {
+          "p2p": 1,
+          "relay": 930
+        }
+      },
+      "result": "pass",
+      "finishedAt": "2026-10-21T10:01:04.955Z"
+    },
+    {
+      "name": "refresh-pause-wrong-right-source-resume-36mib",
+      "startedAt": "2026-10-21T10:01:04.956Z",
+      "result": "fail",
+      "error": "Timed out waiting for native P2P data channels open on edge and chrome; last=null",
+      "finishedAt": "2026-10-21T10:02:05.203Z"
+    }
+  ],
+  "failures": [
+    {
+      "name": "refresh-pause-wrong-right-source-resume-36mib",
+      "error": "Timed out waiting for native P2P data channels open on edge and chrome; last=null"
+    }
+  ],
+  "identities": {
+    "edge": "file-v2-online-edge-mvhxtiuf:000beb67-38c3-4af7-b9a1-c1f45db6f4d0",
+    "chrome": "file-v2-online-chrome-mvhxvdgd:0025b071-8e34-45f4-85d5-9a9ea403cfc1"
+  },
+  "screenshots": [
+    {
+      "profile": "edge",
+      "transferId": "62ea3312-2993-4460-bd6c-21f7bbe1eea7",
+      "outcome": "completed",
+      "file": "screenshots/mvhxtiaz-2c6b186e-completed-edge-62ea3312-2993-4460-bd6c-21f7bbe1eea7.png"
+    },
+    {
+      "profile": "chrome",
+      "transferId": "62ea3312-2993-4460-bd6c-21f7bbe1eea7",
+      "outcome": "completed",
+      "file": "screenshots/mvhxtiaz-2c6b186e-completed-chrome-62ea3312-2993-4460-bd6c-21f7bbe1eea7.png"
+    },
+    {
+      "profile": "edge",
+      "transferId": "b3285210-30b3-4b5e-904a-7e4fda848fe0",
+      "outcome": "completed",
+      "file": "screenshots/mvhxtiaz-2c6b186e-completed-edge-b3285210-30b3-4b5e-904a-7e4fda848fe0.png"
+    },
+    {
+      "profile": "chrome",
+      "transferId": "b3285210-30b3-4b5e-904a-7e4fda848fe0",
+      "outcome": "completed",
+      "file": "screenshots/mvhxtiaz-2c6b186e-completed-chrome-b3285210-30b3-4b5e-904a-7e4fda848fe0.png"
+    }
+  ],
+  "fatal": "Timed out waiting for native P2P data channels open on edge and chrome; last=null",
+  "finishedAt": "2026-10-21T10:02:05.203Z"
+}

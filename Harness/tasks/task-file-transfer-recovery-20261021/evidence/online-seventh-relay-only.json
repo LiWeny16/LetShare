@@ -1,0 +1,123 @@
+{
+  "runId": "mvhyjjrq-d9567cf7",
+  "startedAt": "2026-10-21T10:16:46.550Z",
+  "target": "letshare.fun",
+  "appVersion": "3.8.47",
+  "roomId": "123",
+  "profiles": [
+    {
+      "label": "edge",
+      "appVersion": "3.8.47",
+      "versionJsonVersion": "3.8.47",
+      "roomId": "123",
+      "buildId": "2026-10-21T09:38:27Z-yfndn",
+      "hasDevHook": false,
+      "serviceWorker": {
+        "controller": true,
+        "registrations": 1,
+        "active": 1
+      }
+    },
+    {
+      "label": "chrome",
+      "appVersion": "3.8.47",
+      "versionJsonVersion": "3.8.47",
+      "roomId": "123",
+      "buildId": "2026-10-21T09:38:27Z-yfndn",
+      "hasDevHook": false,
+      "serviceWorker": {
+        "controller": true,
+        "registrations": 1,
+        "active": 1
+      }
+    }
+  ],
+  "cases": [
+    {
+      "name": "dual-path-4mib-exact-download",
+      "result": "skipped",
+      "reason": "FILE_V2_ONLINE_CASE selector"
+    },
+    {
+      "name": "p2p-close-32mib-relay-continuation",
+      "result": "skipped",
+      "reason": "FILE_V2_ONLINE_CASE selector"
+    },
+    {
+      "name": "refresh-pause-wrong-right-source-resume-36mib",
+      "result": "skipped",
+      "reason": "FILE_V2_ONLINE_CASE selector"
+    },
+    {
+      "name": "pause-cancel-refresh-terminal-16mib",
+      "result": "skipped",
+      "reason": "FILE_V2_ONLINE_CASE selector"
+    },
+    {
+      "name": "relay-only-priority-server-3mib",
+      "startedAt": "2026-10-21T10:19:17.086Z",
+      "transferId": "88f91b86-2938-420a-ae2d-0b61fef21423",
+      "nativeClose": {
+        "edge": {
+          "peersClosed": 1,
+          "channelsClosed": 1,
+          "at": 1792577957861,
+          "held": true
+        },
+        "chrome": {
+          "peersClosed": 1,
+          "channelsClosed": 1,
+          "at": 1792577957862,
+          "held": true
+        }
+      },
+      "nativeP2PHeldClosed": true,
+      "source": {
+        "name": "v2-online-mvhyjjrq-d9567cf7-relay.bin",
+        "size": 3145728,
+        "sha256": "2812aade6f1c5531ae4a025c7ed007bc77ca43bb4064770a2350ad24dca1f083"
+      },
+      "download": {
+        "senderStatus": "completed",
+        "receiverStatus": "completed",
+        "bytes": 3145728,
+        "filename": "v2-online-mvhyjjrq-d9567cf7-relay.bin",
+        "sha256": "2812aade6f1c5531ae4a025c7ed007bc77ca43bb4064770a2350ad24dca1f083"
+      },
+      "pathEvidence": {
+        "relayFramesSent": 192,
+        "relayFramesReceived": 192,
+        "p2pFramesSent": 0,
+        "p2pFramesReceived": 0
+      },
+      "result": "pass",
+      "finishedAt": "2026-10-21T10:19:44.590Z"
+    }
+  ],
+  "failures": [],
+  "identities": {
+    "edge": "file-v2-online-edge-mvhyjkav:d6695930-ce9c-4749-a010-9dac9849b55b",
+    "chrome": "file-v2-online-chrome-mvhyl33v:482b490c-d4bd-4a59-8ae0-c3d013e339fb"
+  },
+  "screenshots": [
+    {
+      "profile": "edge",
+      "transferId": "88f91b86-2938-420a-ae2d-0b61fef21423",
+      "outcome": "completed",
+      "file": "screenshots/mvhyjjrq-d9567cf7-completed-edge-88f91b86-2938-420a-ae2d-0b61fef21423.png"
+    },
+    {
+      "profile": "chrome",
+      "transferId": "88f91b86-2938-420a-ae2d-0b61fef21423",
+      "outcome": "completed",
+      "file": "screenshots/mvhyjjrq-d9567cf7-completed-chrome-88f91b86-2938-420a-ae2d-0b61fef21423.png"
+    }
+  ],
+  "finishedAt": "2026-10-21T10:19:44.592Z",
+  "fixtureIds": [
+    "source:v2-online-mvhyjjrq-d9567cf7-relay.bin"
+  ],
+  "transferIds": [
+    "88f91b86-2938-420a-ae2d-0b61fef21423"
+  ]
+}

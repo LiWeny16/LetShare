@@ -1,0 +1,40 @@
+{
+  "checkedAt": "2026-10-21T10:20:33.540Z",
+  "expectedVersion": {
+    "version": "3.8.47",
+    "v": "2026-10-21T09:38:27Z-yfndn",
+    "built": "2026-10-21T09:38:27.947Z"
+  },
+  "expectedHtmlHash": "b6ca8e7c4672b30928cc9a220171b2b774fb71f059e9ed721c331a517c6f4702",
+  "expectedEntry": "./static/index-CaLWF9nt.js",
+  "surfaces": [
+    {
+      "surface": "cdn",
+      "version": {
+        "version": "3.8.47",
+        "v": "2026-10-21T09:38:27Z-yfndn",
+        "built": "2026-10-21T09:38:27.947Z"
+      },
+      "htmlHash": "b6ca8e7c4672b30928cc9a220171b2b774fb71f059e9ed721c331a517c6f4702",
+      "entryHash": "8ed6eb4a9e10a1c666e43512e30c4be6bc5ccc8d835ff7afd52d58da877a9f71",
+      "versionMatches": true,
+      "htmlMatches": true,
+      "entryMatches": true,
+      "pass": true
+    },
+    {
+      "surface": "pages",
+      "version": {
+        "version": "3.8.47",
+        "v": "2026-10-21T09:38:27Z-yfndn",
+        "built": "2026-10-21T09:38:27.947Z"
+      },
+      "htmlHash": "b6ca8e7c4672b30928cc9a220171b2b774fb71f059e9ed721c331a517c6f4702",
+      "entryHash": "8ed6eb4a9e10a1c666e43512e30c4be6bc5ccc8d835ff7afd52d58da877a9f71",
+      "versionMatches": true,
+      "htmlMatches": true,
+      "entryMatches": true,
+      "pass": true
+    }
+  ]
+}

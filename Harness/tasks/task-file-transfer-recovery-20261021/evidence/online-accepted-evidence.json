@@ -1,0 +1,305 @@
+{
+  "checkedAt": "2026-10-21T10:20:33.350Z",
+  "appVersion": "3.8.47",
+  "buildId": "2026-10-21T09:38:27Z-yfndn",
+  "mode": "Five independently verified scenarios across three runs of the same deployed build; not a single full-suite pass.",
+  "sources": [
+    {
+      "file": "online-fourth-fixture-lifecycle-failed.json",
+      "runId": "mvhxtiaz-2c6b186e",
+      "startedAt": "2026-10-21T09:56:31.596Z",
+      "finishedAt": "2026-10-21T10:02:05.203Z",
+      "sha256": "254efb404001d0ab7fb7e290cfc039063b2e6a7afd96fd029923439f2a3e951d",
+      "rawRunFailureCount": 1,
+      "rawRunFatal": "Timed out waiting for native P2P data channels open on edge and chrome; last=null",
+      "selectedScenarios": [
+        "dual-path-4mib-exact-download",
+        "p2p-close-32mib-relay-continuation"
+      ]
+    },
+    {
+      "file": "online-sixth-remaining-ui-selector-failed.json",
+      "runId": "mvhybkld-69e24aec",
+      "startedAt": "2026-10-21T10:10:34.370Z",
+      "finishedAt": "2026-10-21T10:15:08.901Z",
+      "sha256": "de3ee685bf9cb2fafffa3c63839b2504130cff8c6a1eb3748897d526e821f4bd",
+      "rawRunFailureCount": 1,
+      "rawRunFatal": "locator.scrollIntoViewIfNeeded: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('button:has(svg[data-testid=\"SettingsIcon\"])').first()\u001b[22m\n",
+      "selectedScenarios": [
+        "refresh-pause-wrong-right-source-resume-36mib",
+        "pause-cancel-refresh-terminal-16mib"
+      ]
+    },
+    {
+      "file": "online-seventh-relay-only.json",
+      "runId": "mvhyjjrq-d9567cf7",
+      "startedAt": "2026-10-21T10:16:46.550Z",
+      "finishedAt": "2026-10-21T10:19:44.592Z",
+      "sha256": "e8be5a14997c2dccedc6a0da1e3a9c08438ba6be7b2b2f2a52fe1eadb9e6a522",
+      "rawRunFailureCount": 0,
+      "rawRunFatal": null,
+      "selectedScenarios": [
+        "relay-only-priority-server-3mib"
+      ]
+    }
+  ],
+  "scenarios": [
+    {
+      "sourceFile": "online-fourth-fixture-lifecycle-failed.json",
+      "name": "dual-path-4mib-exact-download",
+      "startedAt": "2026-10-21T09:58:57.948Z",
+      "transferId": "62ea3312-2993-4460-bd6c-21f7bbe1eea7",
+      "source": {
+        "name": "v2-online-mvhxtiaz-2c6b186e-dual.bin",
+        "size": 4194304,
+        "sha256": "322558ee93e52d1caa347ff01b2e2605de0a9cf30344876986e5a7a3694ab2e6"
+      },
+      "download": {
+        "senderStatus": "completed",
+        "receiverStatus": "completed",
+        "bytes": 4194304,
+        "filename": "v2-online-mvhxtiaz-2c6b186e-dual.bin",
+        "sha256": "322558ee93e52d1caa347ff01b2e2605de0a9cf30344876986e5a7a3694ab2e6"
+      },
+      "actualPathEvidence": {
+        "sendPaths": [
+          "p2p",
+          "relay"
+        ],
+        "receivePaths": [
+          "p2p",
+          "relay"
+        ],
+        "ackPaths": [
+          "p2p",
+          "relay"
+        ],
+        "p2pFrames": {
+          "count": 240,
+          "bytes": 3932160,
+          "blocks": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            13,
+            14,
+            15
+          ]
+        },
+        "relayFrames": {
+          "count": 16,
+          "bytes": 262144,
+          "blocks": [
+            12
+          ]
+        },
+        "p2pAckBlocks": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15
+        ],
+        "relayAckBlocks": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15
+        ]
+      },
+      "result": "pass",
+      "finishedAt": "2026-10-21T09:59:02.659Z"
+    },
+    {
+      "sourceFile": "online-fourth-fixture-lifecycle-failed.json",
+      "name": "p2p-close-32mib-relay-continuation",
+      "startedAt": "2026-10-21T09:59:02.660Z",
+      "transferId": "b3285210-30b3-4b5e-904a-7e4fda848fe0",
+      "interruptedAtCommittedBytes": 14417920,
+      "nativeClose": {
+        "edge": {
+          "peersClosed": 1,
+          "channelsClosed": 1,
+          "at": 1792576745749
+        },
+        "chrome": {
+          "peersClosed": 1,
+          "channelsClosed": 1,
+          "at": 1792576745747
+        }
+      },
+      "source": {
+        "name": "v2-online-mvhxtiaz-2c6b186e-failover.bin",
+        "size": 33554432,
+        "sha256": "5c268f6126dcefafae35d086a536ecf7629ede291acb8f93c854882bb05f4827"
+      },
+      "download": {
+        "senderStatus": "completed",
+        "receiverStatus": "completed",
+        "bytes": 33554432,
+        "filename": "v2-online-mvhxtiaz-2c6b186e-failover.bin",
+        "sha256": "5c268f6126dcefafae35d086a536ecf7629ede291acb8f93c854882bb05f4827"
+      },
+      "pathEvidence": {
+        "p2pSentBeforeClose": 1120,
+        "framesAfterNativeClose": {
+          "p2p": 0,
+          "relay": 1136
+        },
+        "receiveFramesAfterNativeClose": {
+          "p2p": 1,
+          "relay": 930
+        }
+      },
+      "result": "pass",
+      "finishedAt": "2026-10-21T10:01:04.955Z"
+    },
+    {
+      "sourceFile": "online-sixth-remaining-ui-selector-failed.json",
+      "name": "refresh-pause-wrong-right-source-resume-36mib",
+      "startedAt": "2026-10-21T10:14:01.190Z",
+      "transferId": "1478fb0f-aac0-4b82-839c-5a99d024f79b",
+      "source": {
+        "name": "v2-online-mvhybkld-69e24aec-resume.bin",
+        "size": 37748736,
+        "sha256": "a795150a74c13c091a6cd0d088ac8530a2480fef50a96610f87fac51f6f39396"
+      },
+      "interruptedAtCommittedBytes": 14417920,
+      "durableBlocksBefore": 76,
+      "durableBlocksAfterWrongSource": 76,
+      "persistedSenderRangesBeforeRefresh": [
+        [
+          0,
+          10
+        ],
+        [
+          12,
+          29
+        ],
+        [
+          31,
+          76
+        ]
+      ],
+      "restoredSenderStatus": "needs-source",
+      "restoredReceiverStatus": "paused",
+      "wrongSourceRejected": true,
+      "correctSourceAccepted": true,
+      "download": {
+        "senderStatus": "completed",
+        "receiverStatus": "completed",
+        "bytes": 37748736,
+        "filename": "v2-online-mvhybkld-69e24aec-resume.bin",
+        "sha256": "a795150a74c13c091a6cd0d088ac8530a2480fef50a96610f87fac51f6f39396"
+      },
+      "result": "pass",
+      "finishedAt": "2026-10-21T10:14:25.091Z"
+    },
+    {
+      "sourceFile": "online-sixth-remaining-ui-selector-failed.json",
+      "name": "pause-cancel-refresh-terminal-16mib",
+      "startedAt": "2026-10-21T10:14:25.092Z",
+      "transferId": "b2d097a5-3d7c-4af6-a677-4071dd51fce5",
+      "nativeHold": [
+        {
+          "peersClosed": 1,
+          "channelsClosed": 1,
+          "at": 1792577665094,
+          "held": true
+        },
+        {
+          "peersClosed": 1,
+          "channelsClosed": 1,
+          "at": 1792577665094,
+          "held": true
+        }
+      ],
+      "interruptedAtCommittedBytes": 262144,
+      "source": {
+        "name": "v2-online-mvhybkld-69e24aec-cancel.bin",
+        "size": 16777216,
+        "sha256": "db96dc784e57fb4b42a742a2388f78bcbba379ab0124b290f1171baf5986c2f7"
+      },
+      "afterRefresh": {
+        "sender": "cancelled",
+        "receiver": "cancelled"
+      },
+      "result": "pass",
+      "finishedAt": "2026-10-21T10:14:38.821Z"
+    },
+    {
+      "sourceFile": "online-seventh-relay-only.json",
+      "name": "relay-only-priority-server-3mib",
+      "startedAt": "2026-10-21T10:19:17.086Z",
+      "transferId": "88f91b86-2938-420a-ae2d-0b61fef21423",
+      "nativeClose": {
+        "edge": {
+          "peersClosed": 1,
+          "channelsClosed": 1,
+          "at": 1792577957861,
+          "held": true
+        },
+        "chrome": {
+          "peersClosed": 1,
+          "channelsClosed": 1,
+          "at": 1792577957862,
+          "held": true
+        }
+      },
+      "nativeP2PHeldClosed": true,
+      "source": {
+        "name": "v2-online-mvhyjjrq-d9567cf7-relay.bin",
+        "size": 3145728,
+        "sha256": "2812aade6f1c5531ae4a025c7ed007bc77ca43bb4064770a2350ad24dca1f083"
+      },
+      "download": {
+        "senderStatus": "completed",
+        "receiverStatus": "completed",
+        "bytes": 3145728,
+        "filename": "v2-online-mvhyjjrq-d9567cf7-relay.bin",
+        "sha256": "2812aade6f1c5531ae4a025c7ed007bc77ca43bb4064770a2350ad24dca1f083"
+      },
+      "pathEvidence": {
+        "relayFramesSent": 192,
+        "relayFramesReceived": 192,
+        "p2pFramesSent": 0,
+        "p2pFramesReceived": 0
+      },
+      "result": "pass",
+      "finishedAt": "2026-10-21T10:19:44.590Z"
+    }
+  ],
+  "acceptedScenarioCount": 5
+}
