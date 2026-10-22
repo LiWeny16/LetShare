@@ -263,29 +263,8 @@
       }
     }
   </style>
-  <script type="module" crossorigin src="./static/index-CaLWF9nt.js"></script>
-  <link rel="modulepreload" crossorigin href="./static/modulepreload-polyfill-oNGqn6W8.js">
-  <link rel="modulepreload" crossorigin href="./static/common-vendor-CbK4J8nl.js">
-  <link rel="modulepreload" crossorigin href="./static/babel-vendor-Dwh4f5ok.js">
-  <link rel="modulepreload" crossorigin href="./static/emotion-vendor-Cx2jOqJR.js">
-  <link rel="modulepreload" crossorigin href="./static/browser-fs-access-vendor-Dq0mlxKO.js">
-  <link rel="modulepreload" crossorigin href="./static/crc-32-vendor-Bl1Fnm79.js">
-  <link rel="modulepreload" crossorigin href="./static/es6-promise-pool-vendor-fO-eb6uC.js">
-  <link rel="modulepreload" crossorigin href="./static/braintree-vendor-CO9aGnN4.js">
-  <link rel="modulepreload" crossorigin href="./static/aria-hidden-vendor-BbL3cEyI.js">
-  <link rel="modulepreload" crossorigin href="./static/dayjs-vendor-ADvTHY6B.js">
-  <link rel="modulepreload" crossorigin href="./static/dompurify-vendor-CYRiAeUx.js">
-  <link rel="modulepreload" crossorigin href="./static/d3-brush-vendor-DxYRqXFO.js">
-  <link rel="modulepreload" crossorigin href="./static/d3-selection-vendor-Cz9URK9v.js">
-  <link rel="modulepreload" crossorigin href="./static/d3-path-vendor-D94zZ2cB.js">
-  <link rel="modulepreload" crossorigin href="./static/d3-shape-vendor-alpsqhsN.js">
-  <link rel="modulepreload" crossorigin href="./static/d3-vendor--UXwSKZw.js">
-  <link rel="modulepreload" crossorigin href="./static/es-toolkit-vendor-zdSmz_kA.js">
-  <link rel="modulepreload" crossorigin href="./static/dagre-d3-es-vendor-DP6cEGam.js">
-  <link rel="modulepreload" crossorigin href="./static/excalidraw-vendor-BclfdEHS.js">
-  <link rel="modulepreload" crossorigin href="./static/react-dom-vendor-B8baQ7iD.js">
-  <link rel="modulepreload" crossorigin href="./static/react-router-dom-vendor-Cn4qm129.js">
-  <link rel="stylesheet" crossorigin href="./static-BzSihJH-.excalidraw-vendor.css">
+  <script type="module" crossorigin src="./static/index-Dg0dYd_P.js"></script>
+  <link rel="modulepreload" crossorigin href="./static/jsx-runtime-D9KboXdW.js">
   <link rel="stylesheet" crossorigin href="./static-BmysWR2B.index.css">
 <link rel="manifest" href="./manifest.webmanifest"></head>
 
@@ -369,31 +348,55 @@
     // SW 自愈：检测旧 SW 导致的 dot-prefix 资源加载失败，自动注销并重载
     if ("serviceWorker" in navigator && location.protocol === "https:") {
       var swPoisonPattern = /(?:\/|\.)(?:pnpm-vendor|common-vendor|ably-vendor|react-vendor|mobx-vendor|mui-vendor|emotion-vendor|jszip-vendor|index-)/;
+      var swHealStarted = false;
+      var swHealSessionKey = "letshare-sw-heal-attempted";
+      function swHealAppMounted() {
+        var root = document.getElementById("root");
+        return Boolean(root && root.children.length > 0);
+      }
       window.addEventListener("error", function(e) {
         var target = e.target;
         if (!target || !target.tagName) return;
         var src = target.src || target.href || "";
-        if (swPoisonPattern.test(src)) {
-          console.warn("[SW-Heal] Stale SW resource blocked: " + src + " — unregistering and reloading");
-          navigator.serviceWorker.getRegistrations().then(function(regs) {
-            return Promise.all(regs.map(function(r) { return r.unregister(); }));
-          }).then(function() {
-            if ("caches" in window) {
-              return caches.keys().then(function(keys) {
-                return Promise.all(keys.map(function(k) { return caches.delete(k); }));
-              });
-            }
-          }).finally(function() {
-            location.reload();
-          });
+        if (!swPoisonPattern.test(src)) return;
+        if (swHealAppMounted()) {
+          console.warn("[SW-Heal] Ignoring a stale resource failure after the app mounted.");
+          return;
         }
+        if (swHealStarted) return;
+        try {
+          if (sessionStorage.getItem(swHealSessionKey) === "1") return;
+          sessionStorage.setItem(swHealSessionKey, "1");
+          swHealStarted = true;
+        } catch (e) {
+          console.warn("[SW-Heal] Session storage unavailable; skipping automatic recovery to avoid a reload loop.");
+          return;
+        }
+        console.warn("[SW-Heal] Stale worker resource failed during startup; clearing caches once and reloading.");
+        navigator.serviceWorker.getRegistrations().then(function(regs) {
+          if (swHealAppMounted()) return;
+          return Promise.all(regs.map(function(r) { return r.unregister(); }));
+        }).then(function() {
+          if (!swHealAppMounted() && "caches" in window) {
+            return caches.keys().then(function(keys) {
+              if (swHealAppMounted()) return;
+              return Promise.all(keys.map(function(k) { return caches.delete(k); }));
+            });
+          }
+        }).finally(function() {
+          if (swHealAppMounted()) {
+            console.warn("[SW-Heal] Startup recovery stopped because the app mounted.");
+            return;
+          }
+          location.reload();
+        });
       }, true);
     }
   </script>
 
   <script>
     // SW 注册 + 版本哨兵机制
-    // version.json 每次发布更新 → 检测到版本变化 → 强制 SW 更新 → reload
+    // version.json changes are recorded without interrupting the active page.
     // 无版本变化时，所有缓存 365 天有效，秒开
     if ("serviceWorker" in navigator && location.protocol === "https:") {
       (function() {
@@ -401,7 +404,6 @@
         var POLL_MS = 30 * 1000;
         var VERSION_CHECK_MS = 200; // 200ms 后立刻检查版本
         var hadController = Boolean(navigator.serviceWorker.controller);
-        var refreshing = false;
         var currentVersion = null;
 
         // ── 版本哨兵：检测 server 上是否有新版本 ──────────────
@@ -412,7 +414,7 @@
             .catch(function() { return null; });
         }
 
-        function checkVersionAndReload() {
+        function checkVersion() {
           fetchRemoteVersion().then(function(remote) {
             if (!remote || !remote.v) return;
 
@@ -429,23 +431,9 @@
             }
 
             if (stored !== remote.v) {
-              // 版本变了！强制 SW 更新 + 刷新
-              console.log("[SW] Version changed: " + stored + " → " + remote.v);
+              console.log("[SW] Version changed: " + stored + " -> " + remote.v + "; current page stays active.");
               try { localStorage.setItem("letshare-version", remote.v); } catch(e) {}
               currentVersion = remote.v;
-
-              // 注销旧 SW，清缓存，刷新
-              navigator.serviceWorker.getRegistrations().then(function(regs) {
-                return Promise.all(regs.map(function(r) { return r.unregister(); }));
-              }).then(function() {
-                if ("caches" in window) {
-                  return caches.keys().then(function(keys) {
-                    return Promise.all(keys.map(function(k) { return caches.delete(k); }));
-                  });
-                }
-              }).finally(function() {
-                location.reload();
-              });
             } else {
               currentVersion = remote.v;
             }
@@ -453,16 +441,12 @@
         }
 
         // 首次检查：等 SW 和页面加载完成后延迟执行
-        setTimeout(checkVersionAndReload, VERSION_CHECK_MS);
-
-        // ── SW controllerchange → 新 SW 激活自动刷新 ──────────
+        setTimeout(checkVersion, VERSION_CHECK_MS);
+        // Service worker controller changes keep the current page active.
 
         navigator.serviceWorker.addEventListener("controllerchange", function() {
           if (!hadController) { hadController = true; return; }
-          if (refreshing) return;
-          refreshing = true;
-          console.log("[SW] New version activated, reloading…");
-          location.reload();
+          console.log("[SW] Updated worker activated; current page stays active.");
         });
 
         // ── SW 注册 + 轮询 ─────────────────────────────────────
@@ -477,15 +461,13 @@
               setInterval(function() {
                 registration.update().catch(function() {});
               }, POLL_MS);
-
-              // updatefound → 新 SW 正在安装，确保 skipWaiting
+              // updatefound records a ready worker; it is left waiting for natural page closure.
               registration.addEventListener("updatefound", function() {
                 var newWorker = registration.installing;
                 if (!newWorker) return;
                 newWorker.addEventListener("statechange", function() {
                   if (newWorker.state === "installed" && navigator.serviceWorker.controller) {
-                    console.log("[SW] New version ready, activating…");
-                    newWorker.postMessage({ type: "SKIP_WAITING" });
+                    console.log("[SW] New version installed; waiting for this page to close.");
                   }
                 });
               });
@@ -502,7 +484,7 @@
         document.addEventListener("visibilitychange", function() {
           if (document.hidden) return;
           // 切回标签页 → 检查版本哨兵 + 触发 SW update
-          checkVersionAndReload();
+          checkVersion();
           navigator.serviceWorker.getRegistration().then(function(reg) {
             if (reg) reg.update().catch(function() {});
           });
@@ -511,7 +493,7 @@
         // ── 网络恢复 → 立即检查 ────────────────────────────────
 
         window.addEventListener("online", function() {
-          checkVersionAndReload();
+          checkVersion();
           navigator.serviceWorker.getRegistration().then(function(reg) {
             if (reg) reg.update().catch(function() {});
           });
@@ -535,6 +517,7 @@
         if (hidden || !LOADING) return;
 
         hidden = true;
+        try { sessionStorage.removeItem("letshare-sw-heal-attempted"); } catch(e) {}
         clearTimeout(timeout);
 
         var elapsed = performance.now() - loadingStartedAt;
