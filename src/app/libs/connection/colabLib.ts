@@ -57,8 +57,8 @@ import {
 } from "./fileTransferV2/applicationAdapter";
 import type { FileTransferV2Snapshot } from "./fileTransferV2/engine";
 import type { FileTransferV2Task } from "./fileTransferV2/store";
-import { shouldOpenDownloadDrawerForV2Receive } from "./fileTransferV2/presentation";
-import { receivedFileMapKey } from "../chat/receivedFilePresentation";
+import { shouldOpenDownloadDrawerForV2Transfer } from "./fileTransferV2/presentation";
+import { receivedFileChildMapKey, receivedFileMapKey } from "../chat/receivedFilePresentation";
 import {
 	getProToken,
 	isPro,
@@ -182,7 +182,7 @@ type P2PNormalizedFileMeta = {
 type ColabEvents = {
  'message-sent': { to: string; message: string };
  'message-received': { from: string; message: string };
- 'file-sent': { to: string; fileName: string; fileSize: number; transferId?: string };
+ 'file-sent': { to: string; fileName: string; fileSize: number; transferId?: string; fileKey?: string };
  'file-received': { from: string; fileName: string; fileSize: number; file: File };
  'file-saved-to-disk': { from: string; fileName: string; fileSize: number };
  'file-progress': { to: string; progress: number };
@@ -378,7 +378,7 @@ export class RealTimeColab {
      this.emitter.emit("file-transfer-v2-update", snapshot);
      this.updateUI();
      const previousStatus = this.fileTransferV2LastStatuses.get(snapshot.transferId);
-     if (shouldOpenDownloadDrawerForV2Receive(snapshot.direction, snapshot.status, previousStatus)) {
+     if (shouldOpenDownloadDrawerForV2Transfer(snapshot.direction, snapshot.status, previousStatus)) {
       this.setDownloadPageState(true);
      }
      if (["completed", "cancelled", "failed"].includes(snapshot.status)) {
@@ -3684,16 +3684,17 @@ export class RealTimeColab {
    fileType: "application/octet-stream",
    createFile: (parts, fileName, options) => new File(parts, fileName, options),
   });
+  let persistedFileKey: string;
   try {
    const integration = await import("../chat/ChatIntegration");
-   await integration.default.commitReceivedFile(id, file);
+   persistedFileKey = await integration.default.commitReceivedFile(id, file);
   } catch (error) {
    if (this.receivingFiles.get(id) !== fileInfo || this.dataChannels.get(id) !== channel) return;
    this.abortP2PReceive(id, channel, completedTransferId, "Received file could not be saved to chat history", error);
    return;
   }
   if (this.receivingFiles.get(id) !== fileInfo || this.dataChannels.get(id) !== channel) return;
-  const fullKey = `${id}::${file.name}`;
+  const fullKey = receivedFileMapKey(id, file.name, persistedFileKey);
   this.receivedFiles.set(fullKey, file);
   this.addTransferRecord("received-file", file.name, `← ${id.split(":")[0]}`);
   const postProcessVersion = this.receivedFilesVersion;
@@ -3727,7 +3728,6 @@ export class RealTimeColab {
    postProcess: async () => {
     await this.maybeAutoUnzipReceivedFile(
      file,
-     id,
      fullKey,
      postProcessVersion
     );
@@ -4471,7 +4471,6 @@ private isLetShareZip(file: File): boolean {
 
  private async maybeAutoUnzipReceivedFile(
   file: File,
-  id: string,
   fullKey: string,
   expectedVersion = this.receivedFilesVersion
  ): Promise<boolean> {
@@ -4512,7 +4511,8 @@ private isLetShareZip(file: File): boolean {
     }
     const extractedFile = new File([blob], fileName);
     // 文件夹 ZIP 的子文件以 `<zip名>/<路径>` 为 key，供前端按文件夹分组展示
-    const newKey = keepFolderZip ? `${id}::${file.name}/${fileName}` : `${id}::${fileName}`;
+    const entryPath = keepFolderZip ? `${file.name}/${fileName}` : fileName;
+    const newKey = receivedFileChildMapKey(fullKey, entryPath);
     this.receivedFiles.set(newKey, extractedFile);
    }
 
@@ -4534,15 +4534,15 @@ private isLetShareZip(file: File): boolean {
   * 处理接收到的文件（支持ZIP解压）
   */
  private async handleReceivedFile(file: File, id: string): Promise<void> {
-  const fullKey = `${id}::${file.name}`;
   const postProcessVersion = this.receivedFilesVersion;
   const integration = await import("../chat/ChatIntegration");
-  await integration.default.commitReceivedFile(id, file);
+  const persistedFileKey = await integration.default.commitReceivedFile(id, file);
+  const fullKey = receivedFileMapKey(id, file.name, persistedFileKey);
   this.receivedFiles.set(fullKey, file);
   this.addTransferRecord("received-file", file.name, `← ${id.split(":")[0]}`);
   this.setFileTransferProgress(null);
   this.emitter.emit('file-received', { from: id, fileName: file.name, fileSize: file.size, file });
-  void this.maybeAutoUnzipReceivedFile(file, id, fullKey, postProcessVersion).catch(error => {
+  void this.maybeAutoUnzipReceivedFile(file, fullKey, postProcessVersion).catch(error => {
    console.warn("Received file post-processing failed:", error);
   });
   alertUseMUI(t("alert.fileReceived", { name: id.split(":")[0] }), 2000, { kind: "success" });
@@ -4598,7 +4598,8 @@ private isLetShareZip(file: File): boolean {
  public async sendFileViaServer(
   id: string,
   file: File,
-  roomIdOverride?: string
+  roomIdOverride?: string,
+  fileKey?: string
  ): Promise<void> {
   if (!this.serverFileTransfer) {
    console.error(" 服务器文件传输未初始化");
@@ -4650,7 +4651,7 @@ private isLetShareZip(file: File): boolean {
    console.debug(` 文件通过服务器发送完成`);
    this.sentFiles.set(`${id}::${file.name}::${Date.now()}`, { name: file.name, size: file.size, toUserId: id, completedAt: Date.now() });
    // Emit file-sent event for ChatIntegration
-   this.emitter.emit('file-sent', { to: id, fileName: file.name, fileSize: file.size });
+   this.emitter.emit('file-sent', { to: id, fileName: file.name, fileSize: file.size, fileKey });
   } catch (error) {
    console.error(" 服务器文件传输失败:", error);
    const errMsg = error instanceof Error ? error.message : String(error || "");
@@ -4704,7 +4705,8 @@ private isLetShareZip(file: File): boolean {
   */
   public async sendFileToUser(
    id: string,
-   file: File
+   file: File,
+   fileKey?: string
    // onProgress?: (progress: number) => void
   ): Promise<void> {
   const channel = this.dataChannels.get(id);
@@ -4964,7 +4966,7 @@ private isLetShareZip(file: File): boolean {
    });
     this.addTransferRecord("sent-file", file.name, `→ ${id.split(":")[0]}`);
     // Emit file-sent event for ChatIntegration
-    this.emitter.emit('file-sent', { to: id, fileName: file.name, fileSize: file.size, transferId });
+    this.emitter.emit('file-sent', { to: id, fileName: file.name, fileSize: file.size, transferId, fileKey });
    } catch (err) {
     const closeError = this.p2pUnexpectedCloseErrors.get(transferId);
     if (!stillOwnsTransfer() && !closeError) {
@@ -5097,11 +5099,11 @@ private isLetShareZip(file: File): boolean {
    * P2P 不可用 / 探针失败 / ACK 卡死 / hash 失败 / 通道断开 → 自动切公网 relay。
    * 用户主动取消不自动重发（不重复发送）；Ably 通道无二进制 relay，无法切换。
    */
-  public async sendFileAuto(id: string, file: File, meetingRoomId?: string): Promise<void> {
+  public async sendFileAuto(id: string, file: File, meetingRoomId?: string, fileKey?: string): Promise<void> {
    // Meeting membership is independent from the old LetShare room. Meeting
    // attachments therefore use relay with the meeting ID as their context.
    if (meetingRoomId) {
-    await this.sendFileViaServer(id, file, meetingRoomId);
+    await this.sendFileViaServer(id, file, meetingRoomId, fileKey);
     return;
    }
    const preferServer = settingsStore.get('transferPriority') === 'server';
@@ -5132,15 +5134,16 @@ private isLetShareZip(file: File): boolean {
      fileName: file.name,
      fileSize: file.size,
      transferId,
+     fileKey,
     });
     return;
    }
    if (preferServer || !this.canSendFileToUser(id)) {
-    await this.sendFileViaServer(id, file);
+    await this.sendFileViaServer(id, file, undefined, fileKey);
     return;
    }
    try {
-    await this.sendFileToUser(id, file);
+    await this.sendFileToUser(id, file, fileKey);
    } catch (p2pError) {
     const reason = String(p2pError instanceof Error ? p2pError.message : p2pError);
     // `aborted` is also set by an unexpected DataChannel close/stall. It is
@@ -5155,7 +5158,7 @@ private isLetShareZip(file: File): boolean {
     console.warn(`[FILE TRANSFER] P2P stalled; auto falling back to server relay for ${id}`, p2pError);
     alertUseMUI(t('toast.serverTransferMode'), 2500, { kind: "info", category: "transfer-status" });
     this.aborted = false;
-    await this.sendFileViaServer(id, file);
+    await this.sendFileViaServer(id, file, undefined, fileKey);
    }
   }
 

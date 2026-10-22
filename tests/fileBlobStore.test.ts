@@ -12,7 +12,7 @@ import { describe, beforeEach, it } from "node:test";
 import assert from "node:assert/strict";
 
 import ChatHistoryManager from "../src/app/libs/chat/ChatHistoryManager";
-import FileBlobStore, { type FileBlobInfo } from "../src/app/libs/chat/FileBlobStore";
+import FileBlobStore, { createFileBlobKey, type FileBlobInfo } from "../src/app/libs/chat/FileBlobStore";
 
 const STORE_NAME = "file_blobs";
 
@@ -50,6 +50,13 @@ describe("FileBlobStore IndexedDB operations", () => {
       req.onsuccess = () => resolve();
       req.onerror = () => reject(req.error);
     });
+  });
+
+  it("creates distinct keys for repeated same-name files in the same millisecond", () => {
+    const first = createFileBlobKey("peer-1", 123456, "photo.jpg");
+    const second = createFileBlobKey("peer-1", 123456, "photo.jpg");
+
+    assert.notEqual(first, second);
   });
 
   // ── 1. storeFile & getFile roundtrip ──

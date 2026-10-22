@@ -1,5 +1,6 @@
 import ChatHistoryManager, { UserIdProvider, FileChatMessage } from './ChatHistoryManager';
-import FileBlobStore from './FileBlobStore';
+import FileBlobStore, { createFileBlobKey } from './FileBlobStore';
+import { findUploadingFileMessage } from './fileMessageCorrelation';
 import realTimeColab from '@App/libs/connection/colabLib';
 import mitt from 'mitt';
 import { guessMimeType } from './mimeTypes';
@@ -191,9 +192,9 @@ class ChatIntegration {
         });
 
         // ── File messages ──
-        realTimeColab.emitter.on('file-sent', async ({ to, fileName, fileSize }) => {
+        realTimeColab.emitter.on('file-sent', async ({ to, fileName, fileSize, fileKey }) => {
             console.log(`[CHAT INTEGRATION] Event 'file-sent' for ${to}: ${fileName}`);
-            await this.handleFileSent(to, fileName, fileSize);
+            await this.handleFileSent(to, fileName, fileSize, fileKey);
         });
 
         realTimeColab.emitter.on('file-saved-to-disk', async ({ from, fileName, fileSize }) => {
@@ -264,7 +265,7 @@ class ChatIntegration {
     // ── File message handlers ──
 
     /** Handle file-sent event: update placeholder message to completed. */
-    private async handleFileSent(targetUserId: string, fileName: string, fileSize: number): Promise<void> {
+    private async handleFileSent(targetUserId: string, fileName: string, fileSize: number, fileKey?: string): Promise<void> {
         try {
             // Clear active upload tracking
             if (this.activeUpload?.userId === targetUserId) {
@@ -278,14 +279,10 @@ class ChatIntegration {
             // Find the uploading placeholder and mark it completed
             const history = await ChatHistoryManager.getChatHistory(targetUserId);
             if (history) {
-                const uploadingMsg = history.messages
-                    .filter((m) => m.type === 'file' || m.type === 'image')
-                    .reverse()
-                    .find(
-                        (m) =>
-                            (m as FileChatMessage).fileMetadata.fileName === fileName &&
-                            (m as FileChatMessage).fileMetadata.transferStatus === 'uploading',
-                    ) as FileChatMessage | undefined;
+                const fileMessages = history.messages.filter(
+                    (message): message is FileChatMessage => message.type === 'file' || message.type === 'image',
+                );
+                const uploadingMsg = findUploadingFileMessage(fileMessages, fileKey);
 
                 if (uploadingMsg) {
                     await ChatHistoryManager.updateFileMessageProgress(
@@ -347,7 +344,7 @@ class ChatIntegration {
         if (fromUserId === realTimeColab.getUniqId()) throw new Error('Cannot save a file received from the local user');
 
         const userName = fromUserId.split(':')[0] || 'Unknown User';
-        const fileKey = `${fromUserId}_${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+        const fileKey = createFileBlobKey(fromUserId, Date.now(), file.name);
         const storeResult = await FileBlobStore.storeFile(fileKey, file);
         if (!storeResult.success) {
             throw new Error(`Received file could not be committed to IndexedDB: ${storeResult.error || 'unknown error'}`);
@@ -496,7 +493,7 @@ class ChatIntegration {
             // Keep File in a session-scoped cache so the sender can preview during this session
             // without eagerly arrayBuffer-ing large video/PDF into IndexedDB.
             const now = Date.now();
-            const fileKey = `${targetUserId}_${now}_${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+            const fileKey = createFileBlobKey(targetUserId, now, file.name);
             this.sentFileCache.set(fileKey, file);
 
             // 1. Create placeholder file message (uploading, 0%) with the fileKey
@@ -525,7 +522,7 @@ class ChatIntegration {
 
             // 3. Start the actual file transfer
             // 统一发送入口：P2P（probe 验证后）→ 失败/卡死自动切公网 relay
-            await realTimeColab.sendFileAuto(targetUserId, file);
+            await realTimeColab.sendFileAuto(targetUserId, file, undefined, fileKey);
 
             // 4. After transfer completes, the 'file-sent' event will update the message
             //    (handled by handleFileSent above)

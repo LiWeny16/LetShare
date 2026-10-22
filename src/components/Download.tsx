@@ -1176,7 +1176,7 @@ export default function DownloadDrawerSlide({
                       : row.status === "paused" || row.status === "needs-source" ? "warning"
                       : "default";
                     const statusLabel = remotePaused
-                      ? (isChinese ? "瀵规柟宸叉殏鍋滐紝绛夊緟瀵规柟缁х画" : "The other person paused; waiting for them to continue")
+                      ? (isChinese ? "对方已暂停，等待对方继续" : "The other person paused; waiting for them to continue")
                       : row.status === "reconnecting"
                       ? (isChinese ? "连接恢复后自动继续" : "Will continue when the connection returns")
                       : row.status === "needs-source"

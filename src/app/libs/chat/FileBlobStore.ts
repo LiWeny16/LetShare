@@ -13,6 +13,17 @@ import {
 
 const STORE_NAME = 'file_blobs';
 
+export function createFileBlobKey(userId: string, timestamp: number, fileName: string): string {
+  const safeName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
+  const randomBytes = new Uint8Array(16);
+  if (typeof globalThis.crypto?.getRandomValues !== 'function') {
+    throw new Error('Secure random IDs are unavailable in this environment');
+  }
+  globalThis.crypto.getRandomValues(randomBytes);
+  const uniqueId = Array.from(randomBytes, byte => byte.toString(16).padStart(2, '0')).join('');
+  return `${userId}_${timestamp}_${uniqueId}_${safeName}`;
+}
+
 export interface StoredFile {
   fileKey: string;
   /** ArrayBuffer is retained for records written by older releases. */
@@ -48,7 +59,7 @@ class FileBlobStore {
     return ChatHistoryManager.getDB();
   }
 
-  /** Generate a deterministic file key. */
+  /** Generate a deterministic file key for legacy callers and tests. */
   public static makeFileKey(userId: string, timestamp: number, fileName: string): string {
     const safeName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
     return `${userId}_${timestamp}_${safeName}`;

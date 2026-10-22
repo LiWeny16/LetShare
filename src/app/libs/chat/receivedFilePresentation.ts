@@ -1,7 +1,11 @@
 /** Stable UI key for a received file. V2 transfer IDs keep same-name files distinct. */
 export function receivedFileMapKey(userId: string, fileName: string, fileKey?: string | null): string {
-  if (fileKey?.startsWith("filev2:")) return `${userId}::${fileKey}`;
+  if (fileKey) return `${userId}::${fileKey}`;
   return `${userId}::${fileName}`;
+}
+
+export function receivedFileChildMapKey(parentKey: string, entryName: string): string {
+  return `${parentKey}::${entryName}`;
 }
 
 /** Keeps every selected file when an archive contains duplicate filenames. */
