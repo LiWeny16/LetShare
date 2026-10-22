@@ -282,6 +282,7 @@ describe("file transfer v2 application integration", () => {
           selfId: "self:device",
           getHistory: peerId => ChatHistoryManager.getChatHistory(peerId),
           addFileMessage: (...args) => ChatHistoryManager.addFileMessage(...args),
+          updateProgress: (...args) => ChatHistoryManager.updateFileMessageProgress(...args),
           pinForHistory: async () => { pinCalls++; return true; },
           isHistoryPinCurrent: async () => true,
           rollbackHistoryMessage: (peerId, messageId) => ChatHistoryManager.deleteMessage(
@@ -886,6 +887,7 @@ describe("file transfer v2 application integration", () => {
       selfId: "self:device",
       getHistory: (peerId: string) => ChatHistoryManager.getChatHistory(peerId),
       addFileMessage: (...args: Parameters<typeof ChatHistoryManager.addFileMessage>) => ChatHistoryManager.addFileMessage(...args),
+      updateProgress: (...args: Parameters<typeof ChatHistoryManager.updateFileMessageProgress>) => ChatHistoryManager.updateFileMessageProgress(...args),
       pinForHistory: async () => true,
       isHistoryPinCurrent: async () => true,
       rollbackHistoryMessage: (peerId: string, messageId: string) => ChatHistoryManager.deleteMessage(
@@ -919,6 +921,287 @@ describe("file transfer v2 application integration", () => {
     assert.equal(messages.length, 1);
     assert.equal(messages.some(message => message.type !== "text"
       && message.fileMetadata.fileKey === "filev2:history-pin-failure-001"), false);
+  });
+
+  it("FTV2-HISTORY-001 keeps a verified receive unreadable in chat until task completion is durable", async () => {
+    const { commitV2ReceivedHistoryLink, publishV2ReceivedHistoryLink } = await import("../src/app/libs/chat/ChatIntegration");
+    ChatHistoryManager.setUserIdProvider({ getCurrentUserId: () => "self:device" });
+    await ChatHistoryManager.clearAllChatHistories();
+    await FileBlobStore.clearAll();
+
+    const transferId = "chat-image-complete-order-001";
+    const store = makeStore();
+    const adapter = new FileTransferV2ApplicationAdapter(adapterOptions({ store }));
+    installFileTransferV2ApplicationAdapter(adapter);
+    try {
+      const bytes = new Uint8Array([0xff, 0xd8, 0xff, 0xd9]);
+      const manifest = {
+        ...makeManifest(transferId, bytes.byteLength),
+        name: "phone-photo.jpg",
+        type: "image/jpeg",
+      };
+      const task = await store.createTask({
+        roomId: "room-a",
+        localParticipantId: "self:device",
+        peerParticipantId: "peer:device",
+        manifest,
+        direction: "receive",
+        from: "peer:device",
+        to: "self:device",
+        status: "verifying",
+        createdAt: Date.now(),
+      });
+      const block = new Blob([bytes]);
+      await store.commitBlock(transferId, 0, block, await sha256HexForBlock(block));
+      const file = new File([bytes], manifest.name, { type: manifest.type });
+
+      const fileKey = await commitV2ReceivedHistoryLink(task, file, {
+        selfId: "self:device",
+        getHistory: peerId => ChatHistoryManager.getChatHistory(peerId),
+        addFileMessage: (...args) => ChatHistoryManager.addFileMessage(...args),
+        updateProgress: (...args) => ChatHistoryManager.updateFileMessageProgress(...args),
+        pinForHistory: key => adapter.pinForHistory(key),
+        isHistoryPinCurrent: key => adapter.isHistoryPinCurrent(key),
+        rollbackHistoryMessage: (peerId, messageId) => ChatHistoryManager.deleteMessage(
+          peerId, messageId, { preserveFile: true },
+        ),
+      });
+
+      const history = await ChatHistoryManager.getChatHistory("peer:device");
+      const image = history?.messages.find(message => message.type === "image");
+      assert.equal(fileKey, `filev2:${transferId}`);
+      assert.equal(image?.type, "image");
+      assert.equal(image?.type === "image" ? image.fileMetadata.transferStatus : undefined, "downloading");
+      assert.equal(await FileBlobStore.getFile(fileKey), null);
+
+      let published = 0;
+      const publication = {
+        getHistory: (peerId: string) => ChatHistoryManager.getChatHistory(peerId),
+        updateProgress: (...args: Parameters<typeof ChatHistoryManager.updateFileMessageProgress>) => ChatHistoryManager.updateFileMessageProgress(...args),
+        isCurrent: () => true,
+        isReady: async () => await adapter.hasCompletedReceivedFile(transferId) && await adapter.isHistoryPinCurrent(fileKey),
+        onPublished: () => { published++; },
+      };
+      assert.equal(await publishV2ReceivedHistoryLink(task, publication), false);
+      assert.equal(published, 0);
+      const completed = await store.updateTask(transferId, {
+        status: "completed", expiresAt: (await store.getTask(transferId))!.expiresAt,
+      });
+      // A new adapter models reloading after the task committed, before history publication.
+      adapter.dispose();
+      const restored = new FileTransferV2ApplicationAdapter(adapterOptions({ store }));
+      installFileTransferV2ApplicationAdapter(restored);
+      const [{ default: integration }, { default: colab }] = await Promise.all([
+        import("../src/app/libs/chat/ChatIntegration"), import("../src/app/libs/connection/colabLib"),
+      ]);
+      const original = {
+        getTasks: colab.getFileTransferV2Tasks, getTask: colab.getFileTransferV2Task,
+        isCurrent: colab.isFileTransferV2TaskCurrent,
+      };
+      colab.getFileTransferV2Tasks = () => restored.getTasks();
+      colab.getFileTransferV2Task = id => restored.getTask(id);
+      colab.isFileTransferV2TaskCurrent = () => true;
+      const onPublished = () => { published++; };
+      integration.emitter.on("history-updated", onPublished);
+      try {
+        const recovered = await integration.getChatHistory("peer:device");
+        const recoveredImage = recovered?.messages[0];
+        assert.equal(recoveredImage?.type !== "text" ? recoveredImage?.fileMetadata.transferStatus : undefined, "completed");
+        await integration.getAllFileMessages();
+        const afterReload = {
+          ...publication,
+          isReady: async () => await restored.hasCompletedReceivedFile(transferId) && await restored.isHistoryPinCurrent(fileKey),
+        };
+        assert.equal(await publishV2ReceivedHistoryLink(completed, afterReload), true);
+        assert.equal(await publishV2ReceivedHistoryLink(completed, afterReload), true);
+        assert.equal(published, 1, "a repeated completed snapshot must not publish twice");
+        const visible = (await ChatHistoryManager.getChatHistory("peer:device"))?.messages[0];
+        assert.equal(visible?.type !== "text" ? visible?.fileMetadata.transferStatus : undefined, "completed");
+        assert.deepEqual(new Uint8Array(await (await restored.getFile(transferId)).arrayBuffer()), bytes);
+      } finally {
+        colab.getFileTransferV2Tasks = original.getTasks;
+        colab.getFileTransferV2Task = original.getTask;
+        colab.isFileTransferV2TaskCurrent = original.isCurrent;
+        integration.emitter.off("history-updated", onPublished);
+        restored.dispose();
+      }
+    } finally {
+      adapter.dispose();
+    }
+  });
+
+  it("FTV2-HISTORY-005 restages an old premature completed row during verification without duplicating it", async () => {
+    const { commitV2ReceivedHistoryLink } = await import("../src/app/libs/chat/ChatIntegration");
+    await ChatHistoryManager.clearAllChatHistories();
+    const transferId = "premature-row-restage-001";
+    const fileKey = `filev2:${transferId}`;
+    const old = await ChatHistoryManager.addFileMessage(
+      "peer:device", "Peer", "peer:device", { name: "photo.jpg", size: 4, type: "image/jpeg" },
+      "completed", 100, fileKey,
+    );
+    const task = {
+      transferId, localParticipantId: "self:device", peerParticipantId: "peer:device",
+      direction: "receive", status: "verifying", manifest: { type: "image/jpeg" },
+    } as FileTransferV2Task;
+    await commitV2ReceivedHistoryLink(task, new File(["jpeg"], "photo.jpg", { type: "image/jpeg" }), {
+      selfId: "self:device",
+      getHistory: id => ChatHistoryManager.getChatHistory(id),
+      addFileMessage: (...args) => ChatHistoryManager.addFileMessage(...args),
+      updateProgress: (...args) => ChatHistoryManager.updateFileMessageProgress(...args),
+      pinForHistory: async () => true, isHistoryPinCurrent: async () => true,
+      rollbackHistoryMessage: (id, messageId) => ChatHistoryManager.deleteMessage(id, messageId, { preserveFile: true }),
+    });
+    const messages = (await ChatHistoryManager.getChatHistory("peer:device"))!.messages;
+    assert.equal(messages.length, 1);
+    assert.equal(messages[0].id, old.messageId);
+    assert.equal(messages[0].type !== "text" ? messages[0].fileMetadata.transferStatus : undefined, "downloading");
+  });
+
+  it("FTV2-HISTORY-006 keeps readable chat history available if staged publication fails", async () => {
+    const [{ default: integration }, { default: colab }] = await Promise.all([
+      import("../src/app/libs/chat/ChatIntegration"), import("../src/app/libs/connection/colabLib"),
+    ]);
+    await ChatHistoryManager.clearAllChatHistories();
+    await ChatHistoryManager.addFileMessage(
+      "peer:device", "Peer", "peer:device", { name: "staged.bin", size: 4, type: "application/octet-stream" },
+      "downloading", 99, "filev2:reconcile-write-fail-001",
+    );
+    const original = { getTasks: colab.getFileTransferV2Tasks, report: colab.reportFileTransferV2HistoryError, finalize: integration.finalizeV2ReceivedFile };
+    let errors = 0;
+    let attempts = 0;
+    colab.getFileTransferV2Tasks = async () => [{
+      transferId: "reconcile-write-fail-001", direction: "receive", status: "completed", peerParticipantId: "peer:device",
+    } as FileTransferV2Task];
+    colab.reportFileTransferV2HistoryError = () => { errors++; };
+    integration.finalizeV2ReceivedFile = async () => { attempts++; throw new Error("history publication aborted"); };
+    try {
+      assert.equal((await integration.getChatHistory("peer:device"))?.messages.length, 1);
+      assert.equal((await integration.getAllFileMessages()).length, 1);
+      await integration.getChatHistory("another-peer:device");
+      assert.equal(attempts, 2, "reading another peer must not reconcile this peer's files");
+      assert.equal(errors, 2);
+    } finally {
+      colab.getFileTransferV2Tasks = original.getTasks;
+      colab.reportFileTransferV2HistoryError = original.report;
+      integration.finalizeV2ReceivedFile = original.finalize;
+    }
+  });
+
+  it("FTV2-HISTORY-002 never publishes a cancelled generation or recreates deleted history", async () => {
+    const { publishV2ReceivedHistoryLink } = await import("../src/app/libs/chat/ChatIntegration");
+    await ChatHistoryManager.clearAllChatHistories();
+    const task = {
+      transferId: "publication-cancel-delete-001", direction: "receive", status: "completed",
+      peerParticipantId: "peer:device",
+    } as FileTransferV2Task;
+    const staged = await ChatHistoryManager.addFileMessage(
+      "peer:device", "Peer", "peer:device", { name: "photo.jpg", size: 4, type: "image/jpeg" },
+      "downloading", 99, `filev2:${task.transferId}`,
+    );
+    let current = true;
+    let readyCalls = 0;
+    let published = 0;
+    const dependencies = {
+      getHistory: (peerId: string) => ChatHistoryManager.getChatHistory(peerId),
+      updateProgress: (...args: Parameters<typeof ChatHistoryManager.updateFileMessageProgress>) => ChatHistoryManager.updateFileMessageProgress(...args),
+      isCurrent: () => current,
+      isReady: async () => { if (++readyCalls === 2) current = false; return true; },
+      onPublished: () => { published++; },
+    };
+    assert.equal(await publishV2ReceivedHistoryLink(task, dependencies), false);
+    assert.equal(published, 0);
+    let message = (await ChatHistoryManager.getChatHistory("peer:device"))?.messages[0];
+    assert.equal(message?.type !== "text" ? message?.fileMetadata.transferStatus : undefined, "downloading");
+    current = true;
+    assert.equal(await publishV2ReceivedHistoryLink(task, {
+      ...dependencies,
+      isReady: async () => true,
+      updateProgress: async (...args) => {
+        const result = await ChatHistoryManager.updateFileMessageProgress(...args);
+        if (args[2] === "completed") current = false;
+        return result;
+      },
+    }), false, "a cancellation during the history write must withdraw the stale completion");
+    message = (await ChatHistoryManager.getChatHistory("peer:device"))?.messages[0];
+    assert.equal(message?.type !== "text" ? message?.fileMetadata.transferStatus : undefined, "downloading");
+    assert.equal(published, 0);
+    assert.equal((await ChatHistoryManager.deleteMessage("peer:device", staged.messageId!, { preserveFile: true })).success, true);
+    assert.equal(await publishV2ReceivedHistoryLink(task, { ...dependencies, isCurrent: () => true, isReady: async () => true }), false);
+    assert.equal((await ChatHistoryManager.getChatHistory("peer:device"))?.messages.length, 0);
+    assert.equal(published, 0);
+  });
+
+  it("FTV2-HISTORY-003 reports final history persistence failure and allows a bounded retry", async () => {
+    const { publishV2ReceivedHistoryLink } = await import("../src/app/libs/chat/ChatIntegration");
+    await ChatHistoryManager.clearAllChatHistories();
+    const task = {
+      transferId: "publication-write-retry-001", direction: "receive", status: "completed",
+      peerParticipantId: "peer:device",
+    } as FileTransferV2Task;
+    await ChatHistoryManager.addFileMessage(
+      "peer:device", "Peer", "peer:device", { name: "small.bin", size: 4, type: "application/octet-stream" },
+      "downloading", 99, `filev2:${task.transferId}`,
+    );
+    let published = 0;
+    const dependencies = {
+      getHistory: (peerId: string) => ChatHistoryManager.getChatHistory(peerId),
+      updateProgress: (...args: Parameters<typeof ChatHistoryManager.updateFileMessageProgress>) => ChatHistoryManager.updateFileMessageProgress(...args),
+      isCurrent: () => true,
+      isReady: async () => true,
+      onPublished: () => { published++; },
+    };
+    await assert.rejects(publishV2ReceivedHistoryLink(task, {
+      ...dependencies, updateProgress: async () => ({ success: false, error: "publication transaction aborted" }),
+    }), /publication transaction aborted/);
+    assert.equal(published, 0);
+    assert.equal(await publishV2ReceivedHistoryLink(task, dependencies), true);
+    assert.equal(published, 1);
+  });
+
+  it("FTV2-HISTORY-004 waits for a progress transaction commit, including abort after put success", async () => {
+    const managerApi = ChatHistoryManager as unknown as { ensureDB: () => Promise<IDBDatabase> };
+    const original = managerApi.ensureDB;
+    const history = {
+      userId: "peer:device", userName: "Peer", unreadCount: 0, lastMessageTime: Date.now(),
+      messages: [{ id: "staged-image", type: "image", fileMetadata: { transferStatus: "downloading", transferProgress: 99 } }],
+    };
+    let putSucceeded = false;
+    let releaseAbort: (() => void) | undefined;
+    managerApi.ensureDB = async () => ({
+      transaction: () => {
+        const transaction = {
+          error: new Error("progress transaction aborted after put"),
+          oncomplete: undefined as undefined | (() => void), onabort: undefined as undefined | (() => void),
+          objectStore: () => ({
+            get: () => {
+              const request = { result: structuredClone(history), onsuccess: undefined as undefined | (() => void) };
+              queueMicrotask(() => request.onsuccess?.());
+              return request;
+            },
+            put: () => {
+              const request = { onsuccess: undefined as undefined | (() => void) };
+              queueMicrotask(() => { putSucceeded = true; request.onsuccess?.(); });
+              releaseAbort = () => transaction.onabort?.();
+              return request;
+            },
+          }),
+        };
+        return transaction;
+      },
+    } as unknown as IDBDatabase);
+    try {
+      let resolved = false;
+      const update = ChatHistoryManager.updateFileMessageProgress("peer:device", "staged-image", "completed", 100);
+      void update.then(() => { resolved = true; });
+      await waitFor(() => putSucceeded ? true : undefined);
+      assert.equal(resolved, false, "put success alone must not publish completion");
+      releaseAbort!();
+      const result = await update;
+      assert.equal(result.success, false);
+      assert.match(result.error || "", /progress transaction aborted after put/);
+    } finally {
+      managerApi.ensureDB = original;
+    }
   });
 
   it("R7 attempts legacy blob cleanup even when v2 cleanup fails", async () => {

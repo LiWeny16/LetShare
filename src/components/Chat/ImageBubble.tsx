@@ -26,6 +26,7 @@ interface ImageBubbleProps {
   onDownload?: (fileKey: string) => void;
   onRetry?: (messageId: string) => void;
   thumbnailUrl?: string;
+  sentFile?: File;
 }
 
 function formatTimestamp(timestamp: number): string {
@@ -47,6 +48,7 @@ const ImageBubble: React.FC<ImageBubbleProps> = ({
   isMyMessage,
   onRetry,
   thumbnailUrl,
+  sentFile,
 }) => {
   const theme = useTheme();
   const { t } = useTranslation();
@@ -70,6 +72,19 @@ const ImageBubble: React.FC<ImageBubbleProps> = ({
     if (thumbnailUrl) {
       setObjectUrl(thumbnailUrl);
       objectUrlRef.current = thumbnailUrl;
+      return;
+    }
+
+    if (isMyMessage) {
+      setLoadError(false);
+      setLoadingImage(false);
+      if (sentFile) {
+        const url = URL.createObjectURL(sentFile);
+        setObjectUrl(url);
+        objectUrlRef.current = url;
+      } else {
+        setObjectUrl(null);
+      }
       return;
     }
 
@@ -107,7 +122,7 @@ const ImageBubble: React.FC<ImageBubbleProps> = ({
     };
     // Deliberately exclude objectUrl — we only want to trigger on status/fileKey/thumbnailUrl changes
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [transferStatus, fileKey, thumbnailUrl]);
+  }, [transferStatus, fileKey, thumbnailUrl, isMyMessage, sentFile]);
 
   // Cleanup old object URL when a new one is set, and on unmount
   useEffect(() => {

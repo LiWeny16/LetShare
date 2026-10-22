@@ -335,11 +335,9 @@ class ChatHistoryManager {
       msg.fileMetadata.transferStatus = transferStatus;
       msg.fileMetadata.transferProgress = transferProgress;
 
-      await new Promise<void>((resolve, reject) => {
-        const putRequest = store.put(history);
-        putRequest.onsuccess = () => resolve();
-        putRequest.onerror = () => reject(putRequest.error);
-      });
+      const committed = waitForTransactionCommit(transaction);
+      store.put(history);
+      await committed;
 
       return { success: true };
     } catch (error) {

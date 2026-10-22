@@ -9,12 +9,13 @@ type V2ReceivedHistoryCommitDependencies = {
     selfId: string;
     getHistory: typeof ChatHistoryManager.getChatHistory;
     addFileMessage: typeof ChatHistoryManager.addFileMessage;
+    updateProgress: typeof ChatHistoryManager.updateFileMessageProgress;
     pinForHistory: (fileKey: string) => Promise<boolean>;
     isHistoryPinCurrent: (fileKey: string) => Promise<boolean>;
     rollbackHistoryMessage: (peerId: string, messageId: string) => ReturnType<typeof ChatHistoryManager.deleteMessage>;
 };
 
-/** Ensure one durable history link exists and keep it only while the receive remains complete. */
+/** Stage the durable history link before COMPLETE without making the file readable yet. */
 export async function commitV2ReceivedHistoryLink(
     task: FileTransferV2Task,
     file: File,
@@ -38,8 +39,8 @@ export async function commitV2ReceivedHistoryLink(
             userName,
             peerId,
             { name: file.name, size: file.size, type: file.type || task.manifest.type },
-            'completed',
-            100,
+            'downloading',
+            99,
             fileKey,
         );
         if (!result.success || !result.messageId) {
@@ -47,6 +48,10 @@ export async function commitV2ReceivedHistoryLink(
         }
         messageId = result.messageId;
         createdMessage = true;
+    } else if (task.status === 'verifying' && existing?.type !== 'text'
+        && existing?.fileMetadata.transferStatus === 'completed') {
+        const staged = await dependencies.updateProgress(peerId, messageId, 'downloading', 99);
+        if (!staged.success) throw new Error(`Failed to stage v2 file history message: ${staged.error || 'unknown error'}`);
     }
 
     try {
@@ -65,6 +70,50 @@ export async function commitV2ReceivedHistoryLink(
         throw error;
     }
     return fileKey;
+}
+
+type V2ReceivedHistoryPublishDependencies = {
+    getHistory: typeof ChatHistoryManager.getChatHistory;
+    updateProgress: typeof ChatHistoryManager.updateFileMessageProgress;
+    isCurrent: () => boolean;
+    isReady: () => Promise<boolean>;
+    onPublished: () => void;
+};
+
+/** Publish only an existing link, after the verified task's completed state is durable. */
+export async function publishV2ReceivedHistoryLink(
+    task: FileTransferV2Task,
+    dependencies: V2ReceivedHistoryPublishDependencies,
+): Promise<boolean> {
+    if (task.direction !== 'receive' || task.status !== 'completed'
+        || !dependencies.isCurrent() || !await dependencies.isReady() || !dependencies.isCurrent()) return false;
+    const history = await dependencies.getHistory(task.peerParticipantId);
+    const message = history?.messages.find(message =>
+        (message.type === 'file' || message.type === 'image')
+        && message.fileMetadata.fileKey === `filev2:${task.transferId}`,
+    );
+    if (!message || message.type === 'text' || !dependencies.isCurrent()
+        || !await dependencies.isReady() || !dependencies.isCurrent()) return false;
+    if (message.fileMetadata.transferStatus === 'completed') return true;
+    const result = await dependencies.updateProgress(task.peerParticipantId, message.id, 'completed', 100);
+    if (!result.success) {
+        // A deletion racing this publication must stay deleted; other storage failures remain visible/retryable.
+        const current = await dependencies.getHistory(task.peerParticipantId);
+        if (!current?.messages.some(candidate => candidate.id === message.id)) return false;
+        throw new Error(`Failed to publish received file history: ${result.error || 'unknown error'}`);
+    }
+    if (!dependencies.isCurrent() || !await dependencies.isReady() || !dependencies.isCurrent()) {
+        const rollback = await dependencies.updateProgress(task.peerParticipantId, message.id, 'downloading', 99);
+        if (!rollback.success) {
+            const current = await dependencies.getHistory(task.peerParticipantId);
+            if (current?.messages.some(candidate => candidate.id === message.id)) {
+                throw new Error(`Failed to withdraw stale received file history: ${rollback.error || 'unknown error'}`);
+            }
+        }
+        return false;
+    }
+    dependencies.onPublished();
+    return true;
 }
 
 // 为ChatIntegration创建一个事件发射器类型
@@ -90,6 +139,7 @@ class ChatIntegration {
     // Session-scoped cache: sent files live here so sender can preview during the session
     // without eagerly reading the whole file into IndexedDB (expensive for large video/PDF).
     private sentFileCache: Map<string, File> = new Map();
+    private v2PublicationJobs = new Map<string, Promise<boolean>>();
 
     private constructor() {
         // 注入UserIdProvider到ChatHistoryManager
@@ -124,6 +174,7 @@ class ChatIntegration {
 
         this.isListening = true;
         this.setupEventListeners();
+        void this.reconcileV2ReceivedFiles().catch(error => realTimeColab.reportFileTransferV2HistoryError(error));
     }
 
     // 设置事件监听器
@@ -321,13 +372,14 @@ class ChatIntegration {
         return fileKey;
     }
 
-    /** Link a completed v2 receive to durable block storage without copying the file blob. */
+    /** Link a verified v2 receive before the engine persists completion; keep its preview pending. */
     public async commitV2ReceivedFile(task: FileTransferV2Task, file: File): Promise<string> {
         const peerId = task.peerParticipantId;
         const fileKey = await commitV2ReceivedHistoryLink(task, file, {
             selfId: realTimeColab.getUniqId() || '',
             getHistory: userId => ChatHistoryManager.getChatHistory(userId),
             addFileMessage: (...args) => ChatHistoryManager.addFileMessage(...args),
+            updateProgress: (...args) => ChatHistoryManager.updateFileMessageProgress(...args),
             pinForHistory: key => FileBlobStore.pinForHistory(key),
             isHistoryPinCurrent: key => FileBlobStore.isHistoryPinCurrent(key),
             rollbackHistoryMessage: (userId, messageId) => ChatHistoryManager.deleteMessage(
@@ -338,6 +390,53 @@ class ChatIntegration {
         });
         this.emitter.emit('history-updated', { userId: peerId });
         return fileKey;
+    }
+
+    public finalizeV2ReceivedFile(task: FileTransferV2Task, isCurrent: () => boolean = () => true): Promise<boolean> {
+        const pending = this.v2PublicationJobs.get(task.transferId);
+        if (pending) return pending;
+        const inScope = () => isCurrent() && realTimeColab.isFileTransferV2TaskCurrent(task);
+        const publishing = publishV2ReceivedHistoryLink(task, {
+            getHistory: userId => ChatHistoryManager.getChatHistory(userId),
+            updateProgress: (...args) => ChatHistoryManager.updateFileMessageProgress(...args),
+            isCurrent: inScope,
+            isReady: async () => {
+                const current = await realTimeColab.getFileTransferV2Task(task.transferId);
+                if (!inScope() || current?.status !== 'completed' || current.roomId !== task.roomId
+                    || current.peerParticipantId !== task.peerParticipantId) return false;
+                const key = `filev2:${task.transferId}`;
+                return await FileBlobStore.hasFile(key) && await FileBlobStore.isHistoryPinCurrent(key);
+            },
+            onPublished: () => this.emitter.emit('history-updated', { userId: task.peerParticipantId }),
+        });
+        this.v2PublicationJobs.set(task.transferId, publishing);
+        void publishing.finally(() => {
+            if (this.v2PublicationJobs.get(task.transferId) === publishing) this.v2PublicationJobs.delete(task.transferId);
+        }).catch(() => undefined);
+        return publishing;
+    }
+
+    /** Recover a page close or a failed final history write without recreating deleted messages. */
+    private async reconcileV2ReceivedFiles(peerId?: string): Promise<void> {
+        let tasks: FileTransferV2Task[];
+        try { tasks = await realTimeColab.getFileTransferV2Tasks(); }
+        catch (error) {
+            realTimeColab.reportFileTransferV2HistoryError(error);
+            return;
+        }
+        for (const task of tasks) {
+            if (task.direction !== 'receive' || task.status !== 'completed'
+                || peerId && task.peerParticipantId !== peerId) continue;
+            try {
+                const history = await ChatHistoryManager.getChatHistory(task.peerParticipantId);
+                if (!history?.messages.some(message => message.type !== 'text'
+                    && message.fileMetadata.fileKey === `filev2:${task.transferId}`
+                    && message.fileMetadata.transferStatus !== 'completed')) continue;
+                await this.finalizeV2ReceivedFile(task);
+            } catch (error) {
+                realTimeColab.reportFileTransferV2HistoryError(error, task.transferId);
+            }
+        }
     }
 
     // ── Public API ──
@@ -444,6 +543,7 @@ class ChatIntegration {
 
     /** Get chat history for a user. */
     public async getChatHistory(userId: string) {
+        await this.reconcileV2ReceivedFiles(userId);
         return await ChatHistoryManager.getChatHistory(userId);
     }
 
@@ -511,6 +611,7 @@ class ChatIntegration {
 
     /** Get all file messages across all chats. */
     public async getAllFileMessages() {
+        await this.reconcileV2ReceivedFiles();
         return await ChatHistoryManager.getAllFileMessages();
     }
 

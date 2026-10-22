@@ -375,20 +375,50 @@ export class RealTimeColab {
     onUpdate: snapshot => {
      this.emitter.emit("file-transfer-v2-update", snapshot);
      this.updateUI();
+     const pending = this.pendingV2ReceivedFiles.get(snapshot.transferId);
+     if (pending) {
+      if (pending.status !== snapshot.status) pending.revision++;
+      pending.status = snapshot.status;
+      if (snapshot.status === "cancelled" || snapshot.status === "failed") {
+       this.pendingV2ReceivedFiles.delete(snapshot.transferId);
+      } else if (snapshot.status === "completed" && !pending.publishing) {
+       pending.publishing = true;
+       const revision = pending.revision;
+       const isCurrent = () => this.pendingV2ReceivedFiles.get(snapshot.transferId) === pending
+        && pending.revision === revision && pending.status === "completed"
+        && this.isFileTransferV2TaskCurrent(pending.task);
+       void (async () => {
+        const integration = await import("../chat/ChatIntegration");
+        const task = await this.fileTransferV2?.getTask(snapshot.transferId);
+        if (!task || !isCurrent() || !await integration.default.finalizeV2ReceivedFile(task, isCurrent) || !isCurrent()) return;
+        const file = pending.file;
+        this.receivedFiles.set(`${task.peerParticipantId}::${file.name}`, file);
+        this.receivedFilesVersion++;
+        this.addTransferRecord("received-file", file.name, `← ${task.peerParticipantId.split(":")[0]}`);
+        this.emitter.emit("file-received", {
+         from: task.peerParticipantId, fileName: file.name, fileSize: file.size, file,
+        });
+        this.pendingV2ReceivedFiles.delete(snapshot.transferId);
+        this.updateUI();
+       })().catch(error => this.reportFileTransferV2HistoryError(error, snapshot.transferId))
+        .finally(() => {
+         pending.publishing = false;
+         // Durable blocks/history can be reconciled on the next read; do not retain
+         // another assembled File indefinitely if the final history write failed.
+         if (pending.status === "completed" && this.pendingV2ReceivedFiles.get(snapshot.transferId) === pending) {
+          this.pendingV2ReceivedFiles.delete(snapshot.transferId);
+         }
+        });
+      }
+     }
     },
     onReceived: async (task, file) => {
      const integration = await import("../chat/ChatIntegration");
      await integration.default.commitV2ReceivedFile(task, file);
-     const fullKey = `${task.peerParticipantId}::${file.name}`;
-     this.receivedFiles.set(fullKey, file);
-     this.receivedFilesVersion++;
-     this.addTransferRecord("received-file", file.name, `← ${task.peerParticipantId.split(":")[0]}`);
-     this.emitter.emit("file-received", {
-      from: task.peerParticipantId,
-      fileName: file.name,
-      fileSize: file.size,
-      file,
-     });
+     const current = await this.fileTransferV2?.getTask(task.transferId);
+     if (current && this.isFileTransferV2TaskCurrent(task) && ["verifying", "completed"].includes(current.status)) {
+      this.pendingV2ReceivedFiles.set(task.transferId, { task, file, status: current.status, revision: 0, publishing: false });
+     }
     },
     onError: (reason, transferId) => {
      this.setFileTransferStatus(reason, "error", { autoClearMs: 12_000 });
@@ -408,6 +438,9 @@ export class RealTimeColab {
  // 服务器文件传输
  private serverFileTransfer: ServerFileTransfer | null = null;
  private fileTransferV2: FileTransferV2ApplicationAdapter | null = null;
+ private pendingV2ReceivedFiles = new Map<string, {
+  task: FileTransferV2Task; file: File; status: FileTransferV2Task["status"]; revision: number; publishing: boolean;
+ }>();
  private readonly serverBinaryReceivedHandler = (data: ArrayBuffer): void => {
   this.noteServerTraffic();
   if (this.fileTransferV2?.handleRelayFrame(data)) return;
@@ -5124,6 +5157,17 @@ private isLetShareZip(file: File): boolean {
 
  public getFileTransferV2Task(transferId: string): Promise<FileTransferV2Task | null> {
   return this.fileTransferV2?.getTask(transferId) ?? Promise.resolve(null);
+ }
+
+ public isFileTransferV2TaskCurrent(task: FileTransferV2Task): boolean {
+  return task.localParticipantId === this.getUniqId()
+   && task.roomId === (settingsStore.get("roomId") || "default-room");
+ }
+
+ public reportFileTransferV2HistoryError(error: unknown, transferId?: string): void {
+  const reason = `Received file history could not be updated: ${error instanceof Error ? error.message : String(error)}`;
+  this.setFileTransferStatus(reason, "error", { autoClearMs: 12_000 });
+  console.warn(`[FILE TRANSFER V2] ${transferId || "history"}: ${reason}`);
  }
 
  public async getFileTransferV2File(transferId: string): Promise<File> {

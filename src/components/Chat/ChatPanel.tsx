@@ -210,7 +210,7 @@ const ChatPanelContent: React.FC<ChatPanelProps> = ({ open, onClose, targetUserI
     const loadChatHistory = useCallback(async () => {
         try {
             console.log(`[CHAT PANEL] Loading chat history for ${targetUserId}`);
-            const history = await ChatHistoryManager.getChatHistory(targetUserId);
+            const history = await ChatIntegration.getChatHistory(targetUserId);
             console.log(`[CHAT PANEL] Loaded history:`, history);
             setChatHistory(history);
             // 标记消息为已读
@@ -713,6 +713,9 @@ const ChatPanelContent: React.FC<ChatPanelProps> = ({ open, onClose, targetUserI
                         isMyMessage={isMyMessage}
                         onDownload={handleFileBubbleDownload}
                         onRetry={handleFileBubbleRetry}
+                        sentFile={isMyMessage && fileMsg.fileMetadata.fileKey
+                            ? ChatIntegration.getSentFile(fileMsg.fileMetadata.fileKey)
+                            : undefined}
                     />
                 );
             }
