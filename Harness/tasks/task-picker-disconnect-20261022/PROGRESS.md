@@ -26,3 +26,13 @@
 - Independent Luna max reviewer finds no blocking code/spec issue before deployment. Bounded residual: a startup cache deletion initiated before React mounts may finish after mount; mounted checks prevent subsequent reload and no mounted version-check path initiates deletion.
 - Release candidate: 3.8.48, sentinel `2026-10-22T02:18:24Z-agaf2`. Frontend-only rollout pending. Backend SHA recorded before deployment; frontend backup `/root/cloud/letshare-frontend.pre-picker-fix-3.8.48.tgz` exists.
 - Verification boundary: neither native OS picker automation nor physical mobile/Safari/Firefox or cross-country media acceptance is claimed.
+
+## Deployment and acceptance — complete
+
+- Frontend 3.8.48 deployed through the standard `deploy.cjs --frontend --no-build` flow after the successful normal build. Source commit `fecdd3999b917c7f98e8e84bc85529097d7ec4a8`; artifact commit `a8b8d999e1e0e2c96ad4af479027bddc424d63ce`.
+- Origin, normal mainland CDN, and forced overseas GitHub Pages agree on version/build ID, HTML SHA and entry JS SHA. Automatic CDN purge was unavailable (no keys); acceptance uses actual normal resource requests. Deploy health wrapper skipped remaining curl checks after its proxy failure; independent direct surface checks and SSH origin checks passed.
+- Production Edge and Chrome: five cases pass. Cold root mount 11,571 / 10,838 ms, no loading error card and no editor-named page JS requests; selected file survives selection/cancel; production HTTPS foreground/online/controllerchange dispatch preserves document, original WS and file; 15-second pre-native-probe suspension preserves original WS and peer presence; deliberate native socket close reconnects in about 1.3 seconds, peers visible and file retained.
+- An extra background fixture was not counted: creating another isolated-context page did not change `document.hidden`. Another attempted run hit a Playwright extension-worker attachment assertion. Fresh dedicated profiles with extensions disabled completed all required cases; neither fixture issue is reported as a product failure or covered behavior.
+- CI `39711675092` and Pages `39711674586` succeeded for the artifact commit. Backend remains active with unchanged SHA `b720a9226236d63f065de0d047fd369ac725e043ba7d93126d1e38a152e56853`.
+- Independent Luna max final code/spec reflector: PASS, no blocking issue. HTTPS events were dispatched on the real production page, not an assertion that a naturally arriving worker update was observed. Native OS file picker and mobile coverage remain outside this evidence.
+- Already-open 3.8.47 pages still execute their old inline code until refreshed/closed; the new script cannot retroactively change that document. A user refresh to confirm 3.8.48 completes the transition.

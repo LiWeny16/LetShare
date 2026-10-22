@@ -1,0 +1,40 @@
+{
+  "checkedAt": "2026-10-22T02:31:13.136Z",
+  "expectedVersion": {
+    "version": "3.8.48",
+    "v": "2026-10-22T02:18:24Z-agaf2",
+    "built": "2026-10-22T02:18:24.282Z"
+  },
+  "expectedHtmlHash": "bd7e5559fd0594eebbd431e4c5c4dd2b1d61f508fd3b8379e7ff9b312f5642d4",
+  "expectedEntry": "./static/index-Dg0dYd_P.js",
+  "surfaces": [
+    {
+      "surface": "cdn",
+      "version": {
+        "version": "3.8.48",
+        "v": "2026-10-22T02:18:24Z-agaf2",
+        "built": "2026-10-22T02:18:24.282Z"
+      },
+      "htmlHash": "bd7e5559fd0594eebbd431e4c5c4dd2b1d61f508fd3b8379e7ff9b312f5642d4",
+      "entryHash": "7cd018c6bcd0fbab643911a9844c9e209c45c1dbf23dba7cd106332ff335bc41",
+      "versionMatches": true,
+      "htmlMatches": true,
+      "entryMatches": true,
+      "pass": true
+    },
+    {
+      "surface": "pages",
+      "version": {
+        "version": "3.8.48",
+        "v": "2026-10-22T02:18:24Z-agaf2",
+        "built": "2026-10-22T02:18:24.282Z"
+      },
+      "htmlHash": "bd7e5559fd0594eebbd431e4c5c4dd2b1d61f508fd3b8379e7ff9b312f5642d4",
+      "entryHash": "7cd018c6bcd0fbab643911a9844c9e209c45c1dbf23dba7cd106332ff335bc41",
+      "versionMatches": true,
+      "htmlMatches": true,
+      "entryMatches": true,
+      "pass": true
+    }
+  ]
+}

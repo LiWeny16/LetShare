@@ -1,0 +1,570 @@
+{
+  "at": "2026-10-22T02:31:03.384Z",
+  "target": "https://letshare.fun",
+  "expectedVersion": "3.8.48",
+  "profiles": [
+    {
+      "label": "edge",
+      "console": [
+        {
+          "at": 1792636290990,
+          "text": "[SW] Updated worker activated; current page stays active."
+        },
+        {
+          "at": 1792636291152,
+          "text": "[SW] Version changed: controlled-old-build -> 2026-10-22T02:18:24Z-agaf2; current page stays active."
+        },
+        {
+          "at": 1792636324485,
+          "text": "[ColabLib] WebSocket 连接丢失, 已更新 UI 状态: WebSocket 连接已关闭"
+        },
+        {
+          "at": 1792636324486,
+          "text": "[ColabLib] 自动重连已排入调度（第 1 次）"
+        }
+      ],
+      "start": {
+        "audit": {
+          "loaded": 1792636264189,
+          "sockets": [
+            {
+              "created": 1792636275775,
+              "open": 1792636276103,
+              "closed": null,
+              "probes": [],
+              "inbound": 0
+            }
+          ],
+          "events": [],
+          "rootMountedMs": 11571,
+          "errorShown": [],
+          "pauseNextProbe": false,
+          "probePaused": false
+        },
+        "version": "3.8.48",
+        "identity": "picker-fix-edge-1792636264189:6a1bf0d2-5435-4003-8cdf-c8a4ed86084b",
+        "file": null,
+        "devHook": false,
+        "resources": [
+          {
+            "name": "https://letshare.fun/static/index-Dg0dYd_P.js",
+            "duration": 577.5,
+            "bytes": 25972
+          },
+          {
+            "name": "https://letshare.fun/static/jsx-runtime-D9KboXdW.js",
+            "duration": 2172.600000000559,
+            "bytes": 141853
+          },
+          {
+            "name": "https://letshare.fun/static/share-DYScATMu.js",
+            "duration": 4955.300000000745,
+            "bytes": 309942
+          },
+          {
+            "name": "https://letshare.fun/static/MeetingMinutesEndScreen-By_1sQTo.js",
+            "duration": 9097,
+            "bytes": 607257
+          },
+          {
+            "name": "https://letshare.fun/static/publicServerAuth-Bw6v70YU.js",
+            "duration": 98.79999999981374,
+            "bytes": 701
+          },
+          {
+            "name": "https://letshare.fun/static/applicationAdapter-D-64qTud.js",
+            "duration": 2850.399999999441,
+            "bytes": 96967
+          },
+          {
+            "name": "https://letshare.fun/static/TextField-Bd5SyOX7.js",
+            "duration": 3047,
+            "bytes": 182882
+          },
+          {
+            "name": "https://letshare.fun/static/ChatIntegration-CwGsiAhi.js",
+            "duration": 731.5999999996275,
+            "bytes": 25768
+          },
+          {
+            "name": "https://letshare.fun/static/dist-HTnr3vf7.js",
+            "duration": 410.5,
+            "bytes": 7592
+          },
+          {
+            "name": "https://letshare.fun/static/dist-DiAkf6q-.js",
+            "duration": 2921.699999999255,
+            "bytes": 37714
+          }
+        ],
+        "worker": {
+          "controlled": false
+        }
+      },
+      "final": {
+        "audit": {
+          "loaded": 1792636264189,
+          "sockets": [
+            {
+              "created": 1792636275775,
+              "open": 1792636276103,
+              "closed": {
+                "at": 1792636324484,
+                "code": 1005
+              },
+              "probes": [
+                {
+                  "id": 1,
+                  "at": 1792636286218
+                },
+                {
+                  "id": 2,
+                  "at": 1792636296353
+                },
+                {
+                  "id": 3,
+                  "at": 1792636311362
+                },
+                {
+                  "id": 4,
+                  "at": 1792636321434
+                }
+              ],
+              "inbound": 15
+            },
+            {
+              "created": 1792636325435,
+              "open": 1792636325736,
+              "closed": null,
+              "probes": [],
+              "inbound": 4
+            }
+          ],
+          "events": [
+            {
+              "name": "visibilitychange",
+              "at": 1792636290988,
+              "visibility": "visible"
+            }
+          ],
+          "rootMountedMs": 11571,
+          "errorShown": [],
+          "pauseNextProbe": true,
+          "probePaused": true
+        },
+        "version": "3.8.48",
+        "identity": "picker-fix-edge-1792636264189:6a1bf0d2-5435-4003-8cdf-c8a4ed86084b",
+        "file": null,
+        "devHook": false,
+        "resources": [
+          {
+            "name": "https://letshare.fun/static/index-Dg0dYd_P.js",
+            "duration": 577.5,
+            "bytes": 25972
+          },
+          {
+            "name": "https://letshare.fun/static/jsx-runtime-D9KboXdW.js",
+            "duration": 2172.600000000559,
+            "bytes": 141853
+          },
+          {
+            "name": "https://letshare.fun/static/share-DYScATMu.js",
+            "duration": 4955.300000000745,
+            "bytes": 309942
+          },
+          {
+            "name": "https://letshare.fun/static/MeetingMinutesEndScreen-By_1sQTo.js",
+            "duration": 9097,
+            "bytes": 607257
+          },
+          {
+            "name": "https://letshare.fun/static/publicServerAuth-Bw6v70YU.js",
+            "duration": 98.79999999981374,
+            "bytes": 701
+          },
+          {
+            "name": "https://letshare.fun/static/applicationAdapter-D-64qTud.js",
+            "duration": 2850.399999999441,
+            "bytes": 96967
+          },
+          {
+            "name": "https://letshare.fun/static/TextField-Bd5SyOX7.js",
+            "duration": 3047,
+            "bytes": 182882
+          },
+          {
+            "name": "https://letshare.fun/static/ChatIntegration-CwGsiAhi.js",
+            "duration": 731.5999999996275,
+            "bytes": 25768
+          },
+          {
+            "name": "https://letshare.fun/static/dist-HTnr3vf7.js",
+            "duration": 410.5,
+            "bytes": 7592
+          },
+          {
+            "name": "https://letshare.fun/static/dist-DiAkf6q-.js",
+            "duration": 2921.699999999255,
+            "bytes": 37714
+          }
+        ],
+        "worker": {
+          "controlled": false
+        }
+      }
+    },
+    {
+      "label": "chrome",
+      "console": [],
+      "start": {
+        "audit": {
+          "loaded": 1792636276829,
+          "sockets": [
+            {
+              "created": 1792636287687,
+              "open": 1792636288176,
+              "closed": null,
+              "probes": [],
+              "inbound": 0
+            }
+          ],
+          "events": [],
+          "rootMountedMs": 10838,
+          "errorShown": [],
+          "pauseNextProbe": false,
+          "probePaused": false
+        },
+        "version": "3.8.48",
+        "identity": "picker-fix-chrome-1792636276829:cef150ca-dfa3-4350-b84e-198602903491",
+        "file": null,
+        "devHook": false,
+        "resources": [
+          {
+            "name": "https://letshare.fun/static/index-Dg0dYd_P.js",
+            "duration": 575.3000000007451,
+            "bytes": 25972
+          },
+          {
+            "name": "https://letshare.fun/static/jsx-runtime-D9KboXdW.js",
+            "duration": 2178,
+            "bytes": 141853
+          },
+          {
+            "name": "https://letshare.fun/static/share-DYScATMu.js",
+            "duration": 4978.5999999996275,
+            "bytes": 309942
+          },
+          {
+            "name": "https://letshare.fun/static/MeetingMinutesEndScreen-By_1sQTo.js",
+            "duration": 8373.400000000373,
+            "bytes": 607257
+          },
+          {
+            "name": "https://letshare.fun/static/publicServerAuth-Bw6v70YU.js",
+            "duration": 82.30000000074506,
+            "bytes": 701
+          },
+          {
+            "name": "https://letshare.fun/static/applicationAdapter-D-64qTud.js",
+            "duration": 1888.3999999994412,
+            "bytes": 96967
+          },
+          {
+            "name": "https://letshare.fun/static/TextField-Bd5SyOX7.js",
+            "duration": 3218.399999999441,
+            "bytes": 182882
+          },
+          {
+            "name": "https://letshare.fun/static/ChatIntegration-CwGsiAhi.js",
+            "duration": 659.9000000003725,
+            "bytes": 25768
+          },
+          {
+            "name": "https://letshare.fun/static/dist-HTnr3vf7.js",
+            "duration": 391.5,
+            "bytes": 7592
+          },
+          {
+            "name": "https://letshare.fun/static/dist-DiAkf6q-.js",
+            "duration": 1268.0999999996275,
+            "bytes": 37714
+          }
+        ],
+        "worker": {
+          "controlled": false
+        }
+      },
+      "final": {
+        "audit": {
+          "loaded": 1792636276829,
+          "sockets": [
+            {
+              "created": 1792636287687,
+              "open": 1792636288176,
+              "closed": null,
+              "probes": [
+                {
+                  "id": 1,
+                  "at": 1792636298271
+                },
+                {
+                  "id": 2,
+                  "at": 1792636308454
+                },
+                {
+                  "id": 3,
+                  "at": 1792636318552
+                }
+              ],
+              "inbound": 16
+            }
+          ],
+          "events": [],
+          "rootMountedMs": 10838,
+          "errorShown": [],
+          "pauseNextProbe": false,
+          "probePaused": false
+        },
+        "version": "3.8.48",
+        "identity": "picker-fix-chrome-1792636276829:cef150ca-dfa3-4350-b84e-198602903491",
+        "file": null,
+        "devHook": false,
+        "resources": [
+          {
+            "name": "https://letshare.fun/static/index-Dg0dYd_P.js",
+            "duration": 575.3000000007451,
+            "bytes": 25972
+          },
+          {
+            "name": "https://letshare.fun/static/jsx-runtime-D9KboXdW.js",
+            "duration": 2178,
+            "bytes": 141853
+          },
+          {
+            "name": "https://letshare.fun/static/share-DYScATMu.js",
+            "duration": 4978.5999999996275,
+            "bytes": 309942
+          },
+          {
+            "name": "https://letshare.fun/static/MeetingMinutesEndScreen-By_1sQTo.js",
+            "duration": 8373.400000000373,
+            "bytes": 607257
+          },
+          {
+            "name": "https://letshare.fun/static/publicServerAuth-Bw6v70YU.js",
+            "duration": 82.30000000074506,
+            "bytes": 701
+          },
+          {
+            "name": "https://letshare.fun/static/applicationAdapter-D-64qTud.js",
+            "duration": 1888.3999999994412,
+            "bytes": 96967
+          },
+          {
+            "name": "https://letshare.fun/static/TextField-Bd5SyOX7.js",
+            "duration": 3218.399999999441,
+            "bytes": 182882
+          },
+          {
+            "name": "https://letshare.fun/static/ChatIntegration-CwGsiAhi.js",
+            "duration": 659.9000000003725,
+            "bytes": 25768
+          },
+          {
+            "name": "https://letshare.fun/static/dist-HTnr3vf7.js",
+            "duration": 391.5,
+            "bytes": 7592
+          },
+          {
+            "name": "https://letshare.fun/static/dist-DiAkf6q-.js",
+            "duration": 1268.0999999996275,
+            "bytes": 37714
+          }
+        ],
+        "worker": {
+          "controlled": false
+        }
+      }
+    }
+  ],
+  "cases": [
+    {
+      "name": "cold-boot-and-discovery",
+      "pass": true,
+      "rootMountedMs": [
+        {
+          "label": "edge",
+          "ms": 11571
+        },
+        {
+          "label": "chrome",
+          "ms": 10838
+        }
+      ]
+    },
+    {
+      "name": "file-selection-and-cancel",
+      "pass": true
+    },
+    {
+      "name": "foreground-update-and-controllerchange",
+      "pass": true,
+      "httpsPolicyExercised": true,
+      "before": {
+        "loaded": 1792636264189,
+        "sockets": [
+          {
+            "created": 1792636275775,
+            "open": 1792636276103,
+            "closed": null,
+            "probes": [
+              {
+                "id": 1,
+                "at": 1792636286218
+              }
+            ],
+            "inbound": 12
+          }
+        ],
+        "events": [],
+        "rootMountedMs": 11571,
+        "errorShown": [],
+        "pauseNextProbe": false,
+        "probePaused": false
+      },
+      "after": {
+        "loaded": 1792636264189,
+        "sockets": [
+          {
+            "created": 1792636275775,
+            "open": 1792636276103,
+            "closed": null,
+            "probes": [
+              {
+                "id": 1,
+                "at": 1792636286218
+              }
+            ],
+            "inbound": 12
+          }
+        ],
+        "events": [
+          {
+            "name": "visibilitychange",
+            "at": 1792636290988,
+            "visibility": "visible"
+          }
+        ],
+        "rootMountedMs": 11571,
+        "errorShown": [],
+        "pauseNextProbe": false,
+        "probePaused": false
+      }
+    },
+    {
+      "name": "15sec-js-suspension-at-native-probe",
+      "pass": true,
+      "pausedAt": {
+        "at": 1792636296356,
+        "reason": "other"
+      },
+      "resumeAt": 1792636311360,
+      "peerDuringPause": 1,
+      "after": {
+        "loaded": 1792636264189,
+        "sockets": [
+          {
+            "created": 1792636275775,
+            "open": 1792636276103,
+            "closed": null,
+            "probes": [
+              {
+                "id": 1,
+                "at": 1792636286218
+              },
+              {
+                "id": 2,
+                "at": 1792636296353
+              },
+              {
+                "id": 3,
+                "at": 1792636311362
+              },
+              {
+                "id": 4,
+                "at": 1792636321434
+              }
+            ],
+            "inbound": 15
+          }
+        ],
+        "events": [
+          {
+            "name": "visibilitychange",
+            "at": 1792636290988,
+            "visibility": "visible"
+          }
+        ],
+        "rootMountedMs": 11571,
+        "errorShown": [],
+        "pauseNextProbe": true,
+        "probePaused": true
+      }
+    },
+    {
+      "name": "native-socket-close-and-reconnect",
+      "pass": true,
+      "after": {
+        "loaded": 1792636264189,
+        "sockets": [
+          {
+            "created": 1792636275775,
+            "open": 1792636276103,
+            "closed": {
+              "at": 1792636324484,
+              "code": 1005
+            },
+            "probes": [
+              {
+                "id": 1,
+                "at": 1792636286218
+              },
+              {
+                "id": 2,
+                "at": 1792636296353
+              },
+              {
+                "id": 3,
+                "at": 1792636311362
+              },
+              {
+                "id": 4,
+                "at": 1792636321434
+              }
+            ],
+            "inbound": 15
+          },
+          {
+            "created": 1792636325435,
+            "open": 1792636325736,
+            "closed": null,
+            "probes": [],
+            "inbound": 4
+          }
+        ],
+        "events": [
+          {
+            "name": "visibilitychange",
+            "at": 1792636290988,
+            "visibility": "visible"
+          }
+        ],
+        "rootMountedMs": 11571,
+        "errorShown": [],
+        "pauseNextProbe": true,
+        "probePaused": true
+      }
+    }
+  ],
+  "finished": "2026-10-22T02:32:06.581Z"
+}
