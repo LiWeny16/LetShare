@@ -57,6 +57,8 @@ import { getDeviceType } from "@App/libs/tools/tools";
 import { FILE_TRANSFER_V2_REMOTE_PAUSE_REASON } from "@App/libs/connection/fileTransferV2/engine";
 import type { FileTransferV2Snapshot } from "@App/libs/connection/fileTransferV2/engine";
 import type { FileTransferV2Task, FileTransferV2TaskStatus } from "@App/libs/connection/fileTransferV2/store";
+import { shouldShowV2TaskInActiveList } from "@App/libs/connection/fileTransferV2/presentation";
+import { createUniqueArchiveEntryNames, receivedFileMapKey } from "@App/libs/chat/receivedFilePresentation";
 import FilePreviewDialog from './FilePreviewDialog';
 
 // 图片扩展名列表（小写）
@@ -283,10 +285,7 @@ export default function DownloadDrawerSlide({
   const directSavedMap = realTimeColab.directSavedFiles as Map<string, { name: string; size: number; fromUserId: string; completedAt: number }>;
   const pendingDirectSaveRequest = realTimeColab.getPendingDirectSaveRequest();
   const receivingList = Array.from(receivingMap.entries());
-  const fileTransferV2ReceivedKeys = new Set(fileTransferV2Tasks
-    .filter(task => task.direction === "receive" && task.status === "completed")
-    .map(task => `${task.peerParticipantId}::${task.manifest.name}`));
-  const receivedList = Array.from(receivedMap.entries()).filter(([key]) => !fileTransferV2ReceivedKeys.has(key));
+  const receivedList = Array.from(receivedMap.entries());
   const directSavedList = Array.from(directSavedMap.entries());
 
   // 按用户分组接收到的文件
@@ -446,7 +445,7 @@ export default function DownloadDrawerSlide({
           const file = await FileBlobStore.getFile(fileKey);
           if (!file) continue;
 
-          const mapKey = `${userId}::${file.name}`;
+          const mapKey = receivedFileMapKey(userId, file.name, fileKey);
           if (receivedMap.has(mapKey)) continue;
 
           receivedMap.set(mapKey, file);
@@ -494,8 +493,9 @@ export default function DownloadDrawerSlide({
     try {
       const { default: JSZip } = await import("jszip");
       const zip = new JSZip();
-      files.forEach((file) => {
-        zip.file(file.name, file);
+      const archiveEntryNames = createUniqueArchiveEntryNames(files.map((file) => file.name));
+      files.forEach((file, index) => {
+        zip.file(archiveEntryNames[index], file);
       });
       const content = await zip.generateAsync({ type: "blob" });
       const zipFileName = `letshare_${Date.now()}.zip`;
@@ -693,7 +693,7 @@ export default function DownloadDrawerSlide({
         task: previous?.task ?? null,
       });
     }
-    return [...rows.values()].sort((left, right) => {
+    return [...rows.values()].filter(row => shouldShowV2TaskInActiveList(row.status)).sort((left, right) => {
       const leftTerminal = ["completed", "cancelled", "failed"].includes(left.status);
       const rightTerminal = ["completed", "cancelled", "failed"].includes(right.status);
       const lastActivity = (row: FileTransferV2UiRow) => row.task?.updatedAt ?? row.task?.createdAt ?? row.expiresAt;
@@ -988,7 +988,8 @@ export default function DownloadDrawerSlide({
         const fileMessages = await ChatIntegration.getAllFileMessages();
         const msgByKey = new Map<string, { message: any; userId: string }>();
         for (const entry of fileMessages) {
-            const mapKey = `${entry.userId}::${entry.message.fileMetadata.fileName}`;
+            const { fileName, fileKey } = entry.message.fileMetadata;
+            const mapKey = receivedFileMapKey(entry.userId, fileName, fileKey);
             msgByKey.set(mapKey, entry);
         }
         for (const key of keysToDelete) {
@@ -1152,6 +1153,7 @@ export default function DownloadDrawerSlide({
                 gap: 2,
               }}
             >
+            {fileTransferV2Rows.length > 0 && (
             <Box
               data-testid="file-v2-task-list"
               role="region"
@@ -1160,11 +1162,6 @@ export default function DownloadDrawerSlide({
               <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 1, flexWrap: "wrap", mb: 0.75 }}>
                 <Typography variant="subtitle2">{t("fileTransferV2.taskList.title", { defaultValue: isChinese ? "文件传输" : "File transfers" })}</Typography>
               </Box>
-              {fileTransferV2Rows.length === 0 ? (
-                <Typography variant="body2" color="text.secondary" data-testid="file-v2-empty-state">
-                  {t("fileTransferV2.taskList.empty", { defaultValue: isChinese ? "暂无文件传输。" : "No file transfers." })}
-                </Typography>
-              ) : (
                 <Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
                   {fileTransferV2Rows.map(row => {
                     const busy = fileTransferV2BusyIds.has(row.transferId);
@@ -1367,8 +1364,8 @@ export default function DownloadDrawerSlide({
                     );
                   })}
                 </Box>
-              )}
             </Box>
+            )}
 
             {hasContent && (
               <>

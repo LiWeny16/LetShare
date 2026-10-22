@@ -57,6 +57,8 @@ import {
 } from "./fileTransferV2/applicationAdapter";
 import type { FileTransferV2Snapshot } from "./fileTransferV2/engine";
 import type { FileTransferV2Task } from "./fileTransferV2/store";
+import { shouldOpenDownloadDrawerForV2Receive } from "./fileTransferV2/presentation";
+import { receivedFileMapKey } from "../chat/receivedFilePresentation";
 import {
 	getProToken,
 	isPro,
@@ -375,6 +377,15 @@ export class RealTimeColab {
     onUpdate: snapshot => {
      this.emitter.emit("file-transfer-v2-update", snapshot);
      this.updateUI();
+     const previousStatus = this.fileTransferV2LastStatuses.get(snapshot.transferId);
+     if (shouldOpenDownloadDrawerForV2Receive(snapshot.direction, snapshot.status, previousStatus)) {
+      this.setDownloadPageState(true);
+     }
+     if (["completed", "cancelled", "failed"].includes(snapshot.status)) {
+      this.fileTransferV2LastStatuses.delete(snapshot.transferId);
+     } else {
+      this.fileTransferV2LastStatuses.set(snapshot.transferId, snapshot.status);
+     }
      const pending = this.pendingV2ReceivedFiles.get(snapshot.transferId);
      if (pending) {
       if (pending.status !== snapshot.status) pending.revision++;
@@ -392,7 +403,7 @@ export class RealTimeColab {
         const task = await this.fileTransferV2?.getTask(snapshot.transferId);
         if (!task || !isCurrent() || !await integration.default.finalizeV2ReceivedFile(task, isCurrent) || !isCurrent()) return;
         const file = pending.file;
-        this.receivedFiles.set(`${task.peerParticipantId}::${file.name}`, file);
+        this.receivedFiles.set(receivedFileMapKey(task.peerParticipantId, file.name, `filev2:${task.transferId}`), file);
         this.receivedFilesVersion++;
         this.addTransferRecord("received-file", file.name, `← ${task.peerParticipantId.split(":")[0]}`);
         this.emitter.emit("file-received", {
@@ -438,6 +449,7 @@ export class RealTimeColab {
  // 服务器文件传输
  private serverFileTransfer: ServerFileTransfer | null = null;
  private fileTransferV2: FileTransferV2ApplicationAdapter | null = null;
+ private fileTransferV2LastStatuses = new Map<string, FileTransferV2Snapshot["status"]>();
  private pendingV2ReceivedFiles = new Map<string, {
   task: FileTransferV2Task; file: File; status: FileTransferV2Task["status"]; revision: number; publishing: boolean;
  }>();
