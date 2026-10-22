@@ -1,0 +1,471 @@
+{
+  "at": "2026-10-22T02:21:30.849Z",
+  "target": "http://127.0.0.1:27772",
+  "expectedVersion": "3.8.48",
+  "profiles": [
+    {
+      "label": "edge",
+      "console": [],
+      "start": {
+        "audit": {
+          "loaded": 1792635691494,
+          "sockets": [
+            {
+              "created": 1792635691917,
+              "open": 1792635692301,
+              "closed": null,
+              "probes": [],
+              "inbound": 0
+            }
+          ],
+          "events": [],
+          "rootMountedMs": 409,
+          "errorShown": [],
+          "pauseNextProbe": false,
+          "probePaused": false
+        },
+        "version": "3.8.48",
+        "identity": "picker-fix-edge-1792635691494:41e0ca34-f6d1-4650-9894-61f7e41556d5",
+        "file": null,
+        "devHook": false,
+        "resources": [
+          {
+            "name": "http://127.0.0.1:27772/static/index-Dg0dYd_P.js",
+            "duration": 66.20000000018626,
+            "bytes": 10527
+          },
+          {
+            "name": "http://127.0.0.1:27772/static/jsx-runtime-D9KboXdW.js",
+            "duration": 72.5,
+            "bytes": 45820
+          },
+          {
+            "name": "http://127.0.0.1:27772/static/share-DYScATMu.js",
+            "duration": 74.3999999994412,
+            "bytes": 90141
+          },
+          {
+            "name": "http://127.0.0.1:27772/static/MeetingMinutesEndScreen-By_1sQTo.js",
+            "duration": 94.79999999981374,
+            "bytes": 173324
+          },
+          {
+            "name": "http://127.0.0.1:27772/static/publicServerAuth-Bw6v70YU.js",
+            "duration": 41.60000000055879,
+            "bytes": 701
+          },
+          {
+            "name": "http://127.0.0.1:27772/static/applicationAdapter-D-64qTud.js",
+            "duration": 58.200000000186265,
+            "bytes": 24518
+          },
+          {
+            "name": "http://127.0.0.1:27772/static/TextField-Bd5SyOX7.js",
+            "duration": 66.5,
+            "bytes": 57527
+          },
+          {
+            "name": "http://127.0.0.1:27772/static/ChatIntegration-CwGsiAhi.js",
+            "duration": 48.09999999962747,
+            "bytes": 6748
+          },
+          {
+            "name": "http://127.0.0.1:27772/static/dist-HTnr3vf7.js",
+            "duration": 58,
+            "bytes": 3239
+          },
+          {
+            "name": "http://127.0.0.1:27772/static/dist-DiAkf6q-.js",
+            "duration": 66.59999999962747,
+            "bytes": 13788
+          }
+        ],
+        "worker": {
+          "controlled": false
+        }
+      },
+      "final": {
+        "audit": {
+          "loaded": 1792635691494,
+          "sockets": [
+            {
+              "created": 1792635691917,
+              "open": 1792635692301,
+              "closed": null,
+              "probes": [
+                {
+                  "id": 1,
+                  "at": 1792635702482
+                },
+                {
+                  "id": 2,
+                  "at": 1792635717503
+                },
+                {
+                  "id": 3,
+                  "at": 1792635727565
+                }
+              ],
+              "inbound": 24
+            }
+          ],
+          "events": [
+            {
+              "name": "visibilitychange",
+              "at": 1792635695125,
+              "visibility": "visible"
+            }
+          ],
+          "rootMountedMs": 409,
+          "errorShown": [],
+          "pauseNextProbe": true,
+          "probePaused": true
+        },
+        "version": "3.8.48",
+        "identity": "picker-fix-edge-1792635691494:41e0ca34-f6d1-4650-9894-61f7e41556d5",
+        "file": null,
+        "devHook": false,
+        "resources": [
+          {
+            "name": "http://127.0.0.1:27772/static/index-Dg0dYd_P.js",
+            "duration": 66.20000000018626,
+            "bytes": 10527
+          },
+          {
+            "name": "http://127.0.0.1:27772/static/jsx-runtime-D9KboXdW.js",
+            "duration": 72.5,
+            "bytes": 45820
+          },
+          {
+            "name": "http://127.0.0.1:27772/static/share-DYScATMu.js",
+            "duration": 74.3999999994412,
+            "bytes": 90141
+          },
+          {
+            "name": "http://127.0.0.1:27772/static/MeetingMinutesEndScreen-By_1sQTo.js",
+            "duration": 94.79999999981374,
+            "bytes": 173324
+          },
+          {
+            "name": "http://127.0.0.1:27772/static/publicServerAuth-Bw6v70YU.js",
+            "duration": 41.60000000055879,
+            "bytes": 701
+          },
+          {
+            "name": "http://127.0.0.1:27772/static/applicationAdapter-D-64qTud.js",
+            "duration": 58.200000000186265,
+            "bytes": 24518
+          },
+          {
+            "name": "http://127.0.0.1:27772/static/TextField-Bd5SyOX7.js",
+            "duration": 66.5,
+            "bytes": 57527
+          },
+          {
+            "name": "http://127.0.0.1:27772/static/ChatIntegration-CwGsiAhi.js",
+            "duration": 48.09999999962747,
+            "bytes": 6748
+          },
+          {
+            "name": "http://127.0.0.1:27772/static/dist-HTnr3vf7.js",
+            "duration": 58,
+            "bytes": 3239
+          },
+          {
+            "name": "http://127.0.0.1:27772/static/dist-DiAkf6q-.js",
+            "duration": 66.59999999962747,
+            "bytes": 13788
+          }
+        ],
+        "worker": {
+          "controlled": false
+        }
+      }
+    },
+    {
+      "label": "chrome",
+      "console": [],
+      "start": {
+        "audit": {
+          "loaded": 1792635692760,
+          "sockets": [
+            {
+              "created": 1792635693250,
+              "open": 1792635693546,
+              "closed": null,
+              "probes": [],
+              "inbound": 0
+            }
+          ],
+          "events": [],
+          "rootMountedMs": 480,
+          "errorShown": [],
+          "pauseNextProbe": false,
+          "probePaused": false
+        },
+        "version": "3.8.48",
+        "identity": "picker-fix-chrome-1792635692760:ae25683d-e77a-4801-8482-953b5a6bf4fe",
+        "file": null,
+        "devHook": false,
+        "resources": [
+          {
+            "name": "http://127.0.0.1:27772/static/index-Dg0dYd_P.js",
+            "duration": 28.700000000186265,
+            "bytes": 10527
+          },
+          {
+            "name": "http://127.0.0.1:27772/static/jsx-runtime-D9KboXdW.js",
+            "duration": 42.89999999944121,
+            "bytes": 45820
+          },
+          {
+            "name": "http://127.0.0.1:27772/static/share-DYScATMu.js",
+            "duration": 49.89999999944121,
+            "bytes": 90141
+          },
+          {
+            "name": "http://127.0.0.1:27772/static/MeetingMinutesEndScreen-By_1sQTo.js",
+            "duration": 83.29999999981374,
+            "bytes": 173324
+          },
+          {
+            "name": "http://127.0.0.1:27772/static/publicServerAuth-Bw6v70YU.js",
+            "duration": 20.5,
+            "bytes": 701
+          },
+          {
+            "name": "http://127.0.0.1:27772/static/applicationAdapter-D-64qTud.js",
+            "duration": 30.09999999962747,
+            "bytes": 24518
+          },
+          {
+            "name": "http://127.0.0.1:27772/static/TextField-Bd5SyOX7.js",
+            "duration": 43.40000000037253,
+            "bytes": 57527
+          },
+          {
+            "name": "http://127.0.0.1:27772/static/ChatIntegration-CwGsiAhi.js",
+            "duration": 27,
+            "bytes": 6748
+          },
+          {
+            "name": "http://127.0.0.1:27772/static/dist-HTnr3vf7.js",
+            "duration": 29,
+            "bytes": 3239
+          },
+          {
+            "name": "http://127.0.0.1:27772/static/dist-DiAkf6q-.js",
+            "duration": 40.299999999813735,
+            "bytes": 13788
+          }
+        ],
+        "worker": {
+          "controlled": false
+        }
+      },
+      "final": {
+        "audit": {
+          "loaded": 1792635692760,
+          "sockets": [
+            {
+              "created": 1792635693250,
+              "open": 1792635693546,
+              "closed": null,
+              "probes": [
+                {
+                  "id": 1,
+                  "at": 1792635703637
+                },
+                {
+                  "id": 2,
+                  "at": 1792635713805
+                },
+                {
+                  "id": 3,
+                  "at": 1792635723875
+                }
+              ],
+              "inbound": 16
+            }
+          ],
+          "events": [],
+          "rootMountedMs": 480,
+          "errorShown": [],
+          "pauseNextProbe": false,
+          "probePaused": false
+        },
+        "version": "3.8.48",
+        "identity": "picker-fix-chrome-1792635692760:ae25683d-e77a-4801-8482-953b5a6bf4fe",
+        "file": null,
+        "devHook": false,
+        "resources": [
+          {
+            "name": "http://127.0.0.1:27772/static/index-Dg0dYd_P.js",
+            "duration": 28.700000000186265,
+            "bytes": 10527
+          },
+          {
+            "name": "http://127.0.0.1:27772/static/jsx-runtime-D9KboXdW.js",
+            "duration": 42.89999999944121,
+            "bytes": 45820
+          },
+          {
+            "name": "http://127.0.0.1:27772/static/share-DYScATMu.js",
+            "duration": 49.89999999944121,
+            "bytes": 90141
+          },
+          {
+            "name": "http://127.0.0.1:27772/static/MeetingMinutesEndScreen-By_1sQTo.js",
+            "duration": 83.29999999981374,
+            "bytes": 173324
+          },
+          {
+            "name": "http://127.0.0.1:27772/static/publicServerAuth-Bw6v70YU.js",
+            "duration": 20.5,
+            "bytes": 701
+          },
+          {
+            "name": "http://127.0.0.1:27772/static/applicationAdapter-D-64qTud.js",
+            "duration": 30.09999999962747,
+            "bytes": 24518
+          },
+          {
+            "name": "http://127.0.0.1:27772/static/TextField-Bd5SyOX7.js",
+            "duration": 43.40000000037253,
+            "bytes": 57527
+          },
+          {
+            "name": "http://127.0.0.1:27772/static/ChatIntegration-CwGsiAhi.js",
+            "duration": 27,
+            "bytes": 6748
+          },
+          {
+            "name": "http://127.0.0.1:27772/static/dist-HTnr3vf7.js",
+            "duration": 29,
+            "bytes": 3239
+          },
+          {
+            "name": "http://127.0.0.1:27772/static/dist-DiAkf6q-.js",
+            "duration": 40.299999999813735,
+            "bytes": 13788
+          }
+        ],
+        "worker": {
+          "controlled": false
+        }
+      }
+    }
+  ],
+  "cases": [
+    {
+      "name": "cold-boot-and-discovery",
+      "pass": true,
+      "rootMountedMs": [
+        {
+          "label": "edge",
+          "ms": 409
+        },
+        {
+          "label": "chrome",
+          "ms": 480
+        }
+      ]
+    },
+    {
+      "name": "file-selection-and-cancel",
+      "pass": true
+    },
+    {
+      "name": "foreground-update-and-controllerchange",
+      "pass": true,
+      "httpsPolicyExercised": false,
+      "before": {
+        "loaded": 1792635691494,
+        "sockets": [
+          {
+            "created": 1792635691917,
+            "open": 1792635692301,
+            "closed": null,
+            "probes": [],
+            "inbound": 15
+          }
+        ],
+        "events": [],
+        "rootMountedMs": 409,
+        "errorShown": [],
+        "pauseNextProbe": false,
+        "probePaused": false
+      },
+      "after": {
+        "loaded": 1792635691494,
+        "sockets": [
+          {
+            "created": 1792635691917,
+            "open": 1792635692301,
+            "closed": null,
+            "probes": [],
+            "inbound": 21
+          }
+        ],
+        "events": [
+          {
+            "name": "visibilitychange",
+            "at": 1792635695125,
+            "visibility": "visible"
+          }
+        ],
+        "rootMountedMs": 409,
+        "errorShown": [],
+        "pauseNextProbe": false,
+        "probePaused": false
+      }
+    },
+    {
+      "name": "15sec-js-suspension-at-native-probe",
+      "pass": true,
+      "pausedAt": {
+        "at": 1792635702484,
+        "reason": "other"
+      },
+      "resumeAt": 1792635717500,
+      "peerDuringPause": 1,
+      "after": {
+        "loaded": 1792635691494,
+        "sockets": [
+          {
+            "created": 1792635691917,
+            "open": 1792635692301,
+            "closed": null,
+            "probes": [
+              {
+                "id": 1,
+                "at": 1792635702482
+              },
+              {
+                "id": 2,
+                "at": 1792635717503
+              },
+              {
+                "id": 3,
+                "at": 1792635727565
+              }
+            ],
+            "inbound": 24
+          }
+        ],
+        "events": [
+          {
+            "name": "visibilitychange",
+            "at": 1792635695125,
+            "visibility": "visible"
+          }
+        ],
+        "rootMountedMs": 409,
+        "errorShown": [],
+        "pauseNextProbe": true,
+        "probePaused": true
+      }
+    }
+  ],
+  "finished": "2026-10-22T02:22:10.787Z"
+}

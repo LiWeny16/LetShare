@@ -15,32 +15,6 @@ export default defineConfig({
       // 配置rollup的一些构建策略
       output: {
         assetFileNames: "static-[hash].[name].[ext]",
-        manualChunks(id) {
-          if (id.includes("style.css")) {
-            // 需要单独分割那些资源 就写判断逻辑就行
-            return "src/style.css"
-          }
-          // 最小化拆分包 — 但把很小的包合并，避免请求数爆炸
-          if (id.includes("node_modules")) {
-            // 兼容 / 和 \ 两种路径分隔符（跨平台 id 混用）
-            const seg = id.split(/node_modules[/\\]/);
-            const pkgName = seg[seg.length - 1]
-              .split(/[/\\]/)[0]
-              .toString()
-              .replace(/^[.@]/, "") // 去掉 pnpm(.pnpm) 的 dot 前缀 / npm(@scope) 的 @ 前缀
-            // 小体积包合并到 common-vendor，减少 modulepreload 请求数
-            // ⚠️ scheduler/use-sync-external-store 是 React 内部依赖，不能合并
-            const smallLibs = [
-              "clsx", "mitt", "uuid", "hoist-non-react-statics",
-              "prop-types", "dom-helpers", "void-elements",
-              "html-parse-stringify", "@floating-ui",
-            ]
-            if (smallLibs.includes(pkgName)) {
-              return "common-vendor"
-            }
-            return pkgName + "-vendor"
-          }
-        },
       },
     },
     assetsInlineLimit: 4096000, // 4000kb  超过会以base64字符串显示
@@ -92,13 +66,13 @@ export default defineConfig({
       // devOptions: {
       //   enabled: false, // 在开发模式 (`npm run dev`) 中也启用 Service Worker,方便调试。
       // },
-      registerType: 'autoUpdate',
+      registerType: 'prompt',
       injectRegister: false,
       // 每60秒检查一次更新
       workbox: {
-        // 立即激活新的 Service Worker
-        clientsClaim: true,
-        skipWaiting: true,
+        // Stage updates until current clients close.
+        clientsClaim: false,
+        skipWaiting: false,
         // Excalidraw is intentionally loaded as a real editor and its vendor
         // chunk is larger than Workbox's 2 MiB default. Keep the install
         // manifest complete so a fresh client does not miss the meeting board
@@ -133,12 +107,13 @@ export default defineConfig({
             },
           },
           {
-            // Navigation (HTML): StaleWhileRevalidate — 缓存瞬间返回，后台静默更新
-            // 缓存期 365 天，因为 version.json 哨兵会在版本变化时触发刷新
+            // Navigation HTML prefers fresh content; cached HTML is an offline fallback.
+            // Successful online visits refresh the cached response.
             urlPattern: ({request}: {request: Request}) => request.mode === 'navigate',
-            handler: 'StaleWhileRevalidate',
+            handler: 'NetworkFirst',
             options: {
-              cacheName: 'html-cache-v3',
+              cacheName: 'html-cache-v4',
+              networkTimeoutSeconds: 3,
               expiration: {
                 maxEntries: 10,
                 maxAgeSeconds: 60 * 60 * 24 * 365 // 365天

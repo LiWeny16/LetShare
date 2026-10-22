@@ -45,6 +45,8 @@ const EMPTY_STATE: LivenessState = {
   awaitingSince: null,
 };
 
+const MAX_DEADLINE_LATE_TOLERANCE_MS = 1_000;
+
 export class LivenessMonitor {
   private readonly clock: Clock;
   private readonly probeIntervalMs: number;
@@ -121,7 +123,7 @@ export class LivenessMonitor {
     this.phase = "awaiting";
     this.awaitingSince = this.clock.now();
     this.handlers?.onProbe?.(probeId);
-    this.deadlineTimer = this.clock.setTimeout(() => this.onDeadline(run), this.probeTimeoutMs);
+    this.deadlineTimer = this.clock.setTimeout(() => this.onDeadline(run, probeId), this.probeTimeoutMs);
     // sendProbe 放在截止表之后：即使 sendProbe 抛错，超时兜底也已经武装。
     try {
       this.handlers?.sendProbe(probeId);
@@ -130,17 +132,27 @@ export class LivenessMonitor {
     }
   }
 
-  private onDeadline(run: number): void {
-    if (!this.isRun(run) || this.phase !== "awaiting") return;
+  private onDeadline(run: number, probeId: number): void {
+    if (!this.isRun(run) || this.phase !== "awaiting" || this.probeCount !== probeId) return;
     this.deadlineTimer = null;
     const since = this.awaitingSince ?? 0;
+    const now = this.clock.now();
+    const waited = now - since;
+    const lateToleranceMs = Math.min(MAX_DEADLINE_LATE_TOLERANCE_MS, this.probeTimeoutMs / 2);
+    if (waited - this.probeTimeoutMs > lateToleranceMs) {
+      this.phase = "idle";
+      this.awaitingSince = null;
+      this.onProbeDue(run);
+      return;
+    }
+
     const handlers = this.handlers;
     this.phase = "stopped";
     this.awaitingSince = null;
     this.handlers = null;
     this.runId += 1;
-    // onDead 由接入方负责触发重连（经 RetrySupervisor）；观察者缺陷不得吞掉半开判定。
-    handlers?.onDead(`liveness-timeout (probe=${this.probeCount}, waited=${this.clock.now() - since}ms)`);
+    // The integration layer owns reconnect scheduling after this terminal verdict.
+    handlers?.onDead(`liveness-timeout (probe=${probeId}, waited=${waited}ms)`);
   }
 
   private isRun(run: number): boolean {

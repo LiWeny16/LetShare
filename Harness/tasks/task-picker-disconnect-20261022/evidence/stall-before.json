@@ -1,0 +1,160 @@
+{
+  "at": "2026-10-22T02:07:04.561Z",
+  "console": [
+    {
+      "at": 1792634849557,
+      "text": "[ColabLib] 服务端连接半开：liveness-timeout (probe=8, waited=15013ms) —— 触发重连"
+    },
+    {
+      "at": 1792634849557,
+      "text": "[ColabLib] 自动重连已排入调度（第 1 次）"
+    }
+  ],
+  "before": {
+    "sockets": [
+      {
+        "open": 1792634748622,
+        "closed": null
+      }
+    ],
+    "events": [
+      {
+        "name": "visibilitychange",
+        "at": 1792634750167,
+        "visibility": "visible"
+      },
+      {
+        "name": "visibilitychange",
+        "at": 1792634755885,
+        "visibility": "hidden"
+      },
+      {
+        "name": "visibilitychange",
+        "at": 1792634767736,
+        "visibility": "visible"
+      },
+      {
+        "name": "visibilitychange",
+        "at": 1792634768634,
+        "visibility": "hidden"
+      },
+      {
+        "name": "visibilitychange",
+        "at": 1792634770329,
+        "visibility": "visible"
+      },
+      {
+        "name": "visibilitychange",
+        "at": 1792634770882,
+        "visibility": "hidden"
+      },
+      {
+        "name": "visibilitychange",
+        "at": 1792634771368,
+        "visibility": "visible"
+      },
+      {
+        "name": "visibilitychange",
+        "at": 1792634772356,
+        "visibility": "hidden"
+      },
+      {
+        "name": "visibilitychange",
+        "at": 1792634783362,
+        "visibility": "visible"
+      },
+      {
+        "name": "visibilitychange",
+        "at": 1792634785327,
+        "visibility": "hidden"
+      },
+      {
+        "name": "visibilitychange",
+        "at": 1792634824448,
+        "visibility": "visible"
+      }
+    ],
+    "loaded": 1792634695456
+  },
+  "paused": {
+    "at": 1792634834545,
+    "reason": "other"
+  },
+  "resumeAt": 1792634849552,
+  "after": {
+    "audit": {
+      "sockets": [
+        {
+          "open": 1792634748622,
+          "closed": {
+            "at": 1792634851038,
+            "code": 1005
+          }
+        },
+        {
+          "open": 1792634851390,
+          "closed": null
+        }
+      ],
+      "events": [
+        {
+          "name": "visibilitychange",
+          "at": 1792634750167,
+          "visibility": "visible"
+        },
+        {
+          "name": "visibilitychange",
+          "at": 1792634755885,
+          "visibility": "hidden"
+        },
+        {
+          "name": "visibilitychange",
+          "at": 1792634767736,
+          "visibility": "visible"
+        },
+        {
+          "name": "visibilitychange",
+          "at": 1792634768634,
+          "visibility": "hidden"
+        },
+        {
+          "name": "visibilitychange",
+          "at": 1792634770329,
+          "visibility": "visible"
+        },
+        {
+          "name": "visibilitychange",
+          "at": 1792634770882,
+          "visibility": "hidden"
+        },
+        {
+          "name": "visibilitychange",
+          "at": 1792634771368,
+          "visibility": "visible"
+        },
+        {
+          "name": "visibilitychange",
+          "at": 1792634772356,
+          "visibility": "hidden"
+        },
+        {
+          "name": "visibilitychange",
+          "at": 1792634783362,
+          "visibility": "visible"
+        },
+        {
+          "name": "visibilitychange",
+          "at": 1792634785327,
+          "visibility": "hidden"
+        },
+        {
+          "name": "visibilitychange",
+          "at": 1792634824448,
+          "visibility": "visible"
+        }
+      ],
+      "loaded": 1792634695456
+    },
+    "body": "© 2026 Copyright LetShare v3.8.47 · By Onion\n\nFILE\n1\nIMAGE\n0\nTEXT\n0\nCLIPBOARD\n0\nkeep-selected.txt\nSEARCH USERS IN SAME WI-FI\n0\n\nYour ID: sentinel-picker-1792634695456"
+  }
+}
