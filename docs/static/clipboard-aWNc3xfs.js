@@ -1,1 +1,0 @@
-import{t as e}from"./share-DYScATMu.js";export{e as readClipboard};
