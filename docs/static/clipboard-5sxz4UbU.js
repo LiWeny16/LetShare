@@ -1,1 +1,0 @@
-import{t as e}from"./share-CbULACK3.js";export{e as readClipboard};

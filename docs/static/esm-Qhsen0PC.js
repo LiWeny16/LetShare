@@ -1,0 +1,2 @@
+const __vite__mapDeps=(i,m=__vite__mapDeps,d=(m.f||(m.f=["./web-C-ft_7h8.js","./dist-HTnr3vf7.js"])))=>i.map(i=>d[i]);
+import{t as e}from"./index-AvzOOmt3.js";import{r as t}from"./dist-HTnr3vf7.js";var n;(function(e){e.SHOW=`onShow`,e.HIDE=`onHide`,e.COLOR_CHANGE=`onColorChange`})(n||={});var r=t(`NavigationBar`,{web:()=>e(()=>import(`./web-C-ft_7h8.js`).then(e=>new e.NavigationBarWeb),__vite__mapDeps([0,1]),import.meta.url)});export{r as NavigationBar};
