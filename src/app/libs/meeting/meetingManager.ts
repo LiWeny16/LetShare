@@ -2212,11 +2212,6 @@ class MeetingManagerImpl implements MeetingManager {
     this.subscribeToPeer(publisher);
   }
 
-  /** 独立读取当前发布 PC（方法作用域不受调用点流控收窄影响）。 */
-  private currentPublishPc(): RTCPeerConnection | null {
-    return this.pc;
-  }
-
   /**
    * WS 断线重连后的会话重建：服务器已在断线清理时移除本端 SFU participant，
    * 旧发布/订阅 PC 全部作废 —— 重连不得复用 closed participant（会话假死根因）。
