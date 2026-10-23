@@ -62,6 +62,11 @@ const sharedMalayTranslation = {
             clipboardWriteFailed: "Penyalinan gagal, sila salin teks secara manual.",
             serverTransferMode: "Ditukar ke mod pemindahan pelayan",
             droppedSending: "Memulakan penghantaran {{count}} fail kepada {{name}}...",
+            duplicateFilesSkipped: "{{count}} fail pendua dengan laluan dan kandungan sama dilangkau dalam kelompok ini.",
+            fileReadFailed: "Sebahagian fail tidak dapat dibaca atau dibungkus. Tiada fail dihantar; pilih semula dan cuba lagi.",
+            droppedSendingWithDuplicates: "Menghantar {{count}} fail kepada {{name}}... ({{duplicateCount}} fail pendua dilangkau)",
+            batchFilesSent: "{{count}} fail telah dihantar.",
+            batchSentWithDuplicates: "{{count}} fail dihantar; {{duplicateCount}} fail pendua dengan laluan dan kandungan sama dilangkau.",
             emptyFileNotAllowed: "Fail kosong / folder kosong tidak dibenarkan untuk dihantar"
         },
         // download
@@ -396,6 +401,11 @@ export const resources = {
                 clipboardWriteFailed: "Copy failed, please copy text manually.",
                 serverTransferMode: "Switched to server relay mode",
                 droppedSending: "Sending {{count}} file(s) to {{name}}...",
+                duplicateFilesSkipped: "Skipped {{count}} exact duplicate file(s) with the same path in this batch.",
+                fileReadFailed: "Some files could not be read or packaged. Nothing was sent; select them again and retry.",
+                droppedSendingWithDuplicates: "Sending {{count}} file(s) to {{name}}... (skipped {{duplicateCount}} exact duplicate(s))",
+                batchFilesSent: "Sent {{count}} files.",
+                batchSentWithDuplicates: "Sent {{count}} files; skipped {{duplicateCount}} exact duplicates with the same path and contents.",
                 emptyFileNotAllowed: "Empty files / empty folders are not allowed to be sent"
             },
             // Download.tsx
@@ -737,6 +747,11 @@ export const resources = {
                 clipboardWriteFailed: "复制失败，请手动复制文本。",
                 serverTransferMode: "已切换到服务器中转模式",
                 droppedSending: "开始发送 {{count}} 个文件给 {{name}}...",
+                duplicateFilesSkipped: "本次打包跳过了 {{count}} 个路径相同且内容完全相同的文件。",
+                fileReadFailed: "部分文件无法读取或打包，本次未发送。请重新选择后重试。",
+                droppedSendingWithDuplicates: "正在发送 {{count}} 个文件给 {{name}}……（已跳过 {{duplicateCount}} 个完全重复的文件）",
+                batchFilesSent: "已发送 {{count}} 个文件。",
+                batchSentWithDuplicates: "已发送 {{count}} 个文件；跳过了 {{duplicateCount}} 个路径和内容都相同的重复文件。",
                 emptyFileNotAllowed: "不允许空文件传输：空文件/空文件夹已被跳过"
             },
             // Download
@@ -1031,7 +1046,12 @@ export const resources = {
             },
             toast: {
                 ...sharedMalayTranslation.translation.toast,
-                serverTransferMode: "Beralih ke mode transfer server"
+                serverTransferMode: "Beralih ke mode transfer server",
+                duplicateFilesSkipped: "{{count}} file duplikat dengan jalur dan isi yang sama dilewati dalam kelompok ini.",
+                fileReadFailed: "Beberapa file tidak dapat dibaca atau dikemas. Tidak ada file yang dikirim; pilih ulang lalu coba lagi.",
+                droppedSendingWithDuplicates: "Mengirim {{count}} file ke {{name}}... ({{duplicateCount}} duplikat dilewati)",
+                batchFilesSent: "{{count}} file telah dikirim.",
+                batchSentWithDuplicates: "{{count}} file terkirim; {{duplicateCount}} duplikat dengan jalur dan isi yang sama dilewati."
             },
             chat: {
                 ...sharedMalayTranslation.translation.chat,

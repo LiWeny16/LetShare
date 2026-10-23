@@ -13,7 +13,7 @@
  * 服务器经 membership:snapshot / membership:changed 通报谁在线；本机 ICE 候选以 meeting:ice(to=本端) 回发。
  *
  * 本地流由本模块单一权威持有（getUserMedia 缓存），发布到 SFU 与 UI 预览共用同一份，
- * 静音/摄像头开关直接改 tracks.enabled，保证发布与预览一致。
+ * 媒体开关按需创建或释放采集轨，保证发布与预览一致。
  */
 import realTimeColab from "@App/libs/connection/colabLib";
 import settingsStore from "@App/libs/mobx/mobx";
@@ -21,7 +21,7 @@ import { fetchTurnCredentials, type TurnIceServer } from "@App/libs/connection/p
 import alertUseMUI from "@App/libs/tools/alert";
 import i18n from "@App/libs/i18n/i18n";
 import { configurePublishPeerConnection } from "./meetingSdp";
-import { acquireMeetingAudio, acquireMeetingMedia, mediaErrorKind } from "./meetingMedia";
+import { acquireMeetingAudio, acquireMeetingMedia, acquireMeetingVideo, mediaErrorKind, microphoneErrorKind, type MicrophoneError } from "./meetingMedia";
 import {
   nextVideoAdaptationLevel,
   type MeetingNetworkMetrics,
@@ -180,6 +180,9 @@ export interface MeetingState {
    * 失败必须显式上报 —— 静默降级会让用户误以为摄像头/麦克风正常发布（P0：不得伪装成功）。
    */
   mediaError?: "denied" | "not-found" | "failed";
+  /** Capture failures are independent of the camera and of the user's mute intent. */
+  microphoneError?: MicrophoneError;
+  microphonePending?: boolean;
   /** Join/create domain error shown by the route-level result surface. */
   meetingError?: MeetingError;
 }
@@ -309,8 +312,14 @@ class MeetingManagerImpl implements MeetingManager {
   private pc: RTCPeerConnection | null = null; // 发布 PC（连服务器 SFU）
   /** 最近一次发出发布 offer 的 PC —— answer/ICE 只作用于它，防旧会话 SDP 污染新 session。 */
   private publishOfferPc: RTCPeerConnection | null = null;
+  /** Publisher offers are isolated and serialized by peer connection and lifecycle. */
+  private publisherOfferQueues = new WeakMap<RTCPeerConnection, Map<number, Promise<void>>>();
   private localStream: MediaStream | null = null;
-  private recoveringAudio = false;
+  private recoveringAudioFor: number | null = null;
+  private audioCaptureGeneration = 0;
+  private videoCaptureGeneration = 0;
+  private mediaSenderQueue: Promise<void> = Promise.resolve();
+  private stopMicrophoneMonitor: (() => void) | null = null;
   private screenSender: RTCRtpSender | null = null;
   private adaptiveVideoTimer: number | null = null;
   private videoAdaptationLevel: VideoAdaptationLevel = 0;
@@ -333,6 +342,8 @@ class MeetingManagerImpl implements MeetingManager {
   /** 成功恢复后冷却，防止网络反复抖动时计数被无意义耗尽。 */
   private static readonly PUBLISH_RECOVERY_MAX_ATTEMPTS = 5;
   private static readonly PUBLISH_RECOVERY_RETRY_MS = 5_000;
+  private static readonly PUBLISH_OFFER_STABLE_TIMEOUT_MS = 10_000;
+  private static readonly PUBLISH_OFFER_STABLE_POLL_MS = 100;
   private static readonly SUBSCRIBER_DEGRADED_GRACE_MS = 6_000;
 
   /** 会议号（独立于文件房间）。作为 meeting:* 消息的 channel 直发服务器。 */
@@ -400,6 +411,8 @@ class MeetingManagerImpl implements MeetingManager {
     this.stopAdaptiveVideoControl();
     this.pc?.close();
     this.pc = null;
+    this.stopMicrophoneMonitor?.();
+    this.stopMicrophoneMonitor = null;
     this.localStream?.getTracks().forEach((track) => track.stop());
     this.localStream = null;
     nsPipeline.stop();
@@ -415,6 +428,8 @@ class MeetingManagerImpl implements MeetingManager {
       screenOn: false,
       presentation: { mode: "", ownerId: "", epoch: 0, screenOwnerId: "", screenEpoch: 0, whiteboardActive: false, whiteboardLeaderId: "", whiteboardEpoch: 0, whiteboardVisible: false, whiteboardForceOpen: false, whiteboardFocusEpoch: 0, focusTarget: "", focusEpoch: 0, presenterId: "", presenterEpoch: 0, presenterTarget: "", presenterFollowEpoch: 0 },
       mediaError: undefined,
+      microphoneError: undefined,
+      microphonePending: false,
       meetingError: { ...error, roomId: error.roomId ?? failedRoomId },
     };
     this.setStage("idle");
@@ -484,12 +499,116 @@ class MeetingManagerImpl implements MeetingManager {
   private sendLocalMediaState(roomId = this.meetingChannel): void {
     if (!this.isMeetingRoom(roomId) || this.state.stage === "idle" || this.state.stage === "leaving") return;
     this.sendMeeting("meeting:media-state", {
-      muted: this.state.muted,
-      cameraOn: this.state.cameraOn,
+      muted: this.state.muted || this.state.microphonePending === true
+        || !this.localStream?.getAudioTracks().some((track) => track.readyState === "live" && track.enabled && !track.muted),
+      cameraOn: this.state.cameraOn && this.localStream?.getVideoTracks().some((track) => track.readyState === "live" && track.enabled) === true,
       screenOn: this.state.screenOn,
-      cameraTrackId: this.localStream?.getVideoTracks()[0]?.id ?? "",
+      cameraTrackId: this.localStream?.getVideoTracks().find((track) => track.readyState === "live" && track.enabled)?.id ?? "",
       screenTrackId: this.screenSender?.track?.id ?? "",
     }, roomId);
+  }
+
+  private localTrack(kind: "audio" | "video"): MediaStreamTrack | null {
+    return (kind === "audio" ? this.localStream?.getAudioTracks()[0] : this.localStream?.getVideoTracks()[0]) ?? null;
+  }
+
+  private updateLocalTrack(kind: "audio" | "video", track: MediaStreamTrack | null): MediaStreamTrack | null {
+    const previous = this.localTrack(kind);
+    const otherTrack = this.localTrack(kind === "audio" ? "video" : "audio");
+    const tracks = kind === "audio"
+      ? [...(track ? [track] : []), ...(otherTrack ? [otherTrack] : [])]
+      : [...(otherTrack ? [otherTrack] : []), ...(track ? [track] : [])];
+    this.localStream = tracks.length > 0 ? new MediaStream(tracks) : null;
+    this.monitorLocalMicrophone();
+    if (previous && previous !== track) previous.stop();
+    return previous;
+  }
+
+  private replacePublishedTrack(
+    kind: "audio" | "video",
+    oldTrack: MediaStreamTrack | null,
+    newTrack: MediaStreamTrack | null,
+    stream: MediaStream | null,
+    roomId: string,
+    lifecycle: number,
+    isCurrentRequest: () => boolean,
+  ): Promise<{ pc: RTCPeerConnection | null; renegotiate: boolean } | null> {
+    const operation = this.mediaSenderQueue.then(async () => {
+      if (!isCurrentRequest() || !this.isCurrentMeeting(roomId, lifecycle)) return null;
+      const pc = this.pc;
+      if (!pc) {
+        // Keep the live local stream authoritative while the publisher is being
+        // constructed. createPublishPC reads this stream to create its senders.
+        this.updateLocalTrack(kind, newTrack);
+        return { pc: null, renegotiate: false };
+      }
+      const candidates = pc.getTransceivers().filter((item) => item.sender !== this.screenSender && item.receiver.track.kind === kind);
+      const transceiver = candidates.find((item) => item.sender.track === oldTrack) ?? candidates[0];
+      if (transceiver) {
+        if (transceiver.sender.track !== newTrack) await transceiver.sender.replaceTrack(newTrack);
+        if (!isCurrentRequest() || !this.isCurrentMeeting(roomId, lifecycle) || this.pc !== pc) return null;
+        if (newTrack && transceiver.direction === "inactive") {
+          transceiver.direction = "sendonly";
+          return { pc, renegotiate: true };
+        }
+        return { pc, renegotiate: false };
+      }
+      if (!newTrack) return { pc, renegotiate: false };
+      pc.addTrack(newTrack, stream ?? new MediaStream([newTrack]));
+      return { pc, renegotiate: true };
+    });
+    this.mediaSenderQueue = operation.then(() => undefined, () => undefined);
+    return operation;
+  }
+
+  private isCurrentPublishPc(pc: RTCPeerConnection, roomId: string, lifecycle: number): boolean {
+    return this.isCurrentMeeting(roomId, lifecycle) && this.pc === pc && pc.signalingState !== "closed";
+  }
+
+  private enqueuePublishOffer(
+    pc: RTCPeerConnection,
+    roomId: string,
+    lifecycle: number,
+    options?: RTCOfferOptions,
+  ): Promise<boolean> {
+    const queues = this.publisherOfferQueues.get(pc) ?? new Map<number, Promise<void>>();
+    const previous = queues.get(lifecycle) ?? Promise.resolve();
+    const operation = previous.then(async () => {
+      if (!this.isCurrentPublishPc(pc, roomId, lifecycle)) return false;
+
+      const deadline = Date.now() + MeetingManagerImpl.PUBLISH_OFFER_STABLE_TIMEOUT_MS;
+      while (pc.signalingState !== "stable") {
+        if (!this.isCurrentPublishPc(pc, roomId, lifecycle)) return false;
+        if (Date.now() >= deadline) {
+          if (!this.isCurrentPublishPc(pc, roomId, lifecycle)) return false;
+          console.warn("[meeting] publisher offer queue timed out waiting for stable signaling state", {
+            roomId,
+            signalingState: pc.signalingState,
+          });
+          throw new Error("publisher offer timed out waiting for stable signaling state");
+        }
+        await new Promise<void>((resolve) => window.setTimeout(resolve, MeetingManagerImpl.PUBLISH_OFFER_STABLE_POLL_MS));
+      }
+
+      if (!this.isCurrentPublishPc(pc, roomId, lifecycle)) return false;
+      const offer = await pc.createOffer(options);
+      await pc.setLocalDescription(offer);
+      if (!this.isCurrentPublishPc(pc, roomId, lifecycle)) {
+        pc.close();
+        if (this.pc === pc) this.pc = null;
+        return false;
+      }
+      this.sendPublishOffer(pc, offer, roomId);
+      return true;
+    });
+    queues.set(lifecycle, operation.then(() => undefined, () => undefined));
+    this.publisherOfferQueues.set(pc, queues);
+    return operation;
+  }
+
+  private async renegotiatePublishTrack(pc: RTCPeerConnection | null, roomId: string, lifecycle: number, needed: boolean): Promise<void> {
+    if (!needed || !pc || !this.isCurrentPublishPc(pc, roomId, lifecycle)) return;
+    await this.enqueuePublishOffer(pc, roomId, lifecycle);
   }
 
   private async waitForPublishPC(roomId: string, lifecycle: number): Promise<RTCPeerConnection | null> {
@@ -503,14 +622,67 @@ class MeetingManagerImpl implements MeetingManager {
   }
 
   setMuted(muted: boolean): void {
-    this.state = { ...this.state, muted };
-    const hasLiveAudio = this.localStream?.getAudioTracks().some((track) => track.readyState === "live") === true;
-    if (!muted && !hasLiveAudio && this.isMeetingRoom(this.meetingChannel) && this.state.stage === "in-meeting") {
-      void this.recoverMissingAudioTrack();
+    const token = ++this.audioCaptureGeneration;
+    if (muted) {
+      const roomId = this.meetingChannel;
+      const lifecycle = this.lifecycle;
+      const oldTrack = this.localTrack("audio");
+      this.state = { ...this.state, muted: true, microphonePending: false, microphoneError: undefined };
+      this.updateLocalTrack("audio", null);
+      nsPipeline.stop();
+      this.emit();
+      this.sendLocalMediaState(roomId);
+      if (oldTrack) {
+        void this.replacePublishedTrack(
+          "audio", oldTrack, null, null, roomId, lifecycle,
+          () => token === this.audioCaptureGeneration && this.state.muted,
+        ).then((result) => this.renegotiatePublishTrack(result?.pc ?? null, roomId, lifecycle, result?.renegotiate === true))
+          .catch((error) => console.warn("[meeting] microphone track release failed", error));
+      }
+      return;
     }
-    this.localStream?.getAudioTracks().forEach((t) => (t.enabled = !muted));
+
+    const hasLiveAudio = this.localStream?.getAudioTracks().some((track) => track.readyState === "live" && !track.muted) === true;
+    this.state = { ...this.state, muted: false };
+    if (hasLiveAudio && !this.state.microphoneError) {
+      this.localStream?.getAudioTracks().forEach((track) => { track.enabled = true; });
+      this.emit();
+      this.sendLocalMediaState();
+      return;
+    }
+    if (!this.isMeetingRoom(this.meetingChannel) || this.state.stage !== "in-meeting") {
+      this.emit();
+      this.sendLocalMediaState();
+      return;
+    }
+    this.state = { ...this.state, microphonePending: true };
     this.emit();
     this.sendLocalMediaState();
+    void this.recoverMissingAudioTrack(token);
+  }
+
+  private monitorLocalMicrophone(): void {
+    this.stopMicrophoneMonitor?.();
+    this.stopMicrophoneMonitor = null;
+    const track = this.localStream?.getAudioTracks()[0];
+    if (!track) return;
+    const lifecycle = this.lifecycle;
+    const update = () => {
+      if (lifecycle !== this.lifecycle || this.localStream?.getAudioTracks()[0] !== track) return;
+      const error: MicrophoneError | undefined = track.readyState === "ended" ? "ended" : track.muted ? "paused" : undefined;
+      this.state = { ...this.state, microphoneError: error, ...(error === "ended" ? { muted: true } : {}) };
+      this.emit();
+      this.sendLocalMediaState();
+    };
+    track.addEventListener("mute", update);
+    track.addEventListener("unmute", update);
+    track.addEventListener("ended", update);
+    this.stopMicrophoneMonitor = () => {
+      track.removeEventListener("mute", update);
+      track.removeEventListener("unmute", update);
+      track.removeEventListener("ended", update);
+    };
+    update();
   }
 
   /**
@@ -537,70 +709,109 @@ class MeetingManagerImpl implements MeetingManager {
    * forward.  Recapture only the microphone, keep the live camera track, then
    * add/replace the audio sender and renegotiate when a new sender is needed.
    */
-  private async recoverMissingAudioTrack(): Promise<void> {
-    if (this.recoveringAudio) return;
+  private async recoverMissingAudioTrack(token: number): Promise<void> {
+    if (this.recoveringAudioFor === token) return;
     const roomId = this.meetingChannel;
     const lifecycle = this.lifecycle;
-    const previous = this.localStream;
-    const previousVideo = previous?.getVideoTracks()[0] ?? null;
-    this.recoveringAudio = true;
+    this.recoveringAudioFor = token;
+    let recovered: MediaStream | null = null;
+    let capturedAudioTrack: MediaStreamTrack | null = null;
     try {
-      const recovered = await acquireMeetingAudio();
+      recovered = await acquireMeetingAudio(
+        () => this.isCurrentMeeting(roomId, lifecycle) && token === this.audioCaptureGeneration && !this.state.muted,
+      );
       const audioTrack = recovered.getAudioTracks()[0] ?? null;
+      capturedAudioTrack = audioTrack;
       if (!audioTrack) throw new Error("meeting audio capture returned no audio track");
-      if (!this.isCurrentMeeting(roomId, lifecycle)) {
+      if (!this.isCurrentMeeting(roomId, lifecycle) || token !== this.audioCaptureGeneration || this.state.muted) {
         recovered.getTracks().forEach((track) => track.stop());
         return;
       }
 
-      const pc = this.pc;
-      let addedTrack = false;
-      const audioSender = pc?.getSenders().find((sender) => sender.track?.kind === "audio" && sender !== this.screenSender);
-      if (audioSender) {
-        await audioSender.replaceTrack(audioTrack);
-      } else if (pc) {
-        pc.addTrack(audioTrack, recovered);
-        addedTrack = true;
+      audioTrack.enabled = true;
+      const oldAudio = this.localTrack("audio");
+      const result = await this.replacePublishedTrack(
+        "audio", oldAudio, audioTrack, recovered, roomId, lifecycle,
+        () => token === this.audioCaptureGeneration && !this.state.muted,
+      );
+      if (!result || !this.isCurrentMeeting(roomId, lifecycle) || token !== this.audioCaptureGeneration || this.state.muted) {
+        recovered.getTracks().forEach((track) => track.stop());
+        return;
       }
 
-      audioTrack.enabled = !this.state.muted;
-      this.localStream = new MediaStream([...(previousVideo ? [previousVideo] : []), audioTrack]);
-      if (previous) {
-        previous.getAudioTracks().forEach((track) => {
-          if (track !== audioTrack) track.stop();
-        });
-      }
-      this.state = { ...this.state, mediaError: undefined };
+      this.updateLocalTrack("audio", audioTrack);
+      this.state = { ...this.state, microphoneError: undefined };
       this.emit();
       this.sendLocalMediaState(roomId);
-
-      if (pc && addedTrack && this.isCurrentMeeting(roomId, lifecycle) && this.pc === pc) {
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-        if (this.isCurrentMeeting(roomId, lifecycle) && this.pc === pc) this.sendPublishOffer(pc, offer, roomId);
-      }
+      await this.renegotiatePublishTrack(result.pc, roomId, lifecycle, result.renegotiate);
     } catch (error) {
-      if (this.isCurrentMeeting(roomId, lifecycle)) {
+      const failedTrackIsCurrent = () => Boolean(capturedAudioTrack)
+        && this.isCurrentMeeting(roomId, lifecycle)
+        && token === this.audioCaptureGeneration
+        && !this.state.muted
+        && this.localTrack("audio") === capturedAudioTrack;
+      if (failedTrackIsCurrent()) {
+        try {
+          const released = await this.replacePublishedTrack(
+            "audio", capturedAudioTrack, null, null, roomId, lifecycle,
+            failedTrackIsCurrent,
+          );
+          await this.renegotiatePublishTrack(released?.pc ?? null, roomId, lifecycle, released?.renegotiate === true);
+        } catch (cleanupError) {
+          console.warn("[meeting] failed microphone sender cleanup", cleanupError);
+        }
+        if (failedTrackIsCurrent()) this.updateLocalTrack("audio", null);
+        nsPipeline.stop();
+      }
+      recovered?.getTracks().forEach((track) => {
+        if (!this.localStream?.getTracks().includes(track)) track.stop();
+      });
+      if (this.isCurrentMeeting(roomId, lifecycle) && token === this.audioCaptureGeneration && !this.state.muted) {
         this.state = {
           ...this.state,
           muted: true,
-          mediaError: mediaErrorKind(error),
+          microphoneError: microphoneErrorKind(error),
         };
         this.emit();
         this.sendLocalMediaState(roomId);
       }
       console.warn("[meeting] microphone recovery failed", error);
     } finally {
-      this.recoveringAudio = false;
+      if (this.recoveringAudioFor === token) this.recoveringAudioFor = null;
+      if (this.isCurrentMeeting(roomId, lifecycle) && token === this.audioCaptureGeneration) {
+        this.state = { ...this.state, microphonePending: false };
+        this.emit();
+        this.sendLocalMediaState(roomId);
+      }
     }
   }
 
   setCameraOn(on: boolean): void {
-    this.state = { ...this.state, cameraOn: on };
+    if (!on) {
+      const token = ++this.videoCaptureGeneration;
+      const roomId = this.meetingChannel;
+      const lifecycle = this.lifecycle;
+      const oldTrack = this.localTrack("video");
+      this.state = { ...this.state, cameraOn: false };
+      this.updateLocalTrack("video", null);
+      this.emit();
+      this.sendLocalMediaState(roomId);
+      if (oldTrack) {
+        void this.replacePublishedTrack(
+          "video", oldTrack, null, null, roomId, lifecycle,
+          () => token === this.videoCaptureGeneration && !this.state.cameraOn,
+        ).then((result) => this.renegotiatePublishTrack(result?.pc ?? null, roomId, lifecycle, result?.renegotiate === true))
+          .catch((error) => console.warn("[meeting] camera track release failed", error));
+      }
+      return;
+    }
+    const token = ++this.videoCaptureGeneration;
+    this.state = { ...this.state, cameraOn: true, mediaError: undefined };
     // 迟获取媒体的可见重试入口：加入时 getUserMedia 失败（权限/无设备）后，
     // 用户重新开启摄像头会再次尝试获取并发布 —— 失败继续显式上报，不静默伪装成功。
-    if (on && !this.localStream && this.isMeetingRoom(this.meetingChannel) && this.state.stage === "in-meeting") {
-      void this.acquireLocalStream();
+    if (this.localStream?.getVideoTracks().some((track) => track.readyState === "live") !== true
+      && this.isMeetingRoom(this.meetingChannel) && this.state.stage === "in-meeting") {
+      void this.acquireLocalStream(token);
     }
     this.localStream?.getVideoTracks().forEach((t) => (t.enabled = on));
     this.emit();
@@ -613,61 +824,85 @@ class MeetingManagerImpl implements MeetingManager {
     const lifecycle = this.lifecycle;
     if (!this.isCurrentMeeting(roomId, lifecycle)) return;
 
-    const previous = this.localStream;
-    const oldAudio = previous?.getAudioTracks()[0] ?? null;
-    const oldVideo = previous?.getVideoTracks()[0] ?? null;
-    const next = await acquireMeetingMedia();
+    const requestedAudio = !this.state.muted;
+    const requestedVideo = this.state.cameraOn;
+    const audioToken = ++this.audioCaptureGeneration;
+    const videoToken = ++this.videoCaptureGeneration;
+    const { stream: next, microphoneError, mediaError } = await acquireMeetingMedia(
+      { audio: requestedAudio, video: requestedVideo },
+      () => this.isCurrentMeeting(roomId, lifecycle) && audioToken === this.audioCaptureGeneration && !this.state.muted,
+    );
     if (!this.isCurrentMeeting(roomId, lifecycle)) {
       next.getTracks().forEach((track) => track.stop());
       return;
     }
 
-    const nextAudio = next.getAudioTracks()[0] ?? oldAudio;
-    const nextVideo = next.getVideoTracks()[0] ?? oldVideo;
-    if (nextAudio) nextAudio.enabled = !this.state.muted;
-    if (nextVideo) nextVideo.enabled = this.state.cameraOn;
-    const pc = this.pc;
-    let addedTrack = false;
-
-    const replace = async (kind: "audio" | "video", oldTrack: MediaStreamTrack | null, newTrack: MediaStreamTrack | null) => {
-      if (!newTrack || !pc) return;
-      const sender = pc.getSenders().find((item) => item.track === oldTrack)
-        ?? pc.getSenders().find((item) => item.track?.kind === kind && item !== this.screenSender);
-      if (sender) await sender.replaceTrack(newTrack);
-      else {
-        pc.addTrack(newTrack, next);
-        addedTrack = true;
-      }
-    };
+    const currentAudio = this.localTrack("audio");
+    const currentVideo = this.localTrack("video");
+    const capturedAudio = next.getAudioTracks()[0] ?? null;
+    const capturedVideo = next.getVideoTracks()[0] ?? null;
+    const audioIsCurrent = audioToken === this.audioCaptureGeneration;
+    const videoIsCurrent = videoToken === this.videoCaptureGeneration;
+    const targetAudio = audioIsCurrent
+      ? (requestedAudio ? capturedAudio ?? (currentAudio?.readyState === "live" ? currentAudio : null) : null)
+      : currentAudio;
+    const targetVideo = videoIsCurrent
+      ? (requestedVideo ? capturedVideo ?? (currentVideo?.readyState === "live" ? currentVideo : null) : null)
+      : currentVideo;
+    if (targetAudio) targetAudio.enabled = !this.state.muted;
+    if (targetVideo) targetVideo.enabled = this.state.cameraOn;
 
     try {
-      await replace("audio", oldAudio, nextAudio);
-      await replace("video", oldVideo, nextVideo);
-      this.localStream = new MediaStream([...(nextAudio ? [nextAudio] : []), ...(nextVideo ? [nextVideo] : [])]);
-      if (previous) {
-        previous.getTracks().forEach((track) => {
-          if (track !== nextAudio && track !== nextVideo) track.stop();
-        });
+      let negotiationPc: RTCPeerConnection | null = null;
+      let renegotiate = false;
+      if (audioIsCurrent && targetAudio !== currentAudio) {
+        const result = await this.replacePublishedTrack(
+          "audio", currentAudio, targetAudio, next, roomId, lifecycle,
+          () => audioToken === this.audioCaptureGeneration && (targetAudio === null ? this.state.muted : !this.state.muted),
+        );
+        if (result) {
+          negotiationPc = result.pc;
+          renegotiate ||= result.renegotiate;
+          this.updateLocalTrack("audio", targetAudio);
+        }
       }
+      if (videoIsCurrent && targetVideo !== currentVideo) {
+        const result = await this.replacePublishedTrack(
+          "video", currentVideo, targetVideo, next, roomId, lifecycle,
+          () => videoToken === this.videoCaptureGeneration && (targetVideo === null ? !this.state.cameraOn : this.state.cameraOn),
+        );
+        if (result) {
+          negotiationPc = result.pc ?? negotiationPc;
+          renegotiate ||= result.renegotiate;
+          this.updateLocalTrack("video", targetVideo);
+        }
+      }
+
+      next.getTracks().forEach((track) => {
+        if (track !== this.localTrack("audio") && track !== this.localTrack("video")) track.stop();
+      });
       const currentNs = settingsStore.get("nsMode") ?? "browser";
-      if (currentNs !== "rnnoise" && currentNs !== "gtcrn") {
-        nsPipeline.stop();
+      if (!this.localTrack("audio") || currentNs !== "rnnoise" && currentNs !== "gtcrn") nsPipeline.stop();
+      if (this.localTrack("video")) {
+        await this.localTrack("video")!.applyConstraints({ degradationPreference: settingsStore.get("videoDegradation") } as MediaTrackConstraints).catch(() => undefined);
       }
-      if (nextVideo) {
-        await nextVideo.applyConstraints({ degradationPreference: settingsStore.get("videoDegradation") } as MediaTrackConstraints).catch(() => undefined);
-      }
-      await this.applyVideoSenderParameters(pc);
-      this.state = { ...this.state, mediaError: undefined };
+      const publishPc = this.pc;
+      if (publishPc) this.applyVideoCodecPreference(publishPc);
+      await this.applyVideoSenderParameters(publishPc);
+      this.state = {
+        ...this.state,
+        ...(videoIsCurrent ? { mediaError: requestedVideo && !this.localTrack("video") ? mediaError : undefined } : {}),
+        ...(audioIsCurrent ? { microphoneError: requestedAudio && !this.localTrack("audio") ? microphoneError : undefined } : {}),
+        ...(audioIsCurrent ? { microphonePending: false } : {}),
+        ...(audioIsCurrent && requestedAudio && !this.localTrack("audio") ? { muted: true } : {}),
+        ...(videoIsCurrent && requestedVideo && !this.localTrack("video") ? { cameraOn: false } : {}),
+      };
       this.emit();
       this.sendLocalMediaState(roomId);
-      if (pc && addedTrack && this.isCurrentMeeting(roomId, lifecycle) && this.pc === pc) {
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-        if (this.isCurrentMeeting(roomId, lifecycle) && this.pc === pc) this.sendPublishOffer(pc, offer, roomId);
-      }
+      await this.renegotiatePublishTrack(negotiationPc, roomId, lifecycle, renegotiate);
     } catch (error) {
       next.getTracks().forEach((track) => {
-        if (track !== oldAudio && track !== oldVideo) track.stop();
+        if (track !== this.localTrack("audio") && track !== this.localTrack("video")) track.stop();
       });
       throw error;
     }
@@ -764,46 +999,69 @@ class MeetingManagerImpl implements MeetingManager {
   }
 
   /** 迟获取媒体（摄像头开关重试）：成功后清 mediaError 并经重协商真正发布。 */
-  private async acquireLocalStream(): Promise<void> {
+  private async acquireLocalStream(token: number): Promise<void> {
     const roomId = this.meetingChannel;
     const lifecycle = this.lifecycle;
+    let stream: MediaStream | null = null;
+    let capturedVideoTrack: MediaStreamTrack | null = null;
     try {
-      const stream = await acquireMeetingMedia();
-      if (!this.isCurrentMeeting(roomId, lifecycle)) {
-        stream.getTracks().forEach((t) => t.stop());
+      stream = await acquireMeetingVideo();
+      const videoTrack = stream.getVideoTracks()[0] ?? null;
+      capturedVideoTrack = videoTrack;
+      if (!videoTrack) throw new Error("meeting camera capture returned no video track");
+      if (!this.isCurrentMeeting(roomId, lifecycle) || token !== this.videoCaptureGeneration || !this.state.cameraOn) {
+        stream.getTracks().forEach((track) => track.stop());
         return;
       }
-      this.localStream = stream;
-      stream.getAudioTracks().forEach((track) => (track.enabled = !this.state.muted));
-      stream.getVideoTracks().forEach((track) => (track.enabled = this.state.cameraOn));
+      videoTrack.enabled = true;
+      const oldVideo = this.localTrack("video");
+      const result = await this.replacePublishedTrack(
+        "video", oldVideo, videoTrack, stream, roomId, lifecycle,
+        () => token === this.videoCaptureGeneration && this.state.cameraOn,
+      );
+      if (!result || !this.isCurrentMeeting(roomId, lifecycle) || token !== this.videoCaptureGeneration || !this.state.cameraOn) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+      this.updateLocalTrack("video", videoTrack);
       this.state = { ...this.state, mediaError: undefined };
       this.emit();
       this.sendLocalMediaState(roomId);
-      // 新轨必须真正发布：addTrack + 重协商（与屏幕共享同一路径）
-      const pc = this.pc;
-      if (pc && this.isCurrentMeeting(roomId, lifecycle)) {
-        stream.getTracks().forEach((track) => {
-          if (!pc.getSenders().some((s) => s.track === track)) {
-            pc.addTrack(track, stream);
-          }
-        });
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-        if (this.isCurrentMeeting(roomId, lifecycle) && this.pc === pc) {
-          this.sendPublishOffer(pc, offer, roomId);
-        }
-      }
+      if (result.pc) this.applyVideoCodecPreference(result.pc);
+      await this.applyVideoSenderParameters(result.pc);
+      await this.renegotiatePublishTrack(result.pc, roomId, lifecycle, result.renegotiate);
     } catch (error) {
-      if (!this.isCurrentMeeting(roomId, lifecycle)) return;
+      const failedTrackIsCurrent = () => Boolean(capturedVideoTrack)
+        && this.isCurrentMeeting(roomId, lifecycle)
+        && token === this.videoCaptureGeneration
+        && this.state.cameraOn
+        && this.localTrack("video") === capturedVideoTrack;
+      if (failedTrackIsCurrent()) {
+        try {
+          const released = await this.replacePublishedTrack(
+            "video", capturedVideoTrack, null, null, roomId, lifecycle,
+            failedTrackIsCurrent,
+          );
+          await this.renegotiatePublishTrack(released?.pc ?? null, roomId, lifecycle, released?.renegotiate === true);
+        } catch (cleanupError) {
+          console.warn("[meeting] failed camera sender cleanup", cleanupError);
+        }
+        if (failedTrackIsCurrent()) this.updateLocalTrack("video", null);
+      }
+      stream?.getTracks().forEach((track) => {
+        if (!this.localStream?.getTracks().includes(track)) track.stop();
+      });
+      if (!this.isCurrentMeeting(roomId, lifecycle) || token !== this.videoCaptureGeneration || !this.state.cameraOn) return;
       this.state = {
         ...this.state,
+        cameraOn: false,
         mediaError: mediaErrorKind(error),
       };
       this.emit();
-      console.warn("[meeting] 重试获取本地媒体失败", error);
+      this.sendLocalMediaState(roomId);
+      console.warn("[meeting] camera capture failed", error);
     }
   }
-
   /** 获取共享本地流（UI 预览 / 发布共用）。 */
   getLocalStream(): MediaStream | null {
     return this.localStream;
@@ -817,6 +1075,10 @@ class MeetingManagerImpl implements MeetingManager {
       return;
     }
     const lifecycle = ++this.lifecycle;
+    this.audioCaptureGeneration += 1;
+    this.videoCaptureGeneration += 1;
+    this.recoveringAudioFor = null;
+    this.state = { ...this.state, microphoneError: undefined, microphonePending: false };
     this.clearSubscriptionRetry();
     this.clearAllDegradedTimers();
     this.publishRecoveryAttempts = 0;
@@ -838,6 +1100,12 @@ class MeetingManagerImpl implements MeetingManager {
       new Promise<void>((resolve) => window.setTimeout(resolve, 2500)),
     ]);
     if (!this.isCurrentMeeting(roomId, lifecycle)) return;
+    // Snapshot the intent immediately before starting initial capture. Later
+    // toggle operations advance the per-kind generation and take precedence.
+    const requestedAudio = !this.state.muted;
+    const requestedVideo = this.state.cameraOn;
+    const joinAudioGeneration = this.audioCaptureGeneration;
+    const joinVideoGeneration = this.videoCaptureGeneration;
     // meeting:join 同时完成会议 session 注册、成员快照和媒体授权。
     // WS 帧按发送顺序到达，join 帧先于 sdp 帧，服务器幂等登记。
     this.sendMeeting("meeting:join", {
@@ -847,27 +1115,92 @@ class MeetingManagerImpl implements MeetingManager {
     this.sendLocalMediaState(roomId);
     this.startMeetingHeartbeat(roomId);
     this.broadcastSourceRoomStatus(true);
-    console.log("[meeting] getUserMedia start", { roomId, secureContext: typeof window !== "undefined" && window.isSecureContext });
-    try {
-      const stream = await acquireMeetingMedia();
-      this.localStream = stream;
-      const defaultMicOn = settingsStore.get("meetingMicrophoneDefaultOn") ?? false;
-      const defaultCameraOn = settingsStore.get("meetingCameraDefaultOn") ?? false;
-      stream.getAudioTracks().forEach((t) => (t.enabled = defaultMicOn));
-      stream.getVideoTracks().forEach((t) => (t.enabled = defaultCameraOn));
-      this.state = { ...this.state, muted: !defaultMicOn, cameraOn: defaultCameraOn };
-      console.log("[meeting] getUserMedia ok", stream.getTracks().map((track) => ({ kind: track.kind, readyState: track.readyState })));
+    this.state = { ...this.state, microphonePending: requestedAudio };
+    this.emit();
+    if (requestedAudio || requestedVideo) {
+      console.log("[meeting] getUserMedia start", { roomId, requestedAudio, requestedVideo, secureContext: typeof window !== "undefined" && window.isSecureContext });
+      try {
+        const { stream, microphoneError, mediaError } = await acquireMeetingMedia(
+          { audio: requestedAudio, video: requestedVideo },
+          () => this.isCurrentMeeting(roomId, lifecycle)
+            && joinAudioGeneration === this.audioCaptureGeneration
+            && !this.state.muted,
+        );
+        if (!this.isCurrentMeeting(roomId, lifecycle)) {
+          stream.getTracks().forEach((track) => track.stop());
+          return;
+        }
+        const capturedAudio = stream.getAudioTracks()[0] ?? null;
+        const capturedVideo = stream.getVideoTracks()[0] ?? null;
+        const audioIsCurrent = joinAudioGeneration === this.audioCaptureGeneration;
+        const videoIsCurrent = joinVideoGeneration === this.videoCaptureGeneration;
+        if (audioIsCurrent) {
+          const audioTrack = requestedAudio ? capturedAudio : null;
+          if (audioTrack) audioTrack.enabled = !this.state.muted;
+          this.updateLocalTrack("audio", audioTrack);
+        }
+        if (videoIsCurrent) {
+          const videoTrack = requestedVideo ? capturedVideo : null;
+          if (videoTrack) videoTrack.enabled = this.state.cameraOn;
+          this.updateLocalTrack("video", videoTrack);
+        }
+        // Discard initial tracks for media the user toggled while GUM was
+        // pending. A toggle's own capture owns the latest generation.
+        stream.getTracks().forEach((track) => {
+          if (track !== this.localTrack("audio") && track !== this.localTrack("video")) track.stop();
+        });
+        const audioTrack = this.localTrack("audio");
+        const videoTrack = this.localTrack("video");
+        this.state = {
+          ...this.state,
+          ...(audioIsCurrent ? {
+            muted: !requestedAudio || !audioTrack,
+            microphoneError,
+          } : {}),
+          ...(videoIsCurrent ? {
+            cameraOn: requestedVideo && Boolean(videoTrack),
+            mediaError,
+          } : {}),
+        };
+        this.monitorLocalMicrophone();
+        console.log("[meeting] getUserMedia ok", stream.getTracks().map((track) => ({ kind: track.kind, readyState: track.readyState })));
+        this.emit();
+        this.sendLocalMediaState(roomId);
+      } catch (error) {
+        if (!this.isCurrentMeeting(roomId, lifecycle)) return;
+        this.state = {
+          ...this.state,
+          ...(joinAudioGeneration === this.audioCaptureGeneration ? {
+            muted: true,
+            microphoneError: requestedAudio ? microphoneErrorKind(error) : undefined,
+          } : {}),
+          ...(joinVideoGeneration === this.videoCaptureGeneration ? {
+            cameraOn: false,
+            mediaError: mediaErrorKind(error),
+          } : {}),
+        };
+        this.emit();
+        console.warn("[meeting] enabled meeting media capture failed; joining in receive-only mode", error);
+      } finally {
+        if (this.isCurrentMeeting(roomId, lifecycle)
+          && joinAudioGeneration === this.audioCaptureGeneration) {
+          this.state = { ...this.state, microphonePending: false };
+          this.emit();
+          this.sendLocalMediaState(roomId);
+        }
+      }
+    } else {
+      if (joinAudioGeneration === this.audioCaptureGeneration) {
+        this.updateLocalTrack("audio", null);
+        this.state = { ...this.state, muted: true, microphonePending: false, microphoneError: undefined };
+      }
+      if (joinVideoGeneration === this.videoCaptureGeneration) {
+        this.updateLocalTrack("video", null);
+        this.state = { ...this.state, cameraOn: false, mediaError: undefined };
+      }
+      this.monitorLocalMicrophone();
       this.emit();
       this.sendLocalMediaState(roomId);
-    } catch (error) {
-      // 无摄像头/麦克风时，仅发布屏幕或仅订阅仍可加入 —— 但失败必须显式上报，
-      // 不得静默伪装成功（UI 依据 mediaError 呈现，用户可重试/仅订阅）。
-      this.state = {
-        ...this.state,
-        mediaError: mediaErrorKind(error),
-      };
-      this.emit();
-      console.warn("[meeting] getUserMedia failed（继续以订阅模式加入）", error);
     }
     if (!this.isCurrentMeeting(roomId, lifecycle)) {
       this.localStream?.getTracks().forEach((track) => track.stop());
@@ -875,10 +1208,7 @@ class MeetingManagerImpl implements MeetingManager {
       return;
     }
     try {
-      const offer = await this.createPublishPC(roomId, lifecycle);
-      if (this.isCurrentMeeting(roomId, lifecycle) && this.pc) {
-        this.sendPublishOffer(this.pc, offer, roomId);
-      }
+      await this.createPublishPC(roomId, lifecycle);
     } catch (error) {
       if (this.isCurrentMeeting(roomId, lifecycle)) {
         console.warn("[meeting] 发布端 PC 创建失败", error);
@@ -919,6 +1249,8 @@ class MeetingManagerImpl implements MeetingManager {
       this.pc.close();
       this.pc = null;
     }
+    this.stopMicrophoneMonitor?.();
+    this.stopMicrophoneMonitor = null;
     this.localStream?.getTracks().forEach((t) => t.stop());
     // RNNoise/GTCRN owns a raw microphone stream outside localStream.
     // Release it explicitly when the meeting ends.
@@ -939,11 +1271,25 @@ class MeetingManagerImpl implements MeetingManager {
     const roomId = this.meetingChannel;
     const lifecycle = this.lifecycle;
     if (!this.isMeetingRoom(roomId) || !this.isCurrentMeeting(roomId, lifecycle)) return;
+    let startedScreenTrack: MediaStreamTrack | null = null;
     try {
       const screen = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
       const track = screen.getVideoTracks()[0];
+      startedScreenTrack = track ?? null;
+      if (!track) {
+        screen.getTracks().forEach((item) => item.stop());
+        return;
+      }
+      track.addEventListener("ended", () => {
+        if (this.screenSender?.track !== track) return;
+        void this.stopScreenShareInternal(true);
+      }, { once: true });
+      if (track.readyState !== "live") {
+        screen.getTracks().forEach((item) => item.stop());
+        return;
+      }
       const pc = await this.waitForPublishPC(roomId, lifecycle);
-      if (!track || !pc || !this.isCurrentMeeting(roomId, lifecycle) || this.pc !== pc) {
+      if (track.readyState !== "live" || !pc || !this.isCurrentMeeting(roomId, lifecycle) || this.pc !== pc) {
         screen.getTracks().forEach((item) => item.stop());
         return;
       }
@@ -953,18 +1299,17 @@ class MeetingManagerImpl implements MeetingManager {
       this.emit();
       this.sendLocalMediaState(roomId);
       // addTrack 后必须重协商：新 offer → 服务器 answer（发布 PC 通道）
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-      if (this.isCurrentMeeting(roomId, lifecycle) && this.pc === pc) {
-        this.sendPublishOffer(pc, offer, roomId);
-      }
+      const offerSent = await this.enqueuePublishOffer(pc, roomId, lifecycle);
+      if (!offerSent) return;
       // 结束共享时清理（浏览器停止共享按钮 / switchMeeting 主动停轨）
-      track.addEventListener("ended", () => this.stopScreenShare());
     } catch (error) {
-      const name = (error as DOMException)?.name;
-      if (name === "NotAllowedError" || name === "AbortError") {
-        return; // 用户取消选择，无需提示
+      if (startedScreenTrack && this.isCurrentMeeting(roomId, lifecycle) && this.screenSender?.track === startedScreenTrack) {
+        void this.stopScreenShareInternal(false);
+      } else if (startedScreenTrack && this.screenSender?.track !== startedScreenTrack) {
+        startedScreenTrack.stop();
       }
+      const name = (error as DOMException)?.name;
+      if (name === "NotAllowedError" || name === "AbortError") return;
       console.warn("[meeting] screen-share start failed", error);
       // 屏幕共享失败必须可见 —— 静默无响应会让用户误以为已共享。
       alertUseMUI(t("meeting.screenShareFailed", "屏幕共享启动失败"), 3000, { kind: "error" });
@@ -993,11 +1338,7 @@ class MeetingManagerImpl implements MeetingManager {
     if (pc && sender) {
       try {
         pc.removeTrack(sender);
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-        if (this.isCurrentMeeting(roomId, lifecycle) && this.pc === pc) {
-          this.sendPublishOffer(pc, offer, roomId);
-        }
+        await this.enqueuePublishOffer(pc, roomId, lifecycle);
       } catch { /* PC 已关或协商失败：下行随 leave 重建 */ }
     }
   }
@@ -1071,10 +1412,12 @@ class MeetingManagerImpl implements MeetingManager {
     this.sendMeeting("meeting:update", { title: nextTitle }, this.meetingChannel);
   }
 
-  private async createPublishPC(expectedRoomId = this.meetingChannel, expectedLifecycle = this.lifecycle, extraTracks: MediaStreamTrack[] = []): Promise<RTCSessionDescriptionInit> {
+  private async createPublishPC(expectedRoomId = this.meetingChannel, expectedLifecycle = this.lifecycle, extraTracks: MediaStreamTrack[] = []): Promise<void> {
     const pc = new RTCPeerConnection(this.rtcConfig());
     this.pc = pc;
     configurePublishPeerConnection(pc, this.localStream, extraTracks);
+    const screenTrack = extraTracks.find((track) => track === this.screenSender?.track);
+    if (screenTrack) this.screenSender = pc.getSenders().find((sender) => sender.track === screenTrack) ?? null;
     this.applyVideoCodecPreference(pc);
     pc.onicecandidate = (ev) => {
       if (ev.candidate && this.isCurrentMeeting(expectedRoomId, expectedLifecycle) && this.pc === pc) {
@@ -1099,15 +1442,18 @@ class MeetingManagerImpl implements MeetingManager {
       }
     };
     this.startAdaptiveVideoControl(pc);
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-    if (!this.isCurrentMeeting(expectedRoomId, expectedLifecycle) || this.pc !== pc) {
+    try {
+      const sent = await this.enqueuePublishOffer(pc, expectedRoomId, expectedLifecycle);
+      if (!sent) {
+        if (this.pc === pc) this.pc = null;
+        pc.close();
+        return;
+      }
+    } catch (error) {
+      if (this.pc === pc) this.pc = null;
       pc.close();
-      throw new Error("meeting lifecycle changed while creating publish offer");
+      throw error;
     }
-    // 绑定发出本次 offer 的 PC：只有它有权消费随后的 answer 与 ICE（旧会话事件不得污染）
-    this.publishOfferPc = pc;
-    return offer;
   }
 
   /** Apply the persisted codec preference to every local video transceiver before SDP offer creation. */
@@ -1163,11 +1509,7 @@ class MeetingManagerImpl implements MeetingManager {
         ]);
         this.applyTurnToMeetingPcs();
         if (!this.isCurrentMeeting(roomId, lifecycle) || this.pc !== pc) return;
-        const offer = await pc.createOffer({ iceRestart: true });
-        await pc.setLocalDescription(offer);
-        if (!this.isCurrentMeeting(roomId, lifecycle) || this.pc !== pc) return;
-        this.publishOfferPc = pc;
-        this.sendSdp("offer", undefined, offer, roomId);
+        await this.enqueuePublishOffer(pc, roomId, lifecycle, { iceRestart: true });
       } catch (error) {
         console.warn("[meeting] 发布 ICE restart 失败", error);
       } finally {
@@ -1884,6 +2226,8 @@ class MeetingManagerImpl implements MeetingManager {
   private async rebuildAfterReconnect(): Promise<void> {
     const roomId = this.meetingChannel;
     const lifecycle = ++this.lifecycle;
+    this.state = { ...this.state, microphonePending: false };
+    this.monitorLocalMicrophone();
     this.clearSubscriptionRetry();
     this.subscriptionRecoveryCycles.clear();
     this.lastSubscriberOfferSdp.clear();
@@ -1910,15 +2254,7 @@ class MeetingManagerImpl implements MeetingManager {
     this.startMeetingHeartbeat(roomId);
     const screenTrack = this.screenSender?.track?.readyState === "live" ? this.screenSender.track : null;
     try {
-      const offer = await this.createPublishPC(roomId, lifecycle, screenTrack ? [screenTrack] : []);
-      // createPublishPC 内部已重建 this.pc；经独立方法读取避开上方置 null 的流控收窄
-      const pc = this.currentPublishPc();
-      if (!this.isCurrentMeeting(roomId, lifecycle) || !pc) return;
-      // 重挂屏幕共享轨到新发布 PC 的 sender（getScreenTrack/stopScreenShare 依赖）
-      if (screenTrack) {
-        this.screenSender = pc.getSenders().find((s) => s.track === screenTrack) ?? null;
-      }
-      this.sendPublishOffer(pc, offer, roomId);
+      await this.createPublishPC(roomId, lifecycle, screenTrack ? [screenTrack] : []);
     } catch (error) {
       if (this.isCurrentMeeting(roomId, lifecycle)) {
         console.warn("[meeting] 重连后发布端 PC 重建失败", error);
@@ -2404,6 +2740,8 @@ class MeetingManagerImpl implements MeetingManager {
     if (!/^\d{4}[A-Z]\d{1,2}$|^\d{4}$/.test(roomId)) return;
     const prevChannel = this.meetingChannel;
     const lifecycle = ++this.lifecycle;
+    this.state = { ...this.state, microphonePending: false };
+    this.monitorLocalMicrophone();
     this.clearSubscriptionRetry();
     this.subscriptionRecoveryCycles.clear();
     this.lastSubscriberOfferSdp.clear();
@@ -2442,8 +2780,7 @@ class MeetingManagerImpl implements MeetingManager {
     this.sendLocalMediaState(roomId);
     this.startMeetingHeartbeat(roomId);
     try {
-      const offer = await this.createPublishPC(roomId, lifecycle);
-      if (this.isCurrentMeeting(roomId, lifecycle) && this.pc) this.sendPublishOffer(this.pc, offer, roomId);
+      await this.createPublishPC(roomId, lifecycle);
     } catch (error) {
       if (this.isCurrentMeeting(roomId, lifecycle)) {
         console.warn("[meeting] 切换房间后发布端 PC 创建失败", error);

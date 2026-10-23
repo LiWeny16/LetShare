@@ -59,6 +59,7 @@ import type { FileTransferV2Snapshot } from "./fileTransferV2/engine";
 import type { FileTransferV2Task } from "./fileTransferV2/store";
 import { shouldOpenDownloadDrawerForV2Transfer } from "./fileTransferV2/presentation";
 import { receivedFileChildMapKey, receivedFileMapKey } from "../chat/receivedFilePresentation";
+
 import {
 	getProToken,
 	isPro,
@@ -106,6 +107,18 @@ import {
  writeTransferFrameToDirectFileSink,
  writeTransferFrameToReceiveBuffer,
 } from "./transferReliability";
+
+type PendingV2ReceivedFile = {
+ task: FileTransferV2Task; file: File; sourceArchiveFileKey: string;
+ receiveGeneration: { all: number; user: number }; clearMutationVersion: number;
+ status: FileTransferV2Task["status"]; revision: number; publishing: boolean; onReceivedSettled: boolean;
+};
+
+type ClearProtectedV2ReceivedFile = {
+ pending: PendingV2ReceivedFile;
+ cleanupStarted: boolean;
+};
+
 // import { VideoManager } from "../video/video";
 
 // 常量配置
@@ -387,6 +400,12 @@ export class RealTimeColab {
       this.fileTransferV2LastStatuses.set(snapshot.transferId, snapshot.status);
      }
      const pending = this.pendingV2ReceivedFiles.get(snapshot.transferId);
+     const clearProtected = this.receivedFilesClearProtectedV2Files.get(snapshot.transferId);
+     if ((snapshot.status === "cancelled" || snapshot.status === "failed" || snapshot.status === "paused")
+      && clearProtected && !clearProtected.cleanupStarted) {
+      clearProtected.cleanupStarted = true;
+      void this.cleanupClearProtectedV2ReceivedFile(snapshot.transferId, clearProtected, snapshot.status);
+     }
      if (pending) {
       if (pending.status !== snapshot.status) pending.revision++;
       pending.status = snapshot.status;
@@ -395,20 +414,70 @@ export class RealTimeColab {
       } else if (snapshot.status === "completed" && !pending.publishing) {
        pending.publishing = true;
        const revision = pending.revision;
-       const isCurrent = () => this.pendingV2ReceivedFiles.get(snapshot.transferId) === pending
-        && pending.revision === revision && pending.status === "completed"
-        && this.isFileTransferV2TaskCurrent(pending.task);
        void (async () => {
         const integration = await import("../chat/ChatIntegration");
-        const task = await this.fileTransferV2?.getTask(snapshot.transferId);
-        if (!task || !isCurrent() || !await integration.default.finalizeV2ReceivedFile(task, isCurrent) || !isCurrent()) return;
+        let receiveGeneration = pending.receiveGeneration;
+        const refreshAfterClear = async (): Promise<"current" | "refreshed" | "stale"> => {
+         await this.waitForReceivedFilesClearMutations();
+         if (this.pendingV2ReceivedFiles.get(snapshot.transferId) !== pending
+          || pending.revision !== revision || pending.status !== "completed"
+          || !this.isFileTransferV2TaskCurrent(pending.task)) return "stale";
+         const currentGeneration = this.captureReceivedFilesGeneration(pending.task.peerParticipantId);
+         const clearMutationVersion = this.receivedFilesClearMutationVersion;
+         if (clearMutationVersion !== pending.clearMutationVersion) {
+          if (receiveGeneration.user !== currentGeneration.user) return "stale";
+          // A bulk clear removes the received-list row, but a receive that was
+          // already staged must publish after the clear instead of being lost.
+          receiveGeneration = currentGeneration;
+          pending.receiveGeneration = currentGeneration;
+          pending.clearMutationVersion = clearMutationVersion;
+          return "refreshed";
+         }
+         return this.isReceivedFilesGenerationCurrent(pending.task.peerParticipantId, receiveGeneration)
+          ? "current" : "stale";
+        };
+        let taskToPublish: FileTransferV2Task | null = null;
+        for (;;) {
+         const generationState = await refreshAfterClear();
+         if (generationState === "stale") return;
+         const isCurrent = () => this.pendingV2ReceivedFiles.get(snapshot.transferId) === pending
+          && pending.revision === revision && pending.status === "completed"
+          && this.isReceivedFilesGenerationCurrent(pending.task.peerParticipantId, receiveGeneration)
+          && this.isFileTransferV2TaskCurrent(pending.task);
+         const task = await this.fileTransferV2?.getTask(snapshot.transferId);
+         if (!task || !isCurrent()) {
+          if (await refreshAfterClear() === "refreshed") continue;
+          return;
+         }
+         const published = await integration.default.finalizeV2ReceivedFile(task, isCurrent);
+         if (!published || !isCurrent()) {
+          if (await refreshAfterClear() === "refreshed") continue;
+          return;
+         }
+         taskToPublish = task;
+         break;
+        }
+        if (!taskToPublish) return;
+        const task = taskToPublish;
         const file = pending.file;
-        this.receivedFiles.set(receivedFileMapKey(task.peerParticipantId, file.name, `filev2:${task.transferId}`), file);
-        this.receivedFilesVersion++;
+        const fullKey = this.getReceivedFileMapKey(task.peerParticipantId, file, pending.sourceArchiveFileKey);
+        this.receivedFiles.set(fullKey, file);
+        const postProcessVersion = this.receivedFilesVersion;
         this.addTransferRecord("received-file", file.name, `← ${task.peerParticipantId.split(":")[0]}`);
         this.emitter.emit("file-received", {
          from: task.peerParticipantId, fileName: file.name, fileSize: file.size, file,
         });
+        void this.maybeAutoUnzipReceivedFile(
+         file,
+         task.peerParticipantId,
+         fullKey,
+         postProcessVersion,
+         pending.sourceArchiveFileKey,
+        ).catch(error => console.warn("Received file post-processing failed:", error));
+        const completedClearProtection = this.receivedFilesClearProtectedV2Files.get(snapshot.transferId);
+        if (completedClearProtection && this.isSameV2ReceiveIdentity(completedClearProtection.pending.task, task)) {
+         this.receivedFilesClearProtectedV2Files.delete(snapshot.transferId);
+        }
         this.pendingV2ReceivedFiles.delete(snapshot.transferId);
         this.updateUI();
        })().catch(error => this.reportFileTransferV2HistoryError(error, snapshot.transferId))
@@ -424,11 +493,48 @@ export class RealTimeColab {
      }
     },
     onReceived: async (task, file) => {
-     const integration = await import("../chat/ChatIntegration");
-     await integration.default.commitV2ReceivedFile(task, file);
-     const current = await this.fileTransferV2?.getTask(task.transferId);
-     if (current && this.isFileTransferV2TaskCurrent(task) && ["verifying", "completed"].includes(current.status)) {
-      this.pendingV2ReceivedFiles.set(task.transferId, { task, file, status: current.status, revision: 0, publishing: false });
+     const pending = {
+      task, file, sourceArchiveFileKey: "",
+      receiveGeneration: this.captureReceivedFilesGeneration(task.peerParticipantId),
+      clearMutationVersion: this.receivedFilesClearMutationVersion,
+      status: task.status, revision: 0, publishing: false, onReceivedSettled: false,
+     };
+     // Register before committing the 99% row so a clear that starts in the
+     // commit-to-callback gap knows to leave this in-flight receive queued.
+     this.pendingV2ReceivedFiles.set(task.transferId, pending);
+     try {
+      const integration = await import("../chat/ChatIntegration");
+      const committed = await this.commitReceivedFileAfterClear(
+       task.peerParticipantId,
+       isCurrent => integration.default.commitV2ReceivedFile(task, file, isCurrent),
+       () => this.isFileTransferV2TaskCurrent(task),
+      );
+      const current = await this.fileTransferV2?.getTask(task.transferId);
+      await this.waitForReceivedFilesClearMutations();
+      const latestGeneration = this.captureReceivedFilesGeneration(task.peerParticipantId);
+      const latestClearMutationVersion = this.receivedFilesClearMutationVersion;
+      const clearAdvanced = latestClearMutationVersion !== committed.clearMutationVersion;
+      const receiveGeneration = clearAdvanced ? latestGeneration : committed.generation;
+      if (!current || this.pendingV2ReceivedFiles.get(task.transferId) !== pending
+       || clearAdvanced && committed.generation.user !== latestGeneration.user
+       || !this.isReceivedFilesGenerationCurrent(task.peerParticipantId, receiveGeneration)
+       || !this.isFileTransferV2TaskCurrent(task) || !["verifying", "completed"].includes(current.status)) {
+       if (current) pending.status = current.status;
+       pending.onReceivedSettled = true;
+       if (this.pendingV2ReceivedFiles.get(task.transferId) === pending) this.pendingV2ReceivedFiles.delete(task.transferId);
+       this.cleanupTerminalV2ReceiveIfProtected(task.transferId);
+       return;
+      }
+      pending.sourceArchiveFileKey = committed.fileKey;
+      pending.receiveGeneration = receiveGeneration;
+      pending.clearMutationVersion = clearAdvanced ? latestClearMutationVersion : committed.clearMutationVersion;
+      pending.status = current.status;
+      pending.onReceivedSettled = true;
+     } catch (error) {
+      pending.onReceivedSettled = true;
+      if (this.pendingV2ReceivedFiles.get(task.transferId) === pending) this.pendingV2ReceivedFiles.delete(task.transferId);
+      this.cleanupTerminalV2ReceiveIfProtected(task.transferId);
+      throw error;
      }
     },
     onError: (reason, transferId) => {
@@ -450,9 +556,8 @@ export class RealTimeColab {
  private serverFileTransfer: ServerFileTransfer | null = null;
  private fileTransferV2: FileTransferV2ApplicationAdapter | null = null;
  private fileTransferV2LastStatuses = new Map<string, FileTransferV2Snapshot["status"]>();
- private pendingV2ReceivedFiles = new Map<string, {
-  task: FileTransferV2Task; file: File; status: FileTransferV2Task["status"]; revision: number; publishing: boolean;
- }>();
+ private pendingV2ReceivedFiles = new Map<string, PendingV2ReceivedFile>();
+ private receivedFilesClearProtectedV2Files = new Map<string, ClearProtectedV2ReceivedFile>();
  private readonly serverBinaryReceivedHandler = (data: ArrayBuffer): void => {
   this.noteServerTraffic();
   if (this.fileTransferV2?.handleRelayFrame(data)) return;
@@ -561,6 +666,14 @@ export class RealTimeColab {
   /** 发送端 ACK 看门狗：20s 无 ACK 进度 → 判定卡死 → 自动切 relay */
   private readonly P2P_ACK_STALL_TIMEOUT_MS = 20_000;
  private receivedFilesVersion = 0;
+ private receivedFilesUserVersions = new Map<string, number>();
+ private activeReceivedFilesClearMutations = 0;
+ private receivedFilesClearMutationVersion = 0;
+ private receivedFilesClearWaiters = new Set<() => void>();
+ private receivedFilesHydrationVersion = 0;
+ private activeReceivedFilesHydrationMutations = 0;
+ private receivedFilesHydrationWaiters = new Set<() => void>();
+ private receivedArchiveEntryNameReservations = new Map<string, Set<string>>();
  private transferStatusClearTimeout: ReturnType<typeof setTimeout> | null = null;
  private lastConnectedProToken: string | null = null;
 
@@ -3684,19 +3797,31 @@ export class RealTimeColab {
    fileType: "application/octet-stream",
    createFile: (parts, fileName, options) => new File(parts, fileName, options),
   });
+  const canContinueReceive = () => this.receivingFiles.get(id) === fileInfo && this.dataChannels.get(id) === channel;
+  if (!canContinueReceive()) return;
+  let receiveGeneration: { all: number; user: number };
   let persistedFileKey: string;
   try {
    const integration = await import("../chat/ChatIntegration");
-   persistedFileKey = await integration.default.commitReceivedFile(id, file);
+   const committed = await this.commitReceivedFileAfterClear(
+    id,
+    isCurrent => integration.default.commitReceivedFile(id, file, isCurrent),
+    canContinueReceive,
+   );
+   persistedFileKey = committed.fileKey;
+   receiveGeneration = committed.generation;
   } catch (error) {
-   if (this.receivingFiles.get(id) !== fileInfo || this.dataChannels.get(id) !== channel) return;
+   if (!canContinueReceive()) return;
    this.abortP2PReceive(id, channel, completedTransferId, "Received file could not be saved to chat history", error);
    return;
   }
-  if (this.receivingFiles.get(id) !== fileInfo || this.dataChannels.get(id) !== channel) return;
-  const fullKey = receivedFileMapKey(id, file.name, persistedFileKey);
-  this.receivedFiles.set(fullKey, file);
-  this.addTransferRecord("received-file", file.name, `← ${id.split(":")[0]}`);
+  if (!canContinueReceive()) return;
+  const keepReceivedFile = this.isReceivedFilesGenerationCurrent(id, receiveGeneration);
+  const fullKey = this.getReceivedFileMapKey(id, file, persistedFileKey);
+  if (keepReceivedFile) {
+   this.receivedFiles.set(fullKey, file);
+   this.addTransferRecord("received-file", file.name, `← ${id.split(":")[0]}`);
+  }
   const postProcessVersion = this.receivedFilesVersion;
   this.receivingFiles.delete(id);
   this.setFileTransferProgress(null);
@@ -3706,12 +3831,14 @@ export class RealTimeColab {
   });
   // P2P 与公网 relay 共用同一套文件消息消费链：会议聊天、ChatIntegration
   // 和旧文件历史都依赖 file-received 事件，不能只更新 receivedFiles。
-  this.emitter.emit('file-received', {
-   from: id,
-   fileName: file.name,
-   fileSize: file.size,
-   file,
-  });
+  if (keepReceivedFile) {
+   this.emitter.emit('file-received', {
+    from: id,
+    fileName: file.name,
+    fileSize: file.size,
+    file,
+   });
+  }
   void confirmCompletionBeforePostProcessing({
    confirmCompletion: () => {
     if (completedTransferId && channel.readyState === "open") {
@@ -3726,11 +3853,15 @@ export class RealTimeColab {
     }
    },
    postProcess: async () => {
-    await this.maybeAutoUnzipReceivedFile(
-     file,
-     fullKey,
-     postProcessVersion
-    );
+    if (keepReceivedFile) {
+     await this.maybeAutoUnzipReceivedFile(
+      file,
+      id,
+      fullKey,
+      postProcessVersion,
+      persistedFileKey,
+     );
+    }
    },
    onPostProcessError: (error) => {
     console.warn("P2P received file post-processing failed:", error);
@@ -4359,8 +4490,125 @@ export class RealTimeColab {
  public clearReceivedFiles(): void {
   this.receivedFilesVersion += 1;
   this.receivedFiles.clear();
+  this.receivedArchiveEntryNameReservations.clear();
   this.directSavedFiles.clear();
    this.sentFiles.clear();
+ }
+
+ public beginClearReceivedFiles(): void {
+  this.receivedFilesVersion += 1;
+ }
+
+ public tryBeginReceivedFilesClearMutation(): number | null {
+  if (this.activeReceivedFilesClearMutations > 0) return null;
+  this.activeReceivedFilesClearMutations = 1;
+  this.receivedFilesClearMutationVersion += 1;
+  return this.receivedFilesClearMutationVersion;
+ }
+
+ public isReceivedFilesClearMutationCurrent(version: number): boolean {
+  return version === this.receivedFilesClearMutationVersion;
+ }
+
+ public finishReceivedFilesClearMutation(): void {
+  if (this.activeReceivedFilesClearMutations === 0) return;
+  this.activeReceivedFilesClearMutations -= 1;
+  if (this.activeReceivedFilesClearMutations === 0) {
+   const waiters = Array.from(this.receivedFilesClearWaiters);
+   this.receivedFilesClearWaiters.clear();
+   waiters.forEach(resolve => resolve());
+  }
+ }
+
+ public async waitForReceivedFilesClearMutations(): Promise<void> {
+  if (this.activeReceivedFilesClearMutations === 0) return;
+  await new Promise<void>(resolve => this.receivedFilesClearWaiters.add(resolve));
+ }
+
+ public beginReceivedFilesHydrationMutation(): void {
+  this.receivedFilesHydrationVersion += 1;
+  this.activeReceivedFilesHydrationMutations += 1;
+ }
+
+ public finishReceivedFilesHydrationMutation(): void {
+  if (this.activeReceivedFilesHydrationMutations === 0) return;
+  this.activeReceivedFilesHydrationMutations -= 1;
+  this.receivedFilesHydrationVersion += 1;
+  if (this.activeReceivedFilesHydrationMutations === 0) {
+   const waiters = Array.from(this.receivedFilesHydrationWaiters);
+   this.receivedFilesHydrationWaiters.clear();
+   waiters.forEach(resolve => resolve());
+  }
+ }
+
+ public async waitForReceivedFilesHydrationMutations(): Promise<void> {
+  if (this.activeReceivedFilesHydrationMutations === 0) return;
+  await new Promise<void>(resolve => this.receivedFilesHydrationWaiters.add(resolve));
+ }
+
+ public getReceivedFilesHydrationVersion(): number {
+  return this.receivedFilesHydrationVersion;
+ }
+
+ public isReceivedFilesHydrationVersionCurrent(version: number): boolean {
+  return version === this.receivedFilesHydrationVersion
+   && this.activeReceivedFilesHydrationMutations === 0;
+ }
+
+ public captureReceivedFilesGeneration(id: string): { all: number; user: number } {
+  return {
+   all: this.receivedFilesVersion,
+   user: this.receivedFilesUserVersions.get(id) ?? 0,
+  };
+ }
+
+ public isReceivedFilesGenerationCurrent(
+  id: string,
+  generation: { all: number; user: number }
+ ): boolean {
+  return generation.all === this.receivedFilesVersion
+   && generation.user === (this.receivedFilesUserVersions.get(id) ?? 0);
+ }
+
+ private async commitReceivedFileAfterClear(
+  id: string,
+  commit: (isCurrent: () => boolean) => Promise<string>,
+  canContinue: () => boolean = () => true,
+ ): Promise<{ fileKey: string; generation: { all: number; user: number }; clearMutationVersion: number }> {
+  for (;;) {
+   await this.waitForReceivedFilesClearMutations();
+   if (!canContinue()) throw new Error("Received transfer is no longer current");
+   const generation = this.captureReceivedFilesGeneration(id);
+   const clearMutationVersion = this.receivedFilesClearMutationVersion;
+   const isCurrent = () => this.isReceivedFilesGenerationCurrent(id, generation);
+   try {
+    const fileKey = await commit(isCurrent);
+    const clearSupersededCommit = clearMutationVersion !== this.receivedFilesClearMutationVersion
+     && generation.user === (this.receivedFilesUserVersions.get(id) ?? 0)
+     && canContinue();
+    if (clearSupersededCommit) continue;
+    return { fileKey, generation, clearMutationVersion };
+   } catch (error) {
+    const clearSupersededCommit = clearMutationVersion !== this.receivedFilesClearMutationVersion
+     && generation.user === (this.receivedFilesUserVersions.get(id) ?? 0)
+     && canContinue();
+    if (clearSupersededCommit) continue;
+    throw error;
+   }
+  }
+ }
+
+ public beginReceivedFilesClearForUser(id: string): void {
+  this.receivedFilesUserVersions.set(id, (this.receivedFilesUserVersions.get(id) ?? 0) + 1);
+ }
+
+ public clearReceivedFilesForUser(id: string): void {
+  this.beginReceivedFilesClearForUser(id);
+  const userPrefix = `${id}::`;
+  for (const key of this.receivedFiles.keys()) {
+   if (key.startsWith(userPrefix)) this.receivedFiles.delete(key);
+  }
+  this.receivedArchiveEntryNameReservations.delete(id);
  }
 
  private getActiveFileTransferCount(): number {
@@ -4450,12 +4698,63 @@ export class RealTimeColab {
  }
 
 private isLetShareZip(file: File): boolean {
-  return file.name.startsWith("LetShare_") && file.name.endsWith(".zip");
+  return (file.name.startsWith("LetShare_") || file.name.startsWith("LetShareFolder_"))
+   && file.name.endsWith(".zip");
   }
 
-  // 文件夹打包的 ZIP（LetShare_<ts>_<文件夹名>.zip）：接收端保留 ZIP 本体以便整包下载
+  // Folder archives retain their ZIP alongside extracted entries; old _bundle.zip names remain regular bundles.
   private isFolderZip(file: File): boolean {
-   return /^LetShare_\d+_.+\.zip$/i.test(file.name);
+   return /^LetShareFolder_\d+_.+\.zip$/i.test(file.name)
+    || (/^LetShare_\d+_.+\.zip$/i.test(file.name)
+     && !/^LetShare_\d+_bundle\.zip$/i.test(file.name));
+  }
+
+ private getReceivedFileMapKey(id: string, file: File, fileKey?: string): string {
+  return receivedFileMapKey(id, file.name, fileKey);
+ }
+
+ public getReceivedArchiveEntryMapKey(id: string, sourceArchiveFileKey: string, archivePath: string): string {
+  return receivedFileChildMapKey(receivedFileMapKey(id, "", sourceArchiveFileKey), archivePath);
+ }
+
+ private hasReceivedFileNamed(id: string, name: string): boolean {
+  const normalizedName = name.toLocaleLowerCase();
+  const userPrefix = `${id}::`;
+  for (const [key, file] of this.receivedFiles) {
+   if (key.startsWith(userPrefix) && file.name.toLocaleLowerCase() === normalizedName) return true;
+  }
+  return false;
+ }
+
+ private getUniqueReceivedArchiveEntryName(
+  id: string,
+  archivePath: string,
+  usedNames: ReadonlySet<string> = new Set(),
+  persistedNames: ReadonlySet<string> = new Set()
+ ): string {
+  const reservations = this.receivedArchiveEntryNameReservations.get(id);
+  const isTaken = (candidate: string) => {
+   const normalizedCandidate = candidate.toLocaleLowerCase();
+   return usedNames.has(normalizedCandidate)
+    || persistedNames.has(normalizedCandidate)
+    || reservations?.has(normalizedCandidate) === true
+    || this.hasReceivedFileNamed(id, candidate);
+  };
+  if (!isTaken(archivePath)) return archivePath;
+
+  const slashIndex = archivePath.lastIndexOf("/");
+  const directory = slashIndex >= 0 ? archivePath.slice(0, slashIndex + 1) : "";
+  const filename = slashIndex >= 0 ? archivePath.slice(slashIndex + 1) : archivePath;
+  const dotIndex = filename.lastIndexOf(".");
+  const stem = dotIndex > 0 ? filename.slice(0, dotIndex) : filename;
+  const extension = dotIndex > 0 ? filename.slice(dotIndex) : "";
+  let suffix = 2;
+  let candidate = `${directory}${stem} (${suffix})${extension}`;
+  while (isTaken(candidate)) {
+   suffix += 1;
+   candidate = `${directory}${stem} (${suffix})${extension}`;
+  }
+  return candidate;
   }
 
  private canContinueReceivedFilePostProcessing(
@@ -4471,8 +4770,11 @@ private isLetShareZip(file: File): boolean {
 
  private async maybeAutoUnzipReceivedFile(
   file: File,
+  id: string,
   fullKey: string,
-  expectedVersion = this.receivedFilesVersion
+  expectedVersion = this.receivedFilesVersion,
+  sourceArchiveFileKey?: string,
+  alreadyPersistedEntryPaths: ReadonlySet<string> = new Set()
  ): Promise<boolean> {
   if (!this.isLetShareZip(file)) {
    return false;
@@ -4487,6 +4789,8 @@ private isLetShareZip(file: File): boolean {
    return false;
   }
 
+  let reservationSet: Set<string> | null = null;
+  const reservedNames: string[] = [];
   try {
    alertUseMUI(t("alert.unzipping"), 2000, { kind: "info" });
    const { default: JSZip } = await import("jszip");
@@ -4503,16 +4807,56 @@ private isLetShareZip(file: File): boolean {
     return false;
    }
 
-   const keepFolderZip = this.isFolderZip(file); // 文件夹 ZIP：保留本体，提供“整包下载”
+   const keepFolderZip = this.isFolderZip(file);
+   const extractedEntries: Array<{ file: File; archivePath: string }> = [];
+   const usedReceivedNames = new Set<string>();
+   const persistedReceivedNames = new Set<string>();
+   if (sourceArchiveFileKey) {
+    const integration = await import("../chat/ChatIntegration");
+    const history = await integration.default.getChatHistory(id);
+    for (const message of history?.messages ?? []) {
+     if ((message.type === "file" || message.type === "image") && message.senderId === id) {
+      persistedReceivedNames.add(message.fileMetadata.fileName.toLocaleLowerCase());
+     }
+    }
+   }
+   if (sourceArchiveFileKey) {
+    reservationSet = this.receivedArchiveEntryNameReservations.get(id) ?? new Set<string>();
+    this.receivedArchiveEntryNameReservations.set(id, reservationSet);
+   }
    for (const [fileName, zipEntry] of files) {
+    if (alreadyPersistedEntryPaths.has(fileName)) continue;
     const blob = await zipEntry.async("blob");
     if (!this.canContinueReceivedFilePostProcessing(expectedVersion, fullKey)) {
      return false;
     }
-    const extractedFile = new File([blob], fileName);
-    // 文件夹 ZIP 的子文件以 `<zip名>/<路径>` 为 key，供前端按文件夹分组展示
-    const entryPath = keepFolderZip ? `${file.name}/${fileName}` : fileName;
-    const newKey = receivedFileChildMapKey(fullKey, entryPath);
+    const receivedName = sourceArchiveFileKey
+     ? this.getUniqueReceivedArchiveEntryName(id, fileName, usedReceivedNames, persistedReceivedNames)
+     : fileName;
+    if (sourceArchiveFileKey) {
+     const normalizedName = receivedName.toLocaleLowerCase();
+     usedReceivedNames.add(normalizedName);
+     reservationSet!.add(normalizedName);
+     reservedNames.push(normalizedName);
+    }
+    extractedEntries.push({ file: new File([blob], receivedName), archivePath: fileName });
+   }
+
+   if (sourceArchiveFileKey) {
+    const integration = await import("../chat/ChatIntegration");
+    await integration.default.commitReceivedBundleEntries(
+     id,
+     sourceArchiveFileKey,
+     extractedEntries,
+     () => this.canContinueReceivedFilePostProcessing(expectedVersion, fullKey),
+     keepFolderZip,
+    );
+   }
+
+   for (const { file: extractedFile, archivePath } of extractedEntries) {
+    const newKey = sourceArchiveFileKey
+     ? this.getReceivedArchiveEntryMapKey(id, sourceArchiveFileKey, archivePath)
+     : `${id}::${extractedFile.name}`;
     this.receivedFiles.set(newKey, extractedFile);
    }
 
@@ -4527,22 +4871,53 @@ private isLetShareZip(file: File): boolean {
   } catch (err) {
    console.error("Unzipping failed:", err);
    return false;
+  } finally {
+   if (reservationSet) {
+    for (const name of reservedNames) reservationSet.delete(name);
+    if (reservationSet.size === 0 && this.receivedArchiveEntryNameReservations.get(id) === reservationSet) {
+     this.receivedArchiveEntryNameReservations.delete(id);
+    }
+   }
   }
+ }
+
+ public async restorePersistedReceivedFile(
+  id: string,
+  file: File,
+  sourceArchiveFileKey?: string,
+  alreadyPersistedEntryPaths: ReadonlySet<string> = new Set(),
+  expectedGeneration: { all: number; user: number } = this.captureReceivedFilesGeneration(id)
+ ): Promise<void> {
+  if (!this.isReceivedFilesGenerationCurrent(id, expectedGeneration)) return;
+  const fullKey = this.getReceivedFileMapKey(id, file, sourceArchiveFileKey);
+  this.receivedFiles.set(fullKey, file);
+  await this.maybeAutoUnzipReceivedFile(
+   file,
+   id,
+   fullKey,
+   this.receivedFilesVersion,
+   sourceArchiveFileKey,
+   alreadyPersistedEntryPaths,
+  );
  }
 
  /**
   * 处理接收到的文件（支持ZIP解压）
   */
  private async handleReceivedFile(file: File, id: string): Promise<void> {
-  const postProcessVersion = this.receivedFilesVersion;
   const integration = await import("../chat/ChatIntegration");
-  const persistedFileKey = await integration.default.commitReceivedFile(id, file);
-  const fullKey = receivedFileMapKey(id, file.name, persistedFileKey);
+  const { fileKey: persistedFileKey, generation: receiveGeneration } = await this.commitReceivedFileAfterClear(
+   id,
+   isCurrent => integration.default.commitReceivedFile(id, file, isCurrent),
+  );
+  if (!this.isReceivedFilesGenerationCurrent(id, receiveGeneration)) return;
+  const fullKey = this.getReceivedFileMapKey(id, file, persistedFileKey);
   this.receivedFiles.set(fullKey, file);
+  const postProcessVersion = this.receivedFilesVersion;
   this.addTransferRecord("received-file", file.name, `← ${id.split(":")[0]}`);
   this.setFileTransferProgress(null);
   this.emitter.emit('file-received', { from: id, fileName: file.name, fileSize: file.size, file });
-  void this.maybeAutoUnzipReceivedFile(file, fullKey, postProcessVersion).catch(error => {
+  void this.maybeAutoUnzipReceivedFile(file, id, fullKey, postProcessVersion, persistedFileKey).catch(error => {
    console.warn("Received file post-processing failed:", error);
   });
   alertUseMUI(t("alert.fileReceived", { name: id.split(":")[0] }), 2000, { kind: "success" });
@@ -5174,6 +5549,126 @@ private isLetShareZip(file: File): boolean {
   return this.fileTransferV2?.getTask(transferId) ?? Promise.resolve(null);
  }
 
+ public isV2ReceivedFilePending(transferId: string): boolean {
+  return this.pendingV2ReceivedFiles.has(transferId)
+   || this.activeReceivedFilesClearMutations > 0 && this.receivedFilesClearProtectedV2Files.has(transferId);
+ }
+
+ public protectPendingV2ReceivedFileForClear(transferId: string, peerId: string): boolean {
+  const pending = this.pendingV2ReceivedFiles.get(transferId);
+  if (!pending || pending.task.peerParticipantId !== peerId) return false;
+  const current = this.receivedFilesClearProtectedV2Files.get(transferId);
+  if (!current || !this.isSameV2ReceiveIdentity(current.pending.task, pending.task)) {
+   this.receivedFilesClearProtectedV2Files.set(transferId, { pending, cleanupStarted: false });
+  }
+  return true;
+ }
+
+ public clearV2ReceivedFileClearProtection(task: FileTransferV2Task): void {
+  const protectedFile = this.receivedFilesClearProtectedV2Files.get(task.transferId);
+  if (protectedFile && this.isSameV2ReceiveIdentity(protectedFile.pending.task, task)) {
+   this.receivedFilesClearProtectedV2Files.delete(task.transferId);
+  }
+ }
+
+ private isSameV2ReceiveIdentity(left: FileTransferV2Task, right: FileTransferV2Task): boolean {
+  return left.transferId === right.transferId
+   && left.roomId === right.roomId
+   && left.localParticipantId === right.localParticipantId
+   && left.peerParticipantId === right.peerParticipantId
+   && left.direction === "receive" && right.direction === "receive"
+   && left.createdAt === right.createdAt
+   && left.manifest.fileHash === right.manifest.fileHash;
+ }
+
+ private cleanupTerminalV2ReceiveIfProtected(transferId: string): void {
+  const protectedFile = this.receivedFilesClearProtectedV2Files.get(transferId);
+  if (!protectedFile || protectedFile.cleanupStarted
+   || !["cancelled", "failed", "paused"].includes(protectedFile.pending.status)) return;
+  protectedFile.cleanupStarted = true;
+  void this.cleanupClearProtectedV2ReceivedFile(transferId, protectedFile, protectedFile.pending.status as "cancelled" | "failed" | "paused");
+ }
+
+ private async cleanupClearProtectedV2ReceivedFile(
+  transferId: string,
+  protectedFile: ClearProtectedV2ReceivedFile,
+  terminalStatus: "cancelled" | "failed" | "paused",
+ ): Promise<void> {
+  try {
+   await this.waitForReceivedFilesClearMutations();
+   if (this.receivedFilesClearProtectedV2Files.get(transferId) !== protectedFile) return;
+   if (!protectedFile.pending.onReceivedSettled) {
+    protectedFile.cleanupStarted = false;
+    return;
+   }
+   const currentTask = await this.fileTransferV2?.getTask(transferId);
+   if (!currentTask || !this.isSameV2ReceiveIdentity(currentTask, protectedFile.pending.task)) {
+    this.receivedFilesClearProtectedV2Files.delete(transferId);
+    return;
+   }
+   if (currentTask.status === "completed") {
+    this.receivedFilesClearProtectedV2Files.delete(transferId);
+    return;
+   }
+   if (currentTask.status !== terminalStatus) {
+    protectedFile.cleanupStarted = false;
+    return;
+   }
+   const integration = await import("../chat/ChatIntegration");
+   const history = await integration.default.getChatHistory(currentTask.peerParticipantId);
+   await this.waitForReceivedFilesClearMutations();
+   if (this.receivedFilesClearProtectedV2Files.get(transferId) !== protectedFile) return;
+   const latestTask = await this.fileTransferV2?.getTask(transferId);
+   const newerPending = this.pendingV2ReceivedFiles.get(transferId);
+   if (newerPending && !this.isSameV2ReceiveIdentity(newerPending.task, protectedFile.pending.task)) {
+    this.receivedFilesClearProtectedV2Files.delete(transferId);
+    return;
+   }
+   if (!latestTask || !this.isSameV2ReceiveIdentity(latestTask, protectedFile.pending.task)) {
+    this.receivedFilesClearProtectedV2Files.delete(transferId);
+    return;
+   }
+   if (latestTask.status === "completed") {
+    this.receivedFilesClearProtectedV2Files.delete(transferId);
+    return;
+   }
+   if (latestTask.status !== terminalStatus) {
+    protectedFile.cleanupStarted = false;
+    return;
+   }
+   if (this.pendingV2ReceivedFiles.get(transferId) === protectedFile.pending) {
+    // A paused callback has settled without publishing. Once clear skipped its
+    // staged row, remove this pending publication so the orphan can be cleaned.
+    this.pendingV2ReceivedFiles.delete(transferId);
+   }
+   const fileKey = `filev2:${transferId}`;
+   const message = history?.messages.find(candidate => candidate.type !== "text"
+    && candidate.fileMetadata.fileKey === fileKey);
+   if (message) {
+    const result = await integration.default.deleteMessage(latestTask.peerParticipantId, message.id);
+    if (!result.success && result.error?.startsWith("History entry was deleted")) {
+     const afterDeleteTask = await this.fileTransferV2?.getTask(transferId);
+     if (afterDeleteTask && this.isSameV2ReceiveIdentity(afterDeleteTask, protectedFile.pending.task)
+      && afterDeleteTask.status === terminalStatus && !await this.deleteFileTransferV2(transferId)) {
+      throw new Error("The staged V2 file history row was deleted, but transfer cleanup is still pending");
+     }
+    } else if (!result.success && result.error !== "Chat history not found" && result.error !== "Message not found") {
+     throw new Error(result.error || "The staged V2 file history row could not be deleted");
+    }
+   } else if (!await this.deleteFileTransferV2(transferId)) {
+    throw new Error("The staged V2 transfer task could not be cleaned up");
+   }
+   if (this.receivedFilesClearProtectedV2Files.get(transferId) === protectedFile) {
+    this.receivedFilesClearProtectedV2Files.delete(transferId);
+   }
+  } catch (error) {
+   if (this.receivedFilesClearProtectedV2Files.get(transferId) === protectedFile) {
+    protectedFile.cleanupStarted = false;
+   }
+   this.reportFileTransferV2HistoryError(error, transferId);
+  }
+ }
+
  public isFileTransferV2TaskCurrent(task: FileTransferV2Task): boolean {
   return task.localParticipantId === this.getUniqId()
    && task.roomId === (settingsStore.get("roomId") || "default-room");
@@ -5195,13 +5690,21 @@ private isLetShareZip(file: File): boolean {
   await this.fileTransferV2.pause(transferId);
  }
 
+ private assertV2ReceivedFileCleanupNotStarted(transferId: string): void {
+  if (this.receivedFilesClearProtectedV2Files.get(transferId)?.cleanupStarted) {
+   throw new Error("This received file is being cleared. Wait for cleanup to finish before resuming.");
+  }
+ }
+
  public async resumeFileTransferV2(transferId: string): Promise<void> {
   if (!this.fileTransferV2) throw new Error("File transfer v2 is unavailable");
+  this.assertV2ReceivedFileCleanupNotStarted(transferId);
   await this.fileTransferV2.resume(transferId);
  }
 
  public async resumeFileTransferV2WithSource(transferId: string, file: File): Promise<void> {
   if (!this.fileTransferV2) throw new Error("File transfer v2 is unavailable");
+  this.assertV2ReceivedFileCleanupNotStarted(transferId);
   await this.fileTransferV2.resumeWithSource(transferId, file);
  }
 

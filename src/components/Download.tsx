@@ -38,6 +38,7 @@ import KeyboardArrowUpIcon from "@mui/icons-material/KeyboardArrowUp";
 import { buttonStyleNormal } from "../pages/share";
 import React from "react";
 import ChatIntegration from "@App/libs/chat/ChatIntegration";
+import type { HistoryDeletionGeneration } from "@App/libs/chat/ChatIntegration";
 import FileBlobStore from "@App/libs/chat/FileBlobStore";
 import { categorizeFile } from "@App/libs/chat/ChatHistoryManager";
 import alertUseMUI from "@App/libs/tools/alert";
@@ -124,6 +125,25 @@ function formatTransferSpeed(bytesPerSecond: number): string {
     return "0 B/s";
   }
   return `${formatSize(bytesPerSecond)}/s`;
+}
+
+function getReceivedFileMessageMapKey(
+  userId: string,
+  metadata: {
+    fileName: string;
+    fileKey?: string;
+    sourceArchiveFileKey?: string;
+    sourceArchiveEntryPath?: string;
+  },
+): string {
+  if (metadata.sourceArchiveFileKey && metadata.sourceArchiveEntryPath) {
+    return realTimeColab.getReceivedArchiveEntryMapKey(
+      userId,
+      metadata.sourceArchiveFileKey,
+      metadata.sourceArchiveEntryPath,
+    );
+  }
+  return receivedFileMapKey(userId, metadata.fileName, metadata.fileKey);
 }
 
 type PendingBrowserDownload = {
@@ -244,6 +264,8 @@ export default function DownloadDrawerSlide({
   const [drawerExpanded, setDrawerExpanded] = React.useState(false);
   const [, forceUpdate] = React.useReducer((x) => x + 1, 0);
   const [persistentFileCount, setPersistentFileCount] = React.useState(0);
+  const [isClearingReceivedFiles, setIsClearingReceivedFiles] = React.useState(false);
+  const clearReceivedFilesInFlightRef = React.useRef(false);
   const [fileTransferV2Snapshots, setFileTransferV2Snapshots] = React.useState<FileTransferV2Snapshot[]>([]);
   const [fileTransferV2Tasks, setFileTransferV2Tasks] = React.useState<FileTransferV2Task[]>([]);
   const [fileTransferV2BusyIds, setFileTransferV2BusyIds] = React.useState<Set<string>>(() => new Set());
@@ -278,6 +300,8 @@ export default function DownloadDrawerSlide({
   const thumbnailsRef = React.useRef(thumbnails);
   thumbnailsRef.current = thumbnails;
   const thumbnailKeysRef = React.useRef<Set<string>>(new Set());
+  const persistedFileHydrationPendingRef = React.useRef(true);
+  const deletedReceivedMapKeysRef = React.useRef<Set<string>>(new Set());
 
   // 提前声明（effect 依赖需要用到）
   const receivingMap = realTimeColab.receivingFiles as Map<string, any>;
@@ -423,33 +447,86 @@ export default function DownloadDrawerSlide({
     };
   }, []);
 
-  // Populate receivedFiles from IndexedDB when in-memory map is empty (e.g. after page refresh)
+  // Restore persisted files, including extracted entries, without racing chat-history deletion.
   React.useEffect(() => {
     const receivedMap = realTimeColab.receivedFiles as Map<string, File>;
-    if (receivedMap.size > 0) return;
-
     let cancelled = false;
 
     (async () => {
       try {
-        const fileMessages = await ChatIntegration.getAllFileMessages();
+        let fileMessages: Awaited<ReturnType<typeof ChatIntegration.getAllFileMessages>> = [];
+        let generationsByUser = new Map<string, { all: number; user: number }>();
+        for (;;) {
+          await realTimeColab.waitForReceivedFilesHydrationMutations();
+          if (cancelled) return;
+          const hydrationVersion = realTimeColab.getReceivedFilesHydrationVersion();
+          fileMessages = await ChatIntegration.getAllFileMessages();
+          if (cancelled) return;
+
+          const snapshotGenerations = new Map<string, { all: number; user: number }>();
+          for (const { userId } of fileMessages) {
+            if (!snapshotGenerations.has(userId)) {
+              snapshotGenerations.set(userId, realTimeColab.captureReceivedFilesGeneration(userId));
+            }
+          }
+          if (!realTimeColab.isReceivedFilesHydrationVersionCurrent(hydrationVersion)) continue;
+          generationsByUser = snapshotGenerations;
+          break;
+        }
+        const isCurrent = (userId: string) => {
+          const generation = generationsByUser.get(userId);
+          return !cancelled
+            && !!generation
+            && realTimeColab.isReceivedFilesGenerationCurrent(userId, generation);
+        };
+        const persistedEntriesByArchive = new Map<string, Set<string>>();
+        for (const { message, userId } of fileMessages) {
+          if (!isCurrent(userId)) continue;
+          const sourceArchiveFileKey = message.fileMetadata.sourceArchiveFileKey;
+          const sourceArchiveEntryPath = message.fileMetadata.sourceArchiveEntryPath;
+          const entryFileKey = message.fileMetadata.fileKey;
+          if (!sourceArchiveFileKey || !sourceArchiveEntryPath || !entryFileKey) continue;
+          const hasEntryFile = await FileBlobStore.hasFile(entryFileKey);
+          if (!isCurrent(userId) || !hasEntryFile) continue;
+          let entryPaths = persistedEntriesByArchive.get(sourceArchiveFileKey);
+          if (!entryPaths) {
+            entryPaths = new Set();
+            persistedEntriesByArchive.set(sourceArchiveFileKey, entryPaths);
+          }
+          entryPaths.add(sourceArchiveEntryPath);
+        }
+
         let loadedCount = 0;
 
         for (const { message, userId } of fileMessages) {
-          if (cancelled) return;
+          if (!isCurrent(userId)) continue;
+          const keepExpandedArchive = message.fileMetadata.bundleExpanded
+            && message.fileMetadata.bundleKeepArchive;
+          if (message.fileMetadata.bundleExpanded && !keepExpandedArchive) continue;
           const fileKey = message.fileMetadata.fileKey;
           if (!fileKey) continue;
+          const mapKey = getReceivedFileMessageMapKey(userId, message.fileMetadata);
+          if (deletedReceivedMapKeysRef.current.has(mapKey)) continue;
 
-          if (!(await FileBlobStore.hasFile(fileKey))) continue;
+          const hasFile = await FileBlobStore.hasFile(fileKey);
+          if (!isCurrent(userId) || deletedReceivedMapKeysRef.current.has(mapKey) || !hasFile) continue;
 
           const file = await FileBlobStore.getFile(fileKey);
-          if (!file) continue;
-
-          const mapKey = receivedFileMapKey(userId, file.name, fileKey);
+          if (!isCurrent(userId) || deletedReceivedMapKeysRef.current.has(mapKey) || !file) continue;
           if (receivedMap.has(mapKey)) continue;
 
-          receivedMap.set(mapKey, file);
-          loadedCount++;
+          if (keepExpandedArchive || message.fileMetadata.sourceArchiveFileKey) {
+            receivedMap.set(mapKey, file);
+          } else {
+            await realTimeColab.restorePersistedReceivedFile(
+              userId,
+              file,
+              fileKey,
+              persistedEntriesByArchive.get(fileKey),
+              generationsByUser.get(userId),
+            );
+          }
+          if (isCurrent(userId)) loadedCount++;
         }
 
         if (!cancelled && loadedCount > 0) {
@@ -458,6 +535,9 @@ export default function DownloadDrawerSlide({
         }
       } catch (err) {
         console.warn('[Download] Failed to load persisted files from IndexedDB:', err);
+      } finally {
+        persistedFileHydrationPendingRef.current = false;
+        deletedReceivedMapKeysRef.current.clear();
       }
     })();
 
@@ -845,35 +925,123 @@ export default function DownloadDrawerSlide({
   }, []);
 
   const clearReceivedFiles = async () => {
-    closePreview();
-    replacePendingBrowserDownload(null);
-    setBrowserDownloadNotice(null);
-    realTimeColab.clearReceivedFiles();
-    setThumbnails(new Map());
-    thumbnailKeysRef.current.clear();
-    setSelectedFiles(new Set());
-    setPersistentFileCount(0);
-    forceUpdate();
-    alertUseMUI("已清空接收列表并释放浏览器缓存", 2000, { kind: "success" });
-
+    if (clearReceivedFilesInFlightRef.current) return;
+    const mutationVersion = realTimeColab.tryBeginReceivedFilesClearMutation();
+    if (mutationVersion === null) return;
+    clearReceivedFilesInFlightRef.current = true;
+    setIsClearingReceivedFiles(true);
+    const filesBeforeClear = new Map(realTimeColab.receivedFiles);
+    const historyGenerationsBeforeClear = new Map<string, HistoryDeletionGeneration>();
+    for (const key of filesBeforeClear.keys()) {
+      const separatorIndex = key.indexOf("::");
+      if (separatorIndex <= 0) continue;
+      const userId = key.slice(0, separatorIndex);
+      if (!historyGenerationsBeforeClear.has(userId)) {
+        historyGenerationsBeforeClear.set(userId, ChatIntegration.captureHistoryDeletionGeneration(userId));
+      }
+    }
+    const removedMapKeys = new Set<string>();
+    const canRestoreFile = (userId: string) => {
+      if (!realTimeColab.isReceivedFilesClearMutationCurrent(mutationVersion)) return false;
+      let generation = historyGenerationsBeforeClear.get(userId);
+      if (!generation) {
+        generation = ChatIntegration.captureHistoryDeletionGeneration(userId);
+        historyGenerationsBeforeClear.set(userId, generation);
+      }
+      return ChatIntegration.isHistoryDeletionGenerationCurrent(userId, generation);
+    };
+    realTimeColab.beginReceivedFilesHydrationMutation();
     try {
+      closePreview();
+      replacePendingBrowserDownload(null);
+      setBrowserDownloadNotice(null);
+      realTimeColab.clearReceivedFiles();
+      setThumbnails(new Map());
+      thumbnailKeysRef.current.clear();
+      setSelectedFiles(new Set());
+      setPersistentFileCount(0);
+      forceUpdate();
+      try {
         const fileMessages = await ChatIntegration.getAllFileMessages();
+        let restoredCount = 0;
+        let cleanupPending = false;
         for (const { message, userId } of fileMessages) {
-            await ChatIntegration.deleteMessage(userId, message.id);
+          const metadata = message.fileMetadata;
+          const mapKey = getReceivedFileMessageMapKey(userId, metadata);
+          const transferId = metadata.fileKey?.startsWith("filev2:") ? metadata.fileKey.slice("filev2:".length) : "";
+          if (transferId && realTimeColab.protectPendingV2ReceivedFileForClear(transferId, userId)) continue;
+          if (!canRestoreFile(userId)) {
+            removedMapKeys.add(mapKey);
+            continue;
+          }
+          const result = await ChatIntegration.deleteMessage(userId, message.id);
+          if (result.success) {
+            removedMapKeys.add(mapKey);
+            continue;
+          }
+          if (result.error?.startsWith("History entry was deleted")) {
+            removedMapKeys.add(mapKey);
+            cleanupPending = true;
+            continue;
+          }
+          if (result.error === "Chat history not found" || result.error === "Message not found") {
+            removedMapKeys.add(mapKey);
+            continue;
+          }
+          if (!canRestoreFile(userId)) {
+            removedMapKeys.add(mapKey);
+            continue;
+          }
+
+          let file = filesBeforeClear.get(mapKey);
+          if (!file && metadata.fileKey) file = await FileBlobStore.getFile(metadata.fileKey) ?? undefined;
+          if (!file || !canRestoreFile(userId)) {
+            removedMapKeys.add(mapKey);
+            continue;
+          }
+          realTimeColab.receivedFiles.set(mapKey, file);
+          restoredCount++;
         }
-    } catch (err) {
+        setPersistentFileCount(restoredCount);
+        forceUpdate();
+        if (restoredCount > 0) {
+          alertUseMUI(
+            isChinese ? "部分文件未能删除，已保留在接收列表中。" : "Some files could not be deleted and remain in the received list.",
+            4000,
+            { kind: "warning" },
+          );
+        } else if (cleanupPending) {
+          alertUseMUI(
+            isChinese ? "文件记录已清除，部分存储数据仍待清理。" : "File records were cleared; some stored data still needs cleanup.",
+            4000,
+            { kind: "warning" },
+          );
+        } else {
+          alertUseMUI("已清空接收列表并释放浏览器缓存", 2000, { kind: "success" });
+        }
+      } catch (err) {
         console.warn('[Download] Failed to clear persisted files from IndexedDB:', err);
+        filesBeforeClear.forEach((file, key) => {
+          const separatorIndex = key.indexOf("::");
+          const userId = separatorIndex > 0 ? key.slice(0, separatorIndex) : "";
+          if (!removedMapKeys.has(key) && userId && canRestoreFile(userId)) {
+            realTimeColab.receivedFiles.set(key, file);
+          }
+        });
+        setPersistentFileCount(realTimeColab.receivedFiles.size);
+        forceUpdate();
+        alertUseMUI(isChinese ? "清理记录时发生错误，请重试。" : "An error occurred while clearing file history. Please retry.", 4000, { kind: "warning" });
+      }
+    } catch (err) {
+      console.warn('[Download] Failed to clear received files:', err);
+      alertUseMUI(isChinese ? "文件列表清理失败，请重试。" : "The received list could not be cleared. Please retry.", 4000, { kind: "warning" });
+    } finally {
+      realTimeColab.finishReceivedFilesHydrationMutation();
+      realTimeColab.finishReceivedFilesClearMutation();
+      clearReceivedFilesInFlightRef.current = false;
+      setIsClearingReceivedFiles(false);
     }
   };
-
-  // —— 批量选择与用户分组操作 ——
-
-  /**
-   * 勾选列拖拽滑选状态机（鼠标/触屏统一 Pointer Events）：
-   * - 在勾选框上按下 → 立即切换该行（anchor），并记录切换后的状态为基准
-   * - 指针滑过其他行 → 该行跟随基准状态
-   * - 指针抬起/取消 → 结束；若发生过滑动，抑制随后的 checkbox click / 行点击
-   */
   const dragSelectRef = React.useRef<{
     active: boolean;
     anchorKey: string | null;
@@ -957,49 +1125,77 @@ export default function DownloadDrawerSlide({
     if (!window.confirm(`确定要删除选中的 ${selectedFiles.size} 个文件吗？`)) return;
 
     const keysToDelete = new Set(selectedFiles);
+    if (persistedFileHydrationPendingRef.current) {
+      keysToDelete.forEach((key) => deletedReceivedMapKeysRef.current.add(key));
+    }
+
+    const removedKeys = new Set<string>();
+    const failedKeys = new Set<string>();
+    let cleanupPending = false;
+    try {
+      const fileMessages = await ChatIntegration.getAllFileMessages();
+      const msgByKey = new Map<string, { message: any; userId: string }>();
+      for (const entry of fileMessages) {
+        const mapKey = getReceivedFileMessageMapKey(entry.userId, entry.message.fileMetadata);
+        msgByKey.set(mapKey, entry);
+      }
+      for (const key of keysToDelete) {
+        const entry = msgByKey.get(key);
+        if (!entry) {
+          removedKeys.add(key);
+          continue;
+        }
+        const result = await ChatIntegration.deleteMessage(entry.userId, entry.message.id);
+        if (result.success) removedKeys.add(key);
+        else if (result.error?.startsWith("History entry was deleted")) {
+          removedKeys.add(key);
+          cleanupPending = true;
+        } else failedKeys.add(key);
+      }
+    } catch (err) {
+      console.warn('[Download] Failed to delete persisted files from IndexedDB:', err);
+      keysToDelete.forEach((key) => {
+        if (!removedKeys.has(key)) failedKeys.add(key);
+      });
+    }
 
     if (previewUrlRef.current) {
       const previewKey = Array.from(realTimeColab.receivedFiles.entries()).find(
-        ([, f]) => f === previewFile
+        ([, file]) => file === previewFile
       )?.[0];
-      if (previewKey && keysToDelete.has(previewKey)) {
-        closePreview();
-      }
+      if (previewKey && removedKeys.has(previewKey)) closePreview();
     }
-
-    keysToDelete.forEach((key) => {
+    removedKeys.forEach((key) => {
       realTimeColab.receivedFiles.delete(key);
       if (thumbnailsRef.current.has(key)) {
-        const dataUrl = thumbnailsRef.current.get(key)!;
-        URL.revokeObjectURL(dataUrl);
+        URL.revokeObjectURL(thumbnailsRef.current.get(key)!);
         thumbnailKeysRef.current.delete(key);
       }
     });
-
-    setThumbnails((prev) => {
-      const next = new Map(prev);
-      keysToDelete.forEach((key) => next.delete(key));
+    failedKeys.forEach((key) => deletedReceivedMapKeysRef.current.delete(key));
+    setThumbnails((previous) => {
+      const next = new Map(previous);
+      removedKeys.forEach((key) => next.delete(key));
       return next;
     });
-    setSelectedFiles(new Set());
+    setSelectedFiles((previous) => {
+      const next = new Set(previous);
+      removedKeys.forEach((key) => next.delete(key));
+      return next;
+    });
     forceUpdate();
-
-    try {
-        const fileMessages = await ChatIntegration.getAllFileMessages();
-        const msgByKey = new Map<string, { message: any; userId: string }>();
-        for (const entry of fileMessages) {
-            const { fileName, fileKey } = entry.message.fileMetadata;
-            const mapKey = receivedFileMapKey(entry.userId, fileName, fileKey);
-            msgByKey.set(mapKey, entry);
-        }
-        for (const key of keysToDelete) {
-            const entry = msgByKey.get(key);
-            if (entry) {
-                await ChatIntegration.deleteMessage(entry.userId, entry.message.id);
-            }
-        }
-    } catch (err) {
-        console.warn('[Download] Failed to delete persisted files from IndexedDB:', err);
+    if (failedKeys.size > 0) {
+      alertUseMUI(
+        isChinese ? "部分文件删除失败，已保留在列表中，请重试。" : "Some files could not be deleted and remain in the list. Please retry.",
+        4000,
+        { kind: "warning" },
+      );
+    } else if (cleanupPending) {
+      alertUseMUI(
+        isChinese ? "文件已从记录中删除，部分存储清理仍在等待处理。" : "The files were removed from history; some stored data still needs cleanup.",
+        4000,
+        { kind: "warning" },
+      );
     }
   };
 
@@ -1008,46 +1204,52 @@ export default function DownloadDrawerSlide({
     if (!group) return;
     if (!window.confirm(`确定要删除 ${group.userName} 的全部 ${group.files.length} 个文件吗？`)) return;
 
-    if (previewUrlRef.current) {
-      const previewKey = Array.from(realTimeColab.receivedFiles.entries()).find(
-        ([, f]) => f === previewFile
-      )?.[0];
-      if (previewKey) {
-        const previewUserId = previewKey.split('::')[0];
-        if (previewUserId === userId) {
-          closePreview();
-        }
-      }
-    }
-
+    const previewKey = Array.from(realTimeColab.receivedFiles.entries()).find(
+      ([, file]) => file === previewFile
+    )?.[0];
     group.files.forEach(({ key }) => {
-      realTimeColab.receivedFiles.delete(key);
-      if (thumbnailsRef.current.has(key)) {
-        const dataUrl = thumbnailsRef.current.get(key)!;
-        URL.revokeObjectURL(dataUrl);
-        thumbnailKeysRef.current.delete(key);
+      if (persistedFileHydrationPendingRef.current) {
+        deletedReceivedMapKeysRef.current.add(key);
       }
     });
-
-    setThumbnails((prev) => {
-      const next = new Map(prev);
-      group.files.forEach(({ key }) => next.delete(key));
-      return next;
-    });
-    setSelectedFiles((prev) => {
-      const next = new Set(prev);
-      group.files.forEach(({ key }) => next.delete(key));
-      return next;
-    });
-    forceUpdate();
 
     try {
-        await ChatIntegration.deleteChatHistory(userId);
+      const result = await ChatIntegration.deleteChatHistory(userId);
+      const historyWasDeleted = result.success || result.historyDeleted === true;
+      if (!historyWasDeleted) {
+        group.files.forEach(({ key }) => deletedReceivedMapKeysRef.current.delete(key));
+        alertUseMUI(result.error || (isChinese ? "文件删除失败，请重试。" : "The files could not be deleted. Please retry."), 4000, { kind: "warning" });
+        return;
+      }
+
+      if (previewKey && group.files.some(({ key }) => key === previewKey)) closePreview();
+      group.files.forEach(({ key }) => {
+        realTimeColab.receivedFiles.delete(key);
+        if (thumbnailsRef.current.has(key)) {
+          URL.revokeObjectURL(thumbnailsRef.current.get(key)!);
+          thumbnailKeysRef.current.delete(key);
+        }
+      });
+      setThumbnails((previous) => {
+        const next = new Map(previous);
+        group.files.forEach(({ key }) => next.delete(key));
+        return next;
+      });
+      setSelectedFiles((previous) => {
+        const next = new Set(previous);
+        group.files.forEach(({ key }) => next.delete(key));
+        return next;
+      });
+      forceUpdate();
+      if (!result.success) {
+        alertUseMUI(result.error || (isChinese ? "聊天记录已删除，但部分文件仍待清理。" : "Chat history was deleted, but some file cleanup is pending."), 4000, { kind: "warning" });
+      }
     } catch (err) {
-        console.warn('[Download] Failed to delete persisted files from IndexedDB:', err);
+      console.warn('[Download] Failed to delete persisted files from IndexedDB:', err);
+      group.files.forEach(({ key }) => deletedReceivedMapKeysRef.current.delete(key));
+      alertUseMUI(isChinese ? "文件删除失败，请重试。" : "The files could not be deleted. Please retry.", 4000, { kind: "warning" });
     }
   };
-
   const toggleUserExpand = (userId: string) => {
     setExpandedUsers((prev) => {
       const next = new Set(prev);
@@ -1858,6 +2060,7 @@ export default function DownloadDrawerSlide({
                       >
                         <Button
                           onClick={clearReceivedFiles}
+                          disabled={isClearingReceivedFiles}
                           size="small"
                           sx={{ minWidth: "auto", px: 1, whiteSpace: "nowrap" }}
                         >

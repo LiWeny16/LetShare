@@ -8,6 +8,13 @@ export interface FileMetadata {
   transferStatus: FileTransferStatus;
   transferProgress: number; // 0-100
   fileKey?: string; // IndexedDB key for blob retrieval (populated after storage)
+  /** Marks the source archive after all extracted entries are durable. */
+  bundleExpanded?: boolean;
+  /** Keep an expanded folder archive in the received list with its entries. */
+  bundleKeepArchive?: boolean;
+  /** Durable archive identity for an individually stored extracted entry. */
+  sourceArchiveFileKey?: string;
+  sourceArchiveEntryPath?: string;
 }
 
 export interface TextChatMessage {
@@ -250,6 +257,7 @@ class ChatHistoryManager {
     transferStatus: FileTransferStatus = 'uploading',
     transferProgress: number = 0,
     overrideFileKey?: string | null,
+    additionalFileMetadata?: Pick<FileMetadata, 'sourceArchiveFileKey' | 'sourceArchiveEntryPath'>,
   ): Promise<{ success: boolean; error?: string; messageId?: string }> {
     try {
       const db = await this.ensureDB();
@@ -290,13 +298,14 @@ class ChatHistoryManager {
           transferStatus,
           transferProgress,
           ...(fileKey ? { fileKey } : {}),
+          ...(additionalFileMetadata ?? {}),
         },
       };
 
       history.messages.push(message);
       history.lastMessageTime = message.timestamp;
 
-      if (senderId !== this.getCurrentUserId()) {
+      if (senderId !== this.getCurrentUserId() && !additionalFileMetadata?.sourceArchiveFileKey) {
         history.unreadCount++;
       }
       history.userName = otherUserName;
@@ -311,6 +320,38 @@ class ChatHistoryManager {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       console.error('[CHAT DB] Failed to add file message:', error);
       return { success: false, error: errorMessage };
+    }
+  }
+
+  /** Mark a persisted archive after all extracted entries have been committed. */
+  public async markFileBundleExpanded(
+    userId: string,
+    fileKey: string,
+    expanded = true,
+    keepArchive = false,
+  ): Promise<boolean> {
+    try {
+      const db = await this.ensureDB();
+      const transaction = db.transaction([this.storeName], 'readwrite');
+      const store = transaction.objectStore(this.storeName);
+      const history = await this.getChatHistoryFromStore(store, userId);
+      const message = history?.messages.find((item) =>
+        (item.type === 'file' || item.type === 'image') && item.fileMetadata.fileKey === fileKey,
+      );
+      if (!history || !message || (message.type !== 'file' && message.type !== 'image')) {
+        transaction.abort();
+        return false;
+      }
+
+      message.fileMetadata.bundleExpanded = expanded;
+      message.fileMetadata.bundleKeepArchive = expanded && keepArchive;
+      const committed = waitForTransactionCommit(transaction);
+      store.put(history);
+      await committed;
+      return true;
+    } catch (error) {
+      console.error('[CHAT DB] Failed to mark file bundle as expanded:', error);
+      return false;
     }
   }
 

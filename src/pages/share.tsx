@@ -52,6 +52,7 @@ import MeetingMinutesHistoryDialog from "../components/meeting/components/Meetin
 import ChatPanel from "../components/Chat/ChatPanel";
 import SelectedFileStrip from '../components/SelectedFileStrip';
 import ChatIntegration from "@App/libs/chat/ChatIntegration";
+import { bundleTransferEntriesWithInfo, collectDroppedTransferEntries, type TransferBundleResult } from "@App/libs/chat/fileBundle";
 import AppleIcon from "@mui/icons-material/Apple";
 import LinkIcon from "@mui/icons-material/Link";
 import SyncIcon from "@mui/icons-material/Sync";
@@ -250,6 +251,9 @@ const Share = observer(() => {
 
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [isPreparingSelectedFile, setIsPreparingSelectedFile] = useState(false);
+  const selectedFileBuildIdRef = useRef(0);
+  const isPreparingSelectedFileRef = useRef(false);
   const [selectedText, setSelectedText] = useState<string | null>(null);
   const [textInputDialogOpen, setTextInputDialogOpen] = useState(false);
   const [textInput, setTextInput] = useState("");
@@ -294,16 +298,52 @@ const Share = observer(() => {
   }, [incomingCall]);
 
   const clearSelectedFiles = () => {
+    selectedFileBuildIdRef.current += 1;
+    isPreparingSelectedFileRef.current = false;
     setSelectedFiles([]);
     setSelectedFile(null);
+    setIsPreparingSelectedFile(false);
   };
 
-  const buildZipFile = async (files: File[]): Promise<File> => {
-    const { default: JSZip } = await import("jszip");
-    const zip = new JSZip();
-    files.forEach(f => zip.file(f.name, f));
-    const content = await zip.generateAsync({ type: "blob" });
-    return new File([content], `LetShare_${Date.now()}.zip`, { type: "application/zip" });
+  const buildZipFile = async (files: File[]): Promise<TransferBundleResult> => {
+    return bundleTransferEntriesWithInfo(files.map(file => ({
+      file,
+      relativePath: file.webkitRelativePath || undefined,
+    })));
+  };
+
+  const prepareSelectedFilePayload = async (files: File[]): Promise<TransferBundleResult | null> => {
+    const buildId = ++selectedFileBuildIdRef.current;
+    if (files.length === 1) {
+      isPreparingSelectedFileRef.current = false;
+      setSelectedFile(files[0]);
+      setIsPreparingSelectedFile(false);
+      return { file: files[0], duplicateFileCount: 0, includedFileCount: 1 };
+    }
+
+    setSelectedFile(null);
+    isPreparingSelectedFileRef.current = true;
+    setIsPreparingSelectedFile(true);
+    try {
+      const bundle = await buildZipFile(files);
+      if (selectedFileBuildIdRef.current !== buildId) return null;
+      if (bundle.duplicateFileCount > 0) {
+        alertUseMUI(t('toast.duplicateFilesSkipped', { count: bundle.duplicateFileCount }), 3000, { kind: "info" });
+      }
+      setSelectedFile(bundle.file);
+      return bundle;
+    } catch {
+      if (selectedFileBuildIdRef.current === buildId) {
+        setSelectedFile(null);
+        alertUseMUI(t('toast.fileReadFailed'), 3500, { kind: "error" });
+      }
+      return null;
+    } finally {
+      if (selectedFileBuildIdRef.current === buildId) {
+        isPreparingSelectedFileRef.current = false;
+        setIsPreparingSelectedFile(false);
+      }
+    }
   };
 
   // ── 通话：CallManager 初始化（一次） ─────────────────────────────
@@ -680,92 +720,53 @@ const Share = observer(() => {
   }, []);
 
   // ── 文件夹拖拽处理：目录 → ZIP 打包，空文件/空文件夹一律拒绝 ──
-  // 文件夹打包的 ZIP 命名带文件夹名（LetShare_<ts>_<文件夹名>.zip），
+  // Folder-drop ZIPs use the explicit LetShareFolder_ marker and keep relative paths,
   // 接收端据此保留 ZIP 本体并解出内部文件（可整包下载，也可选择其中文件下载）。
-
-  interface DirEntryFile {
-    file: File;
-    relPath: string;
-  }
-
-  // 递归遍历一个目录，收集所有文件及其相对路径（含子目录层级）
-  const collectDirFiles = async (entry: FileSystemEntry, relativeDir: string, out: DirEntryFile[]): Promise<void> => {
-    if (entry.isFile) {
-      const file = await new Promise<File | null>((resolve) => {
-        (entry as FileSystemFileEntry).file(resolve, () => resolve(null));
-      });
-      if (file) out.push({ file, relPath: relativeDir ? `${relativeDir}/${file.name}` : file.name });
-      return;
-    }
-    if (!entry.isDirectory) return;
-    const reader = (entry as FileSystemDirectoryEntry).createReader();
-    const nextRelativeDir = relativeDir ? `${relativeDir}/${entry.name}` : entry.name;
-    for (;;) {
-      const batch = await new Promise<FileSystemEntry[]>((resolve) => {
-        reader.readEntries(resolve, () => resolve([]));
-      });
-      if (batch.length === 0) break; // 必须循环读取，直到空批次才结束
-      for (const child of batch) {
-        await collectDirFiles(child, nextRelativeDir, out);
-      }
-    }
-  };
 
   /**
    * 将 DataTransfer 解析为可传输的文件列表：
-   * - 拖入文件夹 → 打包为 LetShare_<ts>_<文件夹名>.zip（保留目录结构）
+   * - 混合拖入文件与文件夹 → 一个文件夹标记 ZIP（保留目录结构）
    * - 0 字节的空文件 / 空文件夹 → 拒绝并提示（不允许空文件传输）
    * 返回 null 表示没有可传输内容（已提示）。
    */
   const dropDataToTransferables = async (dt: DataTransfer): Promise<File[] | null> => {
-    const entries: FileSystemEntry[] = [];
-    const items = dt.items;
-    if (items) {
-      for (const item of Array.from(items)) {
-        const entry = (item as unknown as { webkitGetAsEntry?: () => FileSystemEntry | null }).webkitGetAsEntry?.();
-        if (entry) entries.push(entry);
-      }
-    }
-    if (entries.length === 0) {
-      // 不支持目录遍历的浏览器（如 Firefox）：退回 dataTransfer.files，过滤空文件
-      const raw = Array.from(dt.files ?? []).filter(f => f.size > 0);
-      if (raw.length === 0) {
-        alertUseMUI(t('toast.emptyFileNotAllowed'), 2500, { kind: "warning" });
-        return null;
-      }
-      return raw;
+    let entries: Awaited<ReturnType<typeof collectDroppedTransferEntries>>;
+    try {
+      entries = await collectDroppedTransferEntries(dt);
+    } catch (error) {
+      console.warn("Dropped file collection failed; aborting the batch:", error);
+      alertUseMUI(t('toast.fileReadFailed'), 3500, { kind: "error" });
+      return null;
     }
 
-    const transferables: File[] = [];
-    let rejected = 0;
-    for (const entry of entries) {
-      if (entry.isDirectory) {
-        const collected: DirEntryFile[] = [];
-        await collectDirFiles(entry, "", collected);
-        if (collected.length === 0) {
-          rejected++;
-          continue; // 空文件夹不允许传输
-        }
-        const { default: JSZip } = await import("jszip");
-        const zip = new JSZip();
-        collected.forEach(({ file, relPath }) => zip.file(relPath, file));
-        const content = await zip.generateAsync({ type: "blob" });
-        transferables.push(new File([content], `LetShare_${Date.now()}_${entry.name}.zip`, { type: "application/zip" }));
-      } else if (entry.isFile) {
-        const file = await new Promise<File | null>((resolve) => {
-          (entry as FileSystemFileEntry).file(resolve, () => resolve(null));
-        });
-        if (!file || file.size === 0) {
-          rejected++;
-          continue; // 空文件不允许传输
-        }
-        transferables.push(file);
-      }
-    }
-    if (rejected > 0) {
+    const validEntries = entries.filter(({ file }) => file.size > 0);
+    if (validEntries.length !== entries.length) {
       alertUseMUI(t('toast.emptyFileNotAllowed'), 2500, { kind: "warning" });
     }
-    return transferables.length > 0 ? transferables : null;
+    if (validEntries.length === 0) {
+      if (entries.length === 0 && Array.from(dt.items ?? []).some((item) => item.kind === "file")) {
+        alertUseMUI(t('toast.emptyFileNotAllowed'), 2500, { kind: "warning" });
+      }
+      return null;
+    }
+
+    if (validEntries.some(({ relativePath }) => Boolean(relativePath))) {
+      try {
+        const bundle = await bundleTransferEntriesWithInfo(validEntries, {
+          fileName: `LetShareFolder_${Date.now()}_dropped.zip`,
+        });
+        if (bundle.duplicateFileCount > 0) {
+          alertUseMUI(t('toast.duplicateFilesSkipped', { count: bundle.duplicateFileCount }), 3000, { kind: "info" });
+        }
+        return [bundle.file];
+      } catch (error) {
+        console.warn("Dropped folder packaging failed; aborting the batch:", error);
+        alertUseMUI(t('toast.fileReadFailed'), 3500, { kind: "error" });
+        return null;
+      }
+    }
+
+    return validEntries.map(({ file }) => file);
   };
 
   const sendFilesToUserCard = async (targetUserId: string, files: File[]) => {
@@ -783,18 +784,24 @@ const Share = observer(() => {
       setDwnloadPageState(true);
       return;
     }
-    let fileToSend: File;
+    let bundle: TransferBundleResult;
     try {
-      fileToSend = validFiles.length === 1 ? validFiles[0] : await buildZipFile(validFiles);
+      bundle = await buildZipFile(validFiles);
     } catch {
-      alertUseMUI(t('toast.zipFailed'), 2000, { kind: "error" });
+      alertUseMUI(t('toast.fileReadFailed'), 3500, { kind: "error" });
       return;
     }
     try {
       // 3.8.2 统一发送入口：P2P（probe 验证后）→ 失败/卡死自动切公网 relay
-      await realTimeColab.sendFileAuto(targetUserId, fileToSend);
+      await realTimeColab.sendFileAuto(targetUserId, bundle.file);
       alertUseMUI(
-        t('toast.droppedSending', { name: targetUserId.split(':')[0], count: files.length }),
+        bundle.duplicateFileCount > 0
+          ? t('toast.droppedSendingWithDuplicates', {
+            name: targetUserId.split(':')[0],
+            count: bundle.includedFileCount,
+            duplicateCount: bundle.duplicateFileCount,
+          })
+          : t('toast.droppedSending', { name: targetUserId.split(':')[0], count: bundle.includedFileCount }),
         2000,
         { kind: "success" }
       );
@@ -1419,26 +1426,9 @@ const Share = observer(() => {
     }
     // Always keep original file list for display
     setSelectedFiles(files);
-    if (files.length === 1) {
-      setSelectedFile(files[0]);
-      return;
-    }
-    try {
-      const { default: JSZip } = await import("jszip");
-      const zip = new JSZip();
-      // 添加所有文件到ZIP
-      files.forEach(file => {
-        zip.file(file.name, file);
-      });
-      // 生成ZIP文件
-      const content = await zip.generateAsync({ type: "blob" });
-      const zipFile = new File([content], `LetShare_${Date.now()}.zip`, {
-        type: "application/zip",
-      });
-      setSelectedFile(zipFile);
-      realTimeColab.addTransferRecord("pasted-files", `${files.length} files`, files.map(f => f.name).join(", "));
-    } catch (error) {
-      alertUseMUI(t('toast.zipFailed'), 2000, { kind: "error" });
+    const bundle = await prepareSelectedFilePayload(files);
+    if (files.length > 1 && bundle) {
+      realTimeColab.addTransferRecord("pasted-files", `${bundle.includedFileCount} files`, files.map(f => f.name).join(", "));
     }
   };
 
@@ -1450,6 +1440,7 @@ const Share = observer(() => {
     const files = event.target.files;
     if (!files || files.length === 0) return;
     const selected = Array.from(files);
+    event.target.value = "";
     const targetUserId = filePickerTargetUser;
     setFilePickerTargetUser(null);
     if (targetUserId) {
@@ -1466,6 +1457,12 @@ const Share = observer(() => {
       if ((selectedButton === "text" || selectedButton === "clip") && !canSendMessage) {
         alertUseMUI(t('toast.connectingUser'), 2000, { kind: "warning" });
         realTimeColab.connectToUser(targetUserId);
+        return;
+      }
+
+      if ((selectedButton === "file" || selectedButton === "image")
+        && (isPreparingSelectedFile || isPreparingSelectedFileRef.current)) {
+        alertUseMUI("文件正在准备，请稍候", 2000, { kind: "info" });
         return;
       }
 
@@ -1565,18 +1562,27 @@ const Share = observer(() => {
 
       const items = clipboardData.items;
       const pastedFiles: File[] = [];
+      let hasFileItem = false;
+      let hasUnreadableFileItem = false;
 
       for (const item of items) {
         if (item.kind === "file") {
+          hasFileItem = true;
           const file = item.getAsFile();
           if (file) {
             pastedFiles.push(file);
+          } else {
+            hasUnreadableFileItem = true;
           }
         }
       }
 
-      if (pastedFiles.length > 0) {
+      if (hasFileItem) {
         event.preventDefault();
+        if (hasUnreadableFileItem || pastedFiles.length === 0) {
+          alertUseMUI(t('toast.fileReadFailed'), 3500, { kind: "error" });
+          return;
+        }
         await applyFileSelection(pastedFiles, false);
         return;
       }

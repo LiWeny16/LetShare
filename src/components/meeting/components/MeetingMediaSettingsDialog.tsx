@@ -31,6 +31,7 @@ import BadgeIcon from "@mui/icons-material/Badge";
 import CasinoOutlinedIcon from "@mui/icons-material/CasinoOutlined";
 import SettingsSuggestIcon from "@mui/icons-material/SettingsSuggest";
 import { useTranslation } from "react-i18next";
+import MeetingMicrophoneTest from "./MeetingMicrophoneTest";
 import settingsStore from "@App/libs/mobx/mobx";
 import realTimeColab from "@App/libs/connection/colabLib";
 import { meetingManager } from "@App/libs/meeting/meetingManager";
@@ -314,6 +315,7 @@ export default function MeetingMediaSettingsDialog({ open, onClose, onMediaSetti
                 {devices.mics.map((device, index) => <MenuItem key={device.deviceId || `mic-${index}`} value={device.deviceId}>{label(device, `${t("call.microphone", "麦克风")} ${index + 1}`)}</MenuItem>)}
               </Select>
             </FormControl>
+            <MeetingMicrophoneTest active={open} disabled={applying} selectedMic={selectedMic} />
             <FormControl fullWidth size="small">
               <InputLabel>{t("call.camera", "摄像头")}</InputLabel>
               <Select data-testid="meeting-camera-device" value={selectedCamera} label={t("call.camera", "摄像头")} disabled={applying} onChange={(event) => void update("videoDeviceId", String(event.target.value), true)}>

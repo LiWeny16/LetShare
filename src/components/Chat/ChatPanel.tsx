@@ -30,12 +30,13 @@ import { useTranslation } from 'react-i18next';
 import ChatHistoryManager, { ChatMessage, ChatHistory } from '@App/libs/chat/ChatHistoryManager';
 import ChatIntegration from '@App/libs/chat/ChatIntegration';
 import realTimeColab from '@App/libs/connection/colabLib';
+import alertUseMUI from '@App/libs/tools/alert';
 import FileBubble from './FileBubble';
 import ImageBubble from './ImageBubble';
 import FilePreviewDialog from '../FilePreviewDialog';
 import type { FileChatMessage, FileMetadata, TextChatMessage } from '@App/libs/chat/ChatHistoryManager';
 import { buildRedPacket, parseRedPacket, type RedPacketPayload } from '@App/libs/chat/redpacket';
-import { bundleTransferEntries, collectDroppedTransferEntries, type TransferEntry } from '@App/libs/chat/fileBundle';
+import { bundleTransferEntriesWithInfo, collectDroppedTransferEntries, type TransferBundleResult, type TransferEntry } from '@App/libs/chat/fileBundle';
 
 interface ChatPanelProps {
     open: boolean;
@@ -367,30 +368,45 @@ const ChatPanelContent: React.FC<ChatPanelProps> = ({ open, onClose, targetUserI
     };
 
     const sendChatTransferEntries = async (entries: readonly TransferEntry[]) => {
-        const validEntries = entries.filter(({ file }) => Boolean(file));
+        const validEntries = entries.filter(({ file }) => Boolean(file) && file.size > 0);
         if (validEntries.length === 0) {
-            showTransferNotice('空文件无法发送');
+            showTransferNotice(t('toast.emptyFileNotAllowed'));
+            return;
+        }
+        if (validEntries.length !== entries.length) {
+            showTransferNotice(t('toast.emptyFileNotAllowed'));
             return;
         }
 
         setPlusPanelOpen(false);
+        let bundle: TransferBundleResult;
         try {
-            const fileToSend = await bundleTransferEntries(validEntries);
-            console.log('[CHAT PANEL] Sending transfer:', fileToSend.name, fileToSend.size, validEntries.length);
-            const result = await ChatIntegration.sendFileMessage(targetUserId, fileToSend);
+            bundle = await bundleTransferEntriesWithInfo(validEntries);
+        } catch (error) {
+            console.error('[CHAT PANEL] File bundle error:', error);
+            showTransferNotice(t('toast.fileReadFailed'));
+            return;
+        }
+
+        console.log('[CHAT PANEL] Sending transfer:', bundle.file.name, bundle.file.size, bundle.includedFileCount);
+        try {
+            const result = await ChatIntegration.sendFileMessage(targetUserId, bundle.file);
             if (result.error) {
                 console.error('[CHAT PANEL] Failed to send file:', result.error);
-                showTransferNotice('文件发送失败，请重试');
+                showTransferNotice(t('toast.fileTransferFailed'));
                 return;
             }
-            showTransferNotice(
-                validEntries.length > 1
-                    ? `已打包发送 ${validEntries.length} 个文件，接收端会保留文件夹路径`
-                    : '文件已发送'
-            );
+            showTransferNotice(bundle.duplicateFileCount > 0
+                ? t('toast.batchSentWithDuplicates', {
+                    count: bundle.includedFileCount,
+                    duplicateCount: bundle.duplicateFileCount,
+                })
+                : bundle.includedFileCount > 1
+                    ? t('toast.batchFilesSent', { count: bundle.includedFileCount })
+                    : t('toast.fileSent'));
         } catch (error) {
-            console.error('[CHAT PANEL] File bundle/send error:', error);
-            showTransferNotice('文件打包失败，请重试');
+            console.error('[CHAT PANEL] File send error:', error);
+            showTransferNotice(t('toast.fileTransferFailed'));
         }
     };
 
@@ -428,8 +444,13 @@ const ChatPanelContent: React.FC<ChatPanelProps> = ({ open, onClose, targetUserI
         event.stopPropagation();
         dragDepthRef.current = 0;
         setIsFileDragActive(false);
-        const entries = await collectDroppedTransferEntries(event.dataTransfer);
-        await sendChatTransferEntries(entries);
+        try {
+            const entries = await collectDroppedTransferEntries(event.dataTransfer);
+            await sendChatTransferEntries(entries);
+        } catch (error) {
+            console.error('[CHAT PANEL] Dropped file collection failed:', error);
+            showTransferNotice(t('toast.fileReadFailed'));
+        }
     };
 
     /** 相册多选（微信式）：input multiple，逐个发送选中图片 */
@@ -539,12 +560,15 @@ const ChatPanelContent: React.FC<ChatPanelProps> = ({ open, onClose, targetUserI
         try {
             console.log(`[CHAT PANEL] Deleting chat history for ${targetUserId}`);
             const result = await ChatIntegration.deleteChatHistory(targetUserId);
-            if (result.success) {
+            if (result.success || result.historyDeleted) {
                 setChatHistory(null);
                 onClose();
+                if (!result.success && result.error) {
+                    alertUseMUI(result.error, 4000, { kind: 'warning' });
+                }
             } else {
                 console.error(`[CHAT PANEL] Failed to delete chat history: ${result.error}`);
-                // 可以添加用户友好的错误提示
+                alertUseMUI(result.error || t('chat.deleteHistoryFailed', { defaultValue: 'Could not delete chat history. Please retry.' }), 4000, { kind: 'warning' });
             }
         } catch (error) {
             console.error('[CHAT PANEL] Failed to delete chat history:', error);
@@ -780,7 +804,10 @@ const ChatPanelContent: React.FC<ChatPanelProps> = ({ open, onClose, targetUserI
 
     if (!visible && !open) return null;
 
-    const hasMessages = chatHistory?.messages && chatHistory.messages.length > 0;
+    const visibleMessages = (chatHistory?.messages ?? []).filter((message) =>
+        message.type === 'text' || !message.fileMetadata.sourceArchiveFileKey,
+    );
+    const hasMessages = visibleMessages.length > 0;
 
     return (
         <>
@@ -895,7 +922,7 @@ const ChatPanelContent: React.FC<ChatPanelProps> = ({ open, onClose, targetUserI
                                             {targetUserName}
                                         </Typography>
                                         <Typography variant="caption" color="text.secondary">
-                                            {hasMessages ? t('chat.messageCount', { count: chatHistory.messages.length }) : t('chat.startChat')}
+                                            {hasMessages ? t('chat.messageCount', { count: visibleMessages.length }) : t('chat.startChat')}
                                         </Typography>
                                     </Box>
                                 </Box>
@@ -954,7 +981,7 @@ const ChatPanelContent: React.FC<ChatPanelProps> = ({ open, onClose, targetUserI
                                     </Box>
                                 ) : (
                                     <>
-                                        {chatHistory.messages.map((msg, i) => renderMessage(msg, i, chatHistory.messages))}
+                                        {visibleMessages.map((msg, i) => renderMessage(msg, i, visibleMessages))}
                                         <div ref={messagesEndRef} />
                                     </>
                                 )}

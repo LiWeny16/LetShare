@@ -7,6 +7,7 @@
 import { isValidElement, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   alpha,
+  Alert,
   Box,
   Button,
   Chip,
@@ -192,6 +193,21 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
 
   const local = useLocalStream(state.inMeeting, state.cameraOn, state.muted);
   const elapsed = useMeetingTimer(state.stage);
+  const microphoneProblem = state.microphoneError === "denied"
+    ? t("meeting.microphoneDenied", "麦克风权限未获允许，其他人听不到你。请在浏览器的网站权限和手机系统的应用权限中允许麦克风，然后重试。")
+    : state.microphoneError === "not-found"
+      ? t("meeting.microphoneMissing", "未找到可用麦克风。请检查设备或蓝牙耳机连接，也可在会议设置中选择其他麦克风后重试。")
+      : state.microphoneError === "busy"
+        ? t("meeting.microphoneUnavailable", "麦克风暂时无法使用。请检查其他录音应用、蓝牙耳机或系统音频设置后重试。")
+        : state.microphoneError === "unsupported"
+          ? t("meeting.microphoneUnsupported", "当前浏览器环境无法使用麦克风。请用更新版本的系统浏览器打开会议链接。")
+          : state.microphoneError === "insecure"
+            ? t("meeting.microphoneInsecure", "当前页面无法申请麦克风权限，请通过 HTTPS 地址打开会议。")
+            : state.microphoneError === "paused"
+              ? t("meeting.microphonePaused", "麦克风采集已被浏览器或系统暂停，其他人暂时听不到你。请回到会议页面并检查麦克风权限，必要时点击重试。")
+              : state.microphoneError === "ended"
+                ? t("meeting.microphoneEnded", "麦克风采集已结束，其他人听不到你。请检查设备和权限后重新开启麦克风。")
+                : t("meeting.microphoneFailed", "麦克风开启失败。你仍可听会议，请检查权限和设备后重试，或在会议设置中更换麦克风。");
 
   const setWhiteboardLocalVisible = (visible: boolean, breakFollow = true) => {
     if (breakFollow) setFollowPresenter(false);
@@ -869,6 +885,32 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
         </Stack>
       </Box>
 
+      {(state.microphoneError || state.microphonePending) && (
+        <Alert
+          severity="warning"
+          data-testid="meeting-microphone-error"
+          sx={{ flexShrink: 0, borderRadius: 0, alignItems: "center", "& .MuiAlert-message": { minWidth: 0, fontSize: "0.78rem" } }}
+          action={state.microphoneError !== "unsupported" && state.microphoneError !== "insecure" ? (
+            <Button
+              color="inherit"
+              size="small"
+              data-testid="meeting-microphone-retry"
+              disabled={state.microphonePending || state.stage !== "in-meeting"}
+              onClick={() => meetingManager.setMuted(false)}
+              sx={{ whiteSpace: "nowrap" }}
+            >
+              {state.microphonePending ? t("meeting.microphoneOpening", "正在开启…") : t("meeting.microphoneRetry", "重试麦克风")}
+            </Button>
+          ) : undefined}
+        >
+          {state.microphonePending
+            ? state.stage === "joining"
+              ? t("meeting.mediaRequesting", "正在检查媒体设备，请处理浏览器或系统的麦克风、摄像头授权提示。")
+              : t("meeting.microphoneRequesting", "正在请求麦克风，请处理浏览器或系统的授权提示。")
+            : microphoneProblem}
+        </Alert>
+      )}
+
       <Box
         component="main"
         sx={{
@@ -1156,7 +1198,13 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
             "& > span": { flexShrink: 0 },
           }}
         >
-        {control(state.muted ? <MicOffIcon /> : <MicIcon />, state.muted ? t("meeting.unmute", "解除静音") : t("meeting.mute", "静音"), () => meetingManager.setMuted(!state.muted), !state.muted, false, state.stage !== "in-meeting")}
+        {control(state.muted || state.microphoneError || state.microphonePending ? <MicOffIcon /> : <MicIcon />,
+          state.microphonePending ? t("meeting.microphoneOpening", "正在开启…")
+            : state.microphoneError ? t("meeting.microphoneRetry", "重试麦克风")
+              : state.muted ? t("meeting.unmute", "解除静音") : t("meeting.mute", "静音"),
+          () => meetingManager.setMuted(state.microphoneError ? false : !state.muted),
+          !state.muted && !state.microphoneError && !state.microphonePending, false,
+          state.stage !== "in-meeting" || state.microphonePending === true)}
         {control(state.cameraOn ? <VideocamIcon /> : <VideocamOffIcon />, state.cameraOn ? t("meeting.stopVideo", "关闭摄像头") : t("meeting.startVideo", "开启摄像头"), () => meetingManager.setCameraOn(!state.cameraOn), state.cameraOn, false, state.stage !== "in-meeting")}
         {control(state.screenOn ? <StopScreenShareIcon /> : <ScreenShareIcon />, state.screenOn ? t("meeting.stopShare", "停止共享") : t("meeting.shareScreen", "共享屏幕"), () => state.screenOn ? meetingManager.stopScreenShare() : void meetingManager.startScreenShare(), state.screenOn, false, state.stage !== "in-meeting")}
         {control(<EditIcon />, whiteboardLabel, () => {

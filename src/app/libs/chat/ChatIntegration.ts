@@ -6,6 +6,13 @@ import mitt from 'mitt';
 import { guessMimeType } from './mimeTypes';
 import type { FileTransferV2Task } from '../connection/fileTransferV2/store';
 
+export type ReceivedBundleEntry = {
+    file: File;
+    archivePath: string;
+};
+
+export type HistoryDeletionGeneration = { user: number; all: number; stableAtCapture: boolean };
+
 type V2ReceivedHistoryCommitDependencies = {
     selfId: string;
     getHistory: typeof ChatHistoryManager.getChatHistory;
@@ -141,6 +148,41 @@ class ChatIntegration {
     // without eagerly reading the whole file into IndexedDB (expensive for large video/PDF).
     private sentFileCache: Map<string, File> = new Map();
     private v2PublicationJobs = new Map<string, Promise<boolean>>();
+    private historyDeletionVersions = new Map<string, number>();
+    private historyClearVersion = 0;
+    private activeHistoryDeletionCounts = new Map<string, number>();
+    private activeHistoryClearCount = 0;
+
+    public captureHistoryDeletionGeneration(userId: string): HistoryDeletionGeneration {
+        return {
+            user: this.historyDeletionVersions.get(userId) ?? 0,
+            all: this.historyClearVersion,
+            stableAtCapture: this.activeHistoryClearCount === 0
+                && (this.activeHistoryDeletionCounts.get(userId) ?? 0) === 0,
+        };
+    }
+
+    public isHistoryDeletionGenerationCurrent(
+        userId: string,
+        generation: HistoryDeletionGeneration,
+    ): boolean {
+        return generation.stableAtCapture
+            && this.activeHistoryClearCount === 0
+            && (this.activeHistoryDeletionCounts.get(userId) ?? 0) === 0
+            && generation.user === (this.historyDeletionVersions.get(userId) ?? 0)
+            && generation.all === this.historyClearVersion;
+    }
+
+    private beginHistoryDeletion(userId: string): void {
+        this.historyDeletionVersions.set(userId, (this.historyDeletionVersions.get(userId) ?? 0) + 1);
+        this.activeHistoryDeletionCounts.set(userId, (this.activeHistoryDeletionCounts.get(userId) ?? 0) + 1);
+    }
+
+    private finishHistoryDeletion(userId: string): void {
+        const activeCount = this.activeHistoryDeletionCounts.get(userId) ?? 0;
+        if (activeCount <= 1) this.activeHistoryDeletionCounts.delete(userId);
+        else this.activeHistoryDeletionCounts.set(userId, activeCount - 1);
+    }
 
     private constructor() {
         // 注入UserIdProvider到ChatHistoryManager
@@ -340,14 +382,25 @@ class ChatIntegration {
     }
 
     /** Persist a received file and its history reference before the transport confirms completion. */
-    public async commitReceivedFile(fromUserId: string, file: File): Promise<string> {
+    public async commitReceivedFile(
+        fromUserId: string,
+        file: File,
+        isReceiveCurrent: () => boolean = () => true,
+    ): Promise<string> {
         if (fromUserId === realTimeColab.getUniqId()) throw new Error('Cannot save a file received from the local user');
+        const generation = this.captureHistoryDeletionGeneration(fromUserId);
+        const isCommitCurrent = () => this.isHistoryDeletionGenerationCurrent(fromUserId, generation) && isReceiveCurrent();
+        if (!isCommitCurrent()) throw new Error('Received file was cleared before it could be saved');
 
         const userName = fromUserId.split(':')[0] || 'Unknown User';
         const fileKey = createFileBlobKey(fromUserId, Date.now(), file.name);
         const storeResult = await FileBlobStore.storeFile(fileKey, file);
         if (!storeResult.success) {
             throw new Error(`Received file could not be committed to IndexedDB: ${storeResult.error || 'unknown error'}`);
+        }
+        if (!isCommitCurrent()) {
+            await FileBlobStore.deleteFile(fileKey);
+            throw new Error('Received file was cleared while it was being saved');
         }
 
         const result = await ChatHistoryManager.addFileMessage(
@@ -363,6 +416,18 @@ class ChatIntegration {
             await FileBlobStore.deleteFile(fileKey);
             throw new Error(`Failed to create file history message: ${result.error || 'unknown error'}`);
         }
+        if (!isCommitCurrent()) {
+            if (result.messageId) {
+                const rollback = await ChatHistoryManager.deleteMessage(fromUserId, result.messageId);
+                if (!rollback.success && rollback.error !== 'Chat history not found' && rollback.error !== 'Message not found') {
+                    throw new Error(`Received file became stale, but its history entry could not be rolled back: ${rollback.error || 'unknown error'}`);
+                }
+            } else {
+                throw new Error('Received file became stale, but its history entry could not be identified; keeping the stored file for recovery');
+            }
+            await FileBlobStore.deleteFile(fileKey);
+            throw new Error('Received file was cleared while it was being saved');
+        }
 
         this.emitter.emit('history-updated', { userId: fromUserId });
         console.log(`[CHAT INTEGRATION] File received and durably stored: ${file.name} (${fileKey})`);
@@ -370,8 +435,15 @@ class ChatIntegration {
     }
 
     /** Link a verified v2 receive before the engine persists completion; keep its preview pending. */
-    public async commitV2ReceivedFile(task: FileTransferV2Task, file: File): Promise<string> {
+    public async commitV2ReceivedFile(
+        task: FileTransferV2Task,
+        file: File,
+        isReceiveCurrent: () => boolean = () => true,
+    ): Promise<string> {
         const peerId = task.peerParticipantId;
+        const generation = this.captureHistoryDeletionGeneration(peerId);
+        const isCommitCurrent = () => this.isHistoryDeletionGenerationCurrent(peerId, generation) && isReceiveCurrent();
+        if (!isCommitCurrent()) throw new Error('Received file was cleared before it could be saved');
         const fileKey = await commitV2ReceivedHistoryLink(task, file, {
             selfId: realTimeColab.getUniqId() || '',
             getHistory: userId => ChatHistoryManager.getChatHistory(userId),
@@ -385,14 +457,119 @@ class ChatIntegration {
                 { preserveFile: true },
             ),
         });
+        if (!isCommitCurrent()) {
+            const history = await ChatHistoryManager.getChatHistory(peerId);
+            const staleMessage = history?.messages.find(message =>
+                message.type !== 'text' && message.fileMetadata.fileKey === fileKey,
+            );
+            if (staleMessage) {
+                await ChatHistoryManager.deleteMessage(peerId, staleMessage.id, { preserveFile: true });
+            } else {
+                await FileBlobStore.deleteFile(fileKey);
+            }
+            throw new Error('Received file was cleared while it was being saved');
+        }
         this.emitter.emit('history-updated', { userId: peerId });
         return fileKey;
+    }
+
+    /** Persist extracted bundle entries before marking their source archive as expanded. */
+    public async commitReceivedBundleEntries(
+        fromUserId: string,
+        sourceArchiveFileKey: string,
+        entries: readonly ReceivedBundleEntry[],
+        isCurrent: () => boolean = () => true,
+        retainSourceArchive = false,
+    ): Promise<void> {
+        if (fromUserId === realTimeColab.getUniqId()) {
+            throw new Error('Cannot save bundle entries received from the local user');
+        }
+        if (!sourceArchiveFileKey) {
+            throw new Error('Bundle entries require a persisted source archive');
+        }
+
+        const userName = fromUserId.split(':')[0] || 'Unknown User';
+        const generation = this.captureHistoryDeletionGeneration(fromUserId);
+        const isReceiveCurrent = () => this.isHistoryDeletionGenerationCurrent(fromUserId, generation) && isCurrent();
+        const committedEntries: Array<{ messageId: string; fileKey: string }> = [];
+        let bundleMarkedExpanded = false;
+        try {
+            if (!isReceiveCurrent()) throw new Error('Bundle receive was cleared before extracted files could be saved');
+            for (const { file, archivePath } of entries) {
+                if (!isReceiveCurrent()) throw new Error('Bundle receive was cleared while extracted files were being saved');
+                const fileKey = createFileBlobKey(fromUserId, Date.now(), `bundle_${file.name}`);
+                const stored = await FileBlobStore.storeFile(fileKey, file);
+                if (!stored.success) {
+                    throw new Error(`Expanded file could not be saved: ${stored.error || file.name}`);
+                }
+                if (!isReceiveCurrent()) {
+                    await FileBlobStore.deleteFile(fileKey);
+                    throw new Error('Bundle receive was cleared while extracted files were being saved');
+                }
+
+                const result = await ChatHistoryManager.addFileMessage(
+                    fromUserId,
+                    userName,
+                    fromUserId,
+                    { name: file.name, size: file.size, type: file.type },
+                    'completed',
+                    100,
+                    fileKey,
+                    { sourceArchiveFileKey, sourceArchiveEntryPath: archivePath },
+                );
+                if (!result.success || !result.messageId) {
+                    await FileBlobStore.deleteFile(fileKey);
+                    throw new Error(`Expanded file history could not be saved: ${result.error || file.name}`);
+                }
+                committedEntries.push({ messageId: result.messageId, fileKey });
+                if (!isReceiveCurrent()) {
+                    throw new Error('Bundle receive was cleared while extracted files were being saved');
+                }
+            }
+
+            if (!isReceiveCurrent()) throw new Error('Bundle receive was cleared before it could be finalized');
+            if (!(await ChatHistoryManager.markFileBundleExpanded(
+                fromUserId,
+                sourceArchiveFileKey,
+                true,
+                retainSourceArchive,
+            ))) {
+                throw new Error('Source bundle could not be marked as expanded');
+            }
+            bundleMarkedExpanded = true;
+            if (!isReceiveCurrent()) throw new Error('Bundle receive was cleared while it was being finalized');
+        } catch (error) {
+            if (bundleMarkedExpanded) {
+                const expansionReset = await ChatHistoryManager.markFileBundleExpanded(
+                    fromUserId,
+                    sourceArchiveFileKey,
+                    false,
+                );
+                if (!expansionReset) {
+                    console.error('[CHAT INTEGRATION] Could not reset an expanded bundle; keeping its committed entries intact');
+                    throw error;
+                }
+            }
+            for (const { messageId, fileKey } of committedEntries.reverse()) {
+                const rollback = await ChatHistoryManager.deleteMessage(fromUserId, messageId);
+                if (!rollback.success) {
+                    console.error('[CHAT INTEGRATION] Failed to roll back an expanded bundle entry:', messageId);
+                    continue;
+                }
+                await FileBlobStore.deleteFile(fileKey);
+            }
+            throw error;
+        }
+        this.emitter.emit('history-updated', { userId: fromUserId });
     }
 
     public finalizeV2ReceivedFile(task: FileTransferV2Task, isCurrent: () => boolean = () => true): Promise<boolean> {
         const pending = this.v2PublicationJobs.get(task.transferId);
         if (pending) return pending;
-        const inScope = () => isCurrent() && realTimeColab.isFileTransferV2TaskCurrent(task);
+        const generation = this.captureHistoryDeletionGeneration(task.peerParticipantId);
+        const inScope = () => this.isHistoryDeletionGenerationCurrent(task.peerParticipantId, generation)
+            && isCurrent()
+            && realTimeColab.isFileTransferV2TaskCurrent(task);
         const publishing = publishV2ReceivedHistoryLink(task, {
             getHistory: userId => ChatHistoryManager.getChatHistory(userId),
             updateProgress: (...args) => ChatHistoryManager.updateFileMessageProgress(...args),
@@ -423,13 +600,16 @@ class ChatIntegration {
         }
         for (const task of tasks) {
             if (task.direction !== 'receive' || task.status !== 'completed'
-                || peerId && task.peerParticipantId !== peerId) continue;
+                || peerId && task.peerParticipantId !== peerId
+                || realTimeColab.isV2ReceivedFilePending(task.transferId)) continue;
             try {
                 const history = await ChatHistoryManager.getChatHistory(task.peerParticipantId);
                 if (!history?.messages.some(message => message.type !== 'text'
                     && message.fileMetadata.fileKey === `filev2:${task.transferId}`
                     && message.fileMetadata.transferStatus !== 'completed')) continue;
-                await this.finalizeV2ReceivedFile(task);
+                if (await this.finalizeV2ReceivedFile(task)) {
+                    realTimeColab.clearV2ReceivedFileClearProtection(task);
+                }
             } catch (error) {
                 realTimeColab.reportFileTransferV2HistoryError(error, task.transferId);
             }
@@ -556,23 +736,36 @@ class ChatIntegration {
     }
 
     /** Delete chat history for a user (messages + associated file blobs). */
-    public async deleteChatHistory(userId: string): Promise<{ success: boolean; error?: string }> {
+    public async deleteChatHistory(userId: string): Promise<{ success: boolean; error?: string; historyDeleted?: boolean }> {
         try {
             const prepared = await FileBlobStore.prepareDeleteFilesByUser(userId);
             if (!prepared.success) {
-                return { success: false, error: 'Associated transfers could not be paused for deletion' };
+                return { success: false, error: 'Associated transfers could not be paused for deletion', historyDeleted: false };
             }
-            const history = await ChatHistoryManager.deleteChatHistory(userId);
-            if (!history.success) return history;
-            const files = await FileBlobStore.deleteFilesByUser(userId);
-            if (!files.success) {
-                return { success: false, error: 'Chat history was deleted, but some associated file cleanup is pending' };
+            this.beginHistoryDeletion(userId);
+            realTimeColab.beginReceivedFilesClearForUser(userId);
+            realTimeColab.beginReceivedFilesHydrationMutation();
+            try {
+                const history = await ChatHistoryManager.deleteChatHistory(userId);
+                if (!history.success) return { ...history, historyDeleted: false };
+                realTimeColab.clearReceivedFilesForUser(userId);
+                const files = await FileBlobStore.deleteFilesByUser(userId);
+                if (!files.success) {
+                    return {
+                        success: false,
+                        error: 'Chat history was deleted, but some associated file cleanup is pending',
+                        historyDeleted: true,
+                    };
+                }
+                return { ...history, historyDeleted: true };
+            } finally {
+                this.finishHistoryDeletion(userId);
+                realTimeColab.finishReceivedFilesHydrationMutation();
             }
-            return history;
         } catch (error) {
             const errorMessage = error instanceof Error ? error.message : 'Unknown error';
             console.error('[CHAT INTEGRATION] Failed to delete chat history:', error);
-            return { success: false, error: errorMessage };
+            return { success: false, error: errorMessage, historyDeleted: false };
         }
     }
 
@@ -583,13 +776,23 @@ class ChatIntegration {
             if (!prepared.success) {
                 return { success: false, error: 'Stored transfers could not be paused before clearing history' };
             }
-            await ChatHistoryManager.clearAllChatHistories();
-            const files = await FileBlobStore.clearAll();
-            if (!files.success) {
-                return { success: false, error: 'Chat history was cleared, but some stored file cleanup is pending' };
+            this.activeHistoryClearCount += 1;
+            this.historyClearVersion += 1;
+            realTimeColab.beginClearReceivedFiles();
+            realTimeColab.beginReceivedFilesHydrationMutation();
+            try {
+                await ChatHistoryManager.clearAllChatHistories();
+                realTimeColab.clearReceivedFiles();
+                const files = await FileBlobStore.clearAll();
+                if (!files.success) {
+                    return { success: false, error: 'Chat history was cleared, but some stored file cleanup is pending' };
+                }
+                this.emitter.emit('history-updated', { userId: realTimeColab.getUniqId() || 'unknown' });
+                return { success: true };
+            } finally {
+                this.activeHistoryClearCount -= 1;
+                realTimeColab.finishReceivedFilesHydrationMutation();
             }
-            this.emitter.emit('history-updated', { userId: realTimeColab.getUniqId() || 'unknown' });
-            return { success: true };
         } catch (error) {
             const errorMessage = error instanceof Error ? error.message : 'Unknown error';
             return { success: false, error: errorMessage };

@@ -110,17 +110,18 @@ export default function MeetingPrejoinPreview({ compact = false, isHost = false 
       return false;
     }
     try {
+      const contentHint = settingsStore.get("audioContentHint") ?? "speech";
       const next = await navigator.mediaDevices.getUserMedia({
         audio: mergedAudioConstraints(preferredId || undefined, {
           echoCancelType: settingsStore.get("echoCancelType") ?? "browser",
-          noiseSuppression: settingsStore.get("noiseSuppression") ?? true,
+          noiseSuppression: (settingsStore.get("nsMode") ?? "browser") === "browser",
         }),
       });
       stopStream(audioStream);
       setAudioStream(next);
       next.getAudioTracks().forEach((track) => {
         track.enabled = true;
-        track.contentHint = settingsStore.get("audioContentHint") ?? "speech";
+        track.contentHint = contentHint;
       });
       // The preview stream is intentionally released when the dialog closes.
       // Persist the user's choice so MeetingManager's fresh join capture uses
