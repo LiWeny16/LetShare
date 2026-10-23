@@ -1,1 +1,0 @@
-import{t as e}from"./share-myebFAtE.js";export{e as readClipboard};
