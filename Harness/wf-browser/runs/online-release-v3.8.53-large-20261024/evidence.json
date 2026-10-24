@@ -1,0 +1,119 @@
+{
+    "result":  "OPFS direct-to-disk path completed; native save picker incomplete",
+    "capturedAtUtc":  "2026-10-24T10:08:46.384Z",
+    "production":  {
+                       "url":  "https://letshare.fun/",
+                       "version":  "3.8.53",
+                       "roomId":  "816327",
+                       "serverUrl":  "wss://ecs.letshare.fun/",
+                       "transferPriority":  "p2p"
+                   },
+    "browsers":  {
+                     "receiver":  {
+                                      "name":  "Microsoft Edge",
+                                      "version":  "156.0.4314.42",
+                                      "freshIsolatedProfile":  true,
+                                      "peerVisibleOnlineAtEnd":  true
+                                  },
+                     "sender":  {
+                                    "name":  "Google Chrome",
+                                    "version":  "155.0.8059.86",
+                                    "freshIsolatedProfile":  true,
+                                    "peerVisibleOnlineAtEnd":  true
+                                }
+                 },
+    "payload":  {
+                    "fileName":  "letshare-v3853-room816327-128mib-plus-1.bin",
+                    "sizeBytes":  134217729,
+                    "deterministicPattern":  "byte[offset] = offset mod 251",
+                    "sha256":  "dea6ec477c68641ce21ace6acbe92bf6393c55e51c3b1f55c532725b40e8388c"
+                },
+    "p2p":  {
+                "edge":  {
+                             "iceConnectionState":  "connected",
+                             "connectionState":  "connected",
+                             "signalingState":  "stable",
+                             "candidatePairSucceeded":  true,
+                             "candidateTypesObserved":  [
+                                                            "host",
+                                                            "srflx"
+                                                        ],
+                             "dtlsState":  "connected",
+                             "dataChannel":  {
+                                                 "label":  "chat",
+                                                 "state":  "open"
+                                             }
+                         },
+                "chrome":  {
+                               "iceConnectionState":  "connected",
+                               "connectionState":  "connected",
+                               "signalingState":  "stable",
+                               "candidatePairSucceeded":  true,
+                               "candidateTypesObserved":  [
+                                                              "host",
+                                                              "srflx",
+                                                              "prflx"
+                                                          ],
+                               "dtlsState":  "connected",
+                               "dataChannel":  {
+                                                   "label":  "chat",
+                                                   "state":  "open"
+                                               }
+                           },
+                "receiverConsoleSignals":  [
+                                               "Peer status connected",
+                                               "ICE connected",
+                                               "DataChannel opened",
+                                               "P2P probe verified (probe + test data ACK)"
+                                           ]
+            },
+    "transfer":  {
+                     "transferId":  "d5190017-c27b-43b5-bdc6-707677327e1c",
+                     "offer":  "Receiver showed SAVE TO DISK and 0 B / 128.0 MB",
+                     "progress":  "Receiving; Confirmed 17.8 MB / 128.0 MB at 7.4 MB/s",
+                     "completed":  true,
+                     "storageMode":  "direct-to-disk",
+                     "sink":  "OPFS FileSystemFileHandle",
+                     "sinkName":  "e2e-1792836431108-letshare-v3853-room816327-128mib-plus-1.bin",
+                     "sizeBytes":  134217729,
+                     "sha256":  "dea6ec477c68641ce21ace6acbe92bf6393c55e51c3b1f55c532725b40e8388c",
+                     "sourceHashMatches":  true
+                 },
+    "directHistory":  {
+                          "storageMode":  "direct-to-disk",
+                          "transferStatus":  "completed",
+                          "fileSize":  134217729,
+                          "fileKey":  "filev2:d5190017-c27b-43b5-bdc6-707677327e1c"
+                      },
+    "indexedDB":  {
+                      "database":  "letshare_chat_db",
+                      "version":  3,
+                      "chat_historiesCount":  1,
+                      "file_blobsCount":  0,
+                      "matchingFileBlobKeyPresent":  false
+                  },
+    "nativePicker":  {
+                         "edgeApiAvailable":  true,
+                         "completed":  false,
+                         "limitation":  "Windows native automation pipe was unavailable; no native picker selection was observed.",
+                         "fallback":  "A one-time runtime shim returned a real OPFS FileSystemFileHandle. The UI button started the real receiver; this is labeled OPFS, not native picker."
+                     },
+    "evidenceFiles":  [
+                          "session-setup.json",
+                          "final-live-state.json",
+                          "payload-info.json",
+                          "opfs-progress.json",
+                          "verify-opfs-history.json",
+                          "webrtc-after.json",
+                          "receiver-offer-before-save.png",
+                          "receiver-opfs-click-verified.png",
+                          "receiver-opfs-complete.png",
+                          "sender-opfs-complete.png"
+                      ],
+    "changes":  {
+                    "sourceCodeModified":  false,
+                    "repositorySettingsChanged":  false,
+                    "deploymentChanged":  false,
+                    "binaryPayloadInEvidenceDirectory":  false
+                }
+}

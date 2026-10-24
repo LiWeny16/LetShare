@@ -1,0 +1,20 @@
+﻿{
+    "storageMode":  "direct-to-disk",
+    "transferStatus":  "completed",
+    "fileName":  "letshare-v3853-room816327-128mib-plus-1.bin",
+    "fileSize":  134217729,
+    "fileKey":  "filev2:d5190017-c27b-43b5-bdc6-707677327e1c",
+    "indexedDB":  {
+                      "database":  "letshare_chat_db",
+                      "version":  3,
+                      "chat_historiesCount":  1,
+                      "file_blobsCount":  0,
+                      "matchingFileBlobKeyPresent":  false
+                  },
+    "opfs":  {
+                 "handleName":  "e2e-1792836431108-letshare-v3853-room816327-128mib-plus-1.bin",
+                 "sizeBytes":  134217729,
+                 "sha256":  "dea6ec477c68641ce21ace6acbe92bf6393c55e51c3b1f55c532725b40e8388c",
+                 "sourceHashMatches":  true
+             }
+}

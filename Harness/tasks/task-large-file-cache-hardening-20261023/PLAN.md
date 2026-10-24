@@ -73,10 +73,11 @@ Forbidden:
 - [x] Run focused transfer/storage suite, typecheck, and production build.
 - [x] Run independent real-browser Chrome + Edge local acceptance and capture evidence.
 - [x] Complete independent review of the final AC-003 disconnect-race fix.
-- [ ] Deploy with the standard frontend release flow after the review passes.
-- [ ] Dispatch independent agents to verify live small-file and large-file P2P transfer, progress, saved-file integrity, history, and peer connectivity.
+- [x] Deploy with the standard frontend release flow after the review passes.
+- [x] Dispatch independent agents to verify live small-file and large-file P2P transfer, progress, saved-file integrity, history, and peer connectivity.
 
 ## Risks
 
 - V2 direct-to-disk changes the receive storage contract and may affect resume after reload; keep this limitation explicit and verify no duplicate or corrupt writes.
 - `navigator.storage.estimate()` is advisory; concurrent browser writes can still cause a later QuotaExceededError, so retain a paused/recovery path.
+- Live large-file verification used a real OPFS file handle through a one-time picker shim; native Windows save-picker selection and cross-country network behavior remain unverified.

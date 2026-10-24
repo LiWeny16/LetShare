@@ -2,9 +2,9 @@
 
 ## Status
 
-- Phase: release verification and deployment
-- Next: Commit the isolated feature branch, cherry-pick to the clean main release worktree, bump version, deploy with the standard frontend flow, and dispatch independent live online E2E agents.
-- Blocker: None. Final AC-003 race fixes and independent review are complete. Existing V2 task/file-handle retention behavior is unchanged; history deletion never removes the saved disk file.
+- Phase: production deployment and live acceptance complete
+- Next: Commit the sanitized live acceptance evidence and final task status to `main`, then push the evidence commit.
+- Blocker: None. Final AC-003 race fixes, independent review, deployment, and live acceptance are complete. Native Windows save-picker selection and cross-country network behavior remain unverified. Existing V2 task/file-handle retention behavior is unchanged; history deletion never removes the saved disk file.
 
 ## Tasks
 
@@ -20,13 +20,13 @@
 - [x] Complete independent UX/code review; no critical/high findings in AC-001/002/004.
 - [x] Complete final local visible-browser UI smoke for the first large `offered` receive.
 - [x] Fix the medium AC-003 async-admission disconnect race in relay and P2P paths.
-- [x] Run the 16-file focused suite (184/184), typecheck, production build, and targeted diff check after the final fix.
+- [x] Run the 16-file focused suite (185/185), typecheck, production build, and targeted diff check after the final fixes.
 - [x] Complete the independent review of the final race fixes.
-- [ ] Deploy only after review passes; then run independent live online E2E as authorized by the user.
+- [x] Deploy only after review passes; run independent live online E2E as authorized by the user.
 
 ## Changes
 
-- Implementation is underway in this isolated worktree. V2 large receives can use a user-selected direct-to-disk sink; checkpoint ACKs follow durable batch close, and final file integrity is checked before history is pinned.
+- Implementation is complete in this isolated worktree. V2 large receives can use a user-selected direct-to-disk sink; checkpoint ACKs follow durable batch close, and final file integrity is checked before history is pinned.
 - Direct-to-disk history stores metadata and a file handle rather than a duplicate payload. The agreed UI states are available/deleted/permission-required/unavailable, with an “Open file” action.
 - Added storage admission, lazy received-file metadata/cache policies, and bounded legacy relay memory admission. The optional aggregate ZIP expansion cap was removed from the release scope.
 - Same-page cross-protocol reservations account for V2, legacy P2P, and relay receives together. Persisted V2 task reservations are reconciled on demand; stale tokens cannot release a replacement reservation.
@@ -35,9 +35,9 @@
 - Final `pnpm build` passed. Generated `docs/` assets in this feature worktree will be restored before source commit and regenerated on the clean release branch.
 - Final independent UX/code review: AC-001/002/004 passed with no critical/high source finding. It recommends rerunning the first-offer UI flow because the prior browser run recorded the earlier invisible-offer failure.
 - Final local visible-browser UI smoke passed: separate visible Edge/Chrome, local room `410824`, open P2P DataChannel, sparse 134,217,729-byte file; with the receiver drawer initially closed, the first V2 offer opened it and displayed `SAVE TO DISK`, 0 B confirmed, and server stayed connected. Evidence: `Harness/wf-browser/runs/large-file-final-ui-smoke-20261024/`.
-- Independent storage review found a medium AC-003 async-admission disconnect race in both relay and P2P receive paths. Test Writer added relay runtime RED and P2P source-contract RED. A bounded implementation is in progress.
+- Independent storage review found a medium AC-003 async-admission disconnect race in both relay and P2P receive paths. Relay runtime and P2P source-contract RED tests were added; both fixes are now implemented and independently reviewed. A follow-up runtime RED test also caught same-ID relay pending-entry deletion; identity-token cleanup now passes it.
 - Online deployment and production E2E are now authorized by the user, but remain gated on final source review and local/browser acceptance.
-- Production remains untouched; no deploy, release, or push has occurred.
+- Production remained untouched at this checkpoint; the release and live verification are recorded below.
 
 ## Final AC-003 race fix (2026-10-24)
 
@@ -94,14 +94,23 @@
 - The prior AC-002 visibility failure predates the final correction: the first receive in `offered` status now opens the Download manager and exposes the direct-save action. Independent visible-browser smoke is running against the final source.
 - Preserve the existing V2 task/file-handle cleanup behavior for this release. No new history deletion policy is introduced; removing history never deletes the user-saved physical file.
 - After narrowing scope, independent focused verification passed 177/177 across 16 transfer/storage test files. `pnpm exec tsc --noEmit`, `pnpm build`, and `git -c core.whitespace=cr-at-eol diff --check` passed.
-- Independent UX/code review passed AC-001/002/004 with no critical/high source findings. Independent storage/lifecycle review remains in progress.
+- Independent UX/code review passed AC-001/002/004 with no critical/high source findings. The storage/lifecycle review identified and then cleared the final AC-003 races; see the release section below.
 - Independent storage/lifecycle review identified a medium stale-admission race: disconnect can happen while quota preflight is pending and the request may later create a ghost receive. The relay runtime RED reproduces no-session/no-prompt/no-accept/no-reservation expectations; the P2P contract RED covers channel-close guard and reservation release.
 - Final local visible-browser offer smoke passed with real Edge/Chrome; only the pending offer UI was exercised, not native picker completion or payload transfer.
 - GitHub connectivity is available through local proxy port 7897; the repository-local `http.proxy` points to inactive port 7900. The release process must override proxy configuration for its Git push.
-- Production remains untouched pending final review and browser acceptance.
+- Production remained untouched at this checkpoint, before the release documented below.
 - Planned visible run uses separate Edge/Chrome profiles, room 123, local backend/frontend on ports 27771/27772, and CDP ports 27773/27774. Ports were free during read-only preflight.
 - Direct-to-disk acceptance can use an OPFS-backed save-picker shim to exercise V2 sink/checkpoint/history behavior. Cached fallback and lazy ZIP restoration require separate quota/file-store setup and assertions beyond existing scripts.
 
 ## Notes
 
 - Existing root worktree changes are preserved and excluded from this task.
+
+## Release and live acceptance (2026-10-24)
+
+- Feature commit `75d3c98` and release version commit `bab3857` were applied to the clean `main` worktree. The version is `3.8.53`.
+- Standard frontend release `node scripts/deploy.cjs --frontend` deployed to the ECS origin (`/` returned HTTP 200), synced generated `docs/` assets, and pushed GitHub Pages. Its later generic health-check step reported curl unavailable after the WebSocket probe; direct SSH origin and public HTTPS checks both returned the same `version.json` for `3.8.53` (`2026-10-24T09:53:52.914Z`). GitHub `main` resolved to docs sync commit `262ecce`.
+- CDN API refresh was skipped because `ALIYUN_ACCESS_KEY_ID` and `ALIYUN_ACCESS_KEY_SECRET` were not set. The public version endpoint returned the new build after deployment.
+- Independent live small-file E2E passed in production room `482917`: 4,194,304 bytes, browser download completed, and SHA-256 matched the source (`575f42009c28a230e4326c31b94954d2ec21c1a860cc14f40f045301c06eca45`). Edge/Chrome WebSocket connections remained open; WebRTC showed connected ICE/DataChannel, nominated UDP host/host pair, and P2P byte counters increased. Evidence: `Harness/wf-browser/runs/online-release-v3.8.53-small-20261024/`.
+- Independent live large-file E2E completed 134,217,729 bytes over production P2P into a real OPFS `FileSystemFileHandle` returned by a one-time page-runtime shim. Source and OPFS readback SHA-256 matched (`dea6ec477c68641ce21ace6acbe92bf6393c55e51c3b1f55c532725b40e8388c`); history recorded direct-to-disk/completed, and IndexedDB `file_blobs` remained empty. Native Windows picker selection was not completed or observed. Evidence: `Harness/wf-browser/runs/online-release-v3.8.53-large-20261024/`.
+- Both live test pairs used separate isolated Edge/Chrome profiles on this one physical host. They prove production same-host P2P participation and large direct-sink receive; they do not prove cross-country/WAN stability. Native picker completion is also unverified. Browsers, temporary helpers, and binary test payloads were removed from the evidence directories.

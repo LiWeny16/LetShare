@@ -1,0 +1,17 @@
+﻿{
+    "action":  "Clicked the visible SAVE TO DISK button in the active Edge page",
+    "userActivation":  {
+                           "hasBeenActive":  true,
+                           "isActive":  true
+                       },
+    "pickerMode":  "opfs-shim-not-native",
+    "opfsHandleCreated":  true,
+    "opfsFileName":  "e2e-1792836431108-letshare-v3853-room816327-128mib-plus-1.bin",
+    "progressSnapshot":  "Receiving; Confirmed 17.8 MB / 128.0 MB at 7.4 MB/s",
+    "p2pConsoleSignals":  [
+                              "Peer status connected",
+                              "ICE connected",
+                              "DataChannel opened",
+                              "P2P probe verified (probe + test data ACK)"
+                          ]
+}

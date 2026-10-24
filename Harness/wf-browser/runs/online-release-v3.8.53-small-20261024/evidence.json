@@ -1,0 +1,224 @@
+{
+  "result": "PASS",
+  "observedAtUtc": "2026-10-24T10:05:10.891Z",
+  "release": {
+    "site": "https://letshare.fun/",
+    "pageVersion": "3.8.53",
+    "versionJson": {
+      "url": "https://letshare.fun/version.json",
+      "status": 200,
+      "contentType": "application/json",
+      "date": "Sat, 24 Oct 2026 10:05:15 GMT",
+      "lastModified": "Sat, 24 Oct 2026 09:53:52 GMT",
+      "etag": "\"6adc8030-58\"",
+      "fetchedAtUtc": "2026-10-24T10:05:15.831Z",
+      "sizeBytes": 88,
+      "sha256": "a62b311bc9b5d259c79bcde585e167505ea755dbce324e2d543b5c6149e7e9ae",
+      "body": {
+        "version": "3.8.53",
+        "v": "2026-10-24T09:53:52Z-wz7dl",
+        "built": "2026-10-24T09:53:52.914Z"
+      }
+    }
+  },
+  "room": {
+    "id": "482917",
+    "roomIdInBothProfiles": true,
+    "bothPeersVisibleAfterTransfer": true
+  },
+  "browserControl": {
+    "mode": "Visible local Edge and Chrome, each with a fresh isolated TEMP profile, controlled through CDP",
+    "cuaFallback": "CUA Chrome unavailable; the exposed Edge connector belonged to the existing user profile and was not used.",
+    "physicalHosts": 1,
+    "sessions": [
+      {
+        "role": "receiver",
+        "browser": "Microsoft Edge",
+        "product": "Edg/156.0.4314.42",
+        "isolatedProfile": true
+      },
+      {
+        "role": "sender",
+        "browser": "Google Chrome",
+        "product": "Chrome/155.0.8059.86",
+        "isolatedProfile": true
+      }
+    ]
+  },
+  "connectivity": {
+    "websocketEndpoint": "wss://ecs.letshare.fun/",
+    "websocket": {
+      "edge": {
+        "handshakeStatus": 101,
+        "handshakeStatusText": "Switching Protocols",
+        "readyState": 1,
+        "openedAt": "2026-10-24T10:01:25.740Z",
+        "closedAt": null,
+        "errors": 0,
+        "sentFrames": 49,
+        "receivedFrames": 66
+      },
+      "chrome": {
+        "handshakeStatus": 101,
+        "handshakeStatusText": "Switching Protocols",
+        "readyState": 1,
+        "openedAt": "2026-10-24T10:01:25.872Z",
+        "closedAt": null,
+        "errors": 0,
+        "sentFrames": 60,
+        "receivedFrames": 47
+      }
+    },
+    "p2p": {
+      "proof": "PROVED: both peer connections and DataChannels stayed connected/open; selected nominated ICE pair was host/host over UDP; channel byte counters increased by about 3.7 MB during the transfer.",
+      "edge": {
+        "connectionState": "connected",
+        "iceConnectionState": "connected",
+        "dataChannel": {
+          "label": "chat",
+          "direction": "received",
+          "id": 1,
+          "ordered": true,
+          "readyState": "open",
+          "openedAt": "2026-10-24T10:01:26.557Z",
+          "closedAt": null,
+          "sentMessages": 175,
+          "sentBytes": 9193,
+          "receivedMessages": 381,
+          "receivedBytes": 3717212
+        },
+        "selectedCandidatePair": {
+          "state": "succeeded",
+          "nominated": true,
+          "currentRoundTripTime": 0.001,
+          "bytesSent": 106349,
+          "bytesReceived": 3900496,
+          "localCandidateType": "host",
+          "remoteCandidateType": "host",
+          "localProtocol": "udp",
+          "remoteProtocol": "udp"
+        }
+      },
+      "chrome": {
+        "connectionState": "connected",
+        "iceConnectionState": "connected",
+        "dataChannel": {
+          "label": "chat",
+          "direction": "created",
+          "id": null,
+          "ordered": true,
+          "readyState": "open",
+          "openedAt": "2026-10-24T10:01:26.556Z",
+          "closedAt": null,
+          "sentMessages": 381,
+          "sentBytes": 3717212,
+          "receivedMessages": 175,
+          "receivedBytes": 9193
+        },
+        "selectedCandidatePair": {
+          "state": "succeeded",
+          "nominated": true,
+          "currentRoundTripTime": 0.001,
+          "bytesSent": 3900496,
+          "bytesReceived": 106349,
+          "localCandidateType": "host",
+          "remoteCandidateType": "host",
+          "localProtocol": "udp",
+          "remoteProtocol": "udp"
+        }
+      }
+    },
+    "finalOnline": {
+      "edgePeerVisible": true,
+      "chromePeerVisible": true,
+      "edgeWebSocketOpen": true,
+      "chromeWebSocketOpen": true,
+      "edgeDataChannelOpen": true,
+      "chromeDataChannelOpen": true
+    }
+  },
+  "transfer": {
+    "sender": "Google Chrome",
+    "receiver": "Microsoft Edge",
+    "file": {
+      "name": "small-p2p-test.bin",
+      "sizeBytes": 4194304,
+      "sha256": "575f42009c28a230e4326c31b94954d2ec21c1a860cc14f40f045301c06eca45",
+      "deterministicPattern": "byte[i] = (i * 31 + 17) mod 256"
+    },
+    "senderUi": "Sent Files displayed the filename and 4.0 MB.",
+    "receiverUi": "Received Files displayed 1 / 4.0 MB and the filename with a Download control.",
+    "receiverManualAcceptPrompt": false,
+    "downloadAction": "Clicked the visible per-file Download control; Edge displayed its download confirmation UI.",
+    "intermediateProgressFrameCaptured": false,
+    "progressNote": "The 4 MiB transfer completed before the next visible snapshot; pre-send selection and sender/receiver completion states were captured."
+  },
+  "download": {
+    "browser": "Microsoft Edge",
+    "configuredWith": "CDP Browser.setDownloadBehavior targeting the run downloads directory",
+    "browserEvents": [
+      {
+        "at": "2026-10-24T10:04:46.385Z",
+        "type": "downloadProgress",
+        "state": "completed",
+        "totalBytes": 4194304,
+        "receivedBytes": 4194304
+      }
+    ],
+    "completed": true,
+    "totalBytes": 4194304,
+    "receivedBytes": 4194304,
+    "pathAtHashCheck": "run downloads directory; payload moved to TEMP after hash verification",
+    "sizeBytes": 4194304,
+    "sha256": "575f42009c28a230e4326c31b94954d2ec21c1a860cc14f40f045301c06eca45",
+    "matchesSourceExactly": true,
+    "payloadMovedToTempAfterHashCheck": true,
+    "runDirectoryContainsBinaryPayload": false
+  },
+  "sha256Comparison": {
+    "sizeBytes": 4194304,
+    "sha256": "575f42009c28a230e4326c31b94954d2ec21c1a860cc14f40f045301c06eca45",
+    "sourceMatchesDownloadedFile": true,
+    "allEqual": true
+  },
+  "screenshots": [
+    {
+      "path": "screenshots/01-edge-room-entry.png",
+      "purpose": "Edge joined room and saw peer"
+    },
+    {
+      "path": "screenshots/01-chrome-room-entry.png",
+      "purpose": "Chrome joined room and saw peer"
+    },
+    {
+      "path": "screenshots/02-chrome-file-selected.png",
+      "purpose": "Sender file selected before transfer"
+    },
+    {
+      "path": "screenshots/04-after-send-click-chrome.png",
+      "purpose": "Sender Sent Files completion UI"
+    },
+    {
+      "path": "screenshots/04-after-send-click-edge.png",
+      "purpose": "Receiver Received Files entry and Download control"
+    },
+    {
+      "path": "screenshots/03-edge-after-click.png",
+      "purpose": "Receiver browser download confirmation UI"
+    },
+    {
+      "path": "screenshots/05-final-online-edge.png",
+      "purpose": "Edge remained online after download"
+    },
+    {
+      "path": "screenshots/05-final-online-chrome.png",
+      "purpose": "Chrome remained online after transfer"
+    }
+  ],
+  "limitations": [
+    "Receiver did not show a separate accept/reject prompt; the file appeared in Received Files and the receiver clicked its Download control.",
+    "No intermediate percentage frame was captured because the 4 MiB transfer completed before the next visible snapshot.",
+    "Two isolated browser processes ran on one physical host, not separate physical devices.",
+    "WebSocket application frames remained active alongside P2P; direct host/host UDP and DataChannel byte counters prove P2P participation but do not prove every byte used only P2P."
+  ]
+}

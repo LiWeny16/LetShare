@@ -1,0 +1,6 @@
+﻿{
+    "fileName":  "letshare-v3853-room816327-128mib-plus-1.bin",
+    "sizeBytes":  134217729,
+    "deterministicPattern":  "byte[offset] = offset mod 251",
+    "sha256":  "dea6ec477c68641ce21ace6acbe92bf6393c55e51c3b1f55c532725b40e8388c"
+}

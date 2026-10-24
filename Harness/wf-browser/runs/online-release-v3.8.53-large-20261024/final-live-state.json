@@ -1,0 +1,22 @@
+﻿{
+    "capturedAtUtc":  "2026-10-24T10:08:46.384Z",
+    "production":  {
+                       "version":  "3.8.53",
+                       "roomId":  "816327",
+                       "serverUrl":  "wss://ecs.letshare.fun/",
+                       "transferPriority":  "p2p"
+                   },
+    "receiver":  {
+                     "browser":  "Microsoft Edge",
+                     "version":  "156.0.4314.42",
+                     "peerVisibleOnline":  true,
+                     "activeTasks":  "No active tasks"
+                 },
+    "sender":  {
+                   "browser":  "Google Chrome",
+                   "version":  "155.0.8059.86",
+                   "peerVisibleOnline":  true,
+                   "completedFileListed":  "letshare-v3853-room816327-128mib-plus-1.bin",
+                   "displayedSize":  "128.0 MB"
+               }
+}
