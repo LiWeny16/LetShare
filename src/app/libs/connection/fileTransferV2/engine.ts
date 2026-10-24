@@ -20,6 +20,7 @@ import {
 } from "./protocol";
 import {
   FileTransferV2BlockConflictError,
+  FileTransferV2QuotaError,
   FileTransferV2TaskExistsError,
   type FileTransferV2Direction,
   type FileTransferV2PauseOrigin,
@@ -28,6 +29,10 @@ import {
   type FileTransferV2Store,
 } from "./store";
 import { hashFile, hashStoredFileInOrder, sha256HexForBlock } from "./hash";
+import { createFileTransferV2DirectDiskSink, type FileTransferV2DirectDiskSink, type FileTransferV2FileHandle } from "./directDiskSink";
+
+export const FILE_TRANSFER_V2_DIRECT_DISK_THRESHOLD_BYTES = 128 * 1024 * 1024;
+export const FILE_TRANSFER_V2_DIRECT_DISK_CHECKPOINT_BATCH_BYTES = 256 * 1024 * 1024;
 
 const GLOBAL_WINDOW_BYTES = FILE_TRANSFER_V2_DEFAULT_CREDIT_BYTES;
 const REASSEMBLY_LIMIT_BYTES = FILE_TRANSFER_V2_DEFAULT_CREDIT_BYTES;
@@ -80,6 +85,9 @@ export interface FileTransferV2EngineOptions {
   paths: () => FileTransferV2Path[];
   onUpdate: (snapshot: FileTransferV2Snapshot) => void;
   onReceived: (task: FileTransferV2Task, file: File) => void | Promise<void>;
+  onReceivedToDisk?: (task: FileTransferV2Task, handle: FileTransferV2FileHandle) => void | Promise<void>;
+  shouldUseDirectDisk?: (manifest: FileTransferV2Manifest) => boolean;
+  canResumeDirectDisk?: (transferId: string) => boolean;
   now?: () => number;
   hashWorkerFactory?: () => Worker | null;
   globalWindowBytes?: number;
@@ -145,6 +153,10 @@ interface RuntimeTask {
   pumpAgain: boolean;
   verifyBusy: boolean;
   callbackFired: boolean;
+  directDiskSink?: FileTransferV2DirectDiskSink;
+  volatileConfirmed: Set<number>;
+  directDiskPendingBytes: number;
+  directDiskFlushPromise?: Promise<void>;
   userPaused: boolean;
   remotePaused: boolean;
   resumeOfferPending: boolean;
@@ -183,6 +195,14 @@ function expectedBlockLength(manifest: FileTransferV2Manifest, index: number): n
   return index === manifest.totalBlocks - 1
     ? manifest.size - index * manifest.blockSize
     : manifest.blockSize;
+}
+
+function remainingReceiveBytes(manifest: FileTransferV2Manifest, confirmed: Set<number>): number {
+  let confirmedBytes = 0;
+  for (const index of confirmed) {
+    confirmedBytes += expectedBlockLength(manifest, index);
+  }
+  return Math.max(0, manifest.size - Math.min(manifest.size, confirmedBytes));
 }
 
 function rangesToSet(ranges: FileTransferV2Range[], totalBlocks: number): Set<number> {
@@ -400,14 +420,16 @@ export class FileTransferV2Engine {
         || task.expiresAt <= this.now() || ["completed", "cancelled", "failed"].includes(task.status)) continue;
       const restoredStatus = task.direction === "send"
         ? "needs-source"
-        : task.status === "paused" ? "paused" : "receiving";
+        : task.status === "offered" ? "offered" : task.status === "paused" ? "paused" : "receiving";
       const runtime = this.createRuntime(task.transferId, task.peerParticipantId, task.roomId, task.direction,
         task.manifest, task, restoredStatus, selfId);
       const pauseOrigin = task.pauseOrigin ?? (task.status === "paused" ? "local" : null);
       runtime.userPaused = pauseOrigin === "local";
       runtime.remotePaused = pauseOrigin === "remote";
       runtime.confirmed = task.direction === "receive"
-        ? new Set(await this.options.store.getCommittedIndices(task.transferId))
+        ? task.receiveStorageMode === "direct-to-disk"
+          ? rangesToSet(task.receiveConfirmedRanges || [], task.manifest.totalBlocks)
+          : new Set(await this.options.store.getCommittedIndices(task.transferId))
         : rangesToSet(task.remoteConfirmedRanges || [], task.manifest.totalBlocks);
       if (this.options.selfId() !== selfId || this.options.roomId() !== roomId) return;
       runtime.expiresAt = task.expiresAt;
@@ -416,7 +438,39 @@ export class FileTransferV2Engine {
         status: runtime.status,
         pauseOrigin: runtime.remotePaused ? "remote" : runtime.userPaused ? "local" : null,
       }));
+      if (task.direction === "receive" && task.receiveStorageMode === "direct-to-disk") {
+        if (runtime.userPaused || runtime.remotePaused) {
+          this.emit(runtime);
+          continue;
+        }
+        if (!this.canResumeDirectDisk(runtime.transferId)) {
+          runtime.status = "paused";
+          runtime.userPaused = true;
+          runtime.reason = "This save is active in another tab";
+          this.emit(runtime);
+          continue;
+        }
+        if (!task.receiveFileHandle) {
+          runtime.status = "paused";
+          runtime.userPaused = true;
+          runtime.reason = "Choose a save location to continue this transfer";
+          await this.persistStatus(runtime, "local");
+        } else {
+          try {
+            runtime.directDiskSink = await createFileTransferV2DirectDiskSink(
+              task.receiveFileHandle, task.manifest, task.receiveDiskInitialized === true,
+            );
+            await runtime.directDiskSink.initialize();
+          } catch (error) {
+            runtime.status = "paused";
+            runtime.userPaused = true;
+            runtime.reason = error instanceof Error ? error.message : String(error);
+            await this.persistStatus(runtime, "local");
+          }
+        }
+      }
       this.emit(runtime);
+      if (task.direction === "receive" && runtime.status === "offered") continue;
       if (task.direction === "receive" && !runtime.userPaused && !runtime.remotePaused) {
         if (runtime.confirmed.size === task.manifest.totalBlocks) await this.verifyReceive(runtime);
         else await this.sendResumeSafely(runtime);
@@ -486,6 +540,41 @@ export class FileTransferV2Engine {
     }
     if (["completed", "cancelled", "failed"].includes(runtime.status)) return;
     if (runtime.remotePaused) return;
+    if (runtime.direction === "receive" && runtime.task?.receiveStorageMode === "direct-to-disk") {
+      const handle = runtime.task.receiveFileHandle;
+      if (!handle) {
+        runtime.status = "paused";
+        runtime.userPaused = true;
+        runtime.reason = "Choose a save location to continue this transfer";
+        await this.persistStatus(runtime, "local");
+        this.emit(runtime);
+        return;
+      }
+      const permission = handle.queryPermission
+        ? await handle.queryPermission({ mode: "readwrite" })
+        : "granted";
+      if (permission !== "granted") {
+        runtime.status = "paused";
+        runtime.userPaused = true;
+        runtime.reason = "Allow access to the saved file, then continue the transfer";
+        await this.persistStatus(runtime, "local");
+        this.emit(runtime);
+        return;
+      }
+      const sink = await createFileTransferV2DirectDiskSink(
+        handle, runtime.manifest!, runtime.task.receiveDiskInitialized === true,
+      );
+      try { await sink.initialize(); }
+      catch (error) {
+        runtime.status = "paused";
+        runtime.userPaused = true;
+        runtime.reason = error instanceof Error ? error.message : String(error);
+        await this.persistStatus(runtime, "local");
+        this.emit(runtime);
+        return;
+      }
+      runtime.directDiskSink = sink;
+    }
     const generation = ++runtime.generation;
     runtime.userPaused = false;
     runtime.remotePaused = false;
@@ -522,6 +611,10 @@ export class FileTransferV2Engine {
     const runtime = this.tasks.get(transferId);
     if (!runtime || runtime.localParticipantId !== this.options.selfId()
       || ["completed", "cancelled", "failed"].includes(runtime.status)) return;
+    if (runtime.direction === "receive" && runtime.task?.receiveStorageMode === "direct-to-disk") {
+      try { await this.flushDirectDiskBatch(runtime); }
+      catch (error) { await this.pauseDirectDiskForError(runtime, error); return; }
+    }
     ++runtime.generation;
     runtime.userPaused = true;
     runtime.remotePaused = false;
@@ -530,6 +623,10 @@ export class FileTransferV2Engine {
     runtime.abort?.abort();
     runtime.abort = undefined;
     runtime.resumeRetryAt = 0;
+    if (runtime.task?.receiveStorageMode === "direct-to-disk") {
+      await runtime.directDiskSink?.abort().catch(() => undefined);
+      runtime.directDiskSink = undefined;
+    }
     this.releaseQueuedFrames(runtime);
     this.releaseInFlight(runtime);
     runtime.status = "paused";
@@ -581,6 +678,10 @@ export class FileTransferV2Engine {
     const generation = ++runtime.generation;
     runtime.abort?.abort();
     runtime.abort = undefined;
+    if (runtime.directDiskSink) await runtime.directDiskSink.abort().catch(() => undefined);
+    runtime.directDiskSink = undefined;
+    runtime.volatileConfirmed.clear();
+    runtime.directDiskPendingBytes = 0;
     this.releaseAssemblies(runtime);
     this.releaseQueuedFrames(runtime);
     this.releaseInFlight(runtime);
@@ -660,6 +761,8 @@ export class FileTransferV2Engine {
     if (!control.transferId) return true;
     if (control.kind === "offer") return this.acceptOffer(control, authenticatedPeerId, pathId);
     const runtime = this.tasks.get(control.transferId);
+    if (runtime?.direction === "receive" && runtime.task?.receiveStorageMode === "direct-to-disk"
+      && !this.canResumeDirectDisk(runtime.transferId) && control.kind !== "cancel") return true;
     if (!runtime && control.kind === "cancel") {
       const pending = this.pendingOffers.get(control.transferId);
       if (pending && pending.peerId === authenticatedPeerId && pending.roomId === this.options.roomId()
@@ -724,6 +827,12 @@ export class FileTransferV2Engine {
         runtime.acceptedPaths.add(pathId);
         runtime.resumeOfferPending = false;
       }
+      if (control.kind === "resume") {
+        // Resume is authoritative after a receiver reload or a rolled-back direct-disk batch.
+        // Unlike live checkpoints, it must replace stale transient confirmations.
+        runtime.confirmed.clear();
+        this.releaseInFlight(runtime);
+      }
       if (control.ranges) {
         this.mergeConfirmed(runtime, wireRangesToSet(control.ranges, runtime.manifest.totalBlocks));
         try {
@@ -761,11 +870,20 @@ export class FileTransferV2Engine {
       return true;
     }
     if (control.kind === "reject" || control.kind === "error") {
+      if (runtime.direction === "receive" && runtime.task?.receiveStorageMode === "direct-to-disk"
+        && runtime.volatileConfirmed.size > 0) {
+        try { await this.flushDirectDiskBatch(runtime); }
+        catch (error) { await this.pauseDirectDiskForError(runtime, error); return true; }
+      }
       ++runtime.generation;
       const rejectionGeneration = runtime.generation;
       runtime.abort?.abort();
       runtime.abort = undefined;
       runtime.status = "paused";
+      if (runtime.direction === "receive" && runtime.task?.receiveStorageMode === "direct-to-disk") {
+        await runtime.directDiskSink?.abort().catch(() => undefined);
+        runtime.directDiskSink = undefined;
+      }
       runtime.remotePaused = control.kind === "error" && control.reason === FILE_TRANSFER_V2_REMOTE_PAUSE_REASON && !runtime.userPaused;
       runtime.resumeOfferPending = false;
       runtime.acceptedPaths.clear();
@@ -819,6 +937,10 @@ export class FileTransferV2Engine {
         }
         ++runtime.generation;
         runtime.abort?.abort();
+        if (runtime.directDiskSink) await runtime.directDiskSink.abort().catch(() => undefined);
+        runtime.directDiskSink = undefined;
+        runtime.volatileConfirmed.clear();
+        runtime.directDiskPendingBytes = 0;
         this.releaseAssemblies(runtime);
         this.releaseQueuedFrames(runtime);
         this.releaseInFlight(runtime);
@@ -847,6 +969,7 @@ export class FileTransferV2Engine {
     if (!runtime || runtime.forgotten || runtime.localParticipantId !== this.options.selfId()
       || runtime.direction !== "receive" || runtime.peerId !== authenticatedPeerId
       || runtime.roomId !== this.options.roomId() || !runtime.manifest) return true;
+    if (runtime.task?.receiveStorageMode === "direct-to-disk" && !this.canResumeDirectDisk(runtime.transferId)) return true;
     if (!["receiving", "offered", "reconnecting"].includes(runtime.status)) return true;
     if (!runtime.attachedPaths.has(pathId)) return true;
     if (!validateFileTransferV2FrameForManifest(decoded, runtime.manifest)) throw new TypeError("Frame does not match the transfer manifest");
@@ -870,7 +993,7 @@ export class FileTransferV2Engine {
     for (const runtime of this.tasks.values()) {
       if (!runtime.manifest || runtime.localParticipantId !== this.options.selfId() || runtime.roomId !== this.options.roomId()
         || ["completed", "cancelled", "failed", "needs-source"].includes(runtime.status)
-        || runtime.userPaused || runtime.remotePaused) continue;
+        || runtime.status === "offered" || runtime.userPaused || runtime.remotePaused) continue;
       const generation = runtime.generation;
       const paths = this.availablePaths(runtime);
       const availableIds = new Set(paths.map(path => path.id));
@@ -883,6 +1006,10 @@ export class FileTransferV2Engine {
         void this.persistStatus(runtime).then(() => {
           if (this.isCurrent(runtime, generation)) this.emit(runtime);
         });
+        if (runtime.direction === "receive" && runtime.task?.receiveStorageMode === "direct-to-disk"
+          && runtime.volatileConfirmed.size > 0) {
+          void this.flushDirectDiskBatch(runtime).catch(error => this.pauseDirectDiskForError(runtime, error));
+        }
         this.emit(runtime);
       } else if (runtime.direction === "send") {
         runtime.status = "offering";
@@ -907,6 +1034,7 @@ export class FileTransferV2Engine {
   async getFile(transferId: string): Promise<File> {
     const runtime = await this.requireRuntime(transferId);
     if (!runtime.manifest || runtime.direction !== "receive" || runtime.status !== "completed") throw new Error("Received file is not complete");
+    if (runtime.task?.receiveStorageMode === "direct-to-disk") throw new Error("This file was saved directly to disk and has no browser copy");
     return this.assembleReceivedFile(runtime);
   }
 
@@ -925,7 +1053,7 @@ export class FileTransferV2Engine {
     return new File(parts, runtime.manifest.name, { type: runtime.manifest.type, lastModified: runtime.manifest.lastModified });
   }
 
-  dispose(): void {
+  async dispose(): Promise<void> {
     if (this.disposed) return;
     this.disposed = true;
     clearInterval(this.timer);
@@ -934,6 +1062,7 @@ export class FileTransferV2Engine {
       pending.cancelReason = "Transfer engine disposed";
       pending.cancelNotifyPeer = false;
     }
+    const sinkAborts: Promise<void>[] = [];
     for (const runtime of this.tasks.values()) {
       ++runtime.generation;
       runtime.abort?.abort();
@@ -941,7 +1070,15 @@ export class FileTransferV2Engine {
       this.releaseQueuedFrames(runtime);
       this.releaseInFlight(runtime);
       runtime.completion?.reject(new Error("File transfer v2 engine disposed"));
+      if (runtime.directDiskSink) {
+        const sink = runtime.directDiskSink;
+        runtime.directDiskSink = undefined;
+        sinkAborts.push(sink.abort().catch(error => {
+          console.warn("[FileTransferV2] Failed to abort direct-disk writer during dispose: " + runtime.transferId, error);
+        }));
+      }
     }
+    await Promise.all(sinkAborts);
   }
 
   private createRuntime(
@@ -957,6 +1094,7 @@ export class FileTransferV2Engine {
       pumpBusy: false, pumpAgain: false, verifyBusy: false, callbackFired: false, userPaused: false, remotePaused: false,
       resumeOfferPending: false, multipath: true,
       creditBytes: FILE_TRANSFER_V2_DEFAULT_CREDIT_BYTES, nextPathTurn: "p2p", rolling: [],
+      volatileConfirmed: new Set(), directDiskPendingBytes: 0,
       checkpointRetryAt: 0, resumeRetryAt: 0, resumeRetryCount: 0, completionRetryAt: 0, receiptProbeAt: 0,
     };
     for (const id of ["p2p", "relay"] as const) runtime.pathStats.set(id, emptyStats());
@@ -1030,9 +1168,10 @@ export class FileTransferV2Engine {
     }
     let task: FileTransferV2Task;
     try {
+      const directDiskPending = this.shouldUseDirectDisk(manifest);
       task = await this.options.store.createTask({ roomId, localParticipantId: selfId, peerParticipantId: peerId,
         manifest, direction: "receive", from: peerId, to: selfId,
-        status: pending.cancelRequested ? "cancelled" : "receiving", createdAt: this.now() });
+        status: pending.cancelRequested ? "cancelled" : directDiskPending ? "offered" : "receiving", createdAt: this.now() });
     } catch (error) {
       if (error instanceof FileTransferV2TaskExistsError) {
         const old = await this.options.store.getTask(manifest.transferId);
@@ -1051,7 +1190,16 @@ export class FileTransferV2Engine {
         }
         task = old;
       } else {
-        await this.sendControl(peerId, { version: 2, kind: "error", transferId: manifest.transferId, from: selfId, to: peerId, reason: error instanceof Error ? error.message : String(error) }, roomId);
+        const reason = error instanceof Error ? error.message : String(error);
+        await this.sendControl(peerId, {
+          version: 2,
+          kind: error instanceof FileTransferV2QuotaError ? "reject" : "error",
+          transferId: manifest.transferId,
+          from: selfId,
+          to: peerId,
+          reason,
+        }, roomId).catch(() => undefined);
+        if (error instanceof FileTransferV2QuotaError) throw error;
         return true;
       }
     }
@@ -1068,7 +1216,7 @@ export class FileTransferV2Engine {
       return this.acceptOfferForRuntime(racedRuntime, peerId, pathId, pending, roomId, selfId);
     }
     const runtime = this.createRuntime(manifest.transferId, peerId, roomId, "receive", manifest, task,
-      task.status === "completed" ? "completed" : task.status === "paused" ? "paused" : "receiving", selfId);
+      task.status === "completed" ? "completed" : task.status === "offered" ? "offered" : task.status === "paused" ? "paused" : "receiving", selfId);
     pending.resolveReady();
     const pauseOrigin = task.pauseOrigin ?? (task.status === "paused" ? "local" : null);
     runtime.userPaused = pauseOrigin === "local";
@@ -1096,10 +1244,21 @@ export class FileTransferV2Engine {
     }
     this.emit(runtime);
     if (runtime.status === "completed") await this.sendComplete(runtime).catch(() => undefined);
+    else if (runtime.status === "offered") return true;
     else if (runtime.userPaused) return true;
     else if (runtime.remotePaused) return true;
     else if (runtime.confirmed.size === manifest.totalBlocks) await this.verifyReceive(runtime);
-    else await this.sendAccept(runtime);
+    else {
+      try {
+        await this.ensureReceiveStorage(runtime);
+      } catch (error) {
+        await this.pauseReceiveForStorage(runtime, error);
+        await this.sendOfferReject(peerId, manifest, selfId, roomId, pathId,
+          error instanceof Error ? error.message : String(error));
+        throw error;
+      }
+      await this.sendAccept(runtime);
+    }
     return true;
   }
 
@@ -1119,6 +1278,7 @@ export class FileTransferV2Engine {
       await this.sendOfferReject(peerId, manifest, selfId, roomId, pathId, "Transfer ID conflicts with an existing task");
       return true;
     }
+    if (runtime.task?.receiveStorageMode === "direct-to-disk" && !this.canResumeDirectDisk(runtime.transferId)) return true;
     if (runtime.status === "cancelled" || runtime.status === "failed") {
       await this.sendControl(peerId, this.control(runtime, "reject", undefined, "This transfer is terminal"), roomId);
       return true;
@@ -1138,8 +1298,19 @@ export class FileTransferV2Engine {
     }
     if (!this.isGenerationCurrent(runtime, generation)) return true;
     if (runtime.status === "completed") await this.sendComplete(runtime).catch(() => undefined);
+    else if (runtime.status === "offered") return true;
     else if (runtime.confirmed.size === manifest.totalBlocks) await this.verifyReceive(runtime);
-    else await this.sendAccept(runtime);
+    else {
+      try {
+        await this.ensureReceiveStorage(runtime);
+      } catch (error) {
+        await this.pauseReceiveForStorage(runtime, error);
+        await this.sendOfferReject(peerId, manifest, selfId, roomId, pathId,
+          error instanceof Error ? error.message : String(error));
+        throw error;
+      }
+      await this.sendAccept(runtime);
+    }
     return true;
   }
 
@@ -1161,6 +1332,95 @@ export class FileTransferV2Engine {
     } catch { /* The conflicting runtime remains untouched if the reply route is unavailable. */ }
   }
 
+  private canResumeDirectDisk(transferId: string): boolean {
+    try { return this.options.canResumeDirectDisk?.(transferId) !== false; }
+    catch { return false; }
+  }
+
+  private shouldUseDirectDisk(manifest: FileTransferV2Manifest): boolean {
+    if (manifest.size <= FILE_TRANSFER_V2_DIRECT_DISK_THRESHOLD_BYTES) return false;
+    try { return this.options.shouldUseDirectDisk?.(manifest) === true; }
+    catch { return false; }
+  }
+
+  /** Called only after the picker returns from a user click; persists the handle before ACCEPT. */
+  async acceptReceiveToDisk(transferId: string, handle: FileTransferV2FileHandle): Promise<void> {
+    const runtime = await this.requireRuntime(transferId);
+    if (runtime.direction !== "receive" || !runtime.manifest || !runtime.task
+      || runtime.localParticipantId !== this.options.selfId() || runtime.roomId !== this.options.roomId()) {
+      throw new Error("Incoming transfer is unavailable");
+    }
+    const replacingDirectDestination = runtime.status === "paused"
+      && runtime.task.receiveStorageMode === "direct-to-disk";
+    if (runtime.status !== "offered" && !replacingDirectDestination) {
+      throw new Error("This transfer is not waiting for a save location");
+    }
+    if (runtime.directDiskSink) await runtime.directDiskSink.abort().catch(() => undefined);
+    runtime.directDiskSink = undefined;
+    runtime.volatileConfirmed.clear();
+    runtime.directDiskPendingBytes = 0;
+    const sink = await createFileTransferV2DirectDiskSink(handle, runtime.manifest);
+    await sink.initialize();
+    const confirmed = new Set<number>();
+    let task: FileTransferV2Task;
+    try {
+      task = await this.trackWrite(runtime, this.options.store.updateTask(transferId, {
+        status: "receiving",
+        pauseOrigin: null,
+        receiveStorageMode: "direct-to-disk",
+        receiveFileHandle: handle,
+        receiveConfirmedRanges: setToRanges(confirmed, runtime.manifest.totalBlocks),
+        receiveDiskInitialized: false,
+        receiveReservedBytes: 0,
+      }));
+    } catch (error) {
+      await sink.abort().catch(() => undefined);
+      throw error;
+    }
+    runtime.task = task;
+    runtime.directDiskSink = sink;
+    runtime.confirmed = confirmed;
+    runtime.userPaused = false;
+    runtime.remotePaused = false;
+    runtime.status = "receiving";
+    runtime.reason = undefined;
+    runtime.attachedPaths = new Set(this.availablePaths(runtime).map(path => path.id));
+    if (replacingDirectDestination) await this.sendResumeSafely(runtime);
+    else await this.sendAccept(runtime);
+    this.emit(runtime);
+  }
+
+  private async ensureReceiveStorage(runtime: RuntimeTask): Promise<void> {
+    if (runtime.direction !== "receive" || !runtime.manifest || !runtime.task
+      || runtime.task.receiveStorageMode === "direct-to-disk") return;
+    const remainingBytes = remainingReceiveBytes(runtime.manifest, runtime.confirmed);
+    if (remainingBytes === 0) return;
+    const task = await this.trackWrite(runtime, this.options.store.ensureReceiveStorage(runtime.transferId, remainingBytes));
+    if (!runtime.forgotten && runtime.localParticipantId === this.options.selfId()
+      && runtime.roomId === this.options.roomId()) {
+      runtime.task = task;
+      runtime.expiresAt = task.expiresAt;
+    }
+  }
+
+  private async pauseReceiveForStorage(runtime: RuntimeTask, error: unknown): Promise<void> {
+    if (runtime.forgotten || runtime.status === "completed" || runtime.status === "cancelled" || runtime.status === "failed") return;
+    ++runtime.generation;
+    runtime.abort?.abort();
+    runtime.abort = undefined;
+    runtime.userPaused = true;
+    runtime.remotePaused = false;
+    runtime.resumeOfferPending = false;
+    runtime.resumeRetryAt = 0;
+    runtime.status = "paused";
+    runtime.reason = error instanceof Error ? error.message : String(error);
+    this.releaseAssemblies(runtime);
+    this.releaseQueuedFrames(runtime);
+    this.releaseInFlight(runtime);
+    await this.persistStatus(runtime, "local");
+    if (runtime.status === "paused") this.emit(runtime);
+  }
+
   private async sendAccept(runtime: RuntimeTask): Promise<void> {
     if (!runtime.manifest) return;
     const ranges = setToRanges(runtime.confirmed, runtime.manifest.totalBlocks);
@@ -1174,6 +1434,8 @@ export class FileTransferV2Engine {
     const generation = runtime.generation;
     if (!this.isCurrent(runtime, generation) || runtime.userPaused) return;
     for (const path of this.availablePaths(runtime)) runtime.attachedPaths.add(path.id);
+    // Resume ranges are the durable checkpoint only. Volatile direct-disk writes are
+    // deliberately omitted so the sender retransmits them after a reload.
     const ranges = setToRanges(runtime.confirmed, runtime.manifest.totalBlocks);
     const pages = this.rangePages(ranges);
     await this.sendControl(runtime.peerId, this.control(runtime, "resume", pages[0] || [], undefined, FILE_TRANSFER_V2_DEFAULT_CREDIT_BYTES));
@@ -1186,6 +1448,32 @@ export class FileTransferV2Engine {
 
   private async sendResumeSafely(runtime: RuntimeTask, generation = runtime.generation): Promise<void> {
     if (!runtime.manifest || runtime.userPaused || !this.isCurrent(runtime, generation)) return;
+    if (runtime.task?.receiveStorageMode === "direct-to-disk" && !this.canResumeDirectDisk(runtime.transferId)) {
+      runtime.status = "paused";
+      runtime.userPaused = true;
+      runtime.reason = "This save is active in another tab";
+      await runtime.directDiskSink?.abort().catch(() => undefined);
+      runtime.directDiskSink = undefined;
+      this.emit(runtime);
+      return;
+    }
+    try {
+      if (runtime.task?.receiveStorageMode === "direct-to-disk" && runtime.volatileConfirmed.size > 0) {
+        await this.flushDirectDiskBatch(runtime);
+        if (!this.isCurrent(runtime, generation)) return;
+      }
+      await this.ensureReceiveStorage(runtime);
+      if (!this.isCurrent(runtime, generation)) return;
+    } catch (error) {
+      if (!this.isCurrent(runtime, generation) || runtime.userPaused) return;
+      if (runtime.task?.receiveStorageMode === "direct-to-disk") {
+        await this.pauseDirectDiskForError(runtime, error);
+      } else {
+        await this.pauseReceiveForStorage(runtime, error);
+        await this.sendControl(runtime.peerId, this.control(runtime, "reject", undefined, runtime.reason)).catch(() => undefined);
+      }
+      return;
+    }
     try {
       await this.sendResume(runtime);
       if (!this.isCurrent(runtime, generation)) return;
@@ -1200,6 +1488,10 @@ export class FileTransferV2Engine {
       this.emit(runtime);
     } catch (error) {
       if (!this.isCurrent(runtime, generation) || runtime.userPaused) return;
+      if (runtime.task?.receiveStorageMode === "direct-to-disk") {
+        await this.pauseDirectDiskForError(runtime, error);
+        return;
+      }
       runtime.status = "reconnecting";
       runtime.reason = `Resume request will retry: ${error instanceof Error ? error.message : String(error)}`;
       runtime.resumeRetryCount = Math.min(runtime.resumeRetryCount + 1, 6);
@@ -1241,9 +1533,11 @@ export class FileTransferV2Engine {
     if (!manifest || header.index >= manifest.totalBlocks) return;
     const expectedLength = expectedBlockLength(manifest, header.index);
     if (header.totalLength !== expectedLength || header.hash.length !== 64) throw new TypeError("Invalid file transfer v2 block dimensions");
-    if (runtime.confirmed.has(header.index)) {
-      const existing = await this.options.store.getBlock(runtime.transferId, header.index);
-      if (!existing || existing.hash.toLowerCase() !== header.hash.toLowerCase()) throw new FileTransferV2BlockConflictError(runtime.transferId, header.index);
+    if (runtime.confirmed.has(header.index) || runtime.volatileConfirmed.has(header.index)) {
+      if (runtime.task?.receiveStorageMode !== "direct-to-disk") {
+        const existing = await this.options.store.getBlock(runtime.transferId, header.index);
+        if (!existing || existing.hash.toLowerCase() !== header.hash.toLowerCase()) throw new FileTransferV2BlockConflictError(runtime.transferId, header.index);
+      }
       await this.checkpointOrReconnect(runtime);
       return;
     }
@@ -1284,15 +1578,33 @@ export class FileTransferV2Engine {
     const hash = await sha256HexForBlock(blob);
     if (!this.isCurrent(runtime, generation)) return;
     if (hash.toLowerCase() !== assembly.hash) throw new Error(`Block ${header.index} SHA-256 mismatch`);
-    await this.trackWrite(runtime, this.options.store.commitBlock(runtime.transferId, header.index, blob, hash));
+    if (runtime.task?.receiveStorageMode === "direct-to-disk") {
+      const handle = runtime.task.receiveFileHandle;
+      if (!handle) throw new Error("The selected save location is unavailable; choose it again to continue");
+      const sink = runtime.directDiskSink ??= await createFileTransferV2DirectDiskSink(
+        handle, manifest, runtime.task.receiveDiskInitialized === true,
+      );
+      await sink.initialize();
+      await sink.stageBlock(header.index, blockBytes, hash);
+      if (!this.isCurrent(runtime, generation)) return;
+      runtime.volatileConfirmed.add(header.index);
+      runtime.directDiskPendingBytes += expectedLength;
+    } else {
+      await this.trackWrite(runtime, this.options.store.commitBlock(runtime.transferId, header.index, blob, hash));
+      if (!this.isCurrent(runtime, generation)) return;
+      runtime.confirmed.add(header.index);
+    }
     if (!this.isCurrent(runtime, generation)) return;
     this.releaseAssembly(runtime, header.index);
-    runtime.confirmed.add(header.index);
     runtime.status = "receiving";
     runtime.reason = undefined;
     runtime.expiresAt = this.now() + 24 * 60 * 60 * 1000;
     this.updateSpeed(runtime, expectedLength, pathId);
-    if (!await this.checkpointOrReconnect(runtime)) return;
+    const isDirectDisk = runtime.task?.receiveStorageMode === "direct-to-disk";
+    const allReceived = runtime.confirmed.size + runtime.volatileConfirmed.size === manifest.totalBlocks;
+    const shouldFlushDirectDisk = isDirectDisk && (runtime.directDiskPendingBytes >= FILE_TRANSFER_V2_DIRECT_DISK_CHECKPOINT_BATCH_BYTES || allReceived);
+    if (shouldFlushDirectDisk) await this.flushDirectDiskBatch(runtime);
+    else if (!await this.checkpointOrReconnect(runtime)) return;
     this.emit(runtime);
     if (runtime.confirmed.size === manifest.totalBlocks) await this.verifyReceive(runtime);
   }
@@ -1320,26 +1632,51 @@ export class FileTransferV2Engine {
     await this.persistStatus(runtime);
     this.emit(runtime);
     try {
-      const hash = await this.hashJobs.run(abort.signal, () => hashStoredFileInOrder(this.options.store, runtime.transferId, {
-        workerFactory: this.options.hashWorkerFactory, signal: abort.signal,
-      }));
-      if (!this.isCurrent(runtime, generation)) return;
-      if (hash.toLowerCase() !== runtime.manifest.fileHash.toLowerCase()) throw new Error("Completed file SHA-256 does not match the manifest");
-      const file = await this.assembleReceivedFile(runtime);
-      if (!this.isCurrent(runtime, generation)) return;
-      if (!runtime.callbackFired) {
-        runtime.callbackFired = true;
-        try { await this.options.onReceived(runtime.task as FileTransferV2Task, file); }
-        catch (error) {
-          if (!this.isCurrent(runtime, generation)) return;
-          ++runtime.generation;
-          runtime.callbackFired = false;
-          runtime.status = "paused";
-          runtime.reason = `Received file callback failed: ${error instanceof Error ? error.message : String(error)}`;
-          await this.persistStatus(runtime);
-          await this.sendControl(runtime.peerId, this.control(runtime, "error", undefined, runtime.reason)).catch(() => undefined);
-          this.emit(runtime);
-          return;
+      if (runtime.task?.receiveStorageMode === "direct-to-disk") {
+        const handle = runtime.task.receiveFileHandle;
+        if (!handle) throw new Error("The saved file handle is unavailable; choose it again to continue");
+        const sink = runtime.directDiskSink ??= await createFileTransferV2DirectDiskSink(handle, runtime.manifest);
+        await sink.finalize(runtime.manifest.fileHash);
+        if (!this.isCurrent(runtime, generation)) return;
+        if (!runtime.callbackFired) {
+          if (!this.options.onReceivedToDisk) throw new Error("Direct-disk history is unavailable");
+          runtime.callbackFired = true;
+          try { await this.options.onReceivedToDisk(runtime.task, handle); }
+          catch (error) {
+            if (!this.isCurrent(runtime, generation)) return;
+            ++runtime.generation;
+            runtime.callbackFired = false;
+            runtime.status = "paused";
+            runtime.userPaused = true;
+            runtime.reason = `Received file history callback failed: ${error instanceof Error ? error.message : String(error)}`;
+            await this.persistStatus(runtime, "local");
+            await this.sendControl(runtime.peerId, this.control(runtime, "error", undefined, runtime.reason)).catch(() => undefined);
+            this.emit(runtime);
+            return;
+          }
+        }
+      } else {
+        const hash = await this.hashJobs.run(abort.signal, () => hashStoredFileInOrder(this.options.store, runtime.transferId, {
+          workerFactory: this.options.hashWorkerFactory, signal: abort.signal,
+        }));
+        if (!this.isCurrent(runtime, generation)) return;
+        if (hash.toLowerCase() !== runtime.manifest.fileHash.toLowerCase()) throw new Error("Completed file SHA-256 does not match the manifest");
+        const file = await this.assembleReceivedFile(runtime);
+        if (!this.isCurrent(runtime, generation)) return;
+        if (!runtime.callbackFired) {
+          runtime.callbackFired = true;
+          try { await this.options.onReceived(runtime.task as FileTransferV2Task, file); }
+          catch (error) {
+            if (!this.isCurrent(runtime, generation)) return;
+            ++runtime.generation;
+            runtime.callbackFired = false;
+            runtime.status = "paused";
+            runtime.reason = `Received file callback failed: ${error instanceof Error ? error.message : String(error)}`;
+            await this.persistStatus(runtime);
+            await this.sendControl(runtime.peerId, this.control(runtime, "error", undefined, runtime.reason)).catch(() => undefined);
+            this.emit(runtime);
+            return;
+          }
         }
       }
       if (!this.isCurrent(runtime, generation)) return;
@@ -1353,10 +1690,12 @@ export class FileTransferV2Engine {
     } catch (error) {
       if (this.isCurrent(runtime, generation)) {
         ++runtime.generation;
-        runtime.status = "failed";
+        const directDisk = runtime.task?.receiveStorageMode === "direct-to-disk";
+        runtime.status = directDisk ? "paused" : "failed";
+        if (directDisk) runtime.userPaused = true;
         runtime.rolling = [];
         runtime.reason = error instanceof Error ? error.message : String(error);
-        await this.persistStatus(runtime);
+        await this.persistStatus(runtime, directDisk ? "local" : undefined);
         await this.sendControl(runtime.peerId, this.control(runtime, "error", undefined, runtime.reason)).catch(() => undefined);
         this.emit(runtime);
       }
@@ -1376,9 +1715,83 @@ export class FileTransferV2Engine {
     }
   }
 
+  private confirmedForLiveCheckpoint(runtime: RuntimeTask): Set<number> {
+    return runtime.task?.receiveStorageMode === "direct-to-disk"
+      ? new Set([...runtime.confirmed, ...runtime.volatileConfirmed])
+      : runtime.confirmed;
+  }
+
+  private async flushDirectDiskBatch(runtime: RuntimeTask): Promise<void> {
+    if (runtime.task?.receiveStorageMode !== "direct-to-disk" || runtime.volatileConfirmed.size === 0) return;
+    if (runtime.directDiskFlushPromise) return runtime.directDiskFlushPromise;
+    const generation = runtime.generation;
+    const sink = runtime.directDiskSink;
+    if (!sink) throw new Error("The selected save location is unavailable; choose it again to continue");
+    const flush = (async () => {
+      const committedIndices = await sink.flush();
+      if (!committedIndices.length) return;
+      if (!this.isGenerationCurrent(runtime, generation)) return;
+      const committed = new Set(committedIndices);
+      const volatileToCommit = [...committed].filter(index => runtime.volatileConfirmed.has(index));
+      if (volatileToCommit.length !== committed.size) {
+        throw new Error("Direct-disk checkpoint does not match the staged receive blocks");
+      }
+      const nextConfirmed = new Set(runtime.confirmed);
+      for (const index of volatileToCommit) nextConfirmed.add(index);
+      const task = await this.trackWrite(runtime, this.options.store.updateTask(runtime.transferId, {
+        receiveConfirmedRanges: setToRanges(nextConfirmed, runtime.manifest!.totalBlocks),
+        receiveDiskInitialized: true,
+        receiveReservedBytes: 0,
+      }));
+      if (!this.isGenerationCurrent(runtime, generation)) return;
+      runtime.task = task;
+      runtime.expiresAt = task.expiresAt;
+      runtime.confirmed = nextConfirmed;
+      for (const index of volatileToCommit) {
+        runtime.volatileConfirmed.delete(index);
+        runtime.directDiskPendingBytes = Math.max(0, runtime.directDiskPendingBytes - expectedBlockLength(runtime.manifest!, index));
+      }
+      await this.checkpointOrReconnect(runtime);
+      this.emit(runtime);
+      if (runtime.confirmed.size === runtime.manifest!.totalBlocks) void this.verifyReceive(runtime);
+    })();
+    runtime.directDiskFlushPromise = flush;
+    try {
+      await flush;
+    } finally {
+      if (runtime.directDiskFlushPromise === flush) runtime.directDiskFlushPromise = undefined;
+    }
+  }
+
+  private async pauseDirectDiskForError(runtime: RuntimeTask, error: unknown): Promise<void> {
+    if (runtime.forgotten || ["completed", "cancelled", "failed"].includes(runtime.status)) return;
+    ++runtime.generation;
+    runtime.abort?.abort();
+    runtime.abort = undefined;
+    runtime.userPaused = true;
+    runtime.remotePaused = false;
+    runtime.resumeOfferPending = false;
+    runtime.resumeRetryAt = 0;
+    runtime.checkpointRetryAt = 0;
+    runtime.status = "paused";
+    runtime.reason = error instanceof Error ? error.message : String(error);
+    this.releaseAssemblies(runtime);
+    this.releaseQueuedFrames(runtime);
+    this.releaseInFlight(runtime);
+    await runtime.directDiskSink?.abort().catch(() => undefined);
+    runtime.directDiskSink = undefined;
+    runtime.volatileConfirmed.clear();
+    runtime.directDiskPendingBytes = 0;
+    await this.persistStatus(runtime, "local");
+    if (runtime.status === "paused") {
+      await this.sendControl(runtime.peerId, this.control(runtime, "error", undefined, runtime.reason)).catch(() => undefined);
+      this.emit(runtime);
+    }
+  }
+
   private async sendCheckpoint(runtime: RuntimeTask): Promise<void> {
     if (!runtime.manifest) return;
-    const ranges = setToRanges(runtime.confirmed, runtime.manifest.totalBlocks);
+    const ranges = setToRanges(this.confirmedForLiveCheckpoint(runtime), runtime.manifest.totalBlocks);
     for (const page of this.rangePages(ranges)) {
       await this.sendControl(runtime.peerId, this.control(runtime, "checkpoint", page, undefined, FILE_TRANSFER_V2_DEFAULT_CREDIT_BYTES));
     }
@@ -1426,7 +1839,10 @@ export class FileTransferV2Engine {
           } catch (error) {
             const saved = await this.options.store.getTask(runtime.transferId).catch(() => null);
             this.releaseAssemblies(runtime);
-            if (saved?.status === "paused") {
+            if (runtime.task?.receiveStorageMode === "direct-to-disk"
+              && runtime.status !== "cancelled" && runtime.status !== "completed") {
+              await this.pauseDirectDiskForError(runtime, error);
+            } else if (saved?.status === "paused") {
               runtime.status = "paused";
               runtime.reason = `Local storage is paused: ${error instanceof Error ? error.message : String(error)}`;
               await this.sendControl(runtime.peerId, this.control(runtime, "error", undefined, runtime.reason)).catch(() => undefined);
@@ -1741,7 +2157,9 @@ export class FileTransferV2Engine {
       || task.roomId !== roomId || task.localParticipantId !== selfId) throw new Error("Transfer task is unavailable in the current room");
     if (task.expiresAt <= this.now()) throw new Error("Transfer task has expired");
     const confirmed = task.direction === "receive"
-      ? new Set(await this.options.store.getCommittedIndices(task.transferId))
+      ? task.receiveStorageMode === "direct-to-disk"
+        ? rangesToSet(task.receiveConfirmedRanges || [], task.manifest.totalBlocks)
+        : new Set(await this.options.store.getCommittedIndices(task.transferId))
       : rangesToSet(task.remoteConfirmedRanges || [], task.manifest.totalBlocks);
     if (this.options.selfId() !== selfId || this.options.roomId() !== roomId) {
       throw new Error("Transfer task is unavailable in the current room");
@@ -1768,8 +2186,13 @@ export class FileTransferV2Engine {
     return {
       transferId: runtime.transferId, peerId: runtime.peerId, roomId: runtime.roomId, direction: runtime.direction,
       fileName: runtime.manifest?.name || runtime.file?.name || "", fileSize: runtime.manifest?.size ?? runtime.file?.size ?? 0,
-      status: runtime.status, confirmedBytes, queuedBytes, bytesPerSecond: this.speed(runtime),
-      progress: runtime.manifest?.size ? Math.min(1, confirmedBytes / runtime.manifest.size) : runtime.status === "completed" ? 1 : 0,
+      status: runtime.status, confirmedBytes: runtime.manifest
+        ? [...this.confirmedForLiveCheckpoint(runtime)].reduce((sum, index) => sum + expectedBlockLength(runtime.manifest!, index), 0)
+        : confirmedBytes,
+      queuedBytes, bytesPerSecond: this.speed(runtime),
+      progress: runtime.manifest?.size
+        ? Math.min(1, [...this.confirmedForLiveCheckpoint(runtime)].reduce((sum, index) => sum + expectedBlockLength(runtime.manifest!, index), 0) / runtime.manifest.size)
+        : runtime.status === "completed" ? 1 : 0,
       activePaths, reason: runtime.reason, expiresAt: runtime.expiresAt, needsSource: runtime.status === "needs-source",
     };
   }
@@ -1857,7 +2280,8 @@ export class FileTransferV2Engine {
       if (runtime.direction === "receive" && runtime.status === "reconnecting" && runtime.checkpointRetryAt > 0
         && now >= runtime.checkpointRetryAt) {
         runtime.checkpointRetryAt = now + 1000;
-        void this.checkpointOrReconnect(runtime);
+        if (runtime.task?.receiveStorageMode === "direct-to-disk") void this.sendResumeSafely(runtime);
+        else void this.checkpointOrReconnect(runtime);
       }
       if (runtime.direction === "receive" && runtime.status === "completed" && runtime.completionRetryAt > 0
         && now >= runtime.completionRetryAt) {

@@ -20,6 +20,8 @@ import {
   type FileTransferV2Store,
   type FileTransferV2Task,
 } from "./store";
+import type { FileTransferV2FileHandle } from "./directDiskSink";
+import { getFileHandleAvailability, type FileHandleAvailability } from "./fileHandleAvailability";
 
 export const FILE_TRANSFER_V2_HISTORY_PREFIX = "filev2:";
 export const FILE_TRANSFER_V2_DISCOVERY_CAPABILITY = Object.freeze({ version: 2 as const });
@@ -58,6 +60,8 @@ export interface FileTransferV2ApplicationAdapterOptions {
   sendP2PFrame: (peerId: string, frame: Uint8Array) => void;
   onUpdate: (snapshot: FileTransferV2Snapshot) => void;
   onReceived: (task: FileTransferV2Task, file: File) => void | Promise<void>;
+  onReceivedToDisk?: (task: FileTransferV2Task, handle: FileTransferV2FileHandle) => void | Promise<void>;
+  shouldUseDirectDisk?: (manifest: FileTransferV2Task["manifest"]) => boolean;
   onError: (reason: string, transferId?: string) => void;
   store?: FileTransferV2Store;
 }
@@ -193,6 +197,7 @@ export class FileTransferV2ApplicationAdapter {
   private readonly restoredScopes = new Set<string>();
   private readonly restorePromises = new Map<string, Promise<void>>();
   private readonly relayTaskCooldowns = new Map<string, { expiresAt: number; timer: ReturnType<typeof setTimeout> }>();
+  private readonly directDiskLeaseReleases = new Map<string, () => void>();
   private activeRoomId: string;
   private serverConnectionEpoch = 0;
   private relayTransportEnabled = false;
@@ -223,8 +228,16 @@ export class FileTransferV2ApplicationAdapter {
       roomId: options.roomId,
       store,
       paths: () => this.getPaths(),
-      onUpdate: snapshot => options.onUpdate(snapshot),
+      onUpdate: snapshot => {
+        if (["paused", "completed", "cancelled", "failed"].includes(snapshot.status)) {
+          this.releaseDirectDiskLease(snapshot.transferId);
+        }
+        options.onUpdate(snapshot);
+      },
       onReceived: (task, file) => options.onReceived(task, file),
+      onReceivedToDisk: options.onReceivedToDisk,
+      shouldUseDirectDisk: options.shouldUseDirectDisk,
+      canResumeDirectDisk: transferId => this.directDiskLeaseReleases.has(transferId),
     });
   }
 
@@ -259,7 +272,7 @@ export class FileTransferV2ApplicationAdapter {
       if (task.localParticipantId !== selfId || task.direction !== "receive"
         || task.status !== "completed" || task.expiresAt <= Date.now()
         || this.isHiddenTransfer(task.transferId)) continue;
-      if ((await this.store.getCommittedIndices(task.transferId)).length === task.manifest.totalBlocks) matches.push(task);
+      if (await this.isReceiveComplete(task)) matches.push(task);
     }
     return matches;
   }
@@ -312,6 +325,11 @@ export class FileTransferV2ApplicationAdapter {
         if (task.roomId === this.options.roomId() && task.localParticipantId === this.options.selfId()
           && task.expiresAt > Date.now() && !["completed", "cancelled", "failed"].includes(task.status)) {
           this.peerOffers.add(task.peerParticipantId);
+          if (task.direction === "receive" && task.receiveStorageMode === "direct-to-disk"
+            && task.status !== "paused") {
+            try { await this.acquireDirectDiskLease(task.transferId); }
+            catch { /* Engine restore keeps this task paused until this tab can own its writer. */ }
+          }
         }
       }
       await this.engine.restore();
@@ -426,8 +444,17 @@ export class FileTransferV2ApplicationAdapter {
     const task = await this.store.getTask(transferId);
     if (!task || task.localParticipantId !== this.options.selfId() || task.direction !== "receive"
       || task.status !== "completed" || task.expiresAt <= Date.now()) return false;
-    const indices = await this.store.getCommittedIndices(transferId);
-    return indices.length === task.manifest.totalBlocks;
+    return this.isReceiveComplete(task);
+  }
+
+  private async isReceiveComplete(task: FileTransferV2Task): Promise<boolean> {
+    if (task.receiveStorageMode === "direct-to-disk") {
+      if (!task.receiveConfirmedRanges) return task.manifest.size === 0 && task.status === "completed";
+      let count = 0;
+      for (const [start, end] of task.receiveConfirmedRanges) count += end - start + 1;
+      return count === task.manifest.totalBlocks;
+    }
+    return (await this.store.getCommittedIndices(task.transferId)).length === task.manifest.totalBlocks;
   }
 
   async getFile(transferId: string): Promise<File> {
@@ -436,6 +463,9 @@ export class FileTransferV2ApplicationAdapter {
     if (!task || task.localParticipantId !== this.options.selfId() || task.direction !== "receive"
       || task.status !== "completed" || task.expiresAt <= Date.now()) {
       throw new Error("Received file is not complete");
+    }
+    if (task.receiveStorageMode === "direct-to-disk") {
+      throw new Error("This file was saved directly to disk and has no browser copy");
     }
     const parts: Blob[] = [];
     for (let index = 0; index < task.manifest.totalBlocks; index++) {
@@ -455,7 +485,7 @@ export class FileTransferV2ApplicationAdapter {
     const task = await this.store.getTask(transferId);
     if (!task || task.localParticipantId !== this.options.selfId() || task.direction !== "receive"
       || !["verifying", "completed"].includes(task.status)) return false;
-    if ((await this.store.getCommittedIndices(transferId)).length !== task.manifest.totalBlocks) return false;
+    if (!await this.isReceiveComplete(task)) return false;
     await this.store.updateTask(transferId, { expiresAt: HISTORY_PIN_EXPIRY });
     return true;
   }
@@ -467,13 +497,68 @@ export class FileTransferV2ApplicationAdapter {
     if (!task || task.localParticipantId !== this.options.selfId() || task.direction !== "receive"
       || !["verifying", "completed"].includes(task.status)
       || task.expiresAt !== HISTORY_PIN_EXPIRY) return false;
-    return (await this.store.getCommittedIndices(transferId)).length === task.manifest.totalBlocks;
+    return this.isReceiveComplete(task);
+  }
+
+  async acceptReceiveToDisk(transferId: string, handle: FileTransferV2FileHandle): Promise<void> {
+    await this.acquireDirectDiskLease(transferId);
+    try {
+      const lockManager = this.getWebLockManager();
+      if (!lockManager) throw new Error("This browser cannot safely reserve a direct-disk destination");
+      await lockManager.request("letshare-file-transfer-v2-direct-disk-admission", {
+        mode: "exclusive",
+        ifAvailable: true,
+      }, async lock => {
+        if (!lock) throw new Error("Another file is being saved. Try again after it finishes.");
+        const tasks = await this.store.listTasks();
+        for (const task of tasks) {
+          if (task.transferId === transferId || task.direction !== "receive"
+            || task.receiveStorageMode !== "direct-to-disk" || !task.receiveFileHandle
+            || ["completed", "cancelled", "failed"].includes(task.status)) continue;
+          if (!handle.isSameEntry || !task.receiveFileHandle.isSameEntry) {
+            throw new Error("Another direct-disk receive is active and this browser cannot verify save destinations");
+          }
+          if (await handle.isSameEntry(task.receiveFileHandle)) {
+            throw new Error("This file is already being used by another transfer. Choose a different save location.");
+          }
+        }
+        await this.engine.acceptReceiveToDisk(transferId, handle);
+      });
+    } catch (error) {
+      this.releaseDirectDiskLease(transferId);
+      throw error;
+    }
+  }
+
+  async getReceiveStorageMode(transferId: string): Promise<"browser-cache" | "direct-to-disk" | null> {
+    const task = await this.store.getTask(transferId);
+    if (!task || task.localParticipantId !== this.options.selfId() || task.direction !== "receive") return null;
+    return task.receiveStorageMode === "direct-to-disk" ? "direct-to-disk" : "browser-cache";
+  }
+
+  async getReceiveFileHandle(transferId: string): Promise<FileTransferV2FileHandle | null> {
+    const task = await this.store.getTask(transferId);
+    if (!task || task.localParticipantId !== this.options.selfId() || task.direction !== "receive"
+      || task.receiveStorageMode !== "direct-to-disk") return null;
+    return task.receiveFileHandle || null;
+  }
+
+  async getReceiveFileHandleAvailability(
+    transferId: string,
+    mode: "read" | "readwrite" = "read",
+  ): Promise<FileHandleAvailability> {
+    const task = await this.store.getTask(transferId);
+    if (!task || task.localParticipantId !== this.options.selfId() || task.direction !== "receive"
+      || task.receiveStorageMode !== "direct-to-disk" || !task.receiveFileHandle) return "deleted";
+    return getFileHandleAvailability(task.receiveFileHandle, mode);
   }
 
   async deleteFile(fileKey: string): Promise<boolean> {
     const transferId = fileTransferV2IdFromHistoryKey(fileKey);
     if (!transferId) return false;
-    return this.hideAndClearTask(transferId);
+    const deleted = await this.hideAndClearTask(transferId);
+    if (deleted) this.releaseDirectDiskLease(transferId);
+    return deleted;
   }
 
   /** Stop local work before a history transaction while preserving transfer blocks. */
@@ -544,10 +629,21 @@ export class FileTransferV2ApplicationAdapter {
     return tasks.length;
   }
 
-  async pause(transferId: string): Promise<void> { await this.engine.pause(transferId); }
-  async resume(transferId: string): Promise<void> { await this.engine.resume(transferId); }
+  async pause(transferId: string): Promise<void> {
+    await this.engine.pause(transferId);
+    this.releaseDirectDiskLease(transferId);
+  }
+  async resume(transferId: string): Promise<void> {
+    const mode = await this.getReceiveStorageMode(transferId);
+    if (mode === "direct-to-disk") await this.acquireDirectDiskLease(transferId);
+    try { await this.engine.resume(transferId); }
+    catch (error) { this.releaseDirectDiskLease(transferId); throw error; }
+  }
   async resumeWithSource(transferId: string, file: File): Promise<void> { await this.engine.resumeWithSource(transferId, file); }
-  async cancel(transferId: string): Promise<void> { await this.engine.cancel(transferId); }
+  async cancel(transferId: string): Promise<void> {
+    await this.engine.cancel(transferId);
+    this.releaseDirectDiskLease(transferId);
+  }
 
   private async hideAndClearTask(transferId: string): Promise<boolean> {
     const task = await this.store.getTask(transferId);
@@ -742,7 +838,7 @@ export class FileTransferV2ApplicationAdapter {
     return true;
   }
 
-  dispose(): void {
+  async dispose(): Promise<void> {
     if (this.disposed) return;
     this.disposed = true;
     this.clearServerHelloTimer();
@@ -750,8 +846,63 @@ export class FileTransferV2ApplicationAdapter {
     for (const cooldown of this.relayTaskCooldowns.values()) clearTimeout(cooldown.timer);
     this.relayTaskCooldowns.clear();
     this.resolvePeerHelloWaiters(false);
-    this.engine.dispose();
+    await this.engine.dispose();
+    for (const transferId of [...this.directDiskLeaseReleases.keys()]) this.releaseDirectDiskLease(transferId);
     if (activeAdapter === this) activeAdapter = null;
+  }
+
+  private getWebLockManager(): {
+    request<T>(
+      name: string,
+      options: { mode: "exclusive"; ifAvailable?: boolean },
+      callback: (lock: unknown | null) => Promise<T> | T,
+    ): Promise<T>;
+  } | undefined {
+    if (typeof navigator === "undefined") return undefined;
+    return (navigator as Navigator & { locks?: ReturnType<FileTransferV2ApplicationAdapter["getWebLockManager"]> }).locks;
+  }
+
+  private async acquireDirectDiskLease(transferId: string): Promise<void> {
+    if (this.directDiskLeaseReleases.has(transferId)) return;
+    const locks = this.getWebLockManager();
+    if (!locks) throw new Error("This browser cannot safely reserve a direct-disk destination");
+    let resolveAcquired!: () => void;
+    let rejectAcquired!: (error: Error) => void;
+    const acquired = new Promise<void>((resolve, reject) => {
+      resolveAcquired = resolve;
+      rejectAcquired = reject;
+    });
+    let acquiredLock = false;
+    const request = locks.request(`letshare-file-transfer-v2-direct-disk:${transferId}`, {
+      mode: "exclusive",
+      ifAvailable: true,
+    }, async lock => {
+      if (!lock) {
+        rejectAcquired(new Error("This transfer is already active in another tab"));
+        return;
+      }
+      acquiredLock = true;
+      let release!: () => void;
+      const hold = new Promise<void>(resolve => { release = resolve; });
+      this.directDiskLeaseReleases.set(transferId, release);
+      resolveAcquired();
+      await hold;
+    }).catch(error => {
+      if (!acquiredLock) rejectAcquired(error instanceof Error ? error : new Error(String(error)));
+      else this.releaseDirectDiskLease(transferId);
+    });
+    try { await acquired; }
+    catch (error) {
+      await request.catch(() => undefined);
+      throw error;
+    }
+  }
+
+  private releaseDirectDiskLease(transferId: string): void {
+    const release = this.directDiskLeaseReleases.get(transferId);
+    if (!release) return;
+    this.directDiskLeaseReleases.delete(transferId);
+    release();
   }
 
   private getPaths(): FileTransferV2Path[] {

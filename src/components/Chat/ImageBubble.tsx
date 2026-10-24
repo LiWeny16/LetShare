@@ -15,10 +15,11 @@ import ImageIcon from '@mui/icons-material/Image';
 import BrokenImageIcon from '@mui/icons-material/BrokenImage';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
 import RefreshIcon from '@mui/icons-material/Refresh';
+import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import { useTranslation } from 'react-i18next';
 import type { FileChatMessage } from '@App/libs/chat/ChatHistoryManager';
 import { formatFileSize } from '@App/libs/chat/ChatHistoryManager';
-import FileBlobStore from '@App/libs/chat/FileBlobStore';
+import FileBlobStore, { type DirectDiskFileInfo } from '@App/libs/chat/FileBlobStore';
 
 interface ImageBubbleProps {
   message: FileChatMessage;
@@ -54,19 +55,45 @@ const ImageBubble: React.FC<ImageBubbleProps> = ({
   const { t } = useTranslation();
   const { fileMetadata } = message;
   const { transferStatus, transferProgress, fileKey, fileName, fileSize } = fileMetadata;
+  const historyStorageMode = (fileMetadata as typeof fileMetadata & { storageMode?: unknown }).storageMode;
+  const isV2ReceivedFile = !isMyMessage && transferStatus === 'completed' && !!fileKey?.startsWith('filev2:');
 
   const [objectUrl, setObjectUrl] = useState<string | null>(null);
   const [loadingImage, setLoadingImage] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [loadError, setLoadError] = useState(false);
+  const [directFileLookup, setDirectFileLookup] = useState<'checking' | 'regular' | DirectDiskFileInfo>(
+    isV2ReceivedFile ? 'checking' : 'regular'
+  );
+  const [directFileBusy, setDirectFileBusy] = useState(false);
+  const [directFileError, setDirectFileError] = useState(false);
 
   // Track the latest object URL for reliable cleanup
   const objectUrlRef = useRef<string | null>(null);
 
-  // Load image from IndexedDB when transfer is completed and fileKey exists
+  useEffect(() => {
+    if (!isV2ReceivedFile || !fileKey) {
+      setDirectFileLookup('regular');
+      return;
+    }
+    let cancelled = false;
+    setDirectFileLookup('checking');
+    FileBlobStore.getDirectDiskFileInfo(fileKey, { storageMode: historyStorageMode })
+      .then(info => { if (!cancelled) setDirectFileLookup(info ?? 'regular'); })
+      .catch(() => {
+        if (cancelled) return;
+        setDirectFileLookup(historyStorageMode === 'direct-to-disk'
+          ? { transferId: fileKey.slice('filev2:'.length), handle: null, availability: 'unavailable' }
+          : 'regular');
+      });
+    return () => { cancelled = true; };
+  }, [fileKey, historyStorageMode, isV2ReceivedFile]);
+
+  // Load image from IndexedDB only after V2 storage has been identified as cached.
   useEffect(() => {
     if (transferStatus !== 'completed' || !fileKey) return;
     if (objectUrl) return;
+    if (directFileLookup !== 'regular') return;
 
     // If parent provided a thumbnailUrl, use it directly
     if (thumbnailUrl) {
@@ -122,7 +149,26 @@ const ImageBubble: React.FC<ImageBubbleProps> = ({
     };
     // Deliberately exclude objectUrl — we only want to trigger on status/fileKey/thumbnailUrl changes
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [transferStatus, fileKey, thumbnailUrl, isMyMessage, sentFile]);
+  }, [transferStatus, fileKey, thumbnailUrl, isMyMessage, sentFile, directFileLookup]);
+
+  const directFileInfo = typeof directFileLookup === 'object' ? directFileLookup : null;
+
+  const handleOpenDirectFile = useCallback(async () => {
+    if (!directFileInfo?.handle || directFileInfo.availability === 'deleted') return;
+    setDirectFileBusy(true);
+    setDirectFileError(false);
+    const result = await FileBlobStore.openDirectDiskFile(directFileInfo.handle);
+    if (result === 'opened') {
+        setDirectFileLookup({ ...directFileInfo, availability: 'available' });
+    } else if (result === 'deleted') {
+      setDirectFileLookup({ ...directFileInfo, availability: 'deleted' });
+    } else if (result === 'permission-required') {
+      setDirectFileLookup({ ...directFileInfo, availability: 'permission-required' });
+    } else if (result === 'failed') {
+      setDirectFileError(true);
+    }
+    setDirectFileBusy(false);
+  }, [directFileInfo]);
 
   // Cleanup old object URL when a new one is set, and on unmount
   useEffect(() => {
@@ -248,6 +294,52 @@ const ImageBubble: React.FC<ImageBubbleProps> = ({
       }
 
       case 'completed': {
+        if (directFileInfo) {
+          const statusLabel = directFileInfo.availability === 'available'
+            ? t('chat.directFileAvailable', '文件可用')
+            : directFileInfo.availability === 'deleted'
+              ? t('chat.directFileDeleted', '文件已删除')
+              : directFileInfo.availability === 'permission-required'
+                ? t('chat.directFilePermissionRequired', '需要授权后打开')
+                : t('chat.directFileUnavailable', '文件状态暂不可用');
+          return (
+            <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', py: 2.5, px: 2, minWidth: 190, gap: 0.75 }}>
+              <ImageIcon sx={{ fontSize: 40, color: theme.palette.text.disabled }} />
+              <Typography variant="caption" noWrap sx={{ maxWidth: 220 }}>{fileName}</Typography>
+              <Typography variant="caption" sx={{ color: theme.palette.text.secondary }}>{formatFileSize(fileSize)}</Typography>
+              <Typography variant="caption" sx={{ color: theme.palette.text.secondary }}>{statusLabel}</Typography>
+              {directFileInfo.availability !== 'deleted' && directFileInfo.handle && (
+                <Button
+                  size="small"
+                  variant="contained"
+                  startIcon={directFileBusy ? <CircularProgress size={14} color="inherit" /> : <OpenInNewIcon />}
+                  onClick={handleOpenDirectFile}
+                  disabled={directFileBusy}
+                  sx={{ textTransform: 'none' }}
+                >
+                  {directFileInfo.availability === 'permission-required'
+                    ? t('chat.directFileGrantAccess')
+                    : t('chat.directFileOpen', '打开文件')}
+                </Button>
+              )}
+              {directFileError && (
+                <Typography variant="caption" color="error" sx={{ textAlign: 'center' }}>
+                  {t('chat.directFileOpenFailed', '无法打开文件，请检查浏览器权限后重试。')}
+                </Typography>
+              )}
+            </Box>
+          );
+        }
+
+        if (directFileLookup === 'checking') {
+          return (
+            <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', py: 2.5, px: 2, minWidth: 180, gap: 1 }}>
+              <CircularProgress size={22} />
+              <Typography variant="caption" color="text.secondary">{t('chat.directFileChecking', '检查文件状态')}</Typography>
+            </Box>
+          );
+        }
+
         if (loadingImage) {
           return (
             <Box

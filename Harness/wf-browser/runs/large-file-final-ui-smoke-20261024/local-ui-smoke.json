@@ -1,0 +1,588 @@
+{
+  "run": "large-file-final-ui-smoke-20261024",
+  "roomId": "410824",
+  "appUrl": "http://127.0.0.1:27772/",
+  "serverWsUrl": "ws://127.0.0.1:27771/ws",
+  "fileName": "letshare-large-file-final-ui-smoke.bin",
+  "fileSize": 134217729,
+  "browserPorts": {
+    "edge": 27773,
+    "chrome": 27774
+  },
+  "outcome": "PASS",
+  "browserVersions": {
+    "edge": "Edg/156.0.4314.42",
+    "chrome": "Chrome/155.0.8059.86"
+  },
+  "capabilities": {
+    "edge": {
+      "picker": true,
+      "locks": true,
+      "room": "410824"
+    },
+    "chrome": {
+      "picker": true,
+      "locks": true,
+      "room": "410824"
+    }
+  },
+  "connectedPeers": {
+    "edge": [
+      {
+        "uniqId": "chrome:lfsmoke",
+        "status": "connected",
+        "userType": "desktop"
+      }
+    ],
+    "chrome": [
+      {
+        "uniqId": "edge:lfsmoke",
+        "status": "connected",
+        "userType": "desktop"
+      }
+    ]
+  },
+  "v2Supported": true,
+  "senderSelected": {
+    "uniqId": "chrome:lfsmoke",
+    "users": [
+      {
+        "uniqId": "edge:lfsmoke",
+        "status": "connected",
+        "userType": "desktop"
+      }
+    ],
+    "connectedUsers": [
+      {
+        "uniqId": "edge:lfsmoke",
+        "name": "edge",
+        "status": "connected",
+        "userType": "desktop"
+      }
+    ],
+    "receivedFiles": [],
+    "sentFiles": [],
+    "pendingDirectSaveRequest": null,
+    "directSavedFiles": [],
+    "directReceivingFiles": [],
+    "receivingFiles": [],
+    "p2pChannels": [
+      {
+        "peerId": "edge:lfsmoke",
+        "readyState": "open",
+        "bufferedAmount": 0,
+        "maxPacketLifeTime": null,
+        "maxRetransmits": null
+      }
+    ],
+    "probeVerifiedPeers": [
+      "edge:lfsmoke"
+    ],
+    "fileTransferStatus": {
+      "message": null,
+      "kind": "info",
+      "updatedAt": 0
+    },
+    "selectedButton": "file",
+    "selectedFileName": "letshare-large-file-final-ui-smoke.bin",
+    "fileTransferProgress": null,
+    "fileSendingTargetUser": "",
+    "hasActiveOutgoingFileTransfer": false,
+    "serverSendProgressVisible": false,
+    "serverReceiveProgressVisible": false,
+    "isConnectedToServer": true
+  },
+  "receiverV2": {
+    "snapshots": [
+      {
+        "transferId": "53537d3e-db58-444b-8792-c2569bda782e",
+        "direction": "receive",
+        "status": "offered",
+        "progress": 0,
+        "fileName": "letshare-large-file-final-ui-smoke.bin",
+        "fileSize": 134217729
+      }
+    ],
+    "tasks": [
+      {
+        "transferId": "53537d3e-db58-444b-8792-c2569bda782e",
+        "direction": "receive",
+        "status": "offered",
+        "peerParticipantId": "chrome:lfsmoke",
+        "fileName": "letshare-large-file-final-ui-smoke.bin",
+        "fileSize": 134217729
+      }
+    ]
+  },
+  "receiverUi": {
+    "buttonVisible": true,
+    "buttonText": "SAVE TO DISK",
+    "buttonTestId": "file-v2-save-to-disk-53537d3e-db58-444b-8792-c2569bda782e",
+    "bodyText": "© 2026 Copyright LetShare v3.8.52 · By Onion\n\nFILE\n0\nIMAGE\n0\nTEXT\n0\nCLIPBOARD\n0\nSEARCH USERS IN SAME WI-FI\n\nchrome\n\n0\n\nYour ID: edge\n\nFile transfers\n\nletshare-large-file-final-ui-smoke.bin\n\nFrom chrome · 128.0 MB\nChoose where to save to start receiving\nConfirmed 0 B / 128.0 MB\nSAVE TO DISK\nCANCEL\nDetails\nNo active tasks",
+    "drawerVisible": true,
+    "downloadText": false,
+    "connected": true,
+    "p2p": [
+      {
+        "peerId": "chrome:lfsmoke",
+        "readyState": "open",
+        "bufferedAmount": 0,
+        "maxPacketLifeTime": null,
+        "maxRetransmits": null
+      }
+    ]
+  },
+  "domAfterOffer": {
+    "ready": "complete",
+    "bodyText": "© 2026 Copyright LetShare v3.8.52 · By Onion\n\nFILE\n0\nIMAGE\n0\nTEXT\n0\nCLIPBOARD\n0\nSEARCH USERS IN SAME WI-FI\n\nchrome\n\n0\n\nYour ID: edge\n\nFile transfers\n\nletshare-large-file-final-ui-smoke.bin\n\nFrom chrome · 128.0 MB\nChoose where to save to start receiving\nConfirmed 0 B / 128.0 MB\nSAVE TO DISK\nCANCEL\nDetails\nNo active tasks",
+    "buttons": [
+      {
+        "text": "",
+        "testId": null,
+        "aria": "QR Code"
+      },
+      {
+        "text": "",
+        "testId": null,
+        "aria": null
+      },
+      {
+        "text": "FILE",
+        "testId": null,
+        "aria": null
+      },
+      {
+        "text": "IMAGE",
+        "testId": null,
+        "aria": null
+      },
+      {
+        "text": "TEXT",
+        "testId": null,
+        "aria": null
+      },
+      {
+        "text": "CLIPBOARD",
+        "testId": null,
+        "aria": null
+      },
+      {
+        "text": "SEARCH USERS IN SAME WI-FI",
+        "testId": null,
+        "aria": null
+      },
+      {
+        "text": "",
+        "testId": null,
+        "aria": null
+      },
+      {
+        "text": "",
+        "testId": null,
+        "aria": "语音通话"
+      },
+      {
+        "text": "",
+        "testId": null,
+        "aria": "视频通话"
+      },
+      {
+        "text": "0",
+        "testId": null,
+        "aria": "plus"
+      },
+      {
+        "text": "SAVE TO DISK",
+        "testId": "file-v2-save-to-disk-53537d3e-db58-444b-8792-c2569bda782e",
+        "aria": null
+      },
+      {
+        "text": "CANCEL",
+        "testId": "file-v2-cancel-53537d3e-db58-444b-8792-c2569bda782e",
+        "aria": null
+      },
+      {
+        "text": "",
+        "testId": null,
+        "aria": "展开下载抽屉"
+      }
+    ]
+  },
+  "screenshot": "D:\\MyFile\\sample\\synchronous-github\\LetShare\\.tmp\\large-file-cache-fix-20261023\\Harness\\wf-browser\\runs\\large-file-final-ui-smoke-20261024\\receiver-offer-visible.png",
+  "senderFinal": {
+    "uniqId": "chrome:lfsmoke",
+    "users": [
+      {
+        "uniqId": "edge:lfsmoke",
+        "status": "connected",
+        "userType": "desktop"
+      }
+    ],
+    "connectedUsers": [
+      {
+        "uniqId": "edge:lfsmoke",
+        "name": "edge",
+        "status": "connected",
+        "userType": "desktop"
+      }
+    ],
+    "receivedFiles": [],
+    "sentFiles": [],
+    "pendingDirectSaveRequest": null,
+    "directSavedFiles": [],
+    "directReceivingFiles": [],
+    "receivingFiles": [],
+    "p2pChannels": [
+      {
+        "peerId": "edge:lfsmoke",
+        "readyState": "open",
+        "bufferedAmount": 0,
+        "maxPacketLifeTime": null,
+        "maxRetransmits": null
+      }
+    ],
+    "probeVerifiedPeers": [
+      "edge:lfsmoke"
+    ],
+    "fileTransferStatus": {
+      "message": null,
+      "kind": "info",
+      "updatedAt": 0
+    },
+    "selectedButton": "file",
+    "selectedFileName": "letshare-large-file-final-ui-smoke.bin",
+    "fileTransferProgress": null,
+    "fileSendingTargetUser": "",
+    "hasActiveOutgoingFileTransfer": false,
+    "serverSendProgressVisible": false,
+    "serverReceiveProgressVisible": false,
+    "isConnectedToServer": true
+  },
+  "receiverFinal": {
+    "uniqId": "edge:lfsmoke",
+    "users": [
+      {
+        "uniqId": "chrome:lfsmoke",
+        "status": "connected",
+        "userType": "desktop"
+      }
+    ],
+    "connectedUsers": [
+      {
+        "uniqId": "chrome:lfsmoke",
+        "name": "chrome",
+        "status": "connected",
+        "userType": "desktop"
+      }
+    ],
+    "receivedFiles": [],
+    "sentFiles": [],
+    "pendingDirectSaveRequest": null,
+    "directSavedFiles": [],
+    "directReceivingFiles": [],
+    "receivingFiles": [],
+    "p2pChannels": [
+      {
+        "peerId": "chrome:lfsmoke",
+        "readyState": "open",
+        "bufferedAmount": 0,
+        "maxPacketLifeTime": null,
+        "maxRetransmits": null
+      }
+    ],
+    "probeVerifiedPeers": [
+      "chrome:lfsmoke"
+    ],
+    "fileTransferStatus": {
+      "message": null,
+      "kind": "info",
+      "updatedAt": 0
+    },
+    "selectedButton": "",
+    "selectedFileName": null,
+    "fileTransferProgress": null,
+    "fileSendingTargetUser": "",
+    "hasActiveOutgoingFileTransfer": false,
+    "serverSendProgressVisible": false,
+    "serverReceiveProgressVisible": false,
+    "isConnectedToServer": true
+  },
+  "senderV2": {
+    "snapshots": [
+      {
+        "transferId": "53537d3e-db58-444b-8792-c2569bda782e",
+        "direction": "send",
+        "status": "offering",
+        "progress": 0,
+        "fileName": "letshare-large-file-final-ui-smoke.bin",
+        "fileSize": 134217729
+      }
+    ],
+    "tasks": [
+      {
+        "transferId": "53537d3e-db58-444b-8792-c2569bda782e",
+        "direction": "send",
+        "status": "offering",
+        "peerParticipantId": "edge:lfsmoke",
+        "fileName": "letshare-large-file-final-ui-smoke.bin",
+        "fileSize": 134217729
+      }
+    ]
+  },
+  "console": {
+    "edge": [
+      {
+        "type": "debug",
+        "text": "[vite] connecting..."
+      },
+      {
+        "type": "debug",
+        "text": "[vite] connected."
+      },
+      {
+        "type": "info",
+        "text": "%cDownload the React DevTools for a better development experience: https://reactjs.org/link/react-devtools font-weight:bold"
+      },
+      {
+        "type": "warning",
+        "text": "⚠️ React Router Future Flag Warning: React Router will begin wrapping state updates in `React.startTransition` in v7. You can use the `v7_startTransition` future flag to opt-in early. For more information, see https://reactrouter.com/v6/upgrading/future#v7_starttransition."
+      },
+      {
+        "type": "warning",
+        "text": "⚠️ React Router Future Flag Warning: Relative route resolution within Splat routes is changing in v7. You can use the `v7_relativeSplatPath` future flag to opt-in early. For more information, see https://reactrouter.com/v6/upgrading/future#v7_relativesplatpath."
+      },
+      {
+        "type": "log",
+        "text": "[INIT] 扫码指定区域: china → custom server"
+      },
+      {
+        "type": "log",
+        "text": "Chat integration event listeners initialized (text + file)"
+      },
+      {
+        "type": "log",
+        "text": " 已为用户 edge:lfsmoke 初始化加密密钥"
+      },
+      {
+        "type": "debug",
+        "text": " 端到端加密功能已启用"
+      },
+      {
+        "type": "log",
+        "text": "Created chat histories object store"
+      },
+      {
+        "type": "log",
+        "text": "Created file_blobs object store"
+      },
+      {
+        "type": "log",
+        "text": "IndexedDB initialized successfully"
+      },
+      {
+        "type": "debug",
+        "text": "[ColabLib] 文件传输消息回调已设置"
+      },
+      {
+        "type": "debug",
+        "text": "[ColabLib] 二进制数据回调已设置"
+      },
+      {
+        "type": "debug",
+        "text": " 已连接自定义服务器"
+      },
+      {
+        "type": "debug",
+        "text": " 成功连接到 custom 提供者"
+      },
+      {
+        "type": "log",
+        "text": " 用户 chrome:lfsmoke 的公钥签名验证通过"
+      },
+      {
+        "type": "log",
+        "text": " 已注册用户 chrome:lfsmoke 的公钥并计算共享密钥"
+      },
+      {
+        "type": "debug",
+        "text": " 已注册用户 chrome:lfsmoke 的公钥"
+      },
+      {
+        "type": "debug",
+        "text": "[DISCOVER] Attempting P2P connection with chrome:lfsmoke"
+      },
+      {
+        "type": "debug",
+        "text": "[CONNECT] User chrome:lfsmoke status updated to connecting"
+      },
+      {
+        "type": "log",
+        "text": " 用户 chrome:lfsmoke 的公钥签名验证通过"
+      },
+      {
+        "type": "log",
+        "text": " 已注册用户 chrome:lfsmoke 的公钥并计算共享密钥"
+      },
+      {
+        "type": "debug",
+        "text": " 已注册用户 chrome:lfsmoke 的公钥"
+      },
+      {
+        "type": "debug",
+        "text": "[CONNECT] Sending offer to chrome:lfsmoke"
+      },
+      {
+        "type": "log",
+        "text": " 用户 chrome:lfsmoke 的公钥签名验证通过"
+      },
+      {
+        "type": "log",
+        "text": " 已注册用户 chrome:lfsmoke 的公钥并计算共享密钥"
+      },
+      {
+        "type": "debug",
+        "text": " 已注册用户 chrome:lfsmoke 的公钥"
+      },
+      {
+        "type": "debug",
+        "text": "[CONNECT] chrome:lfsmoke 状态: connecting"
+      },
+      {
+        "type": "debug",
+        "text": "[CONNECT] chrome:lfsmoke 状态: connected"
+      },
+      {
+        "type": "debug",
+        "text": "[CONNECT] chrome:lfsmoke ICE connected，取消超时"
+      },
+      {
+        "type": "debug",
+        "text": "[DATACHANNEL] chrome:lfsmoke DataChannel opened, probing before marking P2P"
+      },
+      {
+        "type": "debug",
+        "text": "[P2P PROBE] chrome:lfsmoke channel verified (probe + test data ACK)"
+      }
+    ],
+    "chrome": [
+      {
+        "type": "debug",
+        "text": "[vite] connecting..."
+      },
+      {
+        "type": "info",
+        "text": "%cDownload the React DevTools for a better development experience: https://reactjs.org/link/react-devtools font-weight:bold"
+      },
+      {
+        "type": "debug",
+        "text": "[vite] connected."
+      },
+      {
+        "type": "warning",
+        "text": "⚠️ React Router Future Flag Warning: React Router will begin wrapping state updates in `React.startTransition` in v7. You can use the `v7_startTransition` future flag to opt-in early. For more information, see https://reactrouter.com/v6/upgrading/future#v7_starttransition."
+      },
+      {
+        "type": "warning",
+        "text": "⚠️ React Router Future Flag Warning: Relative route resolution within Splat routes is changing in v7. You can use the `v7_relativeSplatPath` future flag to opt-in early. For more information, see https://reactrouter.com/v6/upgrading/future#v7_relativesplatpath."
+      },
+      {
+        "type": "log",
+        "text": "Created chat histories object store"
+      },
+      {
+        "type": "log",
+        "text": "Created file_blobs object store"
+      },
+      {
+        "type": "log",
+        "text": "[INIT] 扫码指定区域: china → custom server"
+      },
+      {
+        "type": "log",
+        "text": "Chat integration event listeners initialized (text + file)"
+      },
+      {
+        "type": "log",
+        "text": " 已为用户 chrome:lfsmoke 初始化加密密钥"
+      },
+      {
+        "type": "debug",
+        "text": " 端到端加密功能已启用"
+      },
+      {
+        "type": "log",
+        "text": "IndexedDB initialized successfully"
+      },
+      {
+        "type": "debug",
+        "text": "[ColabLib] 文件传输消息回调已设置"
+      },
+      {
+        "type": "debug",
+        "text": "[ColabLib] 二进制数据回调已设置"
+      },
+      {
+        "type": "debug",
+        "text": " 已连接自定义服务器"
+      },
+      {
+        "type": "debug",
+        "text": " 成功连接到 custom 提供者"
+      },
+      {
+        "type": "log",
+        "text": " 用户 edge:lfsmoke 的公钥签名验证通过"
+      },
+      {
+        "type": "log",
+        "text": " 已注册用户 edge:lfsmoke 的公钥并计算共享密钥"
+      },
+      {
+        "type": "debug",
+        "text": " 已注册用户 edge:lfsmoke 的公钥"
+      },
+      {
+        "type": "warning",
+        "text": "[ICE] remoteDescription not set, caching candidates"
+      },
+      {
+        "type": "log",
+        "text": " 用户 edge:lfsmoke 的公钥签名验证通过"
+      },
+      {
+        "type": "log",
+        "text": " 已注册用户 edge:lfsmoke 的公钥并计算共享密钥"
+      },
+      {
+        "type": "debug",
+        "text": " 已注册用户 edge:lfsmoke 的公钥"
+      },
+      {
+        "type": "debug",
+        "text": "[CONNECT] edge:lfsmoke 状态: connecting"
+      },
+      {
+        "type": "debug",
+        "text": "[CONNECT] edge:lfsmoke 状态: connected"
+      },
+      {
+        "type": "debug",
+        "text": "[CONNECT] edge:lfsmoke ICE connected，取消超时"
+      },
+      {
+        "type": "debug",
+        "text": "[DATACHANNEL] edge:lfsmoke DataChannel opened, probing before marking P2P"
+      },
+      {
+        "type": "debug",
+        "text": "[P2P PROBE] edge:lfsmoke channel verified (probe + test data ACK)"
+      }
+    ],
+    "edgeExceptions": [],
+    "chromeExceptions": []
+  },
+  "websocketFrameCounts": {
+    "edge": 25,
+    "chrome": 30
+  }
+}

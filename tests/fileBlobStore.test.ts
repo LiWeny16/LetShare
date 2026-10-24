@@ -50,6 +50,7 @@ describe("FileBlobStore IndexedDB operations", () => {
       req.onsuccess = () => resolve();
       req.onerror = () => reject(req.error);
     });
+    await FileBlobStore.getAllFileInfos();
   });
 
   it("creates distinct keys for repeated same-name files in the same millisecond", () => {
@@ -142,6 +143,51 @@ describe("FileBlobStore IndexedDB operations", () => {
   });
 
   // ── 6. getAllFileKeys returns all keys ──
+
+  it("scans legacy file metadata through an index key cursor without opening value cursors", async () => {
+    const key = "legacy-metadata-" + Date.now() + "-large.bin";
+    const db = await ChatHistoryManager.getDB();
+    await new Promise<void>((resolve, reject) => {
+      const transaction = db.transaction([STORE_NAME], "readwrite");
+      transaction.objectStore(STORE_NAME).put({
+        fileKey: key,
+        blob: new ArrayBuffer(1024 * 1024),
+        fileName: "large.bin",
+        mimeType: "application/octet-stream",
+        fileSize: 1024 * 1024,
+        storedAt: Date.now(),
+      });
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error);
+      transaction.onabort = () => reject(transaction.error);
+    });
+
+    const objectStore = db.transaction([STORE_NAME], "readonly").objectStore(STORE_NAME);
+    const storePrototype = Object.getPrototypeOf(objectStore) as {
+      openCursor: (...args: unknown[]) => IDBRequest<IDBCursorWithValue | null>;
+    };
+    const originalOpenCursor = storePrototype.openCursor;
+    storePrototype.openCursor = () => { throw new Error("metadata scan must not open value cursors"); };
+    try {
+      const infos = await FileBlobStore.getAllFileInfos();
+      assert.ok(infos.some(info => info.fileKey === key && info.fileSize === 1024 * 1024));
+      assert.ok(db.transaction([STORE_NAME], "readonly").objectStore(STORE_NAME).indexNames.contains("fileInfo"));
+    } finally {
+      storePrototype.openCursor = originalOpenCursor;
+    }
+  });
+
+  it("invalidates the metadata snapshot after deleting a user's cached files", async () => {
+    const key = "quota-user-" + Date.now() + "-stored.bin";
+    await FileBlobStore.storeFile(key, makeTextFile("stored.bin", "cached"));
+    assert.ok((await FileBlobStore.getAllFileInfos()).some(info => info.fileKey === key));
+
+    const result = await FileBlobStore.deleteFilesByUser("quota-user-");
+    assert.equal(result.success, true);
+    assert.equal(result.deletedCount, 1);
+    assert.equal(FileBlobStore.getCachedFileInfos(), null);
+    assert.equal((await FileBlobStore.getAllFileInfos()).some(info => info.fileKey === key), false);
+  });
 
   it("getAllFileKeys returns all stored keys", async () => {
     const keys = [

@@ -6,6 +6,14 @@ import {
   type FileTransferV2Range,
 } from "./protocol";
 import { sha256HexForBlock } from "./hash";
+import { evaluateFileReceiveStorage, type ReceiveStorageEstimate } from "./storageAdmission";
+import type { FileTransferV2FileHandle } from "./directDiskSink";
+import {
+  receiveStorageReservationCoordinator,
+  type PersistedV2ReceiveReservation,
+  type ReceiveStorageReservationCoordinator,
+  type ReceiveStorageReservationLease,
+} from "../receiveStorageReservationCoordinator";
 
 const DEFAULT_DB_NAME = "letshare-file-transfer-v2";
 const DB_VERSION = 1;
@@ -43,6 +51,15 @@ export interface FileTransferV2Task {
   updatedAt: number;
   expiresAt: number;
   storagePersistent: boolean | null;
+  /** Remaining quota reserved for a receive, excluding committed blocks. */
+  receiveReservedBytes?: number;
+  /** The selected destination for a large receive. Direct-disk payloads never enter BLOCKS_STORE. */
+  receiveStorageMode?: "browser-cache" | "direct-to-disk";
+  receiveFileHandle?: FileTransferV2FileHandle;
+  /** At least one direct-disk batch was successfully closed and checkpointed. */
+  receiveDiskInitialized?: boolean;
+  /** Durable direct-disk checkpoints; updated only after a block writer closes successfully. */
+  receiveConfirmedRanges?: FileTransferV2Range[];
 }
 
 export interface NewFileTransferV2Task {
@@ -55,6 +72,7 @@ export interface NewFileTransferV2Task {
   to: string;
   status: FileTransferV2TaskStatus;
   pauseOrigin?: FileTransferV2PauseOrigin;
+  receiveStorageMode?: "browser-cache" | "direct-to-disk";
   createdAt?: number;
   expiresAt?: number;
 }
@@ -70,9 +88,10 @@ export interface FileTransferV2Block {
 
 export interface FileTransferV2Store {
   createTask(input: NewFileTransferV2Task): Promise<FileTransferV2Task>;
+  ensureReceiveStorage(transferId: string, remainingBytes: number): Promise<FileTransferV2Task>;
   getTask(transferId: string): Promise<FileTransferV2Task | null>;
   listTasks(): Promise<FileTransferV2Task[]>;
-  updateTask(transferId: string, patch: Partial<Pick<FileTransferV2Task, "status" | "expiresAt" | "pauseOrigin">>): Promise<FileTransferV2Task>;
+  updateTask(transferId: string, patch: Partial<Pick<FileTransferV2Task, "status" | "expiresAt" | "pauseOrigin" | "receiveReservedBytes" | "receiveStorageMode" | "receiveFileHandle" | "receiveConfirmedRanges" | "receiveDiskInitialized">>): Promise<FileTransferV2Task>;
   updateRemoteConfirmedRanges(transferId: string, ranges: FileTransferV2Range[]): Promise<FileTransferV2Task>;
   commitBlock(transferId: string, index: number, data: Blob | Uint8Array, hash: string): Promise<{ committed: boolean }>;
   getBlock(transferId: string, index: number): Promise<FileTransferV2Block | null>;
@@ -83,6 +102,7 @@ export interface FileTransferV2Store {
   removeTask(transferId: string): Promise<void>;
   expireTasks(now?: number): Promise<string[]>;
   markRecoveredSendTasksNeedsSource(localParticipantId: string, now?: number): Promise<string[]>;
+  listActiveReceiveStorageReservations?(): Promise<PersistedV2ReceiveReservation[]>;
 }
 
 export interface IndexedDbFileTransferV2StoreOptions {
@@ -91,10 +111,11 @@ export interface IndexedDbFileTransferV2StoreOptions {
   idb?: IDBFactory;
   estimateStorage?: () => Promise<StorageEstimate>;
   requestPersistence?: () => Promise<boolean>;
+  reservationCoordinator?: ReceiveStorageReservationCoordinator;
 }
 
 export class FileTransferV2QuotaError extends Error {
-  constructor(message = "Browser storage quota is insufficient for this transfer block") {
+  constructor(message = "浏览器存储空间不足，文件传输已暂停。请清理空间后重试。") {
     super(message);
     this.name = "FileTransferV2QuotaError";
   }
@@ -152,7 +173,7 @@ function requestBrowserPersistence(): Promise<boolean> {
 
 function toStoreError(error: unknown): Error {
   if (error instanceof FileTransferV2QuotaError) return error;
-  if (isQuotaError(error)) return new FileTransferV2QuotaError(error instanceof Error ? error.message : undefined);
+  if (isQuotaError(error)) return new FileTransferV2QuotaError();
   return error instanceof Error ? error : new Error(String(error));
 }
 
@@ -183,6 +204,72 @@ function hasRecentActiveLease(task: FileTransferV2Task, now: number): boolean {
 
 function isTerminalStatus(status: FileTransferV2TaskStatus): boolean {
   return status === "completed" || status === "cancelled" || status === "failed";
+}
+
+function shouldReserveReceiveTask(task: FileTransferV2Task, now = Date.now()): boolean {
+  return task.direction === "receive" && task.status !== "offered" && task.receiveStorageMode !== "direct-to-disk" && !isTerminalStatus(task.status)
+    && (task.expiresAt > now || hasRecentActiveLease(task, now));
+}
+
+function collectOtherReceiveReservations(
+  tx: IDBTransaction,
+  tasks: FileTransferV2Task[],
+  excludedTransferId: string,
+  onComplete: (reservedBytes: number) => void,
+  abort: (error: Error) => void,
+): void {
+  const candidates = tasks.filter(task => task.transferId !== excludedTransferId && shouldReserveReceiveTask(task));
+  let pending = candidates.length;
+  let totalReserved = 0;
+  const finishOne = (bytes: number) => {
+    if (!Number.isSafeInteger(bytes) || bytes < 0 || !Number.isSafeInteger(totalReserved + bytes)) {
+      abort(new FileTransferV2QuotaError("无法确认其他接收任务预留的浏览器存储空间。请清理空间后重试。"));
+      return;
+    }
+    totalReserved += bytes;
+    pending--;
+    if (pending === 0) onComplete(totalReserved);
+  };
+
+  if (pending === 0) {
+    onComplete(0);
+    return;
+  }
+
+  const blockIndex = tx.objectStore(BLOCKS_STORE).index(BLOCK_TRANSFER_INDEX);
+  for (const task of candidates) {
+    const savedReservation = task.receiveReservedBytes;
+    if (Number.isSafeInteger(savedReservation) && savedReservation! >= 0
+      && savedReservation! <= task.manifest.size) {
+      finishOne(savedReservation!);
+      continue;
+    }
+
+    // Tasks written before reservations were introduced are accounted for using their
+    // committed block indexes. Read keys only, not potentially thousands of Blob records.
+    const request = blockIndex.getAllKeys(IDBKeyRange.only(task.transferId));
+    request.onsuccess = () => {
+      const blockKeys = request.result as IDBValidKey[];
+      let committedBytes = 0;
+      for (const key of blockKeys) {
+        const index = Array.isArray(key) ? Number(key[1]) : Number.NaN;
+        if (!Number.isSafeInteger(index) || index < 0 || index >= task.manifest.totalBlocks) continue;
+        committedBytes = Math.min(task.manifest.size, committedBytes + expectedBlockLength(task.manifest, index));
+      }
+      finishOne(Math.max(0, task.manifest.size - committedBytes));
+    };
+    request.onerror = () => abort(toStoreError(request.error || new Error("Unable to inspect active receive blocks")));
+  }
+}
+
+function receiveQuotaError(reason: "estimate-unavailable" | "insufficient-space" | "invalid-size"): FileTransferV2QuotaError {
+  if (reason === "estimate-unavailable") {
+    return new FileTransferV2QuotaError("无法确认浏览器剩余存储空间，暂不接收以避免传输中断。请清理空间后重试。");
+  }
+  if (reason === "insufficient-space") {
+    return new FileTransferV2QuotaError("浏览器可用存储空间不足，无法安全接收完整文件。请清理空间后重试。");
+  }
+  return new FileTransferV2QuotaError("文件大小无效，无法开始接收。");
 }
 
 function validateStoredRanges(value: unknown, totalBlocks: number): value is FileTransferV2Range[] {
@@ -252,6 +339,8 @@ export class IndexedDbFileTransferV2Store implements FileTransferV2Store {
   private readonly idb: IDBFactory;
   private readonly estimateStorage?: () => Promise<StorageEstimate>;
   private readonly requestPersistence?: () => Promise<boolean>;
+  private readonly reservationCoordinator: ReceiveStorageReservationCoordinator;
+  private readonly receiveReservationLeases = new Map<string, ReceiveStorageReservationLease>();
   private dbPromise: Promise<IDBDatabase> | null = null;
 
   constructor(options: IndexedDbFileTransferV2StoreOptions = {}) {
@@ -260,6 +349,7 @@ export class IndexedDbFileTransferV2Store implements FileTransferV2Store {
     this.idb = options.idb || indexedDB;
     this.estimateStorage = options.estimateStorage || estimateBrowserStorage;
     this.requestPersistence = options.requestPersistence || requestBrowserPersistence;
+    this.reservationCoordinator = options.reservationCoordinator || receiveStorageReservationCoordinator;
   }
 
   private openDB(): Promise<IDBDatabase> {
@@ -290,6 +380,27 @@ export class IndexedDbFileTransferV2Store implements FileTransferV2Store {
     return this.dbPromise;
   }
 
+  private rememberReceiveReservation(transferId: string, lease: ReceiveStorageReservationLease): void {
+    this.receiveReservationLeases.set(transferId, lease);
+  }
+
+  private async releaseReceiveReservation(transferId: string): Promise<void> {
+    const lease = this.receiveReservationLeases.get(transferId);
+    if (lease) {
+      await lease.release();
+      if (this.receiveReservationLeases.get(transferId) === lease) this.receiveReservationLeases.delete(transferId);
+      return;
+    }
+    await this.reservationCoordinator.release(`v2:${transferId}`);
+  }
+
+  private resizeReceiveReservation(transferId: string, bytes: number): Promise<void> {
+    const lease = this.receiveReservationLeases.get(transferId);
+    return lease
+      ? lease.resize(bytes)
+      : this.reservationCoordinator.resize(`v2:${transferId}`, bytes);
+  }
+
   private async checkQuota(additionalBytes: number): Promise<void> {
     try {
       const estimate = await this.estimateStorage?.();
@@ -300,6 +411,97 @@ export class IndexedDbFileTransferV2Store implements FileTransferV2Store {
       if (error instanceof FileTransferV2QuotaError) throw error;
       // Storage estimation is advisory; the IDB transaction remains authoritative.
     }
+  }
+
+  private async requireReceiveStorageEstimate(): Promise<ReceiveStorageEstimate> {
+    let estimate: StorageEstimate | undefined;
+    try {
+      estimate = await this.estimateStorage?.();
+    } catch {
+      estimate = undefined;
+    }
+    const validation = evaluateFileReceiveStorage(0, estimate as ReceiveStorageEstimate | undefined);
+    if (!validation.allowed) throw receiveQuotaError(validation.reason);
+    return estimate as ReceiveStorageEstimate;
+  }
+
+  private getCrossProtocolReservedBytes(
+    reservations: readonly { key: string; owner: string; bytes: number; state: string }[],
+    persistedV2: readonly PersistedV2ReceiveReservation[],
+  ): number {
+    const durableV2Keys = new Set(persistedV2.map(item => `v2:${item.transferId}`));
+    let reservedBytes = 0;
+    for (const reservation of reservations) {
+      // Other V2 tasks are checked again from their IndexedDB task/block metadata
+      // inside this store's write transaction. Count V2 ledger rows here only if
+      // they are still pending and have not reached that durable task yet.
+      if (reservation.owner === "file-transfer-v2"
+        && (reservation.state !== "pending" || durableV2Keys.has(reservation.key))) continue;
+      if (!Number.isSafeInteger(reservation.bytes) || reservation.bytes < 0
+        || reservedBytes > Number.MAX_SAFE_INTEGER - reservation.bytes) return Number.MAX_SAFE_INTEGER;
+      reservedBytes += reservation.bytes;
+    }
+    return reservedBytes;
+  }
+
+  private async acquireReceiveStorageReservation(
+    transferId: string,
+    bytes: number,
+    replaceExisting = false,
+  ): Promise<{ lease: ReceiveStorageReservationLease; estimate: ReceiveStorageEstimate }> {
+    let estimate: ReceiveStorageEstimate | undefined;
+    let admissionError: Error | null = null;
+    const lease = await this.reservationCoordinator.tryReserve(`v2:${transferId}`, bytes,
+      async (_reservedBytes, reservations, persistedV2) => {
+        try {
+          estimate = await this.requireReceiveStorageEstimate();
+        } catch (error) {
+          admissionError = error instanceof Error ? error : receiveQuotaError("estimate-unavailable");
+          return false;
+        }
+        const reservedBytes = this.getCrossProtocolReservedBytes(reservations, persistedV2);
+        const admission = evaluateFileReceiveStorage(bytes, estimate, reservedBytes);
+        if (!admission.allowed) {
+          admissionError = receiveQuotaError(admission.reason);
+          return false;
+        }
+        return true;
+      },
+      { replaceExisting });
+    if (!lease) {
+      throw admissionError || new FileTransferV2QuotaError("A receive reservation already exists in another tab");
+    }
+    if (!estimate) {
+      await lease.release();
+      throw receiveQuotaError("estimate-unavailable");
+    }
+    return { lease, estimate };
+  }
+
+  async listActiveReceiveStorageReservations(): Promise<PersistedV2ReceiveReservation[]> {
+    const now = Date.now();
+    const reservations: PersistedV2ReceiveReservation[] = [];
+    for (const task of await this.listTasks()) {
+      if (!shouldReserveReceiveTask(task, now)) continue;
+      let bytes = task.receiveReservedBytes;
+      if (!Number.isSafeInteger(bytes) || bytes! < 0 || bytes! > task.manifest.size) {
+        const committedIndices = await this.getCommittedIndices(task.transferId);
+        let committedBytes = 0;
+        for (const index of committedIndices) {
+          committedBytes = Math.min(task.manifest.size, committedBytes + expectedBlockLength(task.manifest, index));
+        }
+        bytes = Math.max(0, task.manifest.size - committedBytes);
+      }
+      if (task.receiveStorageMode === "direct-to-disk" || bytes === 0) continue;
+      reservations.push({
+        transferId: task.transferId,
+        bytes: bytes!,
+        status: task.status,
+        updatedAt: task.updatedAt,
+        expiresAt: task.expiresAt,
+      });
+    }
+    return reservations;
   }
 
   async createTask(input: NewFileTransferV2Task): Promise<FileTransferV2Task> {
@@ -316,6 +518,16 @@ export class IndexedDbFileTransferV2Store implements FileTransferV2Store {
       || (input.expiresAt !== undefined && (!Number.isSafeInteger(input.expiresAt) || input.expiresAt < 0))) {
       throw new TypeError("Invalid file transfer v2 task timestamps");
     }
+    const reserveReceiveBytes = input.direction === "receive" && input.status !== "offered"
+      && input.receiveStorageMode !== "direct-to-disk" && !isTerminalStatus(input.status);
+    if (reserveReceiveBytes && await this.getTask(input.manifest.transferId)) {
+      throw new FileTransferV2TaskExistsError(input.manifest.transferId);
+    }
+    const receiveReservation = reserveReceiveBytes && input.manifest.size > 0
+      ? await this.acquireReceiveStorageReservation(input.manifest.transferId, input.manifest.size)
+      : null;
+    if (receiveReservation) this.rememberReceiveReservation(input.manifest.transferId, receiveReservation.lease);
+    const storageEstimate = receiveReservation?.estimate;
     const storagePersistent = await this.requestPersistence?.().catch(() => false) ?? false;
     const task: FileTransferV2Task = {
       transferId: input.manifest.transferId,
@@ -333,17 +545,100 @@ export class IndexedDbFileTransferV2Store implements FileTransferV2Store {
       updatedAt: createdAt,
       expiresAt: input.expiresAt ?? createdAt + this.expiryMs,
       storagePersistent,
+      ...(input.direction === "receive"
+        ? { receiveReservedBytes: reserveReceiveBytes ? input.manifest.size : 0 }
+        : {}),
+      ...(input.receiveStorageMode ? { receiveStorageMode: input.receiveStorageMode } : {}),
     };
-    const db = await this.openDB();
-    return runTransaction(db, [TASKS_STORE], "readwrite", (tx, setResult, abort) => {
-      const store = tx.objectStore(TASKS_STORE);
-      const get = store.get(task.transferId);
-      get.onsuccess = () => {
-        if (get.result) return abort(new FileTransferV2TaskExistsError(task.transferId));
-        store.add(task);
-        setResult(task);
-      };
-    });
+    try {
+      const db = await this.openDB();
+      const created = await runTransaction<FileTransferV2Task>(db, [TASKS_STORE, BLOCKS_STORE], "readwrite", (tx, setResult, abort) => {
+        const store = tx.objectStore(TASKS_STORE);
+        const getAll = store.getAll();
+        getAll.onsuccess = () => {
+          const tasks = getAll.result as FileTransferV2Task[];
+          if (tasks.some(existing => existing.transferId === task.transferId)) {
+            return abort(new FileTransferV2TaskExistsError(task.transferId));
+          }
+          const addTask = () => {
+            store.add(task);
+            setResult(task);
+          };
+          if (!reserveReceiveBytes || !storageEstimate) {
+            addTask();
+            return;
+          }
+          collectOtherReceiveReservations(tx, tasks, task.transferId, reservedBytes => {
+            const admission = evaluateFileReceiveStorage(task.manifest.size, storageEstimate, reservedBytes);
+            if (!admission.allowed) return abort(receiveQuotaError(admission.reason));
+            addTask();
+          }, abort);
+        };
+      });
+      await receiveReservation?.lease.commit();
+      return created;
+    } catch (error) {
+      await receiveReservation?.lease.release().catch(() => undefined);
+      if (receiveReservation && this.receiveReservationLeases.get(input.manifest.transferId) === receiveReservation.lease) {
+        this.receiveReservationLeases.delete(input.manifest.transferId);
+      }
+      throw error;
+    }
+  }
+
+  async ensureReceiveStorage(transferId: string, remainingBytes: number): Promise<FileTransferV2Task> {
+    if (!Number.isSafeInteger(remainingBytes) || remainingBytes < 0) {
+      throw receiveQuotaError("invalid-size");
+    }
+    const receiveReservation = remainingBytes > 0
+      ? await this.acquireReceiveStorageReservation(transferId, remainingBytes, true)
+      : null;
+    if (receiveReservation) this.rememberReceiveReservation(transferId, receiveReservation.lease);
+    const estimate = receiveReservation?.estimate;
+    try {
+      const db = await this.openDB();
+      const updated = await runTransaction<FileTransferV2Task>(db, [TASKS_STORE, BLOCKS_STORE], "readwrite", (tx, setResult, abort) => {
+        const taskStore = tx.objectStore(TASKS_STORE);
+        const getAll = taskStore.getAll();
+        getAll.onsuccess = () => {
+          const tasks = getAll.result as FileTransferV2Task[];
+          const task = tasks.find(candidate => candidate.transferId === transferId);
+          if (!task) return abort(new FileTransferV2TaskNotFoundError(transferId));
+          if (task.direction !== "receive") return abort(new TypeError("Storage admission only applies to receive tasks"));
+          if (isTerminalStatus(task.status)) return abort(new FileTransferV2TerminalTaskError(transferId, task.status));
+          const saveReservation = () => {
+            const now = Date.now();
+            const value: FileTransferV2Task = {
+              ...task,
+              receiveReservedBytes: remainingBytes,
+              updatedAt: now,
+              expiresAt: now + this.expiryMs,
+            };
+            taskStore.put(value);
+            setResult(value);
+          };
+          if (remainingBytes === 0) {
+            saveReservation();
+            return;
+          }
+          if (!estimate) return abort(receiveQuotaError("estimate-unavailable"));
+          collectOtherReceiveReservations(tx, tasks, transferId, reservedBytes => {
+            const admission = evaluateFileReceiveStorage(remainingBytes, estimate, reservedBytes);
+            if (!admission.allowed) return abort(receiveQuotaError(admission.reason));
+            saveReservation();
+          }, abort);
+        };
+      });
+      if (receiveReservation) await receiveReservation.lease.commit();
+      else await this.reservationCoordinator.release(`v2:${transferId}`);
+      return updated;
+    } catch (error) {
+      await receiveReservation?.lease.release().catch(() => undefined);
+      if (receiveReservation && this.receiveReservationLeases.get(transferId) === receiveReservation.lease) {
+        this.receiveReservationLeases.delete(transferId);
+      }
+      throw error;
+    }
   }
 
   async getTask(transferId: string): Promise<FileTransferV2Task | null> {
@@ -364,7 +659,7 @@ export class IndexedDbFileTransferV2Store implements FileTransferV2Store {
 
   async updateTask(
     transferId: string,
-    patch: Partial<Pick<FileTransferV2Task, "status" | "expiresAt" | "pauseOrigin">>,
+    patch: Partial<Pick<FileTransferV2Task, "status" | "expiresAt" | "pauseOrigin" | "receiveReservedBytes" | "receiveStorageMode" | "receiveFileHandle" | "receiveConfirmedRanges" | "receiveDiskInitialized">>,
   ): Promise<FileTransferV2Task> {
     if (patch.status !== undefined && !TASK_STATUSES.has(patch.status)) throw new TypeError("Invalid file transfer v2 task status");
     if (patch.pauseOrigin !== undefined && patch.pauseOrigin !== null
@@ -374,13 +669,28 @@ export class IndexedDbFileTransferV2Store implements FileTransferV2Store {
     if (patch.expiresAt !== undefined && (!Number.isSafeInteger(patch.expiresAt) || patch.expiresAt < 0)) {
       throw new TypeError("Invalid file transfer v2 task expiry");
     }
+    if (patch.receiveReservedBytes !== undefined
+      && (!Number.isSafeInteger(patch.receiveReservedBytes) || patch.receiveReservedBytes < 0)) {
+      throw new TypeError("Invalid file transfer v2 receive storage reservation");
+    }
+    if (patch.receiveStorageMode !== undefined
+      && patch.receiveStorageMode !== "browser-cache" && patch.receiveStorageMode !== "direct-to-disk") {
+      throw new TypeError("Invalid file transfer v2 receive storage mode");
+    }
     const db = await this.openDB();
-    return runTransaction(db, [TASKS_STORE], "readwrite", (tx, setResult, abort) => {
+    const updated = await runTransaction<FileTransferV2Task>(db, [TASKS_STORE], "readwrite", (tx, setResult, abort) => {
       const store = tx.objectStore(TASKS_STORE);
       const request = store.get(transferId);
       request.onsuccess = () => {
         const task = request.result as FileTransferV2Task | undefined;
         if (!task) return abort(new FileTransferV2TaskNotFoundError(transferId));
+        if (patch.receiveConfirmedRanges !== undefined
+          && !validateFileTransferV2Ranges(patch.receiveConfirmedRanges, task.manifest.totalBlocks)) {
+          return abort(new TypeError("Invalid direct-disk receive checkpoint ranges"));
+        }
+        if (patch.receiveStorageMode === "direct-to-disk" && task.direction !== "receive") {
+          return abort(new TypeError("Direct-disk storage only applies to receive tasks"));
+        }
         if (isTerminalStatus(task.status) && patch.status !== undefined && patch.status !== task.status) {
           return abort(new FileTransferV2TerminalTaskError(transferId, task.status));
         }
@@ -388,6 +698,15 @@ export class IndexedDbFileTransferV2Store implements FileTransferV2Store {
         const updated: FileTransferV2Task = {
           ...task,
           ...(patch.status !== undefined ? { status: patch.status } : {}),
+          ...(patch.receiveReservedBytes !== undefined ? { receiveReservedBytes: patch.receiveReservedBytes } : {}),
+          ...(patch.receiveStorageMode !== undefined ? { receiveStorageMode: patch.receiveStorageMode } : {}),
+          ...(patch.receiveFileHandle !== undefined ? { receiveFileHandle: patch.receiveFileHandle } : {}),
+          ...(patch.receiveConfirmedRanges !== undefined ? { receiveConfirmedRanges: patch.receiveConfirmedRanges } : {}),
+          ...(patch.receiveDiskInitialized !== undefined ? { receiveDiskInitialized: patch.receiveDiskInitialized } : {}),
+          ...(patch.status !== undefined && isTerminalStatus(patch.status) && task.direction === "receive"
+            ? { receiveReservedBytes: 0 } : {}),
+          ...(patch.receiveStorageMode === "direct-to-disk" && patch.receiveReservedBytes === undefined
+            ? { receiveReservedBytes: 0 } : {}),
           ...(patch.pauseOrigin !== undefined
             ? { pauseOrigin: patch.pauseOrigin }
             : patch.status !== undefined && patch.status !== "paused" && patch.status !== "needs-source"
@@ -399,6 +718,15 @@ export class IndexedDbFileTransferV2Store implements FileTransferV2Store {
         setResult(updated);
       };
     });
+    if (updated.direction === "receive") {
+      if (isTerminalStatus(updated.status) || updated.receiveStorageMode === "direct-to-disk"
+        || updated.receiveReservedBytes === 0) {
+        void this.releaseReceiveReservation(transferId).catch(() => undefined);
+      } else if (Number.isSafeInteger(updated.receiveReservedBytes)) {
+        void this.resizeReceiveReservation(transferId, updated.receiveReservedBytes!).catch(() => undefined);
+      }
+    }
+    return updated;
   }
 
   async updateRemoteConfirmedRanges(transferId: string, ranges: FileTransferV2Range[]): Promise<FileTransferV2Task> {
@@ -443,7 +771,7 @@ export class IndexedDbFileTransferV2Store implements FileTransferV2Store {
       await this.checkQuota(blob.size);
       const db = await this.openDB();
       const now = Date.now();
-      return await runTransaction(db, [TASKS_STORE, BLOCKS_STORE], "readwrite", (tx, setResult, abort) => {
+      const result = await runTransaction<{ committed: boolean; receiveReservedBytes?: number }>(db, [TASKS_STORE, BLOCKS_STORE], "readwrite", (tx, setResult, abort) => {
         const taskStore = tx.objectStore(TASKS_STORE);
         const blockStore = tx.objectStore(BLOCKS_STORE);
         const taskRequest = taskStore.get(transferId);
@@ -467,11 +795,33 @@ export class IndexedDbFileTransferV2Store implements FileTransferV2Store {
               transferId, index, hash: hash.toLowerCase(), blob, byteLength: blob.size, committedAt: now,
             };
             blockStore.add(record);
-            taskStore.put({ ...task, updatedAt: now, expiresAt: now + this.expiryMs });
-            setResult({ committed: true });
+            const remainingReservation = task.direction === "receive"
+              ? Math.max(0, (Number.isSafeInteger(task.receiveReservedBytes)
+                ? task.receiveReservedBytes!
+                : task.manifest.size) - blob.size)
+              : task.receiveReservedBytes;
+            taskStore.put({
+              ...task,
+              ...(task.direction === "receive" ? { receiveReservedBytes: remainingReservation } : {}),
+              updatedAt: now,
+              expiresAt: now + this.expiryMs,
+            });
+            setResult({
+              committed: true,
+              ...(task.direction === "receive" ? { receiveReservedBytes: remainingReservation } : {}),
+            });
           };
         };
       });
+      if (result.committed && existingTask.direction === "receive" && existingTask.receiveStorageMode !== "direct-to-disk") {
+        const task = await this.getTask(transferId);
+        if (task && (isTerminalStatus(task.status) || task.receiveReservedBytes === 0)) {
+          await this.releaseReceiveReservation(transferId);
+        } else if (task && Number.isSafeInteger(task.receiveReservedBytes)) {
+          await this.resizeReceiveReservation(transferId, task.receiveReservedBytes!);
+        }
+      }
+      return { committed: result.committed };
     } catch (error) {
       if (!(error instanceof FileTransferV2TaskNotFoundError) && !(error instanceof FileTransferV2BlockConflictError)
         && !(error instanceof FileTransferV2TerminalTaskError) && !(error instanceof FileTransferV2IdentityChangedError)
@@ -558,12 +908,13 @@ export class IndexedDbFileTransferV2Store implements FileTransferV2Store {
         } else setResult(undefined);
       };
     });
+    await this.releaseReceiveReservation(transferId);
   }
 
   async clearBlocksKeepingTask(transferId: string, status: FileTransferV2TaskStatus): Promise<FileTransferV2Task> {
     if (!TASK_STATUSES.has(status)) throw new TypeError("Invalid file transfer v2 task status");
     const db = await this.openDB();
-    return runTransaction(db, [TASKS_STORE, BLOCKS_STORE], "readwrite", (tx, setResult, abort) => {
+    const updated = await runTransaction<FileTransferV2Task>(db, [TASKS_STORE, BLOCKS_STORE], "readwrite", (tx, setResult, abort) => {
       const taskStore = tx.objectStore(TASKS_STORE);
       const blockStore = tx.objectStore(BLOCKS_STORE);
       const request = taskStore.get(transferId);
@@ -575,7 +926,13 @@ export class IndexedDbFileTransferV2Store implements FileTransferV2Store {
         }
         const now = Date.now();
         const updated: FileTransferV2Task = {
-          ...task, status, updatedAt: now, expiresAt: now + this.expiryMs,
+          ...task,
+          status,
+          ...(task.direction === "receive"
+            ? { receiveReservedBytes: isTerminalStatus(status) || task.receiveStorageMode === "direct-to-disk" ? 0 : task.manifest.size }
+            : {}),
+          updatedAt: now,
+          expiresAt: now + this.expiryMs,
         };
         taskStore.put(updated);
         const cursorRequest = blockStore.index(BLOCK_TRANSFER_INDEX).openKeyCursor(IDBKeyRange.only(transferId));
@@ -588,6 +945,14 @@ export class IndexedDbFileTransferV2Store implements FileTransferV2Store {
         };
       };
     });
+    if (updated.direction === "receive") {
+      if (isTerminalStatus(updated.status) || updated.receiveStorageMode === "direct-to-disk") {
+        await this.releaseReceiveReservation(transferId);
+      } else {
+        await this.resizeReceiveReservation(transferId, updated.receiveReservedBytes ?? updated.manifest.size);
+      }
+    }
+    return updated;
   }
 
   async expireTasks(now = Date.now()): Promise<string[]> {
@@ -614,7 +979,10 @@ export class IndexedDbFileTransferV2Store implements FileTransferV2Store {
           };
         };
       });
-      if (deleted) removed.push(task.transferId);
+      if (deleted) {
+        removed.push(task.transferId);
+        await this.releaseReceiveReservation(task.transferId);
+      }
     }
     return removed;
   }

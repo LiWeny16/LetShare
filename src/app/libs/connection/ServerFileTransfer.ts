@@ -34,6 +34,19 @@ import {
  withTransferTimeout,
 } from "./transferReliability";
 import { getDeviceType } from "../tools/tools";
+import {
+ evaluateLegacyRelayBrowserStorage,
+ getAvailableLegacyRelayMemoryBytes,
+ getLegacyRelayStorageReservedBytes,
+ getLegacyRelayReceiveMemoryBudgetBytes,
+ getLegacyRelayReservedMemoryBytes,
+ type LegacyRelayStorageEstimate,
+ selectLegacyRelayReceiveStorage,
+} from "./legacyRelayStoragePolicy";
+import {
+ receiveStorageReservationCoordinator,
+ type ReceiveStorageReservationLease,
+} from "./receiveStorageReservationCoordinator";
 
 const t = i18n.t;
 
@@ -187,6 +200,7 @@ interface ReceiveSession {
  storageMode: "browser-cache" | "direct-to-disk";
  directSink: DirectFileWriteSink | null;
  writeChain: Promise<void>;
+ reservationLease?: ReceiveStorageReservationLease;
  directSaveReason?: string;
 }
 
@@ -214,6 +228,13 @@ type TransferStatusKind = "info" | "warning" | "error" | "success";
 type SendCompletionWaiter = {
  resolve: () => void;
  reject: (error: Error) => void;
+};
+
+type LegacyRelayBrowserStoragePreflight = {
+ estimate: LegacyRelayStorageEstimate | null;
+ reservedBytes: number;
+ allowed: boolean;
+ reason?: string;
 };
 
 export class ServerFileTransfer {
@@ -247,16 +268,24 @@ export class ServerFileTransfer {
  private onFileMetaInfoChange: ((name: string) => void) | null = null;
  private onTransferStatusChange: ((message: string | null, kind: TransferStatusKind) => void) | null = null;
  private receivedFileCacheCandidatesCallback: (() => Array<{ size: number }>) | null = null;
+ private p2pReceiveMemoryReservationsCallback: (() => number[]) | null = null;
  private onFileSavedToDiskCallback: ((fileName: string, fileSize: number, fromUserId: string) => void) | null = null;
  private onTransferUiUpdateCallback: ((update: FileTransferUiUpdate) => void) | null = null;
  private pendingDirectSaveRequests = new Map<string, ServerDirectSaveRequest>();
  private pendingDirectSaveRequest: ServerDirectSaveRequest | null = null;
+ private pendingBrowserCacheAdmissions = new Map<string, number>();
+ private pendingBrowserCacheAdmissionTokens = new Map<string, object>();
+ private receiveReservationLeases = new Map<string, ReceiveStorageReservationLease>();
+ private connectionGeneration = 0;
 
  constructor(connectionManager: ConnectionManager) {
   this.connectionManager = connectionManager;
   this.setupMessageHandlers();
   this.connectionManager.onDisconnected?.((reason) => {
-   this.handleConnectionLost(reason || t('alert.serverConnectionLost'));
+   if (this.connectionManager.isConnected()) return;
+   void this.handleConnectionLost(reason || t('alert.serverConnectionLost')).catch((error) => {
+    console.error("[ServerFileTransfer] Disconnect cleanup failed:", error);
+   });
   });
  }
 
@@ -336,6 +365,40 @@ export class ServerFileTransfer {
   this.receivedFileCacheCandidatesCallback = callback;
  }
 
+ public setP2PReceiveMemoryReservationsCallback(callback: () => number[]): void {
+  this.p2pReceiveMemoryReservationsCallback = callback;
+ }
+
+ public getActiveBrowserCacheReceiveSizes(excludeTransferId?: string): number[] {
+  const activeSessions = Array.from(this.receivingSessions.values())
+   .filter(session => session.storageMode === "browser-cache"
+    && (session.status === "pending" || session.status === "receiving")
+    && session.transferId !== excludeTransferId)
+   .map(session => session.fileSize);
+  const pendingAdmissions = Array.from(this.pendingBrowserCacheAdmissions.entries())
+   .filter(([transferId]) => transferId !== excludeTransferId)
+   .map(([, fileSize]) => fileSize);
+  return [...activeSessions, ...pendingAdmissions];
+ }
+
+ private async releaseReceiveStorageReservation(
+  transferId: string,
+  expectedLease: ReceiveStorageReservationLease | null,
+ ): Promise<void> {
+  const lease = expectedLease;
+  if (!lease) return;
+  if (this.receiveReservationLeases.get(transferId) === lease) this.receiveReservationLeases.delete(transferId);
+  try {
+   await lease.release();
+  } catch (error) {
+   console.warn(`[ServerFileTransfer] receive reservation release failed: ${transferId}`, error);
+  }
+ }
+
+ public getAvailableReceiveMemoryBytes(): number {
+  return this.getAvailableLegacyRelayReceiveMemoryBytes();
+ }
+
  public setFileSavedToDiskCallback(callback: (fileName: string, fileSize: number, fromUserId: string) => void) {
   this.onFileSavedToDiskCallback = callback;
  }
@@ -383,10 +446,12 @@ export class ServerFileTransfer {
   this.pendingDirectSaveRequest = request;
  }
 
- private clearPendingDirectSaveRequest(transferId?: string): void {
+ private clearPendingDirectSaveRequest(transferId?: string, expectedRequest?: ServerDirectSaveRequest): void {
   if (transferId) {
+   if (expectedRequest && this.pendingDirectSaveRequests.get(transferId) !== expectedRequest) return;
    this.pendingDirectSaveRequests.delete(transferId);
-   if (this.pendingDirectSaveRequest?.transferId === transferId) {
+   if (this.pendingDirectSaveRequest?.transferId === transferId
+    && (!expectedRequest || this.pendingDirectSaveRequest === expectedRequest)) {
     this.pendingDirectSaveRequest =
      this.pendingDirectSaveRequests.values().next().value ?? null;
    }
@@ -857,6 +922,7 @@ export class ServerFileTransfer {
   session.buffer = null;
   session.receivedChunks = [];
   this.receivingSessions.delete(session.transferId);
+  this.releaseReceiveStorageReservation(session.transferId, session.reservationLease ?? null);
   this.clearPendingDirectSaveRequest(session.transferId);
   this.clearReceiveTimeout(session.transferId);
   this.onProgressCallback?.(null);
@@ -872,6 +938,7 @@ export class ServerFileTransfer {
  private getReceivedFileCacheCandidates(incomingSize: number): Array<{ size: number }> {
   return [
    ...(this.receivedFileCacheCandidatesCallback?.() ?? []),
+   ...Array.from(this.pendingBrowserCacheAdmissions.values()).map(size => ({ size })),
    ...Array.from(this.receivingSessions.values())
     .filter((session) => session.storageMode === "browser-cache")
     .map((session) => ({
@@ -879,6 +946,41 @@ export class ServerFileTransfer {
     })),
    { size: incomingSize },
   ];
+ }
+
+ private getAvailableLegacyRelayReceiveMemoryBytes(): number {
+  const budgetBytes = getLegacyRelayReceiveMemoryBudgetBytes(getDeviceType());
+  const p2pReservations = (this.p2pReceiveMemoryReservationsCallback?.() ?? [])
+   .map(fileSize => ({ storageMode: "browser-cache" as const, fileSize }));
+  const pendingReservations = Array.from(this.pendingBrowserCacheAdmissions.values())
+   .map(fileSize => ({ storageMode: "browser-cache" as const, fileSize }));
+  const reservedBytes = getLegacyRelayReservedMemoryBytes([
+   ...this.receivingSessions.values(),
+   ...pendingReservations,
+   ...p2pReservations,
+  ]);
+  return getAvailableLegacyRelayMemoryBytes(budgetBytes, reservedBytes);
+ }
+
+ private async preflightLegacyRelayBrowserCacheStorage(
+  fileSize: number,
+  activeReceiveReservations: number,
+ ): Promise<LegacyRelayBrowserStoragePreflight> {
+  let estimate: LegacyRelayStorageEstimate | null = null;
+  try {
+   const storage = typeof navigator === "undefined" ? undefined : navigator.storage;
+   if (storage && typeof storage.estimate === "function") estimate = await storage.estimate();
+  } catch (error) {
+   console.warn("[ServerFileTransfer] Browser storage estimate failed; receive will fail closed:", error);
+  }
+
+  const check = evaluateLegacyRelayBrowserStorage(fileSize, estimate, activeReceiveReservations);
+  return {
+   estimate,
+   reservedBytes: activeReceiveReservations,
+   allowed: check.allowed,
+   ...(!check.allowed ? { reason: check.reason } : {}),
+  };
  }
 
  private getReceivedCacheLimitMessage(guard: {
@@ -980,9 +1082,18 @@ export class ServerFileTransfer {
    alertUseMUI(reason, 4000, { kind: "error", category: "transfer-status" });
  }
 
- public handleConnectionLost(reason: string): void {
+ public async handleConnectionLost(reason: string): Promise<void> {
+  this.connectionGeneration += 1;
   this.lastDisconnectTime = Date.now(); // 记录断开时间, 用于重连宽限期判断
-  const activeTransferCount = this.sendingSessions.size + this.receivingSessions.size;
+  const receiveSessions = new Map(this.receivingSessions);
+  const sendSessions = new Map(this.sendingSessions);
+  const receiveLeases = new Map(this.receiveReservationLeases);
+  const pendingSaveRequests = new Map(this.pendingDirectSaveRequests);
+  const receiveTimeouts = new Map(this.receiveTimeouts);
+  const transferTimeouts = new Map(this.transferTimeouts);
+  const issueKeys = Array.from(this.unknownBinaryTransferIssueKeys);
+  const currentSendingTransferId = this.currentSendingTransferId;
+  const activeTransferCount = sendSessions.size + receiveSessions.size;
   const pendingAckCount = this.completionAcks.rejectAll(
    new TransferTimeoutError(reason)
   );
@@ -992,32 +1103,56 @@ export class ServerFileTransfer {
    return;
   }
 
-  for (const session of this.receivingSessions.values()) {
+  for (const [transferId, session] of receiveSessions) {
    session.status = "error";
    if (session.directSink) {
-    void session.directSink.abort(reason).catch((error) => {
+    try {
+     await session.directSink.abort(reason);
+    } catch (error) {
      console.warn(`[ServerFileTransfer] direct file sink abort failed: ${session.transferId}`, error);
-    });
+    }
    }
    session.directSink = null;
    session.buffer = null;
    session.receivedChunks = [];
+   await this.releaseReceiveStorageReservation(session.transferId, session.reservationLease ?? receiveLeases.get(transferId) ?? null);
   }
-  for (const session of this.sendingSessions.values()) {
+  for (const session of sendSessions.values()) {
    session.status = "error";
   }
 
-  this.receivingSessions.clear();
-  this.clearPendingDirectSaveRequest();
-  this.sendingSessions.clear();
-  this.unknownBinaryTransferIssueKeys.clear();
-  this.clearAllTimeouts();
-  this.currentSendingTransferId = null;
-  this.onProgressCallback?.(null);
+  for (const [transferId, session] of receiveSessions) {
+   if (this.receivingSessions.get(transferId) === session) this.receivingSessions.delete(transferId);
+  }
+  for (const [transferId, session] of sendSessions) {
+   if (this.sendingSessions.get(transferId) === session) this.sendingSessions.delete(transferId);
+  }
+  for (const [transferId, request] of pendingSaveRequests) {
+   this.clearPendingDirectSaveRequest(transferId, request);
+  }
+  for (const issueKey of issueKeys) this.unknownBinaryTransferIssueKeys.delete(issueKey);
+  for (const [transferId, timeoutId] of receiveTimeouts) {
+   clearTimeout(timeoutId);
+   if (this.receiveTimeouts.get(transferId) === timeoutId) this.receiveTimeouts.delete(transferId);
+  }
+  for (const [transferId, timeoutId] of transferTimeouts) {
+   clearTimeout(timeoutId);
+   if (this.transferTimeouts.get(transferId) === timeoutId) this.transferTimeouts.delete(transferId);
+  }
+  if (currentSendingTransferId && this.currentSendingTransferId === currentSendingTransferId
+   && !this.sendingSessions.has(currentSendingTransferId)) {
+   this.currentSendingTransferId = null;
+  }
+
+  if (this.getActiveTransferCount() === 0 && this.pendingDirectSaveRequests.size === 0) {
+   this.onProgressCallback?.(null);
+  }
 
   // 使用连接丢失专用提示（区别于畸形消息错误）
-  const displayReason = reason || t('alert.serverConnectionLost');
-  this.setTransferStatus(displayReason, "error");
+  if (this.getActiveTransferCount() === 0 && this.pendingDirectSaveRequests.size === 0) {
+   const displayReason = reason || t('alert.serverConnectionLost');
+   this.setTransferStatus(displayReason, "error");
+  }
   // 不弹 toast — transfer error toasts 已逐条通知用户，避免重复
  }
 
@@ -1146,19 +1281,11 @@ export class ServerFileTransfer {
   }
  }
 
- private clearAllTimeouts(): void {
-  for (const transferId of Array.from(this.transferTimeouts.keys())) {
-   this.clearTransferTimeout(transferId);
-  }
-  for (const transferId of Array.from(this.receiveTimeouts.keys())) {
-   this.clearReceiveTimeout(transferId);
-  }
- }
-
  /**
   * 处理传输请求 — 先校验大小再创建会话, buffer 延迟到 acceptTransfer 分配
   */
  private async handleTransferRequest(request: FileTransferRequest) {
+  const connectionGeneration = this.connectionGeneration;
   console.debug(`[ServerFileTransfer] Received transfer request:`, request);
 
   const normalizedMeta = normalizeTransferMetadata({
@@ -1186,19 +1313,94 @@ export class ServerFileTransfer {
    return;
   }
 
-  const cacheGuard = canRetainReceivedFiles(
+  const retainedFileCacheGuard = canRetainReceivedFiles(
    this.getReceivedFileCacheCandidates(normalizedMeta.fileSize),
    getDeviceType()
   );
-  if (!cacheGuard.allowed) {
-   const reason = this.getReceivedCacheLimitMessage(cacheGuard);
-   console.warn(`[ServerFileTransfer] ${reason}`);
-   if (!this.canUseDirectFileSave()) {
-    const fullReason = `${reason} ${t('alert.directSaveUnsupported')}`;
-    this.setTransferStatus(fullReason, "warning");
-    this.rejectIncomingRequest(request, fullReason);
-    return;
+  const canUseDirectFileSave = this.canUseDirectFileSave();
+  const availableMemoryBytes = this.getAvailableLegacyRelayReceiveMemoryBytes();
+  const memoryStorageMode = selectLegacyRelayReceiveStorage(
+   normalizedMeta.fileSize,
+   availableMemoryBytes,
+   canUseDirectFileSave,
+  );
+  const cacheGuard = {
+   ...retainedFileCacheGuard,
+   allowed: retainedFileCacheGuard.allowed && memoryStorageMode === "browser-cache",
+  };
+  const cacheLimitMessage = !retainedFileCacheGuard.allowed
+   ? this.getReceivedCacheLimitMessage(retainedFileCacheGuard)
+   : undefined;
+  let storageMode: ReceiveSession["storageMode"] | "reject" = cacheGuard.allowed
+   ? "browser-cache"
+   : canUseDirectFileSave ? "direct-to-disk" : "reject";
+  let directSaveReason = cacheLimitMessage || (!cacheGuard.allowed ? t('alert.directSaveRequired', {
+    name: normalizedMeta.fileName,
+    size: formatSize(normalizedMeta.fileSize),
+   }) : undefined);
+  let reservationLease: ReceiveStorageReservationLease | null = null;
+  if (cacheGuard.allowed) {
+   const admissionToken = {};
+   this.pendingBrowserCacheAdmissions.set(request.transfer_id, normalizedMeta.fileSize);
+   this.pendingBrowserCacheAdmissionTokens.set(request.transfer_id, admissionToken);
+   let preflight: LegacyRelayBrowserStoragePreflight | undefined;
+   let memoryAllowed = true;
+   try {
+    reservationLease = await receiveStorageReservationCoordinator.tryReserve(
+     `relay:${request.transfer_id}`,
+     normalizedMeta.fileSize,
+     async (reservedBytes, reservations) => {
+      preflight = await this.preflightLegacyRelayBrowserCacheStorage(
+       normalizedMeta.fileSize,
+       reservedBytes,
+      );
+      const activeMemoryBytes = getLegacyRelayStorageReservedBytes(
+       reservations.filter(reservation => reservation.owner !== "file-transfer-v2")
+        .map(reservation => reservation.bytes),
+      );
+      const memoryAvailable = getAvailableLegacyRelayMemoryBytes(
+       getLegacyRelayReceiveMemoryBudgetBytes(getDeviceType()),
+       activeMemoryBytes,
+      );
+      memoryAllowed = normalizedMeta.fileSize <= memoryAvailable;
+      return preflight.allowed && memoryAllowed;
+     },
+    );
+   } catch (error) {
+    console.warn("[ServerFileTransfer] Shared receive admission failed closed:", error);
+    directSaveReason = t('alert.storageEstimateUnavailable');
+   } finally {
+    if (this.pendingBrowserCacheAdmissionTokens.get(request.transfer_id) === admissionToken) {
+     this.pendingBrowserCacheAdmissionTokens.delete(request.transfer_id);
+     this.pendingBrowserCacheAdmissions.delete(request.transfer_id);
+    }
    }
+   storageMode = reservationLease
+    ? "browser-cache"
+    : canUseDirectFileSave ? "direct-to-disk" : "reject";
+   if (preflight && !preflight.allowed) {
+    directSaveReason = preflight.reason === "estimate-unavailable"
+     ? t('alert.storageEstimateUnavailable')
+     : t('alert.storageSpaceInsufficient');
+   } else if (!memoryAllowed) {
+    directSaveReason = t('alert.insufficientMemory');
+   }
+  }
+  if (connectionGeneration !== this.connectionGeneration) {
+   if (reservationLease) await reservationLease.release();
+   this.rejectIncomingRequest(request, t('alert.serverConnectionLost'));
+   return;
+  }
+  if (storageMode === "reject") {
+   const reason = directSaveReason || t('alert.directSaveRequired', {
+    name: normalizedMeta.fileName,
+    size: formatSize(normalizedMeta.fileSize),
+   });
+   const fullReason = `${reason} ${t('alert.directSaveUnsupported')}`;
+   console.warn(`[ServerFileTransfer] ${fullReason}`);
+   this.setTransferStatus(fullReason, "warning");
+   this.rejectIncomingRequest(request, fullReason);
+   return;
   }
 
   // Bug2 修复: 不在此处预分配缓冲区, 延迟到用户真正接受后再分配
@@ -1220,12 +1422,27 @@ export class ServerFileTransfer {
    fromUserId: request.from_user_id,
    roomName: request.room_name,
    status: "pending",
-   storageMode: cacheGuard.allowed ? "browser-cache" : "direct-to-disk",
+   storageMode,
    directSink: null,
    writeChain: Promise.resolve(),
-   directSaveReason: cacheGuard.allowed ? undefined : this.getReceivedCacheLimitMessage(cacheGuard),
+   ...(reservationLease ? { reservationLease } : {}),
+   directSaveReason,
   };
   this.receivingSessions.set(request.transfer_id, session);
+  if (reservationLease) {
+   this.receiveReservationLeases.set(request.transfer_id, reservationLease);
+   try {
+    await reservationLease.commit();
+   } catch (error) {
+    this.receiveReservationLeases.delete(request.transfer_id);
+    void reservationLease.release().catch(() => undefined);
+    this.receivingSessions.delete(request.transfer_id);
+    const reason = t('alert.storageEstimateUnavailable');
+    this.rejectIncomingRequest(request, reason);
+    this.setTransferStatus(reason, "error");
+    return;
+   }
+  }
   this.unknownBinaryTransferIssueKeys.delete(request.transfer_id);
   this.emitReceivingUpdate(session, "pending", 0);
 
@@ -1469,6 +1686,7 @@ export class ServerFileTransfer {
  private rejectTransfer(transferId: string, _toUserId: string, reason: string) {
   const session = this.receivingSessions.get(transferId);
   this.receivingSessions.delete(transferId);
+  this.releaseReceiveStorageReservation(transferId, session?.reservationLease ?? null);
 
   if (session) {
    this.sendTransferControlMessage(
@@ -1992,6 +2210,7 @@ export class ServerFileTransfer {
   }
   this.sendingSessions.delete(data.transfer_id);
   this.receivingSessions.delete(data.transfer_id);
+  this.releaseReceiveStorageReservation(data.transfer_id, receivingSession?.reservationLease ?? null);
   this.clearPendingDirectSaveRequest(data.transfer_id);
   if (this.currentSendingTransferId === data.transfer_id) {
    this.currentSendingTransferId = null;
@@ -2033,6 +2252,7 @@ export class ServerFileTransfer {
   }
   this.sendingSessions.delete(data.transfer_id);
   this.receivingSessions.delete(data.transfer_id);
+  this.releaseReceiveStorageReservation(data.transfer_id, receivingSession?.reservationLease ?? null);
   this.clearPendingDirectSaveRequest(data.transfer_id);
   if (this.currentSendingTransferId === data.transfer_id) {
    this.currentSendingTransferId = null;
@@ -2140,6 +2360,7 @@ export class ServerFileTransfer {
   session.buffer = null;
   session.receivedChunks = [];
   this.receivingSessions.delete(session.transferId);
+  this.releaseReceiveStorageReservation(session.transferId, session.reservationLease ?? null);
   this.clearPendingDirectSaveRequest(session.transferId);
   this.clearReceiveTimeout(session.transferId);
 
@@ -2168,6 +2389,7 @@ export class ServerFileTransfer {
   session.receivedChunks = [];
   this.sendTransferControlMessage(FILE_TRANSFER_MESSAGE_TYPES.CANCEL, transferId, reason, session.roomName);
   this.receivingSessions.delete(transferId);
+  this.releaseReceiveStorageReservation(transferId, session.reservationLease ?? null);
   this.clearPendingDirectSaveRequest(transferId);
   this.clearReceiveTimeout(transferId);
   this.onProgressCallback?.(null);
@@ -2225,6 +2447,7 @@ export class ServerFileTransfer {
     session.roomName
    );
    this.receivingSessions.delete(session.transferId);
+   this.releaseReceiveStorageReservation(session.transferId, session.reservationLease ?? null);
    this.clearPendingDirectSaveRequest(session.transferId);
    this.clearReceiveTimeout(session.transferId);
    cancelled = true;

@@ -81,9 +81,16 @@ test("direct-to-disk completion avoids creating a retained browser File", () => 
 
 test("P2P browser cache overflow routes to direct-to-disk instead of rejecting when supported", () => {
   const fileMetaStart = colabLibSource.indexOf('case "file-meta"');
-  const cacheGuardStart = colabLibSource.indexOf("const cacheGuard = canRetainReceivedFiles", fileMetaStart);
-  const cacheOverflowStart = colabLibSource.indexOf("if (!cacheGuard.allowed)", cacheGuardStart);
-  const cacheOverflowEnd = colabLibSource.indexOf("// 初始化新的接收状态", cacheOverflowStart);
+  const cacheGuardMatch = colabLibSource.slice(fileMetaStart).match(
+    /const\s+cacheGuard\s*=\s*canRetainReceivedFiles\s*\(/
+  );
+  const cacheGuardStart = cacheGuardMatch ? fileMetaStart + cacheGuardMatch.index! : -1;
+  const cacheOverflowMatch = colabLibSource.slice(cacheGuardStart).match(/if\s*\(\s*!cacheGuard\.allowed\b/);
+  const cacheOverflowStart = cacheOverflowMatch ? cacheGuardStart + cacheOverflowMatch.index! : -1;
+  const cacheOverflowEndMatch = colabLibSource.slice(cacheOverflowStart).match(
+    /const\s+totalChunks\s*=\s*normalizedMeta\.totalChunks/
+  );
+  const cacheOverflowEnd = cacheOverflowEndMatch ? cacheOverflowStart + cacheOverflowEndMatch.index! : -1;
   assert.notEqual(cacheGuardStart, -1);
   assert.notEqual(cacheOverflowStart, -1);
   assert.notEqual(cacheOverflowEnd, -1);

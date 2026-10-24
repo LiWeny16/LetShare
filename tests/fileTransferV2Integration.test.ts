@@ -95,6 +95,7 @@ function makeManifest(transferId: string, size: number): FileTransferV2Manifest 
 function makeStore() {
   return new IndexedDbFileTransferV2Store({
     dbName: `file-transfer-v2-integration-${++databaseIndex}`,
+    estimateStorage: async () => ({ usage: 0, quota: Number.MAX_SAFE_INTEGER }),
     requestPersistence: async () => false,
   });
 }

@@ -59,6 +59,7 @@ import { FILE_TRANSFER_V2_REMOTE_PAUSE_REASON } from "@App/libs/connection/fileT
 import type { FileTransferV2Snapshot } from "@App/libs/connection/fileTransferV2/engine";
 import type { FileTransferV2Task, FileTransferV2TaskStatus } from "@App/libs/connection/fileTransferV2/store";
 import { shouldShowV2TaskInActiveList } from "@App/libs/connection/fileTransferV2/presentation";
+import { shouldStartPersistedFileHydration, type PersistedFileHydrationState } from "@App/libs/connection/fileHydrationPolicy";
 import { createUniqueArchiveEntryNames, receivedFileMapKey } from "@App/libs/chat/receivedFilePresentation";
 import FilePreviewDialog from './FilePreviewDialog';
 
@@ -152,6 +153,16 @@ type PendingBrowserDownload = {
   size: number;
 };
 
+type DirectDiskHistoryRow = {
+  transferId: string;
+  fileKey: string;
+  fileName: string;
+  fileSize: number;
+  peerId: string;
+  availability: "available" | "deleted" | "permission-required" | "unavailable";
+  handle: NonNullable<FileTransferV2Task["receiveFileHandle"]> | null;
+};
+
 type FileTransferV2UiRow = {
   transferId: string;
   peerId: string;
@@ -168,6 +179,10 @@ type FileTransferV2UiRow = {
   expiresAt: number;
   needsSource: boolean;
   task: FileTransferV2Task | null;
+  storageMode?: "browser-cache" | "direct-to-disk";
+  directDiskAvailability?: "available" | "deleted" | "permission-required" | "unavailable";
+  directFileHandle?: FileTransferV2Task["receiveFileHandle"] | null;
+  fileKey?: string;
 };
 
 const FILE_TRANSFER_V2_STATUS_LABELS: Record<FileTransferV2TaskStatus, { key: string; zh: string; en: string }> = {
@@ -264,10 +279,16 @@ export default function DownloadDrawerSlide({
   const [drawerExpanded, setDrawerExpanded] = React.useState(false);
   const [, forceUpdate] = React.useReducer((x) => x + 1, 0);
   const [persistentFileCount, setPersistentFileCount] = React.useState(0);
+  const [isHydratingPersistedFiles, setIsHydratingPersistedFiles] = React.useState(false);
   const [isClearingReceivedFiles, setIsClearingReceivedFiles] = React.useState(false);
   const clearReceivedFilesInFlightRef = React.useRef(false);
   const [fileTransferV2Snapshots, setFileTransferV2Snapshots] = React.useState<FileTransferV2Snapshot[]>([]);
   const [fileTransferV2Tasks, setFileTransferV2Tasks] = React.useState<FileTransferV2Task[]>([]);
+  const [directDiskHistoryRows, setDirectDiskHistoryRows] = React.useState<DirectDiskHistoryRow[]>([]);
+  const directDiskTaskRefreshKey = fileTransferV2Tasks
+    .filter(task => task.direction === "receive" && task.receiveStorageMode === "direct-to-disk" && task.status === "completed")
+    .map(task => task.transferId)
+    .join("|");
   const [fileTransferV2BusyIds, setFileTransferV2BusyIds] = React.useState<Set<string>>(() => new Set());
   const [fileTransferV2Errors, setFileTransferV2Errors] = React.useState<Record<string, string>>({});
   const fileTransferV2SourceInputsRef = React.useRef<Map<string, HTMLInputElement>>(new Map());
@@ -301,6 +322,8 @@ export default function DownloadDrawerSlide({
   thumbnailsRef.current = thumbnails;
   const thumbnailKeysRef = React.useRef<Set<string>>(new Set());
   const persistedFileHydrationPendingRef = React.useRef(true);
+  const persistedFileHydrationStateRef = React.useRef<PersistedFileHydrationState>("not-started");
+  const isMountedRef = React.useRef(true);
   const deletedReceivedMapKeysRef = React.useRef<Set<string>>(new Set());
 
   // 提前声明（effect 依赖需要用到）
@@ -350,6 +373,10 @@ export default function DownloadDrawerSlide({
   React.useEffect(() => {
     if (open) setVisible(true);
   }, [open]);
+  React.useEffect(() => {
+    isMountedRef.current = true;
+    return () => { isMountedRef.current = false; };
+  }, []);
   React.useEffect(() => {
     const interval = setInterval(() => {
       forceUpdate(); // 刷新进度
@@ -449,19 +476,23 @@ export default function DownloadDrawerSlide({
 
   // Restore persisted files, including extracted entries, without racing chat-history deletion.
   React.useEffect(() => {
+    if (!shouldStartPersistedFileHydration(open, persistedFileHydrationStateRef.current)) return;
+
+    persistedFileHydrationStateRef.current = "loading";
+    setIsHydratingPersistedFiles(true);
     const receivedMap = realTimeColab.receivedFiles as Map<string, File>;
-    let cancelled = false;
 
     (async () => {
+      let completed = false;
       try {
         let fileMessages: Awaited<ReturnType<typeof ChatIntegration.getAllFileMessages>> = [];
         let generationsByUser = new Map<string, { all: number; user: number }>();
         for (;;) {
           await realTimeColab.waitForReceivedFilesHydrationMutations();
-          if (cancelled) return;
+          if (!isMountedRef.current) return;
           const hydrationVersion = realTimeColab.getReceivedFilesHydrationVersion();
           fileMessages = await ChatIntegration.getAllFileMessages();
-          if (cancelled) return;
+          if (!isMountedRef.current) return;
 
           const snapshotGenerations = new Map<string, { all: number; user: number }>();
           for (const { userId } of fileMessages) {
@@ -475,7 +506,7 @@ export default function DownloadDrawerSlide({
         }
         const isCurrent = (userId: string) => {
           const generation = generationsByUser.get(userId);
-          return !cancelled
+          return isMountedRef.current
             && !!generation
             && realTimeColab.isReceivedFilesGenerationCurrent(userId, generation);
         };
@@ -485,7 +516,8 @@ export default function DownloadDrawerSlide({
           const sourceArchiveFileKey = message.fileMetadata.sourceArchiveFileKey;
           const sourceArchiveEntryPath = message.fileMetadata.sourceArchiveEntryPath;
           const entryFileKey = message.fileMetadata.fileKey;
-          if (!sourceArchiveFileKey || !sourceArchiveEntryPath || !entryFileKey) continue;
+          if (message.fileMetadata.storageMode === "direct-to-disk"
+            || !sourceArchiveFileKey || !sourceArchiveEntryPath || !entryFileKey) continue;
           const hasEntryFile = await FileBlobStore.hasFile(entryFileKey);
           if (!isCurrent(userId) || !hasEntryFile) continue;
           let entryPaths = persistedEntriesByArchive.get(sourceArchiveFileKey);
@@ -504,7 +536,7 @@ export default function DownloadDrawerSlide({
             && message.fileMetadata.bundleKeepArchive;
           if (message.fileMetadata.bundleExpanded && !keepExpandedArchive) continue;
           const fileKey = message.fileMetadata.fileKey;
-          if (!fileKey) continue;
+          if (!fileKey || message.fileMetadata.storageMode === "direct-to-disk") continue;
           const mapKey = getReceivedFileMessageMapKey(userId, message.fileMetadata);
           if (deletedReceivedMapKeysRef.current.has(mapKey)) continue;
 
@@ -529,20 +561,61 @@ export default function DownloadDrawerSlide({
           if (isCurrent(userId)) loadedCount++;
         }
 
-        if (!cancelled && loadedCount > 0) {
+        if (isMountedRef.current && loadedCount > 0) {
           setPersistentFileCount(loadedCount);
           forceUpdate();
         }
+        completed = true;
       } catch (err) {
         console.warn('[Download] Failed to load persisted files from IndexedDB:', err);
       } finally {
-        persistedFileHydrationPendingRef.current = false;
-        deletedReceivedMapKeysRef.current.clear();
+        if (!isMountedRef.current) return;
+        if (completed) {
+          persistedFileHydrationStateRef.current = "complete";
+          persistedFileHydrationPendingRef.current = false;
+          deletedReceivedMapKeysRef.current.clear();
+        } else {
+          // Let a later close/reopen retry transient storage failures without
+          // dropping deletion guards from the incomplete pass.
+          persistedFileHydrationStateRef.current = "not-started";
+        }
+        setIsHydratingPersistedFiles(false);
       }
     })();
+  }, [open]);
 
+  React.useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    const loadDirectDiskHistory = async () => {
+      try {
+        const infos = await FileBlobStore.getAllFileInfos();
+        const directInfos = infos.filter(info => info.storageMode === "direct-to-disk");
+        const tasks = await realTimeColab.getFileTransferV2Tasks();
+        const taskById = new Map(tasks.map(task => [task.transferId, task]));
+        const rows = await Promise.all(directInfos.map(async info => {
+          const transferId = info.fileKey.startsWith("filev2:") ? info.fileKey.slice("filev2:".length) : "";
+          if (!transferId) return null;
+          const task = taskById.get(transferId);
+          const directInfo = await FileBlobStore.getDirectDiskFileInfo(info.fileKey, { storageMode: "direct-to-disk" });
+          return {
+            transferId,
+            fileKey: info.fileKey,
+            fileName: info.fileName,
+            fileSize: info.fileSize,
+            peerId: task?.peerParticipantId || "",
+            availability: directInfo?.availability ?? "unavailable",
+            handle: directInfo?.handle ?? task?.receiveFileHandle ?? null,
+          } satisfies DirectDiskHistoryRow;
+        }));
+        if (!cancelled) setDirectDiskHistoryRows(rows.filter((row): row is DirectDiskHistoryRow => row !== null));
+      } catch (error) {
+        if (!cancelled) console.warn("[Download] Could not load direct-disk file history:", error);
+      }
+    };
+    void loadDirectDiskHistory();
     return () => { cancelled = true; };
-  }, []);
+  }, [open, directDiskTaskRefreshKey]);
 
   const handleSlideExited = () => {
     setVisible(false);
@@ -686,6 +759,7 @@ export default function DownloadDrawerSlide({
         await refreshFileTransferV2();
       }
     } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return;
       const message = error instanceof Error ? error.message : String(error);
       if (fileTransferV2ActionVersionsRef.current.get(transferId) === actionVersion) {
         setFileTransferV2Errors(previous => ({ ...previous, [transferId]: message }));
@@ -732,6 +806,77 @@ export default function DownloadDrawerSlide({
     });
   };
 
+  const handleChooseV2DirectDiskDestination = (row: FileTransferV2UiRow) => {
+    const picker = (window as Window & {
+      showSaveFilePicker?: (options: { suggestedName: string }) => Promise<FileSystemFileHandle>;
+    }).showSaveFilePicker;
+    if (!picker) {
+      setFileTransferV2Errors(previous => ({
+        ...previous,
+        [row.transferId]: isChinese ? "\u6b64\u6d4f\u89c8\u5668\u4e0d\u652f\u6301\u9009\u62e9\u78c1\u76d8\u4fdd\u5b58\u4f4d\u7f6e" : "This browser cannot choose a disk save location",
+      }));
+      return;
+    }
+    // Call the picker before any await so the browser sees the user's click gesture.
+    const handlePromise = picker.call(window, { suggestedName: row.fileName });
+    void runFileTransferV2Action(row.transferId, async () => {
+      const handle = await handlePromise;
+      await realTimeColab.acceptFileTransferV2ToDisk(row.transferId, handle as never);
+    });
+  };
+
+  const resumeV2DirectDiskTransfer = (row: FileTransferV2UiRow) => {
+    const handle = row.directFileHandle || row.task?.receiveFileHandle;
+    const permissionPromise = handle?.requestPermission
+      ? handle.requestPermission({ mode: "readwrite" })
+      : handle?.queryPermission
+        ? handle.queryPermission({ mode: "readwrite" })
+        : Promise.resolve<PermissionState>(handle ? "granted" : "denied");
+    void runFileTransferV2Action(row.transferId, async () => {
+      const permission = await permissionPromise;
+      if (permission !== "granted") throw new Error(isChinese
+        ? "\u8bf7\u5141\u8bb8\u8bbf\u95ee\u5df2\u9009\u62e9\u7684\u4fdd\u5b58\u6587\u4ef6\uff0c\u6216\u91cd\u65b0\u9009\u62e9\u4fdd\u5b58\u4f4d\u7f6e\u3002"
+        : "Allow access to the selected save file, or choose a save location again.");
+      await realTimeColab.resumeFileTransferV2(row.transferId);
+    });
+  };
+
+  const openV2DirectDiskFile = (row: FileTransferV2UiRow) => {
+    const handle = row.directFileHandle || row.task?.receiveFileHandle;
+    if (!handle) {
+      setFileTransferV2Errors(previous => ({
+        ...previous,
+        [row.transferId]: isChinese ? "\u627e\u4e0d\u5230\u4fdd\u5b58\u7684\u6587\u4ef6\uff0c\u8bf7\u91cd\u65b0\u63a5\u6536\u3002" : "The saved file is unavailable. Receive it again.",
+      }));
+      return;
+    }
+    void runFileTransferV2Action(row.transferId, async () => {
+      const result = await FileBlobStore.openDirectDiskFile(handle);
+      const nextAvailability = result === "opened" ? "available"
+        : result === "deleted" ? "deleted"
+        : result === "permission-required" ? "permission-required" : "unavailable";
+      setDirectDiskHistoryRows(previous => previous.map(item => item.transferId === row.transferId
+        ? { ...item, availability: nextAvailability }
+        : item));
+      if (result === "opened") return;
+      if (result === "deleted") {
+        setFileTransferV2Errors(previous => ({
+          ...previous,
+          [row.transferId]: isChinese ? "\u6587\u4ef6\u5df2\u5220\u9664\uff0c\u8bf7\u91cd\u65b0\u63a5\u6536\u3002" : "The file was deleted. Receive it again.",
+        }));
+        return;
+      }
+      if (result === "permission-required") {
+        setFileTransferV2Errors(previous => ({
+          ...previous,
+          [row.transferId]: isChinese ? "\u9700\u8981\u5141\u8bb8 LetShare \u8bbf\u95ee\u6b64\u6587\u4ef6\u540e\u624d\u80fd\u6253\u5f00\u3002" : "Allow LetShare to access this file before opening it.",
+        }));
+        return;
+      }
+      throw new Error(isChinese ? "\u65e0\u6cd5\u6253\u5f00\u4fdd\u5b58\u7684\u6587\u4ef6\u3002" : "Could not open the saved file.");
+    });
+  };
+
   const fileTransferV2Rows = React.useMemo(() => {
     const rows = new Map<string, FileTransferV2UiRow>();
     for (const task of fileTransferV2Tasks) {
@@ -751,6 +896,12 @@ export default function DownloadDrawerSlide({
         expiresAt: task.expiresAt,
         needsSource: task.status === "needs-source",
         task,
+        storageMode: task.receiveStorageMode,
+        directDiskAvailability: task.receiveStorageMode === "direct-to-disk"
+          ? directDiskHistoryRows.find(item => item.transferId === task.transferId)?.availability ?? "unavailable"
+          : undefined,
+        directFileHandle: task.receiveFileHandle || directDiskHistoryRows.find(item => item.transferId === task.transferId)?.handle,
+        fileKey: task.receiveStorageMode === "direct-to-disk" ? `filev2:${task.transferId}` : undefined,
       });
     }
     for (const snapshot of fileTransferV2Snapshots) {
@@ -771,6 +922,34 @@ export default function DownloadDrawerSlide({
         expiresAt: snapshot.expiresAt,
         needsSource: snapshot.needsSource,
         task: previous?.task ?? null,
+        storageMode: previous?.storageMode,
+        directDiskAvailability: previous?.directDiskAvailability,
+        directFileHandle: previous?.directFileHandle,
+        fileKey: previous?.fileKey,
+      });
+    }
+    for (const direct of directDiskHistoryRows) {
+      const previous = rows.get(direct.transferId);
+      rows.set(direct.transferId, {
+        transferId: direct.transferId,
+        peerId: direct.peerId || previous?.peerId || "",
+        direction: "receive",
+        fileName: direct.fileName,
+        fileSize: direct.fileSize,
+        status: previous?.status || "completed",
+        confirmedBytes: previous?.confirmedBytes ?? direct.fileSize,
+        queuedBytes: previous?.queuedBytes ?? 0,
+        bytesPerSecond: previous?.bytesPerSecond ?? 0,
+        progress: previous?.progress ?? 100,
+        activePaths: previous?.activePaths ?? [],
+        reason: previous?.reason,
+        expiresAt: previous?.expiresAt ?? Date.now() + 365 * 24 * 60 * 60 * 1000,
+        needsSource: false,
+        task: previous?.task ?? null,
+        storageMode: "direct-to-disk",
+        directDiskAvailability: direct.availability,
+        directFileHandle: direct.handle,
+        fileKey: direct.fileKey,
       });
     }
     return [...rows.values()].filter(row => shouldShowV2TaskInActiveList(row.status)).sort((left, right) => {
@@ -779,7 +958,7 @@ export default function DownloadDrawerSlide({
       const lastActivity = (row: FileTransferV2UiRow) => row.task?.updatedAt ?? row.task?.createdAt ?? row.expiresAt;
       return Number(leftTerminal) - Number(rightTerminal) || lastActivity(right) - lastActivity(left);
     });
-  }, [fileTransferV2Tasks, fileTransferV2Snapshots]);
+  }, [fileTransferV2Tasks, fileTransferV2Snapshots, directDiskHistoryRows]);
 
 
   // 文件扩展名映射图标组件
@@ -1279,6 +1458,7 @@ export default function DownloadDrawerSlide({
     sentCount > 0 ||
     !!pendingBrowserDownload ||
     !!browserDownloadNotice ||
+    isHydratingPersistedFiles ||
     !!statusMessage;
 
   // The drawer backdrop only closes the drawer; preview state stays independent.
@@ -1370,22 +1550,36 @@ export default function DownloadDrawerSlide({
                     const terminal = ["completed", "cancelled", "failed"].includes(row.status);
                     const remotePaused = row.status === "paused"
                       && (row.task?.pauseOrigin === "remote" || row.reason === FILE_TRANSFER_V2_REMOTE_PAUSE_REASON);
-                    const canPause = !terminal && row.status !== "paused" && row.status !== "needs-source";
-                    const canResume = row.status === "paused" && !remotePaused;
+                    const directAvailability = row.directDiskAvailability;
+                    const isDirectDiskComplete = row.direction === "receive" && row.status === "completed" && row.storageMode === "direct-to-disk";
+                    const canPause = !terminal && row.status !== "paused" && row.status !== "needs-source"
+                      && !(row.direction === "receive" && row.status === "offered");
+                    const canResume = row.status === "paused" && !remotePaused && row.storageMode !== "direct-to-disk";
                     const statusColor = remotePaused ? "default"
+                      : isDirectDiskComplete && directAvailability !== "available" ? "warning"
                       : row.status === "completed" ? "success"
                       : row.status === "failed" ? "error"
-                      : row.status === "paused" || row.status === "needs-source" ? "warning"
+                      : row.status === "paused" || row.status === "needs-source" || row.status === "offered" ? "warning"
                       : "default";
-                    const statusLabel = remotePaused
-                      ? (isChinese ? "对方已暂停，等待对方继续" : "The other person paused; waiting for them to continue")
-                      : row.status === "reconnecting"
-                      ? (isChinese ? "连接恢复后自动继续" : "Will continue when the connection returns")
-                      : row.status === "needs-source"
-                        ? (isChinese ? "需要重新选择文件" : "Choose the original file again")
-                        : t(`fileTransferV2.status.${FILE_TRANSFER_V2_STATUS_LABELS[row.status].key}`, {
-                          defaultValue: isChinese ? FILE_TRANSFER_V2_STATUS_LABELS[row.status].zh : FILE_TRANSFER_V2_STATUS_LABELS[row.status].en,
-                        });
+                    const statusLabel = isDirectDiskComplete && directAvailability === "deleted"
+                      ? (isChinese ? "\u6587\u4ef6\u5df2\u5220\u9664" : "File deleted")
+                      : isDirectDiskComplete && directAvailability === "permission-required"
+                        ? (isChinese ? "\u9700\u8981\u6388\u6743\u8bbf\u95ee" : "Permission required")
+                        : isDirectDiskComplete && directAvailability === "unavailable"
+                          ? (isChinese ? "\u65e0\u6cd5\u68c0\u67e5\u6587\u4ef6\u72b6\u6001" : "File status unavailable")
+                          : isDirectDiskComplete && directAvailability === "available"
+                            ? (isChinese ? "\u5df2\u4fdd\u5b58\u5230\u78c1\u76d8" : "Saved to disk")
+                            : row.status === "offered" && row.direction === "receive"
+                              ? (isChinese ? "\u9009\u62e9\u4fdd\u5b58\u4f4d\u7f6e\u540e\u5f00\u59cb\u63a5\u6536" : "Choose where to save to start receiving")
+                              : remotePaused
+                                ? (isChinese ? "\u5bf9\u65b9\u5df2\u6682\u505c\uff0c\u7b49\u5f85\u5bf9\u65b9\u7ee7\u7eed" : "The other person paused; waiting for them to continue")
+                                : row.status === "reconnecting"
+                                  ? (isChinese ? "\u8fde\u63a5\u6062\u590d\u540e\u81ea\u52a8\u7ee7\u7eed" : "Will continue when the connection returns")
+                                  : row.status === "needs-source"
+                                    ? (isChinese ? "\u9700\u8981\u91cd\u65b0\u9009\u62e9\u6587\u4ef6" : "Choose the original file again")
+                                    : t(`fileTransferV2.status.${FILE_TRANSFER_V2_STATUS_LABELS[row.status].key}`, {
+                                      defaultValue: isChinese ? FILE_TRANSFER_V2_STATUS_LABELS[row.status].zh : FILE_TRANSFER_V2_STATUS_LABELS[row.status].en,
+                                    });
                     const routeLabel = row.status === "completed" && row.activePaths.length === 0
                       ? (isChinese ? "\u5df2\u5b8c\u6210" : "Finished")
                       : getFileTransferV2RouteLabel(row.activePaths, isChinese);
@@ -1492,6 +1686,41 @@ export default function DownloadDrawerSlide({
                               </Button>
                             </>
                           )}
+                          {row.direction === "receive" && row.status === "offered" && (
+                            <Button
+                              size="small"
+                              variant="contained"
+                              disabled={busy}
+                              data-testid={`file-v2-save-to-disk-${row.transferId}`}
+                              onClick={() => handleChooseV2DirectDiskDestination(row)}
+                            >{isChinese ? "\u4fdd\u5b58\u5230\u78c1\u76d8" : "Save to disk"}</Button>
+                          )}
+                          {row.direction === "receive" && row.status === "paused" && row.storageMode === "direct-to-disk" && (
+                            <>
+                              <Button
+                                size="small"
+                                startIcon={<PlayArrowIcon />}
+                                disabled={busy || !row.directFileHandle}
+                                data-testid={`file-v2-resume-disk-${row.transferId}`}
+                                onClick={() => resumeV2DirectDiskTransfer(row)}
+                              >{isChinese ? "\u6388\u6743\u5e76\u7ee7\u7eed" : "Allow and resume"}</Button>
+                              <Button
+                                size="small"
+                                disabled={busy}
+                                data-testid={`file-v2-reselect-disk-${row.transferId}`}
+                                onClick={() => handleChooseV2DirectDiskDestination(row)}
+                              >{isChinese ? "\u91cd\u65b0\u9009\u62e9\u4f4d\u7f6e" : "Choose another location"}</Button>
+                            </>
+                          )}
+                          {isDirectDiskComplete && row.directFileHandle && (
+                            <Button
+                              size="small"
+                              startIcon={<DownloadIcon />}
+                              disabled={busy}
+                              data-testid={`file-v2-open-disk-${row.transferId}`}
+                              onClick={() => openV2DirectDiskFile(row)}
+                            >{isChinese ? "\u6253\u5f00\u6587\u4ef6" : "Open file"}</Button>
+                          )}
                           {canPause && (
                             <Button
                               size="small"
@@ -1518,7 +1747,7 @@ export default function DownloadDrawerSlide({
                               onClick={() => void runFileTransferV2Action(row.transferId, () => realTimeColab.cancelFileTransferV2(row.transferId))}
                             >{t("fileTransferV2.action.cancel", { defaultValue: isChinese ? "取消" : "Cancel" })}</Button>
                           )}
-                          {row.direction === "receive" && row.status === "completed" && (
+                          {row.direction === "receive" && row.status === "completed" && row.storageMode !== "direct-to-disk" && (
                             <Button
                               size="small"
                               startIcon={<DownloadIcon />}
@@ -2368,7 +2597,15 @@ export default function DownloadDrawerSlide({
                 )}
               </>
             )}
-            {visible && !hasContent && (
+            {visible && isHydratingPersistedFiles && (
+              <Box sx={{ display: "flex", alignItems: "center", gap: 1, color: "text.secondary", py: 2 }}>
+                <LinearProgress sx={{ width: 64, flexShrink: 0 }} />
+                <Typography variant="body2">
+                  {isChinese ? "正在恢复已接收文件…" : "Restoring received files…"}
+                </Typography>
+              </Box>
+            )}
+            {visible && !hasContent && !isHydratingPersistedFiles && (
               <Box
                 sx={{
                   textAlign: "center",

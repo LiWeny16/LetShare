@@ -1,4 +1,4 @@
-﻿import React from "react";
+import React from "react";
 import TimerIcon from "@mui/icons-material/Timer";
 import alertUseMUI from "../tools/alert";
 import { PeerManager } from "./peerManager";
@@ -55,10 +55,16 @@ import {
  unwrapP2PFileTransferV2Control,
  withFileTransferV2DiscoveryCapability,
 } from "./fileTransferV2/applicationAdapter";
-import type { FileTransferV2Snapshot } from "./fileTransferV2/engine";
+import { FILE_TRANSFER_V2_DIRECT_DISK_THRESHOLD_BYTES, type FileTransferV2Snapshot } from "./fileTransferV2/engine";
+import type { FileTransferV2FileHandle } from "./fileTransferV2/directDiskSink";
 import type { FileTransferV2Task } from "./fileTransferV2/store";
 import { shouldOpenDownloadDrawerForV2Transfer } from "./fileTransferV2/presentation";
 import { receivedFileChildMapKey, receivedFileMapKey } from "../chat/receivedFilePresentation";
+import FileBlobStore from "../chat/FileBlobStore";
+import { buildReceivedFileCacheCandidates } from "./receivedFileCachePolicy";
+import { receiveStorageReservationCoordinator, type ReceiveStorageReservationLease } from "./receiveStorageReservationCoordinator";
+import { evaluateFileReceiveStorage, type ReceiveStorageEstimate } from "./fileTransferV2/storageAdmission";
+import { getLegacyRelayStorageReservedBytes } from "./legacyRelayStoragePolicy";
 
 import {
 	getProToken,
@@ -109,7 +115,7 @@ import {
 } from "./transferReliability";
 
 type PendingV2ReceivedFile = {
- task: FileTransferV2Task; file: File; sourceArchiveFileKey: string;
+ task: FileTransferV2Task; file?: File; storageMode?: "direct-to-disk"; sourceArchiveFileKey: string;
  receiveGeneration: { all: number; user: number }; clearMutationVersion: number;
  status: FileTransferV2Task["status"]; revision: number; publishing: boolean; onReceivedSettled: boolean;
 };
@@ -196,7 +202,7 @@ type ColabEvents = {
  'message-sent': { to: string; message: string };
  'message-received': { from: string; message: string };
  'file-sent': { to: string; fileName: string; fileSize: number; transferId?: string; fileKey?: string };
- 'file-received': { from: string; fileName: string; fileSize: number; file: File };
+ 'file-received': { from: string; fileName: string; fileSize: number; file?: File; fileKey?: string; storageMode?: "direct-to-disk" };
  'file-saved-to-disk': { from: string; fileName: string; fileSize: number };
  'file-progress': { to: string; progress: number };
  'file-transfer-ui': FileTransferUiUpdate;
@@ -361,6 +367,11 @@ export class RealTimeColab {
   this.serverFileTransfer = new ServerFileTransfer(this.connectionManager);
   const fileTransferV2Store = getFileTransferV2Store();
   if (fileTransferV2Store) {
+   if (fileTransferV2Store.listActiveReceiveStorageReservations) {
+    receiveStorageReservationCoordinator.setV2ReservationsProvider(() =>
+     fileTransferV2Store.listActiveReceiveStorageReservations!()
+    );
+   }
    this.fileTransferV2 = new FileTransferV2ApplicationAdapter({
     selfId: () => this.getUniqId() || "",
     roomId: () => settingsStore.get("roomId") || "default-room",
@@ -386,6 +397,17 @@ export class RealTimeColab {
      const channel = this.dataChannels.get(peerId);
      if (!channel || channel.readyState !== "open") throw new Error("P2P data channel is unavailable");
      channel.send(frame.buffer.slice(frame.byteOffset, frame.byteOffset + frame.byteLength) as ArrayBuffer);
+    },
+    shouldUseDirectDisk: manifest => {
+     const picker = typeof window !== "undefined"
+      ? (window as Window & { showSaveFilePicker?: unknown }).showSaveFilePicker
+      : undefined;
+     const locks = typeof navigator !== "undefined"
+      ? (navigator as Navigator & { locks?: unknown }).locks
+      : undefined;
+     return getDeviceType() === "desktop"
+      && manifest.size > FILE_TRANSFER_V2_DIRECT_DISK_THRESHOLD_BYTES
+      && typeof picker === "function" && Boolean(locks);
     },
     onUpdate: snapshot => {
      this.emitter.emit("file-transfer-v2-update", snapshot);
@@ -460,20 +482,30 @@ export class RealTimeColab {
         if (!taskToPublish) return;
         const task = taskToPublish;
         const file = pending.file;
-        const fullKey = this.getReceivedFileMapKey(task.peerParticipantId, file, pending.sourceArchiveFileKey);
-        this.receivedFiles.set(fullKey, file);
-        const postProcessVersion = this.receivedFilesVersion;
-        this.addTransferRecord("received-file", file.name, `← ${task.peerParticipantId.split(":")[0]}`);
-        this.emitter.emit("file-received", {
-         from: task.peerParticipantId, fileName: file.name, fileSize: file.size, file,
-        });
-        void this.maybeAutoUnzipReceivedFile(
-         file,
-         task.peerParticipantId,
-         fullKey,
-         postProcessVersion,
-         pending.sourceArchiveFileKey,
-        ).catch(error => console.warn("Received file post-processing failed:", error));
+        if (file) {
+         const fullKey = this.getReceivedFileMapKey(task.peerParticipantId, file, pending.sourceArchiveFileKey);
+         this.receivedFiles.set(fullKey, file);
+         const postProcessVersion = this.receivedFilesVersion;
+         this.addTransferRecord("received-file", file.name, `? ${task.peerParticipantId.split(":")[0]}`);
+         this.emitter.emit("file-received", {
+          from: task.peerParticipantId, fileName: file.name, fileSize: file.size, file,
+         });
+         void this.maybeAutoUnzipReceivedFile(
+          file,
+          task.peerParticipantId,
+          fullKey,
+          postProcessVersion,
+          pending.sourceArchiveFileKey,
+         ).catch(error => console.warn("Received file post-processing failed:", error));
+        } else if (pending.storageMode === "direct-to-disk") {
+         const fileName = task.manifest.name;
+         const fileKey = pending.sourceArchiveFileKey || `filev2:${task.transferId}`;
+         this.addTransferRecord("saved-disk", fileName, `? ${task.peerParticipantId.split(":")[0]}`);
+         this.emitter.emit("file-received", {
+          from: task.peerParticipantId, fileName, fileSize: task.manifest.size,
+          fileKey, storageMode: "direct-to-disk",
+         });
+        }
         const completedClearProtection = this.receivedFilesClearProtectedV2Files.get(snapshot.transferId);
         if (completedClearProtection && this.isSameV2ReceiveIdentity(completedClearProtection.pending.task, task)) {
          this.receivedFilesClearProtectedV2Files.delete(snapshot.transferId);
@@ -537,6 +569,53 @@ export class RealTimeColab {
       throw error;
      }
     },
+    onReceivedToDisk: async task => {
+     const pending: PendingV2ReceivedFile = {
+      task, storageMode: "direct-to-disk", file: undefined, sourceArchiveFileKey: "",
+      receiveGeneration: this.captureReceivedFilesGeneration(task.peerParticipantId),
+      clearMutationVersion: this.receivedFilesClearMutationVersion,
+      status: task.status, revision: 0, publishing: false, onReceivedSettled: false,
+     };
+     this.pendingV2ReceivedFiles.set(task.transferId, pending);
+     try {
+      const integration = await import("../chat/ChatIntegration");
+      const committed = await this.commitReceivedFileAfterClear(
+       task.peerParticipantId,
+       async isCurrent => {
+        const result = await integration.default.commitV2ReceivedFileMetadata(task, isCurrent);
+        if (!result) throw new Error("Received file history could not be committed");
+        return result.fileKey;
+       },
+       () => this.isFileTransferV2TaskCurrent(task),
+      );
+      const current = await this.fileTransferV2?.getTask(task.transferId);
+      await this.waitForReceivedFilesClearMutations();
+      const latestGeneration = this.captureReceivedFilesGeneration(task.peerParticipantId);
+      const latestClearMutationVersion = this.receivedFilesClearMutationVersion;
+      const clearAdvanced = latestClearMutationVersion !== committed.clearMutationVersion;
+      const receiveGeneration = clearAdvanced ? latestGeneration : committed.generation;
+      if (!current || this.pendingV2ReceivedFiles.get(task.transferId) !== pending
+       || clearAdvanced && committed.generation.user !== latestGeneration.user
+       || !this.isReceivedFilesGenerationCurrent(task.peerParticipantId, receiveGeneration)
+       || !this.isFileTransferV2TaskCurrent(task) || !["verifying", "completed"].includes(current.status)) {
+       if (current) pending.status = current.status;
+       pending.onReceivedSettled = true;
+       if (this.pendingV2ReceivedFiles.get(task.transferId) === pending) this.pendingV2ReceivedFiles.delete(task.transferId);
+       this.cleanupTerminalV2ReceiveIfProtected(task.transferId);
+       return;
+      }
+      pending.sourceArchiveFileKey = committed.fileKey;
+      pending.receiveGeneration = receiveGeneration;
+      pending.clearMutationVersion = clearAdvanced ? latestClearMutationVersion : committed.clearMutationVersion;
+      pending.status = current.status;
+      pending.onReceivedSettled = true;
+     } catch (error) {
+      pending.onReceivedSettled = true;
+      if (this.pendingV2ReceivedFiles.get(task.transferId) === pending) this.pendingV2ReceivedFiles.delete(task.transferId);
+      this.cleanupTerminalV2ReceiveIfProtected(task.transferId);
+      throw error;
+     }
+    },
     onError: (reason, transferId) => {
      this.setFileTransferStatus(reason, "error", { autoClearMs: 12_000 });
      alertUseMUI(reason, 4000, { kind: "error", category: "transfer-status" });
@@ -545,6 +624,9 @@ export class RealTimeColab {
     store: fileTransferV2Store,
    });
    installFileTransferV2ApplicationAdapter(this.fileTransferV2);
+   this.receivedFileCachePreload = FileBlobStore.getAllFileInfos().then(() => undefined).catch(error => {
+    console.warn("[FILE CACHE] Could not preload persisted receive metadata:", error);
+   });
   }
  }
  // In RealTimeColab
@@ -556,7 +638,10 @@ export class RealTimeColab {
  private serverFileTransfer: ServerFileTransfer | null = null;
  private fileTransferV2: FileTransferV2ApplicationAdapter | null = null;
  private fileTransferV2LastStatuses = new Map<string, FileTransferV2Snapshot["status"]>();
+ private receivedFileCachePreload: Promise<void> = Promise.resolve();
  private pendingV2ReceivedFiles = new Map<string, PendingV2ReceivedFile>();
+ private pendingP2PReceiveCacheAdmissions = new Map<string, { size: number }>();
+ private p2pReceiveReservationLeases = new Map<string, { key: string; lease: ReceiveStorageReservationLease }>();
  private receivedFilesClearProtectedV2Files = new Map<string, ClearProtectedV2ReceivedFile>();
  private readonly serverBinaryReceivedHandler = (data: ArrayBuffer): void => {
   this.noteServerTraffic();
@@ -938,7 +1023,12 @@ export class RealTimeColab {
    });
 
    this.serverFileTransfer.setReceivedFileCacheCandidatesCallback(() =>
-    this.getReceivedFileCacheCandidates()
+    this.getReceivedFileCacheCandidates(undefined, false)
+   );
+   this.serverFileTransfer.setP2PReceiveMemoryReservationsCallback(() =>
+    Array.from(this.receivingFiles.values())
+     .filter(file => file.storageMode !== "direct-to-disk")
+     .map(file => file.size)
    );
 
   }
@@ -1021,6 +1111,11 @@ export class RealTimeColab {
 
   // 3.7.0：发起新连接前清除失败锁（maxFailures=1 会让一次失败后的所有重试被 ConnectionManager
   // 直接拒绝 —— "不刷新页面就连不上"的第二根因）。同时停止自动重连调度、标记本次为主动连接。
+  // Do not expose incoming transfer handlers until persisted cache metadata is ready.
+  // Admission stays synchronous after this barrier, so concurrent peer offers cannot
+  // pass the quota check before their reservations are visible.
+  await this.ensureReceivedFileCacheMetadataReady();
+
   this.connectionManager.resetFailureCount();
   // 由重连链自身发起的连接不得取消自己那条链：否则失败后无人排下一次 = 静默死锁（Q20）。
   if (!this.reconnectAttemptInFlight) this.cancelReconnect("superseded-by-manual-connect");
@@ -2575,7 +2670,10 @@ export class RealTimeColab {
       }
 
       const deviceType = getDeviceType();
-      const receiveLimit = getConservativeReceiveMemoryLimit(deviceType);
+      const receiveLimit = Math.min(
+       getConservativeReceiveMemoryLimit(deviceType),
+       this.serverFileTransfer?.getAvailableReceiveMemoryBytes() ?? getConservativeReceiveMemoryLimit(deviceType),
+      );
       if (normalizedMeta.fileSize > receiveLimit) {
        this.queueDirectDiskReceive(id, channel, {
         ...normalizedMeta,
@@ -2604,6 +2702,44 @@ export class RealTimeColab {
        }, cacheLimitMessage);
        break;
       }
+      const pendingAdmission = { size: normalizedMeta.fileSize };
+      this.pendingP2PReceiveCacheAdmissions.set(id, pendingAdmission);
+      const clearPendingAdmission = () => {
+       if (this.pendingP2PReceiveCacheAdmissions.get(id) === pendingAdmission) {
+        this.pendingP2PReceiveCacheAdmissions.delete(id);
+       }
+      };
+      let p2pReservation: { key: string; lease: ReceiveStorageReservationLease | null; reason: string };
+      try {
+       p2pReservation = await this.reserveLegacyP2PReceiveCache(
+        id,
+        normalizedMeta.transferId,
+        normalizedMeta.fileSize,
+        deviceType,
+       );
+      } catch (error) {
+       console.warn("[P2P FILE] Shared receive admission failed closed:", error);
+       p2pReservation = {
+        key: `p2p:${normalizedMeta.transferId || id}`,
+        lease: null,
+        reason: t("alert.storageEstimateUnavailable"),
+       };
+      }
+      if (channel.readyState !== "open" || this.dataChannels.get(id) !== channel) {
+       clearPendingAdmission();
+       if (p2pReservation.lease) await p2pReservation.lease.release();
+       break;
+      }
+      if (!p2pReservation.lease) {
+       clearPendingAdmission();
+       this.queueDirectDiskReceive(id, channel, {
+        ...normalizedMeta,
+        hash: typeof message.hash === "string" ? message.hash : undefined,
+        hashPending: message.hashPending === true,
+        supportsReceiveCredit: message.supportsReceiveCredit === true,
+       }, p2pReservation.reason);
+       break;
+      }
       // 初始化新的接收状态
       const totalChunks = normalizedMeta.totalChunks;
       let receiveBuffer: TransferReceiveBuffer;
@@ -2614,6 +2750,8 @@ export class RealTimeColab {
         chunkSize: normalizedMeta.chunkSize,
        });
       } catch (err) {
+       clearPendingAdmission();
+       await p2pReservation.lease.release();
        const reason = t('alert.insufficientMemory');
        console.error(`[P2P FILE] ${reason}:`, err);
        this.queueDirectDiskReceive(id, channel, {
@@ -2649,6 +2787,12 @@ export class RealTimeColab {
        lastAckedCount: 0,
        lastChunkAckAt: Date.now(),
       });
+      this.p2pReceiveReservationLeases.set(id, {
+       key: p2pReservation.key,
+       lease: p2pReservation.lease,
+      });
+      clearPendingAdmission();
+      await p2pReservation.lease.commit();
       if (normalizedMeta.transferId) {
        this.p2pUnknownTransferIssueKeys.delete(normalizedMeta.transferId);
       }
@@ -3766,6 +3910,7 @@ export class RealTimeColab {
     fileSize: fileInfo.size,
    });
    this.receivingFiles.delete(id);
+   this.releaseP2PReceiveReservation(id);
    this.setFileTransferProgress(null);
    this.setFileTransferStatus(t('alert.directSaveComplete', { name: fileInfo.name }), "success", {
     autoClearMs: CONFIG.TRANSFER_COMPLETE_DELAY,
@@ -3824,6 +3969,7 @@ export class RealTimeColab {
   }
   const postProcessVersion = this.receivedFilesVersion;
   this.receivingFiles.delete(id);
+  this.releaseP2PReceiveReservation(id);
   this.setFileTransferProgress(null);
   this.setFileTransferStatus(t('alert.fileReceivedComplete'), "success", {
    autoClearMs: CONFIG.TRANSFER_COMPLETE_DELAY,
@@ -4004,6 +4150,17 @@ export class RealTimeColab {
   return fileInfo.directSink ?? fileInfo.receiveBuffer ?? null;
  }
 
+ private releaseP2PReceiveReservation(id: string): void {
+  this.pendingP2PReceiveCacheAdmissions.delete(id);
+  const reservation = this.p2pReceiveReservationLeases.get(id);
+  this.p2pReceiveReservationLeases.delete(id);
+  if (reservation) {
+   void reservation.lease.release().catch(error => {
+    console.warn(`[P2P FILE] Receive reservation release failed: ${reservation.key}`, error);
+   });
+  }
+ }
+
  private removeReceivingFile(id: string, reason?: unknown): void {
   const fileInfo = this.receivingFiles.get(id);
   fileInfo?.hashChunks.clear();
@@ -4018,6 +4175,7 @@ export class RealTimeColab {
    fileInfo.hashWaitTimer = undefined;
   }
   this.receivingFiles.delete(id);
+  this.releaseP2PReceiveReservation(id);
  }
 
  private clearReceivingFiles(reason?: unknown): void {
@@ -4458,19 +4616,77 @@ export class RealTimeColab {
   this.setFileTransferProgress(null);
  }
 
- private getReceivedFileCacheCandidates(incomingSize?: number): Array<{ size: number }> {
-  const candidates = [
-   ...Array.from(this.receivedFiles.values()).map((file) => ({ size: file.size })),
-   ...Array.from(this.receivingFiles.values())
-    .filter((file) => file.storageMode !== "direct-to-disk")
-    .map((file) => ({ size: file.size })),
-  ];
-
-  if (typeof incomingSize === "number") {
-   candidates.push({ size: incomingSize });
+ private async ensureReceivedFileCacheMetadataReady(): Promise<void> {
+  await this.receivedFileCachePreload;
+  if (FileBlobStore.getCachedFileInfos() !== null) return;
+  try {
+   await FileBlobStore.getAllFileInfos();
+  } catch (error) {
+   console.warn("[FILE CACHE] Persisted receive metadata remains unavailable:", error);
   }
+ }
 
-  return candidates;
+ private getReceivedFileCacheCandidates(
+  incomingSize?: number,
+  includeRelayReceives = true,
+ ): Array<{ size: number }> {
+  const persistedFiles = FileBlobStore.getCachedFileInfos();
+  const receivingSizes = Array.from(this.receivingFiles.values())
+   .filter(file => file.storageMode !== "direct-to-disk")
+   .map(file => file.size);
+  const pendingP2PReceiveSizes = Array.from(this.pendingP2PReceiveCacheAdmissions.values())
+   .map(admission => admission.size);
+  const relayReceivingSizes = includeRelayReceives
+   ? this.serverFileTransfer?.getActiveBrowserCacheReceiveSizes() ?? []
+   : [];
+  // receivedFiles is a presentation map of already-persisted entries; counting it
+  // again would double-count hydrated metadata.
+  return buildReceivedFileCacheCandidates(
+   persistedFiles,
+   [...receivingSizes, ...pendingP2PReceiveSizes],
+   incomingSize,
+   relayReceivingSizes,
+  );
+ }
+
+ private async reserveLegacyP2PReceiveCache(
+  peerId: string,
+  transferId: string | undefined,
+  fileSize: number,
+  deviceType: ReturnType<typeof getDeviceType>,
+ ): Promise<{ key: string; lease: ReceiveStorageReservationLease | null; reason: string }> {
+  const key = `p2p:${transferId || peerId}`;
+  let reason = t("alert.storageEstimateUnavailable");
+  const lease = await receiveStorageReservationCoordinator.tryReserve(key, fileSize,
+   async (reservedBytes, reservations) => {
+    let estimate: ReceiveStorageEstimate | undefined;
+    try {
+     const storage = typeof navigator === "undefined" ? undefined : navigator.storage;
+     if (storage && typeof storage.estimate === "function") {
+      estimate = await storage.estimate() as ReceiveStorageEstimate;
+     }
+    } catch (error) {
+     console.warn("[P2P FILE] Browser storage estimate failed; receive will fail closed:", error);
+    }
+    const storageAdmission = evaluateFileReceiveStorage(fileSize, estimate, reservedBytes);
+    if (!storageAdmission.allowed) {
+     reason = storageAdmission.reason === "insufficient-space"
+      ? t("alert.storageSpaceInsufficient")
+      : t("alert.storageEstimateUnavailable");
+     return false;
+    }
+    const memoryReservedBytes = getLegacyRelayStorageReservedBytes(
+     reservations.filter(reservation => reservation.owner !== "file-transfer-v2")
+      .map(reservation => reservation.bytes),
+    );
+    const memoryAvailableBytes = Math.max(0, getConservativeReceiveMemoryLimit(deviceType) - memoryReservedBytes);
+    if (fileSize > memoryAvailableBytes) {
+     reason = t("alert.insufficientMemory");
+     return false;
+    }
+    return true;
+   });
+  return { key, lease, reason };
  }
 
  private getReceivedCacheLimitMessage(guard: {
@@ -4774,7 +4990,8 @@ private isLetShareZip(file: File): boolean {
   fullKey: string,
   expectedVersion = this.receivedFilesVersion,
   sourceArchiveFileKey?: string,
-  alreadyPersistedEntryPaths: ReadonlySet<string> = new Set()
+  alreadyPersistedEntryPaths: ReadonlySet<string> = new Set(),
+  notifyUser = true,
  ): Promise<boolean> {
   if (!this.isLetShareZip(file)) {
    return false;
@@ -4785,14 +5002,14 @@ private isLetShareZip(file: File): boolean {
   }
 
   if (file.size > this.AUTO_UNZIP_SIZE_LIMIT) {
-   alertUseMUI(t('alert.zipTooLarge'), 3000, { kind: "info" });
+   if (notifyUser) alertUseMUI(t('alert.zipTooLarge'), 3000, { kind: "info" });
    return false;
   }
 
   let reservationSet: Set<string> | null = null;
   const reservedNames: string[] = [];
   try {
-   alertUseMUI(t("alert.unzipping"), 2000, { kind: "info" });
+   if (notifyUser) alertUseMUI(t("alert.unzipping"), 2000, { kind: "info" });
    const { default: JSZip } = await import("jszip");
    const zip = await JSZip.loadAsync(file);
 
@@ -4803,7 +5020,7 @@ private isLetShareZip(file: File): boolean {
    const files = Object.entries(zip.files).filter(([, zipEntry]) => !zipEntry.dir);
 
    if (files.length > this.AUTO_UNZIP_FILE_LIMIT) {
-    alertUseMUI(t('alert.zipTooManyFiles'), 3000, { kind: "info" });
+    if (notifyUser) alertUseMUI(t('alert.zipTooManyFiles'), 3000, { kind: "info" });
     return false;
    }
 
@@ -4898,6 +5115,7 @@ private isLetShareZip(file: File): boolean {
    this.receivedFilesVersion,
    sourceArchiveFileKey,
    alreadyPersistedEntryPaths,
+   false,
   );
  }
 
@@ -5683,6 +5901,12 @@ private isLetShareZip(file: File): boolean {
  public async getFileTransferV2File(transferId: string): Promise<File> {
   if (!this.fileTransferV2) throw new Error("File transfer v2 is unavailable");
   return this.fileTransferV2.getFile(transferId);
+ }
+
+ public async acceptFileTransferV2ToDisk(transferId: string, handle: FileTransferV2FileHandle): Promise<void> {
+  if (!this.fileTransferV2) throw new Error("File transfer v2 is unavailable");
+  this.assertV2ReceivedFileCleanupNotStarted(transferId);
+  await this.fileTransferV2.acceptReceiveToDisk(transferId, handle);
  }
 
  public async pauseFileTransferV2(transferId: string): Promise<void> {

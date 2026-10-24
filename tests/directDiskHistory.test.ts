@@ -16,6 +16,10 @@ const fileBubbleSource = readFileSync(
   join(repoRoot, "src", "components", "Chat", "FileBubble.tsx"),
   "utf8"
 );
+const imageBubbleSource = readFileSync(
+  join(repoRoot, "src", "components", "Chat", "ImageBubble.tsx"),
+  "utf8"
+);
 const chatPanelSource = readFileSync(
   join(repoRoot, "src", "components", "Chat", "ChatPanel.tsx"),
   "utf8"
@@ -58,7 +62,9 @@ test("chat file messages can intentionally omit IndexedDB fileKey", () => {
 test("file bubble explains direct-to-disk history cannot be downloaded from browser storage", () => {
   assert.match(fileBubbleSource, /isDirectSavedWithoutBrowserCopy/);
   assert.match(fileBubbleSource, /chat\.fileSavedToDiskNoHistory/);
-  assert.match(fileBubbleSource, /isCompleted && fileKey/);
+  assert.match(fileBubbleSource, /isCompleted && isReceived && !fileKey/);
+  assert.match(fileBubbleSource, /result === 'opened'[\s\S]*availability: 'available'/);
+  assert.match(imageBubbleSource, /result === 'opened'[\s\S]*availability: 'available'/);
 });
 
 test("direct-to-disk image messages render as file bubbles when no browser blob exists", () => {

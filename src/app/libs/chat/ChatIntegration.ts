@@ -23,6 +23,113 @@ type V2ReceivedHistoryCommitDependencies = {
     rollbackHistoryMessage: (peerId: string, messageId: string) => ReturnType<typeof ChatHistoryManager.deleteMessage>;
 };
 
+type V2ReceivedFileMetadataCommitDependencies = {
+    selfId: string;
+    isCurrent: () => boolean;
+    getHistory: typeof ChatHistoryManager.getChatHistory;
+    addFileMessage: typeof ChatHistoryManager.addFileMessage;
+    completeDirectDiskFileMessage: typeof ChatHistoryManager.completeDirectDiskFileMessage;
+    pinForHistory: (fileKey: string) => Promise<boolean>;
+    isHistoryPinCurrent: (fileKey: string) => Promise<boolean>;
+    rollbackHistoryMessage: (peerId: string, messageId: string) => ReturnType<typeof ChatHistoryManager.deleteMessage>;
+};
+
+/** Commit only the metadata link for a verified direct-to-disk receive. */
+export async function commitV2ReceivedFileMetadataLink(
+    task: FileTransferV2Task,
+    dependencies: V2ReceivedFileMetadataCommitDependencies,
+): Promise<{ fileKey: string; message: FileChatMessage } | null> {
+    if (task.direction !== 'receive' || task.localParticipantId !== dependencies.selfId
+        || task.receiveStorageMode !== 'direct-to-disk'
+        || !['verifying', 'completed'].includes(task.status)) {
+        throw new Error('Direct-disk file task is not a verified receive for this user');
+    }
+    if (!dependencies.isCurrent()) return null;
+
+    const peerId = task.peerParticipantId;
+    const userName = peerId.split(':')[0] || 'Unknown User';
+    const fileKey = `filev2:${task.transferId}`;
+    const fileType = task.manifest.type || 'application/octet-stream';
+    const history = await dependencies.getHistory(peerId);
+    if (!dependencies.isCurrent()) return null;
+
+    const existing = history?.messages.find(message =>
+        (message.type === 'file' || message.type === 'image') && message.fileMetadata.fileKey === fileKey,
+    );
+    let messageId = existing?.id;
+    let createdMessage = false;
+    if (existing) {
+        if (existing.type === 'text' || existing.fileMetadata.fileName !== task.manifest.name
+            || existing.fileMetadata.fileSize !== task.manifest.size
+            || existing.fileMetadata.mimeType !== fileType) {
+            throw new Error('Existing v2 history metadata does not match the direct-disk file');
+        }
+        if (existing.fileMetadata.storageMode !== 'direct-to-disk'
+            || existing.fileMetadata.transferStatus !== 'completed'
+            || existing.fileMetadata.transferProgress !== 100) {
+            const updated = await dependencies.completeDirectDiskFileMessage(peerId, existing.id);
+            if (!updated.success) {
+                throw new Error(`Failed to complete direct-disk file history: ${updated.error || 'unknown error'}`);
+            }
+        }
+    } else {
+        const result = await dependencies.addFileMessage(
+            peerId,
+            userName,
+            peerId,
+            { name: task.manifest.name, size: task.manifest.size, type: fileType },
+            'completed',
+            100,
+            fileKey,
+            { storageMode: 'direct-to-disk' },
+        );
+        if (!result.success || !result.messageId) {
+            throw new Error(`Failed to create direct-disk file history: ${result.error || 'unknown error'}`);
+        }
+        messageId = result.messageId;
+        createdMessage = true;
+    }
+
+    const rollbackCreatedMessage = async () => {
+        if (!createdMessage || !messageId) return;
+        const current = await dependencies.getHistory(peerId);
+        if (!current?.messages.some(message => message.id === messageId)) return;
+        const rollback = await dependencies.rollbackHistoryMessage(peerId, messageId);
+        if (!rollback.success && rollback.error !== 'Chat history not found' && rollback.error !== 'Message not found') {
+            throw new Error(`Direct-disk history rollback failed: ${rollback.error || 'unknown error'}`);
+        }
+    };
+
+    if (!dependencies.isCurrent()) {
+        await rollbackCreatedMessage();
+        return null;
+    }
+
+    try {
+        if (!(await dependencies.pinForHistory(fileKey)) || !(await dependencies.isHistoryPinCurrent(fileKey))) {
+            throw new Error('Received direct-disk file is no longer complete and could not be pinned for history');
+        }
+    } catch (error) {
+        await rollbackCreatedMessage();
+        throw error;
+    }
+
+    if (!dependencies.isCurrent()) {
+        await rollbackCreatedMessage();
+        return null;
+    }
+    const committedHistory = await dependencies.getHistory(peerId);
+    if (!dependencies.isCurrent()) {
+        await rollbackCreatedMessage();
+        return null;
+    }
+    const message = committedHistory?.messages.find(candidate =>
+        candidate.id === messageId && candidate.type !== 'text' && candidate.fileMetadata.fileKey === fileKey,
+    );
+    if (!message || message.type === 'text') return null;
+    return { fileKey, message };
+}
+
 /** Stage the durable history link before COMPLETE without making the file readable yet. */
 export async function commitV2ReceivedHistoryLink(
     task: FileTransferV2Task,
@@ -471,6 +578,33 @@ class ChatIntegration {
         }
         this.emitter.emit('history-updated', { userId: peerId });
         return fileKey;
+    }
+
+    /** Commit a direct-to-disk receive as metadata only; never materialize or cache its payload. */
+    public async commitV2ReceivedFileMetadata(
+        task: FileTransferV2Task,
+        isCurrent: () => boolean = () => true,
+    ): Promise<{ fileKey: string; message: FileChatMessage } | null> {
+        const peerId = task.peerParticipantId;
+        const generation = this.captureHistoryDeletionGeneration(peerId);
+        const isCommitCurrent = () => this.isHistoryDeletionGenerationCurrent(peerId, generation) && isCurrent();
+        const result = await commitV2ReceivedFileMetadataLink(task, {
+            selfId: realTimeColab.getUniqId() || '',
+            isCurrent: isCommitCurrent,
+            getHistory: userId => ChatHistoryManager.getChatHistory(userId),
+            addFileMessage: (...args) => ChatHistoryManager.addFileMessage(...args),
+            completeDirectDiskFileMessage: (...args) => ChatHistoryManager.completeDirectDiskFileMessage(...args),
+            pinForHistory: key => FileBlobStore.pinForHistory(key),
+            isHistoryPinCurrent: key => FileBlobStore.isHistoryPinCurrent(key),
+            rollbackHistoryMessage: (userId, messageId) => ChatHistoryManager.deleteMessage(
+                userId,
+                messageId,
+                { preserveFile: true },
+            ),
+        });
+        if (!result) return null;
+        this.emitter.emit('history-updated', { userId: peerId });
+        return result;
     }
 
     /** Persist extracted bundle entries before marking their source archive as expanded. */

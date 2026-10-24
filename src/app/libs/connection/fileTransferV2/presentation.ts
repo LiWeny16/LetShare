@@ -8,7 +8,7 @@ export function shouldOpenDownloadDrawerForV2Transfer(
 ): boolean {
   if (previousStatus !== undefined) return false;
   return direction === "receive"
-    ? status === "receiving"
+    ? status === "offered" || status === "receiving"
     : status === "preparing";
 }
 

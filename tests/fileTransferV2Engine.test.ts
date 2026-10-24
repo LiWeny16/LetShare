@@ -19,9 +19,11 @@ import { IndexedDbFileTransferV2Store, type FileTransferV2Store } from "../src/a
 
 let storeCounter = 0;
 
-function makeStore(): IndexedDbFileTransferV2Store {
+function makeStore(estimateStorage: () => Promise<StorageEstimate> = async () => ({ usage: 0, quota: Number.MAX_SAFE_INTEGER })):
+  IndexedDbFileTransferV2Store {
   return new IndexedDbFileTransferV2Store({
     dbName: `file-transfer-v2-engine-${++storeCounter}`,
+    estimateStorage,
     requestPersistence: async () => false,
   });
 }
@@ -176,7 +178,140 @@ function makeFile(size: number, name = "sample.bin", seed = 0): File {
   return new File([bytes.buffer as ArrayBuffer], name, { type: "application/octet-stream", lastModified: 1234 });
 }
 
+function makeInMemoryFileHandle(name: string) {
+  let savedBytes = new Uint8Array(0);
+  let logicalSize = 0;
+  return {
+    kind: "file",
+    name,
+    async queryPermission() { return "granted" as PermissionState; },
+    async requestPermission() { return "granted" as PermissionState; },
+    async getFile() {
+      return new File([savedBytes.slice(0, logicalSize).buffer as ArrayBuffer], name, {
+        type: "application/octet-stream",
+      });
+    },
+    async createWritable() {
+      let working = savedBytes.slice();
+      return {
+        async write(command: { type: "write"; position?: number; data: ArrayBuffer | ArrayBufferView | Blob }) {
+          const data = command.data instanceof Blob
+            ? new Uint8Array(await command.data.arrayBuffer())
+            : command.data instanceof ArrayBuffer
+              ? new Uint8Array(command.data)
+              : new Uint8Array(command.data.buffer, command.data.byteOffset, command.data.byteLength);
+          const position = command.position ?? 0;
+          const end = position + data.byteLength;
+          if (end > working.byteLength) {
+            const grown = new Uint8Array(end);
+            grown.set(working);
+            working = grown;
+          }
+          working.set(data, position);
+          logicalSize = Math.max(logicalSize, end);
+        },
+        async close() { savedBytes = working; },
+        async abort() { /* discard the uncommitted write */ },
+      };
+    },
+  };
+}
+
+function makeDirectDiskMetadataStore() {
+  const store = makeStore();
+  const metadataByTransferId = new Map<string, Record<string, unknown>>();
+  const attachMetadata = <T extends { transferId: string } | null>(task: T): T | (T extends null ? null : T & Record<string, unknown>) => {
+    if (!task) return task;
+    return { ...task, ...(metadataByTransferId.get(task.transferId) || {}) } as T;
+  };
+  const originalCreateTask = store.createTask.bind(store);
+  const originalGetTask = store.getTask.bind(store);
+  const originalUpdateTask = store.updateTask.bind(store);
+  store.createTask = (async (input: Parameters<typeof store.createTask>[0]) => {
+    const record = input as typeof input & Record<string, unknown>;
+    const { receiveStorageMode, receiveFileHandle, ...base } = record;
+    const task = await originalCreateTask(base as Parameters<typeof store.createTask>[0]);
+    if (receiveStorageMode || receiveFileHandle) {
+      metadataByTransferId.set(task.transferId, {
+        ...(receiveStorageMode ? { receiveStorageMode } : {}),
+        ...(receiveFileHandle ? { receiveFileHandle } : {}),
+      });
+    }
+    return attachMetadata(task) as typeof task;
+  }) as typeof store.createTask;
+  store.getTask = (async (transferId: string) => attachMetadata(await originalGetTask(transferId)) as Awaited<ReturnType<typeof store.getTask>>) as typeof store.getTask;
+  store.updateTask = (async (transferId: string, patch: Parameters<typeof store.updateTask>[1]) => {
+    const record = patch as typeof patch & Record<string, unknown>;
+    const { receiveStorageMode, receiveFileHandle, ...base } = record;
+    const task = await originalUpdateTask(transferId, base as Parameters<typeof store.updateTask>[1]);
+    if (receiveStorageMode || receiveFileHandle) {
+      metadataByTransferId.set(transferId, {
+        ...(metadataByTransferId.get(transferId) || {}),
+        ...(receiveStorageMode ? { receiveStorageMode } : {}),
+        ...(receiveFileHandle ? { receiveFileHandle } : {}),
+      });
+    }
+    return attachMetadata(task) as Awaited<ReturnType<typeof store.updateTask>>;
+  }) as typeof store.updateTask;
+  return { store: store as unknown as FileTransferV2Store, metadataByTransferId };
+}
+
 describe("file transfer v2 engine", () => {
+  it("waits for a user-selected disk handle before ACCEPT and receives without IDB payload blocks", async () => {
+    const network = new MockNetwork();
+    const senderStore = makeStore();
+    const receiverPersistence = makeDirectDiskMetadataStore();
+    const sender = makeEngine("alice", senderStore, network);
+    let receivedDiskHandle: unknown = null;
+    const receiver = new FileTransferV2Engine({
+      selfId: () => "bob",
+      roomId: () => "room-test",
+      store: receiverPersistence.store,
+      paths: () => [network.path("bob", "p2p"), network.path("bob", "relay")],
+      onUpdate: () => undefined,
+      onReceived: () => { throw new Error("direct-disk receive must not assemble a browser File"); },
+      onReceivedToDisk: async (_task, handle) => { receivedDiskHandle = handle; },
+      shouldUseDirectDisk: () => true,
+      retryAfterMs: 50,
+    });
+    // Keep this focused on the pending destination-selection protocol without
+    // allocating and transferring a >128 MiB fixture just to cross the production threshold.
+    Reflect.set(receiver, "shouldUseDirectDisk", () => true);
+    network.attach("alice", sender);
+    network.attach("bob", receiver);
+
+    const source = makeFile(FILE_TRANSFER_V2_BLOCK_SIZE + 37, "disk-only.bin", 11);
+    const send = sender.send("bob", source);
+    await waitFor(() => receiver.getSnapshots().length === 1);
+    const transferId = receiver.getSnapshots()[0].transferId;
+    await network.flush();
+    assert.equal(network.deliveredControls.some(item => item.from === "bob" && item.control.kind === "accept"), false,
+      "an incoming direct-disk offer must remain pending until the user chooses a destination");
+    assert.equal(network.sentFrames.some(frame => frame.from === "alice"), false,
+      "the sender must not transmit payload before destination selection");
+
+    const destination = makeInMemoryFileHandle(source.name);
+    await receiver.acceptReceiveToDisk(transferId, destination as never);
+    assert.equal(await send, transferId);
+    await network.flush();
+    network.assertNoErrors();
+
+    const task = await receiverPersistence.store.getTask(transferId) as (FileTransferV2Task & Record<string, unknown>) | null;
+    assert.equal(task?.receiveStorageMode, "direct-to-disk");
+    assert.equal(task?.receiveFileHandle, destination);
+    assert.deepEqual(await senderStore.getCommittedIndices(transferId), []);
+    assert.deepEqual(await (receiverPersistence.store as unknown as IndexedDbFileTransferV2Store).getCommittedIndices(transferId), [],
+      "direct-disk payload must never be committed to IndexedDB blocks");
+    assert.equal(receivedDiskHandle, destination, "direct history callback receives the selected handle without a File Blob");
+    assert.deepEqual(
+      new Uint8Array(await (await destination.getFile()).arrayBuffer()),
+      new Uint8Array(await source.arrayBuffer()),
+    );
+    assert.equal(receiver.getSnapshots().find(snapshot => snapshot.transferId === transferId)?.status, "completed");
+    sender.dispose();
+    receiver.dispose();
+  });
+
   it("fragments, schedules disjoint blocks over both paths, and resolves send only after durable receive completion", async () => {
     const network = new MockNetwork();
     const senderStore = makeStore();
@@ -1736,5 +1871,102 @@ describe("file transfer v2 engine", () => {
 
     await assertCancelDuringCreate(false, "cancel-create-local-01");
     await assertCancelDuringCreate(true, "cancel-create-remote-01");
+  });
+
+  it("rejects an incoming offer before sending accept or payload when the full file cannot fit", async () => {
+    const network = new MockNetwork();
+    const sender = makeEngine("alice", makeStore(), network);
+    const receiverStore = makeStore(async () => ({ usage: 0, quota: 270_000 }));
+    const receiver = makeEngine("bob", receiverStore, network);
+    network.attach("alice", sender);
+    network.attach("bob", receiver);
+
+    const senderResult = sender.send("bob", makeFile(300_000, "quota-preflight.bin"))
+      .then(() => "resolved", () => "rejected");
+    await waitFor(() => network.deliveredControls.some(item => item.from === "bob" && item.control.kind === "reject"));
+    await network.flush();
+
+    assert.equal(network.deliveredControls.some(item => item.from === "bob" && item.control.kind === "accept"), false);
+    assert.equal(network.sentFrames.some(frame => frame.from === "alice"), false, "no payload may be sent before admission");
+    assert.equal((await receiverStore.listTasks()).some(task => task.direction === "receive"), false);
+    assert.equal(sender.getSnapshots()[0]?.status, "paused");
+    assert.equal(
+      (network as unknown as { errors: unknown[] }).errors.some(error => error instanceof Error && /浏览器可用存储空间不足/.test(error.message)),
+      true,
+      "the rejected control must surface the local capacity error to the adapter",
+    );
+    sender.dispose();
+    receiver.dispose();
+    assert.equal(await senderResult, "rejected");
+  });
+
+  it("rechecks remaining receive capacity before explicit resume", async () => {
+    const network = new MockNetwork();
+    network.dropFrames = true;
+    let estimate: StorageEstimate = { usage: 0, quota: Number.MAX_SAFE_INTEGER };
+    const sender = makeEngine("alice", makeStore(), network);
+    const receiverStore = makeStore(async () => estimate);
+    const receiver = makeEngine("bob", receiverStore, network);
+    network.attach("alice", sender);
+    network.attach("bob", receiver);
+
+    const senderResult = sender.send("bob", makeFile(64_000, "resume-quota-preflight.bin"))
+      .then(() => "resolved", () => "rejected");
+    await waitFor(() => receiver.getSnapshots()[0]?.status === "receiving");
+    const transferId = receiver.getSnapshots()[0].transferId;
+    await receiver.pause(transferId);
+    await network.flush();
+    const resumeAttemptsBefore = network.controlSendAttempts.filter(item => item.from === "bob" && item.kind === "resume").length;
+
+    estimate = { usage: 0, quota: 1 };
+    await receiver.resume(transferId);
+    await network.flush();
+
+    assert.equal(receiver.getSnapshots()[0]?.status, "paused");
+    assert.match(receiver.getSnapshots()[0]?.reason || "", /浏览器可用存储空间不足/);
+    assert.equal(
+      network.controlSendAttempts.filter(item => item.from === "bob" && item.kind === "resume").length,
+      resumeAttemptsBefore,
+      "a resume control must not be sent when the remaining file cannot be stored",
+    );
+    assert.equal((await receiverStore.getCommittedIndices(transferId)).length, 0);
+    assert.equal(network.deliveredControls.some(item => item.from === "bob" && item.control.kind === "reject"), true);
+    receiver.dispose();
+    sender.dispose();
+    assert.equal(await senderResult, "rejected");
+    network.assertNoErrors();
+  });
+
+  it("does not send a resume after reload when full-file receive capacity is no longer available", async () => {
+    const network = new MockNetwork();
+    let estimate: StorageEstimate = { usage: 0, quota: Number.MAX_SAFE_INTEGER };
+    const store = makeStore(async () => estimate);
+    const file = makeFile(64_000, "restore-quota-preflight.bin");
+    const transferId = "restore-quota-preflight-01";
+    const manifest = createFileTransferV2Manifest(transferId, file, await hashFile(file));
+    await store.createTask({
+      roomId: "room-test",
+      localParticipantId: "bob",
+      peerParticipantId: "alice",
+      from: "alice",
+      to: "bob",
+      manifest,
+      direction: "receive",
+      status: "transferring",
+    });
+    estimate = { usage: 0, quota: 1 };
+
+    const receiver = makeEngine("bob", store, network);
+    network.attach("bob", receiver);
+    await receiver.restore();
+    await network.flush();
+
+    assert.equal(receiver.getSnapshots()[0]?.status, "paused");
+    assert.match(receiver.getSnapshots()[0]?.reason || "", /浏览器可用存储空间不足/);
+    assert.equal(network.controlSendAttempts.some(item => item.from === "bob" && item.kind === "resume"), false);
+    assert.equal(network.deliveredControls.some(item => item.from === "bob" && item.control.kind === "reject"), true);
+    assert.equal((await store.getTask(transferId))?.status, "paused");
+    receiver.dispose();
+    network.assertNoErrors();
   });
 });

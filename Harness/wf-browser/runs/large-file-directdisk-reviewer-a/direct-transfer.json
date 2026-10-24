@@ -1,0 +1,59 @@
+﻿{
+    "browsers":  {
+                     "edge":  "Edg/155.0.4283.62",
+                     "chrome":  "Chrome/155.0.8059.86",
+                     "edgeCdpPort":  27773,
+                     "chromeCdpPort":  27774,
+                     "distinctVisibleProcesses":  true
+                 },
+    "localServices":  {
+                          "backend":  "http://127.0.0.1:27771/ws",
+                          "frontend":  "http://127.0.0.1:27772",
+                          "backendStopped":  true,
+                          "frontendStopped":  true
+                      },
+    "roomId":  "123",
+    "receiver":  "edge:room123",
+    "sender":  "chrome:room123",
+    "transferId":  "0e8771d5-3c6c-4ca1-9caf-63d00d537fbb",
+    "fileName":  "letshare-large-direct-a-payload.bin",
+    "fileBytes":  134217729,
+    "senderSha256":  "256488d1ec11964596f42c83d7255fb6c501ef2afe47fec56e550d73cdfee78f",
+    "receiverOpfsFile":  {
+                             "fileName":  "LetShare-large-direct-a.bin",
+                             "bytes":  134217729,
+                             "sha256":  "256488d1ec11964596f42c83d7255fb6c501ef2afe47fec56e550d73cdfee78f",
+                             "headAndTailMarkersMatch":  true
+                         },
+    "p2p":  {
+                "dataChannelState":  "open",
+                "attachedPaths":  [
+                                      "p2p"
+                                  ],
+                "acceptedPaths":  [
+                                      "p2p"
+                                  ],
+                "receiveStatus":  "completed",
+                "confirmedBytes":  134217729,
+                "receiveStorageMode":  "direct-to-disk",
+                "confirmedBlockRange":  [
+                                            0,
+                                            512
+                                        ]
+            },
+    "indexedDb":  {
+                      "database":  "letshare-file-transfer-v2",
+                      "blocksCount":  0,
+                      "tasksCount":  1,
+                      "chatDb":  "letshare_chat_db",
+                      "fileBlobsCount":  0,
+                      "historyMessage":  {
+                                             "type":  "file",
+                                             "fileName":  "letshare-large-direct-a-payload.bin",
+                                             "fileSize":  134217729,
+                                             "fileKey":  "filev2:0e8771d5-3c6c-4ca1-9caf-63d00d537fbb",
+                                             "storageMode":  "direct-to-disk"
+                                         }
+                  },
+    "savePicker":  "OPFS-backed File System Access shim; validates the V2 disk sink, not the native OS save-picker dialog"
+}

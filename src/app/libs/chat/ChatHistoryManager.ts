@@ -15,6 +15,8 @@ export interface FileMetadata {
   /** Durable archive identity for an individually stored extracted entry. */
   sourceArchiveFileKey?: string;
   sourceArchiveEntryPath?: string;
+  /** Where the received payload is stored; direct-disk files have metadata only in chat history. */
+  storageMode?: 'browser-cache' | 'direct-to-disk';
 }
 
 export interface TextChatMessage {
@@ -91,14 +93,15 @@ class ChatHistoryManager {
   private static instance: ChatHistoryManager | null = null;
   private static isCreating = false; // 防止并发创建
   private dbName = 'letshare_chat_db';
-  private dbVersion = 2; // bumped: v2 adds file_blobs store
+  private dbVersion = 3; // v3 adds a payload-free file metadata index
   private storeName = 'chat_histories';
   private fileStoreName = 'file_blobs';
   private db: IDBDatabase | null = null;
+  private dbOpenPromise: Promise<IDBDatabase> | null = null;
   private userIdProvider: UserIdProvider | null = null;
 
   private constructor() {
-    this.initDB();
+    void this.initDB().catch(() => undefined);
   }
 
   public static getInstance(): ChatHistoryManager {
@@ -129,19 +132,52 @@ class ChatHistoryManager {
   }
 
   // 初始化IndexedDB
-  private async initDB(): Promise<void> {
-    return new Promise((resolve, reject) => {
-      const request = indexedDB.open(this.dbName, this.dbVersion);
+  private initDB(): Promise<IDBDatabase> {
+    if (this.db) return Promise.resolve(this.db);
+    if (this.dbOpenPromise) return this.dbOpenPromise;
+
+    let openPromise: Promise<IDBDatabase>;
+    openPromise = new Promise<IDBDatabase>((resolve, reject) => {
+      let settled = false;
+      let abandoned = false;
+      let request: IDBOpenDBRequest;
+      const settleError = (error: unknown) => {
+        if (settled) return;
+        settled = true;
+        reject(error instanceof Error ? error : new Error(String(error || 'Unable to open chat history database')));
+      };
+      try {
+        request = indexedDB.open(this.dbName, this.dbVersion);
+      } catch (error) {
+        settleError(error);
+        return;
+      }
 
       request.onerror = () => {
-        console.error('Failed to open IndexedDB:', request.error);
-        reject(request.error);
+        settleError(request.error || new Error('Unable to open chat history database'));
+      };
+
+      request.onblocked = () => {
+        abandoned = true;
+        settleError(new Error('IndexedDB upgrade blocked by another open tab'));
       };
 
       request.onsuccess = () => {
-        this.db = request.result;
+        const db = request.result;
+        if (abandoned) {
+          db.close();
+          return;
+        }
+        db.onversionchange = () => {
+          db.close();
+          if (this.db === db) this.db = null;
+        };
+        this.db = db;
         console.log('IndexedDB initialized successfully');
-        resolve();
+        if (!settled) {
+          settled = true;
+          resolve(db);
+        }
       };
 
       request.onupgradeneeded = (event) => {
@@ -155,24 +191,34 @@ class ChatHistoryManager {
         }
 
         // 创建文件blob存储 (v2)
+        // Create or upgrade file metadata indexes without reading blob payloads in application code.
+        let fileStore: IDBObjectStore;
         if (!db.objectStoreNames.contains(this.fileStoreName)) {
-          const fileStore = db.createObjectStore(this.fileStoreName, { keyPath: 'fileKey' });
+          fileStore = db.createObjectStore(this.fileStoreName, { keyPath: 'fileKey' });
           fileStore.createIndex('storedAt', 'storedAt', { unique: false });
           console.log('Created file_blobs object store');
+        } else {
+          const transaction = (event.target as IDBOpenDBRequest).transaction;
+          if (!transaction) throw new Error('Missing IndexedDB upgrade transaction');
+          fileStore = transaction.objectStore(this.fileStoreName);
+        }
+        if (!fileStore.indexNames.contains('fileInfo')) {
+          fileStore.createIndex('fileInfo', ['fileSize', 'storedAt', 'fileName', 'mimeType'], { unique: false });
         }
       };
     });
+    this.dbOpenPromise = openPromise;
+    void openPromise.then(
+      () => { if (this.dbOpenPromise === openPromise) this.dbOpenPromise = null; },
+      () => { if (this.dbOpenPromise === openPromise) this.dbOpenPromise = null; },
+    );
+    return openPromise;
   }
 
   // 确保数据库已初始化
   private async ensureDB(): Promise<IDBDatabase> {
-    if (!this.db) {
-      await this.initDB();
-    }
-    if (!this.db) {
-      throw new Error('Failed to initialize database');
-    }
-    return this.db;
+    if (this.db) return this.db;
+    return this.initDB();
   }
 
   /** Public accessor for FileBlobStore to share the same DB connection. */
@@ -257,7 +303,7 @@ class ChatHistoryManager {
     transferStatus: FileTransferStatus = 'uploading',
     transferProgress: number = 0,
     overrideFileKey?: string | null,
-    additionalFileMetadata?: Pick<FileMetadata, 'sourceArchiveFileKey' | 'sourceArchiveEntryPath'>,
+    additionalFileMetadata?: Pick<FileMetadata, 'sourceArchiveFileKey' | 'sourceArchiveEntryPath' | 'storageMode'>,
   ): Promise<{ success: boolean; error?: string; messageId?: string }> {
     try {
       const db = await this.ensureDB();
@@ -384,6 +430,38 @@ class ChatHistoryManager {
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       console.error('[CHAT DB] Failed to update file progress:', error);
+      return { success: false, error: errorMessage };
+    }
+  }
+
+  /** Mark an existing v2 direct-disk file message as available after verification. */
+  public async completeDirectDiskFileMessage(
+    userId: string,
+    messageId: string,
+  ): Promise<{ success: boolean; error?: string }> {
+    try {
+      const db = await this.ensureDB();
+      const transaction = db.transaction([this.storeName], 'readwrite');
+      const store = transaction.objectStore(this.storeName);
+      const history = await this.getChatHistoryFromStore(store, userId);
+      if (!history) return { success: false, error: 'Chat history not found' };
+
+      const message = history.messages.find((item) => item.id === messageId);
+      if (!message || message.type === 'text' || !message.fileMetadata.fileKey?.startsWith('filev2:')) {
+        return { success: false, error: 'V2 file message not found' };
+      }
+
+      message.fileMetadata.storageMode = 'direct-to-disk';
+      message.fileMetadata.transferStatus = 'completed';
+      message.fileMetadata.transferProgress = 100;
+
+      const committed = waitForTransactionCommit(transaction);
+      store.put(history);
+      await committed;
+      return { success: true };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      console.error('[CHAT DB] Failed to complete direct-disk file message:', error);
       return { success: false, error: errorMessage };
     }
   }

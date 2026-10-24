@@ -19,6 +19,7 @@ let dbCounter = 0;
 function makeStore(options: ConstructorParameters<typeof IndexedDbFileTransferV2Store>[0] = {}) {
   return new IndexedDbFileTransferV2Store({
     dbName: `file-transfer-v2-test-${++dbCounter}`,
+    estimateStorage: async () => ({ usage: 0, quota: Number.MAX_SAFE_INTEGER }),
     requestPersistence: async () => false,
     ...options,
   });
@@ -71,6 +72,7 @@ describe("file transfer v2 durable store", () => {
 
     assert.deepEqual(await store.commitBlock(task.transferId, 0, bytes, hash), { committed: true });
     assert.ok((await store.getTask(task.transferId))!.expiresAt > initialExpiry);
+    assert.equal((await store.getTask(task.transferId))?.receiveReservedBytes, 0);
     assert.deepEqual(await store.commitBlock(task.transferId, 0, bytes, hash), { committed: false });
     assert.deepEqual(await store.getCommittedIndices(task.transferId), [0]);
     assert.deepEqual(await store.getCommittedRanges(task.transferId), [[0, 0]]);
@@ -126,12 +128,68 @@ describe("file transfer v2 durable store", () => {
   });
 
   it("surfaces quota failures, pauses the task, and leaves the checkpoint unchanged", async () => {
-    const store = makeStore({ estimateStorage: async () => ({ usage: 100, quota: 100 }) });
+    let estimate = { usage: 0, quota: 100 };
+    const store = makeStore({ estimateStorage: async () => estimate });
     const task = await createTask(store, { size: 3 });
+    estimate = { usage: 100, quota: 100 };
     const bytes = new Uint8Array([1, 2, 3]);
     await assert.rejects(store.commitBlock(task.transferId, 0, bytes, await sha256HexForBlock(bytes)), FileTransferV2QuotaError);
     assert.equal((await store.getTask(task.transferId))?.status, "paused");
     assert.deepEqual(await store.getCommittedIndices(task.transferId), []);
+  });
+
+  it("rejects an incoming manifest before creating a task when the whole file cannot fit", async () => {
+    const store = makeStore({ estimateStorage: async () => ({ usage: 90, quota: 100 }) });
+    const transferId = "receive-too-large-for-quota";
+    await assert.rejects(createTask(store, { size: 11, transferId }), FileTransferV2QuotaError);
+    assert.equal(await store.getTask(transferId), null);
+  });
+
+  it("reserves the remaining full-file capacity atomically across active receives", async () => {
+    let estimate = { usage: 0, quota: 100 };
+    const store = makeStore({ estimateStorage: async () => estimate });
+    const first = await createTask(store, { size: 80, transferId: "receive-reservation-first" });
+    assert.equal(first.receiveReservedBytes, 80);
+    await assert.rejects(
+      createTask(store, { size: 21, transferId: "receive-reservation-overflow" }),
+      FileTransferV2QuotaError,
+    );
+
+    estimate = { usage: 60, quota: 100 };
+    const resized = await store.ensureReceiveStorage(first.transferId, 20);
+    assert.equal(resized.receiveReservedBytes, 20);
+    const exactFit = await createTask(store, { size: 20, transferId: "receive-reservation-exact-fit" });
+    assert.equal(exactFit.receiveReservedBytes, 20);
+    await assert.rejects(
+      createTask(store, { size: 1, transferId: "receive-reservation-after-exact-fit" }),
+      FileTransferV2QuotaError,
+    );
+  });
+
+  it("requires a usable estimate before creating a non-empty receive task", async () => {
+    const store = makeStore({ estimateStorage: async () => ({}) });
+    const transferId = "receive-no-storage-estimate";
+    await assert.rejects(createTask(store, { size: 1, transferId }), FileTransferV2QuotaError);
+    assert.equal(await store.getTask(transferId), null);
+  });
+
+  it("serializes full-file reservations across store instances sharing IndexedDB", async () => {
+    const dbName = `file-transfer-v2-cross-tab-${++dbCounter}`;
+    const estimateStorage = async () => ({ usage: 0, quota: 100 });
+    const firstStore = makeStore({ dbName, estimateStorage });
+    const secondStore = makeStore({ dbName, estimateStorage });
+    const results = await Promise.allSettled([
+      createTask(firstStore, { size: 80, transferId: "cross-tab-reserve-1" }),
+      createTask(secondStore, { size: 80, transferId: "cross-tab-reserve-2" }),
+    ]);
+
+    assert.equal(results.filter(result => result.status === "fulfilled").length, 1);
+    const rejected = results.find(result => result.status === "rejected");
+    assert.equal(rejected?.status, "rejected");
+    if (rejected?.status === "rejected") assert.ok(rejected.reason instanceof FileTransferV2QuotaError);
+    const tasks = await firstStore.listTasks();
+    assert.equal(tasks.filter(task => task.direction === "receive").length, 1);
+    assert.equal(tasks.find(task => task.direction === "receive")?.receiveReservedBytes, 80);
   });
 
   it("keeps task identity immutable and marks recovered outgoing tasks as needing their source", async () => {

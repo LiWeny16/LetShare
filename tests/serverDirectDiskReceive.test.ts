@@ -47,19 +47,54 @@ function extractMethodBody(source: string, methodName: string): string {
 
 test("server relay browser-cache overflow queues direct-to-disk instead of rejecting when supported", () => {
   const body = extractMethodBody(serverSource, "private async handleTransferRequest");
-  const overflowStart = body.indexOf("if (!cacheGuard.allowed)");
-  const sessionStart = body.indexOf("const session: ReceiveSession", overflowStart);
-  assert.notEqual(overflowStart, -1);
+  const storageSelection = body.indexOf('let storageMode: ReceiveSession["storageMode"] | "reject"');
+  const sessionStart = body.indexOf("const session: ReceiveSession", storageSelection);
+  assert.notEqual(storageSelection, -1);
   assert.notEqual(sessionStart, -1);
 
-  const overflowBranch = body.slice(overflowStart, sessionStart);
-  assert.match(overflowBranch, /!this\.canUseDirectFileSave\(\)/);
-  assert.match(overflowBranch, /this\.rejectIncomingRequest\(request,\s*fullReason\)/);
-  assert.match(body, /storageMode:\s*cacheGuard\.allowed \? "browser-cache" : "direct-to-disk"/);
+  const storageAdmission = body.slice(storageSelection, sessionStart);
+  assert.match(storageAdmission, /canUseDirectFileSave \? "direct-to-disk" : "reject"/);
+  assert.match(storageAdmission, /if \(storageMode === "reject"\)/);
+  assert.match(storageAdmission, /this\.rejectIncomingRequest\(request,\s*fullReason\)/);
+  assert.match(body, /storageMode,/);
   assert.match(
     body,
     /if \(session\.storageMode === "direct-to-disk"\) \{[\s\S]*this\.queueDirectDiskReceive\(session,\s*session\.directSaveReason\)/
   );
+});
+
+test("AC-003 server relay preflights full-file browser quota before creating or accepting a cached receive", () => {
+  const body = extractMethodBody(serverSource, "private async handleTransferRequest");
+  const quotaPreflight = body.indexOf("await this.preflightLegacyRelayBrowserCacheStorage");
+  const sessionCreation = body.indexOf("const session: ReceiveSession");
+  assert.ok(quotaPreflight >= 0, "the relay request path should run a full-file quota preflight");
+  assert.ok(body.indexOf("receiveStorageReservationCoordinator.tryReserve") >= 0,
+    "the relay request should reserve origin-wide capacity before awaiting the estimate");
+  assert.ok(quotaPreflight < sessionCreation, "quota admission should finish before the receive session can be accepted");
+  assert.match(body, /pendingBrowserCacheAdmissions/);
+  assert.match(body, /reservationLease\.commit\(\)/);
+
+  const preflightBody = extractMethodBody(serverSource, "private async preflightLegacyRelayBrowserCacheStorage");
+  assert.match(preflightBody, /navigator\.storage/);
+  assert.match(preflightBody, /estimate\(\)/);
+  assert.match(preflightBody, /activeReceiveReservations/);
+  assert.match(colabLibSource, /setV2ReservationsProvider/,
+    "the shared coordinator should reconcile active durable V2 receives before cross-protocol admission");
+});
+
+test("AC-002/003 legacy P2P reserves before cache acceptance and releases on completion or abort", () => {
+  const start = colabLibSource.indexOf('case "file-meta":');
+  const end = colabLibSource.indexOf('case "abort":', start);
+  assert.ok(start >= 0 && end > start, "legacy P2P file-meta branch should exist");
+  const body = colabLibSource.slice(start, end);
+  const admission = body.indexOf("await this.reserveLegacyP2PReceiveCache");
+  const buffer = body.indexOf("new TransferReceiveBuffer");
+  assert.ok(admission >= 0 && admission < buffer,
+    "legacy P2P must reserve quota before allocating/accepting the full receive");
+  assert.match(body, /pendingP2PReceiveCacheAdmissions\.set/);
+  assert.match(body, /p2pReservation\.lease\.commit\(\)/);
+  assert.match(colabLibSource, /private releaseP2PReceiveReservation/);
+  assert.match(colabLibSource, /this\.releaseP2PReceiveReservation\(id\)/);
 });
 
 test("server relay direct-to-disk waits for user picker before accepting transfer", () => {
@@ -85,7 +120,10 @@ test("server relay direct-to-disk writes chunks to the disk sink and avoids brow
   assert.notEqual(directEnd, -1);
 
   const directBranch = finalizeBody.slice(directStart, directEnd);
-  assert.match(directBranch, /await session\.directSink\.close\(\)/);
+  assert.match(
+    directBranch,
+    /await completeAfterReceivePersistence\(\s*\(\) => session\.directSink!\.close\(\)/
+  );
   assert.match(directBranch, /this\.onFileSavedToDiskCallback\?\.\(session\.fileName,\s*session\.fileSize,\s*session\.fromUserId\)/);
   assert.doesNotMatch(directBranch, /this\.onFileReceivedCallback/);
   assert.doesNotMatch(directBranch, /createCompletedTransferFile/);

@@ -1,5 +1,5 @@
 /**
- * FileBlobStore — IndexedDB-backed persistent file blob storage.
+ * FileBlobStore 鈥?IndexedDB-backed persistent file blob storage.
  *
  * Stores file blobs alongside chat history so received files survive page refresh.
  * Uses ChatHistoryManager's shared DB connection to avoid schema race conditions.
@@ -10,8 +10,11 @@ import {
   fileTransferV2IdFromHistoryKey,
   getFileTransferV2ApplicationAdapter,
 } from '../connection/fileTransferV2/applicationAdapter';
+import type { FileTransferV2FileHandle } from '../connection/fileTransferV2/directDiskSink';
+import type { FileHandleAvailability } from '../connection/fileTransferV2/fileHandleAvailability';
 
 const STORE_NAME = 'file_blobs';
+const FILE_INFO_INDEX = 'fileInfo';
 
 export function createFileBlobKey(userId: string, timestamp: number, fileName: string): string {
   const safeName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
@@ -40,12 +43,46 @@ export interface FileBlobInfo {
   mimeType: string;
   fileSize: number;
   storedAt: number;
+  storageMode?: "browser-cache" | "direct-to-disk";
 }
+
+export interface DirectDiskFileInfo {
+  transferId: string;
+  handle: FileTransferV2FileHandle | null;
+  availability: FileHandleAvailability | 'unavailable';
+}
+
+export type DirectDiskOpenResult = 'opened' | 'permission-required' | 'deleted' | 'failed';
 
 class FileBlobStore {
   private static instance: FileBlobStore | null = null;
+  private fileInfoCache: FileBlobInfo[] | null = null;
+  private fileInfoCacheVersion = 0;
 
   private constructor() {}
+
+  /** Synchronous metadata snapshot for receive admission; null means the scan is pending or unavailable. */
+  public getCachedFileInfos(): FileBlobInfo[] | null {
+    const snapshot = this.fileInfoCache;
+    return snapshot ? snapshot.map(info => ({ ...info })) : null;
+  }
+
+  private rememberFileInfo(info: FileBlobInfo): void {
+    this.fileInfoCacheVersion++;
+    if (!this.fileInfoCache) return;
+    this.fileInfoCache = [...this.fileInfoCache.filter(item => item.fileKey !== info.fileKey), info];
+  }
+
+  private forgetFileInfo(fileKey: string): void {
+    this.fileInfoCacheVersion++;
+    if (!this.fileInfoCache) return;
+    this.fileInfoCache = this.fileInfoCache.filter(item => item.fileKey !== fileKey);
+  }
+
+  private invalidateFileInfoCache(): void {
+    this.fileInfoCacheVersion++;
+    this.fileInfoCache = null;
+  }
 
   public static getInstance(): FileBlobStore {
     if (!FileBlobStore.instance) {
@@ -73,7 +110,7 @@ class FileBlobStore {
     try {
       const db = await this.getDB();
 
-      return await new Promise((resolve, reject) => {
+      const result = await new Promise<{ success: boolean; error?: string }>((resolve, reject) => {
         const transaction = db.transaction([STORE_NAME], 'readwrite');
         const store = transaction.objectStore(STORE_NAME);
 
@@ -101,6 +138,14 @@ class FileBlobStore {
           reject(new Error(transaction.error?.message || 'Transaction aborted'));
         };
       });
+      if (result.success) this.rememberFileInfo({
+        fileKey,
+        fileName: file instanceof File ? file.name : fileKey,
+        mimeType: file.type || 'application/octet-stream',
+        fileSize: file.size,
+        storedAt: Date.now(),
+      });
+      return result;
     } catch (error) {
       const msg = error instanceof Error ? error.message : 'Unknown error';
       console.error('[FileBlobStore] storeFile exception:', error);
@@ -108,12 +153,14 @@ class FileBlobStore {
     }
   }
 
-  /** Retrieve a file as a Blob (reconstructed from ArrayBuffer). */
+  /** Retrieve cached file content; direct-disk V2 files are metadata-only and return null. */
   public async getFile(fileKey: string): Promise<File | null> {
     const transferId = fileTransferV2IdFromHistoryKey(fileKey);
     if (transferId) {
       try {
-        return await getFileTransferV2ApplicationAdapter()?.getFile(transferId) ?? null;
+        const adapter = getFileTransferV2ApplicationAdapter();
+        if (await adapter?.getReceiveStorageMode(transferId) === 'direct-to-disk') return null;
+        return await adapter?.getFile(transferId) ?? null;
       } catch (error) {
         console.error('[FileBlobStore] v2 file retrieval failed:', error);
         return null;
@@ -155,14 +202,16 @@ class FileBlobStore {
     const transferId = fileTransferV2IdFromHistoryKey(fileKey);
     if (transferId) {
       try {
-        return { success: await (getFileTransferV2ApplicationAdapter()?.deleteFile(fileKey) ?? Promise.resolve(false)) };
+        const success = await (getFileTransferV2ApplicationAdapter()?.deleteFile(fileKey) ?? Promise.resolve(false));
+        if (success) this.forgetFileInfo(fileKey);
+        return { success };
       } catch {
         return { success: false };
       }
     }
     try {
       const db = await this.getDB();
-      return new Promise((resolve) => {
+      const result = await new Promise<{ success: boolean }>((resolve) => {
         const transaction = db.transaction([STORE_NAME], 'readwrite');
         const store = transaction.objectStore(STORE_NAME);
         store.delete(fileKey);
@@ -173,6 +222,8 @@ class FileBlobStore {
         transaction.onerror = () => resolve({ success: false });
         transaction.onabort = () => resolve({ success: false });
       });
+      if (result.success) this.forgetFileInfo(fileKey);
+      return result;
     } catch {
       return { success: false };
     }
@@ -247,6 +298,7 @@ class FileBlobStore {
       success = false;
       console.error('[FileBlobStore] legacy deleteFilesByUser failed:', error);
     }
+    if (deletedCount > 0) this.invalidateFileInfoCache();
     return { success, deletedCount };
   }
 
@@ -271,42 +323,82 @@ class FileBlobStore {
     return Array.from(new Set([...legacyKeys, ...tasks.map(task => `filev2:${task.transferId}`)]));
   }
 
-  /** Get all file infos using cursor (avoids loading all blobs into memory at once). */
+  /** Read indexed file metadata with key cursors, without materializing blob payloads. */
   public async getAllFileInfos(): Promise<FileBlobInfo[]> {
+    const cacheVersion = this.fileInfoCacheVersion;
     let legacyInfos: FileBlobInfo[];
+    let legacyInfoScanSucceeded = true;
     try {
       const db = await this.getDB();
       legacyInfos = await new Promise((resolve) => {
         const transaction = db.transaction([STORE_NAME], 'readonly');
         const store = transaction.objectStore(STORE_NAME);
         const results: FileBlobInfo[] = [];
-        const request = store.openCursor();
+        let cursorFinished = false;
+        let settled = false;
+        let expectedCount: number | null = null;
+        const finish = (success: boolean) => {
+          if (settled) return;
+          settled = true;
+          if (!success) legacyInfoScanSucceeded = false;
+          resolve(results);
+        };
 
+        const countRequest = store.count();
+        countRequest.onsuccess = () => { expectedCount = countRequest.result; };
+        countRequest.onerror = () => finish(false);
+
+        const request = store.index(FILE_INFO_INDEX).openKeyCursor();
         request.onsuccess = () => {
+          if (settled) return;
           const cursor = request.result;
           if (cursor) {
-            const s = cursor.value as StoredFile;
+            const [fileSize, storedAt, fileName, mimeType] =
+              cursor.key as unknown as [number, number, string, string];
+            if (typeof cursor.primaryKey !== 'string'
+              || !Number.isSafeInteger(fileSize) || fileSize < 0
+              || !Number.isFinite(storedAt)
+              || typeof fileName !== 'string' || typeof mimeType !== 'string') {
+              finish(false);
+              return;
+            }
             results.push({
-              fileKey: s.fileKey,
-              fileName: s.fileName,
-              mimeType: s.mimeType,
-              fileSize: s.fileSize,
-              storedAt: s.storedAt,
+              fileKey: cursor.primaryKey,
+              fileName,
+              mimeType,
+              fileSize,
+              storedAt,
             });
             cursor.continue();
           } else {
-            resolve(results);
+            cursorFinished = true;
           }
         };
-        request.onerror = () => resolve(results);
+        request.onerror = () => finish(false);
+        transaction.oncomplete = () => finish(cursorFinished && expectedCount === results.length);
+        transaction.onerror = () => finish(false);
+        transaction.onabort = () => finish(false);
       });
     } catch {
+      legacyInfoScanSucceeded = false;
       legacyInfos = [];
     }
     const adapter = getFileTransferV2ApplicationAdapter();
-    if (!adapter) return legacyInfos;
-    const tasks = await adapter.listCompletedReceivedTasks();
-    return [
+    if (!adapter) {
+      if (cacheVersion !== this.fileInfoCacheVersion) return this.getAllFileInfos();
+      this.fileInfoCache = legacyInfoScanSucceeded ? legacyInfos : null;
+      return legacyInfos;
+    }
+    let tasks: Awaited<ReturnType<typeof adapter.listCompletedReceivedTasks>> = [];
+    if (typeof adapter.listCompletedReceivedTasks === "function") {
+      try {
+        tasks = await adapter.listCompletedReceivedTasks();
+      } catch (error) {
+        if (cacheVersion === this.fileInfoCacheVersion) this.fileInfoCache = null;
+        throw error;
+      }
+    }
+    const infos = [
       ...legacyInfos,
       ...tasks.map(task => ({
         fileKey: `filev2:${task.transferId}`,
@@ -314,15 +406,19 @@ class FileBlobStore {
         mimeType: task.manifest.type,
         fileSize: task.manifest.size,
         storedAt: task.createdAt,
+        storageMode: task.receiveStorageMode ?? "browser-cache",
       })),
     ];
+    if (cacheVersion !== this.fileInfoCacheVersion) return this.getAllFileInfos();
+    this.fileInfoCache = legacyInfoScanSucceeded ? infos : null;
+    return infos;
   }
 
   /** Get total storage size estimate (bytes). Uses cursor count, no blob loading. */
   public async getStorageSize(): Promise<number> {
     try {
       const infos = await this.getAllFileInfos();
-      return infos.reduce((sum, f) => sum + f.fileSize, 0);
+      return infos.reduce((sum, f) => sum + (f.storageMode === "direct-to-disk" ? 0 : f.fileSize), 0);
     } catch {
       return 0;
     }
@@ -342,7 +438,12 @@ class FileBlobStore {
     const transferId = fileTransferV2IdFromHistoryKey(fileKey);
     if (transferId) {
       try {
-        return await getFileTransferV2ApplicationAdapter()?.hasCompletedReceivedFile(transferId) ?? false;
+        const adapter = getFileTransferV2ApplicationAdapter();
+        if (!adapter) return false;
+        if (await adapter.getReceiveStorageMode(transferId) === 'direct-to-disk') {
+          return (await adapter.getReceiveFileHandleAvailability(transferId)) !== 'deleted';
+        }
+        return await adapter.hasCompletedReceivedFile(transferId);
       } catch {
         return false;
       }
@@ -361,10 +462,98 @@ class FileBlobStore {
     }
   }
 
+  /** Read direct-disk metadata without materializing the saved file as a browser Blob. */
+  public async getDirectDiskFileInfo(fileKey: string, historyMetadata?: unknown): Promise<DirectDiskFileInfo | null> {
+    const transferId = fileTransferV2IdFromHistoryKey(fileKey);
+    if (!transferId) return null;
+
+    const hasDirectDiskHistoryFlag = historyMetadata !== null && typeof historyMetadata === 'object'
+      && 'storageMode' in historyMetadata
+      && (historyMetadata as { storageMode?: unknown }).storageMode === 'direct-to-disk';
+    const adapter = getFileTransferV2ApplicationAdapter();
+    if (!adapter) {
+      return hasDirectDiskHistoryFlag
+        ? { transferId, handle: null, availability: 'unavailable' }
+        : null;
+    }
+    try {
+      const storageMode = await adapter.getReceiveStorageMode(transferId);
+      if (storageMode !== 'direct-to-disk') {
+        return hasDirectDiskHistoryFlag
+          ? { transferId, handle: null, availability: 'deleted' }
+          : null;
+      }
+      const handle = await adapter.getReceiveFileHandle(transferId);
+      const availability = handle
+        ? await adapter.getReceiveFileHandleAvailability(transferId)
+        : 'deleted';
+      return { transferId, handle, availability };
+    } catch (error) {
+      if (!hasDirectDiskHistoryFlag) throw error;
+      console.warn('[FileBlobStore] Direct-disk history status is temporarily unavailable:', error);
+      return { transferId, handle: null, availability: 'unavailable' };
+    }
+  }
+
+  /** Open a previously selected disk file from a user click without copying it into IndexedDB. */
+  public async openDirectDiskFile(handle: FileTransferV2FileHandle): Promise<DirectDiskOpenResult> {
+    let openedWindow: WindowProxy | null = null;
+    try {
+      // Open a placeholder synchronously within the click handler. The same user action
+      // then covers any required permission prompt and the final file navigation.
+      openedWindow = window.open('about:blank', '_blank');
+      const permission = handle.requestPermission
+        ? await handle.requestPermission({ mode: 'read' })
+        : handle.queryPermission
+          ? await handle.queryPermission({ mode: 'read' })
+          : 'granted';
+      if (permission !== 'granted') {
+        openedWindow?.close();
+        return 'permission-required';
+      }
+
+      const file = await handle.getFile();
+      const objectUrl = URL.createObjectURL(file);
+      if (openedWindow) {
+        openedWindow.location.replace(objectUrl);
+      } else {
+        const link = document.createElement('a');
+        link.href = objectUrl;
+        link.target = '_blank';
+        link.rel = 'noopener';
+        link.click();
+      }
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+      return 'opened';
+    } catch (error) {
+      openedWindow?.close();
+      if (error instanceof DOMException && error.name === 'NotFoundError') return 'deleted';
+      if (error instanceof DOMException && error.name === 'NotAllowedError') return 'permission-required';
+      console.error('[FileBlobStore] Failed to open direct-disk file:', error);
+      return 'failed';
+    }
+  }
+
   /** Pin a v2 receive only after its chat history record has committed. */
   public async pinForHistory(fileKey: string): Promise<boolean> {
     const adapter = getFileTransferV2ApplicationAdapter();
-    return adapter ? adapter.pinForHistory(fileKey) : false;
+    if (!adapter) return false;
+    const pinned = await adapter.pinForHistory(fileKey);
+    if (pinned) {
+      const transferId = fileTransferV2IdFromHistoryKey(fileKey);
+      const task = transferId && typeof adapter.getTask === "function"
+        ? await adapter.getTask(transferId)
+        : null;
+      if (task) this.rememberFileInfo({
+        fileKey,
+        fileName: task.manifest.name,
+        mimeType: task.manifest.type,
+        fileSize: task.manifest.size,
+        storedAt: task.createdAt,
+        storageMode: task.receiveStorageMode ?? "browser-cache",
+      });
+    }
+    return pinned;
   }
 
   /** Recheck a pinned v2 receive after the chat history transaction commits. */
@@ -401,6 +590,8 @@ class FileBlobStore {
       success = false;
       console.error('[FileBlobStore] v2 clearAll failed:', error);
     }
+    if (deletedCount > 0) this.invalidateFileInfoCache();
+    if (success) this.fileInfoCache = [];
     return { success, deletedCount };
   }
 

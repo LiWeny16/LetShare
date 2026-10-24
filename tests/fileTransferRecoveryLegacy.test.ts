@@ -228,6 +228,19 @@ test("legacy direct-save hashing, credit negotiation, and completion guards stay
   assert.match(colabSource, /p2pUnexpectedCloseErrors\.set\(transferId, failure\);\s*this\.p2pAckTracker\.reject\(transferId, failure\)/);
 });
 
+test("AC-003 P2P storage admission rechecks the data channel before creating receive state", () => {
+  const admissionStart = colabSource.indexOf("await this.reserveLegacyP2PReceiveCache");
+  const receivingStateStart = colabSource.indexOf("receivingFiles.set", admissionStart);
+  assert.ok(admissionStart >= 0, "P2P offers must reserve storage before acceptance");
+  assert.ok(receivingStateStart > admissionStart, "the session is created after asynchronous admission");
+
+  const afterAdmission = colabSource.slice(admissionStart, receivingStateStart);
+  assert.match(afterAdmission, /channel\.readyState\s*!==\s*["']open["']/,
+    "a disconnected data channel must invalidate its pending admission before the receive is created");
+  assert.match(afterAdmission, /p2pReservation\.lease[\s\S]{0,240}release/,
+    "a disconnected P2P request must release its admission reservation");
+});
+
 test("disconnected peers retain presence and stale ICE work is identity guarded", () => {
   const createPeerConnectionStart = peerManagerSource.indexOf("public createPeerConnection");
   const removePeerStart = peerManagerSource.indexOf("public removePeer");

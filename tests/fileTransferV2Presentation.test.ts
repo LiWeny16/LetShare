@@ -12,7 +12,9 @@ import {
 import { findUploadingFileMessage } from "../src/app/libs/chat/fileMessageCorrelation";
 
 describe("File Transfer V2 transfer UI (AC-001, AC-002, AC-003)", () => {
-  it("opens the manager once when a new receive or send becomes active", () => {
+  it("opens the manager once for a new receive offer or send activity", () => {
+    assert.equal(shouldOpenDownloadDrawerForV2Transfer("receive", "offered", undefined), true);
+    assert.equal(shouldOpenDownloadDrawerForV2Transfer("receive", "offered", "offered"), false);
     assert.equal(shouldOpenDownloadDrawerForV2Transfer("receive", "receiving", undefined), true);
     assert.equal(shouldOpenDownloadDrawerForV2Transfer("receive", "receiving", "receiving"), false);
     assert.equal(shouldOpenDownloadDrawerForV2Transfer("receive", "receiving", "reconnecting"), false);
