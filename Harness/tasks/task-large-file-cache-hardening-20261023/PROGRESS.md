@@ -3,7 +3,7 @@
 ## Status
 
 - Phase: production deployment and live acceptance complete
-- Next: Commit the sanitized live acceptance evidence and final task status to `main`, then push the evidence commit.
+- Next: None; production deployment, independent live acceptance, GitHub Pages publication, and CI are complete.
 - Blocker: None. Final AC-003 race fixes, independent review, deployment, and live acceptance are complete. Native Windows save-picker selection and cross-country network behavior remain unverified. Existing V2 task/file-handle retention behavior is unchanged; history deletion never removes the saved disk file.
 
 ## Tasks
@@ -109,7 +109,7 @@
 ## Release and live acceptance (2026-10-24)
 
 - Feature commit `75d3c98` and release version commit `bab3857` were applied to the clean `main` worktree. The version is `3.8.53`.
-- Standard frontend release `node scripts/deploy.cjs --frontend` deployed to the ECS origin (`/` returned HTTP 200), synced generated `docs/` assets, and pushed GitHub Pages. Its later generic health-check step reported curl unavailable after the WebSocket probe; direct SSH origin and public HTTPS checks both returned the same `version.json` for `3.8.53` (`2026-10-24T09:53:52.914Z`). GitHub `main` resolved to docs sync commit `262ecce`.
+- Standard frontend release `node scripts/deploy.cjs --frontend` deployed to the ECS origin (`/` returned HTTP 200), synced generated `docs/` assets, and pushed GitHub Pages. Its later generic health-check step reported curl unavailable after the WebSocket probe; direct SSH origin and public HTTPS checks both returned the same `version.json` for `3.8.53` (`2026-10-24T09:53:52.914Z`). Final live-evidence commit `6bfad99` and docs artifact cleanup commit `a3211a0` are pushed; remote `main` resolves to `a3211a0`. The subsequent GitHub Pages build and CI succeeded, including frontend TypeScript/unit/build and backend vet/test/build jobs.
 - CDN API refresh was skipped because `ALIYUN_ACCESS_KEY_ID` and `ALIYUN_ACCESS_KEY_SECRET` were not set. The public version endpoint returned the new build after deployment.
 - Independent live small-file E2E passed in production room `482917`: 4,194,304 bytes, browser download completed, and SHA-256 matched the source (`575f42009c28a230e4326c31b94954d2ec21c1a860cc14f40f045301c06eca45`). Edge/Chrome WebSocket connections remained open; WebRTC showed connected ICE/DataChannel, nominated UDP host/host pair, and P2P byte counters increased. Evidence: `Harness/wf-browser/runs/online-release-v3.8.53-small-20261024/`.
 - Independent live large-file E2E completed 134,217,729 bytes over production P2P into a real OPFS `FileSystemFileHandle` returned by a one-time page-runtime shim. Source and OPFS readback SHA-256 matched (`dea6ec477c68641ce21ace6acbe92bf6393c55e51c3b1f55c532725b40e8388c`); history recorded direct-to-disk/completed, and IndexedDB `file_blobs` remained empty. Native Windows picker selection was not completed or observed. Evidence: `Harness/wf-browser/runs/online-release-v3.8.53-large-20261024/`.
