@@ -1,1 +1,0 @@
-import{t as e}from"./share-DEavXrCD.js";export{e as readClipboard};
