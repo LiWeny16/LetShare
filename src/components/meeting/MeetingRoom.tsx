@@ -61,10 +61,8 @@ import PictureInPictureAltIcon from "@mui/icons-material/PictureInPictureAlt";
 import realTimeColab from "@App/libs/connection/colabLib";
 import settingsStore from "@App/libs/mobx/mobx";
 import {
-  RemoteAudioHost,
-  RemoteAudioPipeline,
+  MeetingRemoteAudio,
   toAudioPrefs,
-  type RemoteAudioHostState,
 } from "../../core/audio/index";
 import { buildPlaybackDump, registerDiagnosticsProvider } from "../../diagnostics/index";
 import { useTranslation } from "react-i18next";
@@ -497,52 +495,53 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
     }
   };
 
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  const remoteAudioTrackKey = state.remoteTracks
-    .filter((remote) => remote.kind === "audio" && remote.track)
-    .map((remote) => remote.track!.id)
-    .join("|");
-  const remoteAudioStream = useMemo(() => {
-    const stream = new MediaStream();
-    for (const remote of state.remoteTracks) {
-      if (remote.kind === "audio" && remote.track) stream.addTrack(remote.track);
-    }
-    return stream;
-  }, [state.remoteTracks]);
-  // V3：远端音频唯一权威 RemoteAudioHost —— 元素/管线/gain/srcObject/play 单一写者（P6），
-  // 本组件只绑发声元素（bindElement）、推偏好（setPrefs）与读状态（state/snapshot）。
-  const remoteAudioHostRef = useRef<RemoteAudioHost | null>(null);
+  const [participantVolumes, setParticipantVolumes] = useState<Record<string, number>>({});
+  const [audioGainCapped, setAudioGainCapped] = useState(false);
+  const remoteAudioHostRef = useRef<MeetingRemoteAudio | null>(null);
+  const previousAudioTracksRef = useRef<Array<{ memberId: string; track: MediaStreamTrack }>>([]);
   const [audioBlocked, setAudioBlocked] = useState(false);
-  const previousRemoteAudioTrackKeyRef = useRef<string | null>(null);
-  const previousMediaSettingsVersionRef = useRef<number | null>(null);
   useEffect(() => {
-    const host = new RemoteAudioHost(new RemoteAudioPipeline());
+    const host = new MeetingRemoteAudio();
     remoteAudioHostRef.current = host;
-    host.bindElement(audioRef.current);
+    previousAudioTracksRef.current = [];
+    setParticipantVolumes({});
     setAudioBlocked(host.state.autoplayBlocked);
-    const unsubscribe = host.subscribe((s: RemoteAudioHostState) => setAudioBlocked(s.autoplayBlocked));
-    // 诊断出口（window.__ls.dump 的 playback 段）：复用 buildPlaybackDump + host 快照（D6），不另造一套
-    const unregister = registerDiagnosticsProvider({ playback: () => buildPlaybackDump(host.snapshot()) });
+    setAudioGainCapped(host.state.gainCapped);
+    const unsubscribe = host.subscribe((s) => {
+      setAudioBlocked(s.autoplayBlocked);
+      setAudioGainCapped(s.gainCapped);
+    });
+    const unregister = registerDiagnosticsProvider({ playback: () => {
+      const participants = host.snapshots().map(({ memberId, trackId, snapshot }) => ({ memberId, trackId, playback: buildPlaybackDump(snapshot) }));
+      return {
+        ...(participants.length === 1 ? participants[0].playback : buildPlaybackDump({ output: null, sink: null, pipeline: null })),
+        autoplayBlocked: host.state.autoplayBlocked,
+        gainCapped: host.state.gainCapped,
+        participants,
+      };
+    } });
     return () => {
-      host.bindElement(null);
       unsubscribe();
       unregister();
       host.dispose();
       remoteAudioHostRef.current = null;
     };
-  }, []);
+  }, [meetingId]);
   useEffect(() => {
-    const audioTracksChanged = previousRemoteAudioTrackKeyRef.current !== remoteAudioTrackKey;
-    const settingsChanged = previousMediaSettingsVersionRef.current !== mediaSettingsVersion;
-    previousRemoteAudioTrackKeyRef.current = remoteAudioTrackKey;
-    previousMediaSettingsVersionRef.current = mediaSettingsVersion;
-    // Video/screen tracks are stored in the same remoteTracks array. They must
-    // not tear down an otherwise healthy remote audio decoder/playback graph.
-    if (!audioTracksChanged && !settingsChanged) return;
     const host = remoteAudioHostRef.current;
     if (!host) return;
-    // 解码 sink / 发声 / C-10 存活看门狗 / 结构性互斥全部在 host 内部，这里只换流 + 推偏好。
-    host.setStream(remoteAudioStream.getAudioTracks().length > 0 ? remoteAudioStream : null);
+    const tracks = state.remoteTracks.flatMap((remote) =>
+      remote.kind === "audio" && remote.track ? [{ memberId: remote.uniqId, track: remote.track }] : [],
+    );
+    const previous = previousAudioTracksRef.current;
+    if (tracks.length !== previous.length || tracks.some((entry, index) => entry.memberId !== previous[index]?.memberId || entry.track !== previous[index]?.track)) {
+      previousAudioTracksRef.current = tracks;
+      host.setTracks(tracks);
+    }
+  }, [state.remoteTracks, meetingId]);
+  useEffect(() => {
+    const host = remoteAudioHostRef.current;
+    if (!host) return;
     host.setPrefs(
       toAudioPrefs({
         volume: settingsStore.get("speakerVolume"),
@@ -551,7 +550,7 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
         sinkId: settingsStore.get("speakerDeviceId"),
       }),
     );
-  }, [remoteAudioStream, remoteAudioTrackKey, mediaSettingsVersion]);
+  }, [mediaSettingsVersion, meetingId]);
 
   // 手势补偿（B1“手势也救不回声音”的修复点）：unlock 在手势上下文内 resume()+play()
   // 并按当前裁决复原 muted/volume；被拒 → D5 可见降级，不再 catch(() => undefined) 静默吞。
@@ -710,7 +709,6 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
         "&:fullscreen": { bgcolor: "background.paper" },
       }}
     >
-      <audio ref={audioRef} autoPlay playsInline style={{ display: "none" }} />
       {/* D5 可见降级：自动播放被拒 → 常驻琥珀 chip（非阻断式，不挡会议操作）；
           点击 = 手势上下文内 resume()+play() 并按当前裁决复原 muted/volume。 */}
       {audioBlocked && (
@@ -727,6 +725,11 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
           <Typography variant="caption" sx={{ fontWeight: 600 }}>
             {t("meeting.audioBlocked", "🔇 声音未开启 · 点此恢复")}
           </Typography>
+        </Box>
+      )}
+      {audioGainCapped && (
+        <Box role="status" sx={{ position: "absolute", top: audioBlocked ? 104 : 64, left: "50%", transform: "translateX(-50%)", zIndex: 1400, bgcolor: "warning.main", color: "warning.contrastText", borderRadius: 2, px: 2, py: 0.75, boxShadow: 3 }}>
+          <Typography variant="caption">{t("meeting.volumeCapped", "部分成员音量已达到当前播放上限")}</Typography>
         </Box>
       )}
 
@@ -1148,6 +1151,11 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
             <Box sx={{ display: panelTab === 1 ? "flex" : "none", flex: 1, minHeight: 0, flexDirection: "column" }}>
               <ParticipantsPanel
                 state={state}
+                participantVolumes={participantVolumes}
+                onParticipantVolumeChange={(uniqId, volume) => {
+                  remoteAudioHostRef.current?.setMemberVolume(uniqId, volume);
+                  setParticipantVolumes((current) => ({ ...current, [uniqId]: volume }));
+                }}
                 onStartPrivateChat={(uniqId) => {
                   setPrivateChatTarget(uniqId);
                   setPanelTab(0);

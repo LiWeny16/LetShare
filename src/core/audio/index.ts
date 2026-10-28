@@ -26,3 +26,5 @@ export type {
 export { RemoteAudioPipeline } from "./remoteAudioPipeline";
 export type { RemoteAudioPipelineOptions } from "./remoteAudioPipeline";
 export type { Clock } from "./remoteAudioClock";
+export { MeetingRemoteAudio } from "./meetingRemoteAudio";
+export type { MeetingAudioTrack, MeetingRemoteAudioState } from "./meetingRemoteAudio";

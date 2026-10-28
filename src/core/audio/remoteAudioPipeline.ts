@@ -80,9 +80,9 @@ export class RemoteAudioPipeline {
     const previousStream = this.stream;
     this.stream = stream;
     if (opts) this.opts = { ...this.opts, ...opts, volume: clampSpeakerVolume(opts.volume ?? this.opts.volume) };
-    const ctx = this.ctx ?? this.createCtx();
-    if (!ctx) return false;
     try {
+      const ctx = this.ctx ?? this.createCtx();
+      if (!ctx) return false;
       this.ctx = ctx;
       if (this.source && previousStream === stream) {
         this.applyConnectionOptions();

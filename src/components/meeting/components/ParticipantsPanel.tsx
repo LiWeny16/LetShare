@@ -1,13 +1,14 @@
 /** Meeting participant list with host actions and a direct private-chat entry. */
-import { useRef, useState } from "react";
-import { alpha, Avatar, Button, Divider, IconButton, List, ListItem, ListItemAvatar, ListItemText, Menu, MenuItem, Stack, Tooltip, Typography, useTheme } from "@mui/material";
+import { useEffect, useRef, useState } from "react";
+import { alpha, Avatar, Box, Button, Divider, IconButton, List, ListItem, ListItemAvatar, ListItemText, Menu, MenuItem, Popover, Slider, Stack, Tooltip, Typography, useTheme } from "@mui/material";
 import ChatBubbleOutlineIcon from "@mui/icons-material/ChatBubbleOutline";
 import MicOffIcon from "@mui/icons-material/MicOff";
 import CampaignIcon from "@mui/icons-material/Campaign";
 import PersonIcon from "@mui/icons-material/Person";
-import PersonRemoveIcon from "@mui/icons-material/PersonRemove";
+import MoreVertIcon from "@mui/icons-material/MoreVert";
 import StarIcon from "@mui/icons-material/Star";
-import StarBorderRoundedIcon from "@mui/icons-material/StarBorderRounded";
+import VolumeUpIcon from "@mui/icons-material/VolumeUp";
+import VolumeOffIcon from "@mui/icons-material/VolumeOff";
 import { useTranslation } from "react-i18next";
 import realTimeColab from "@App/libs/connection/colabLib";
 import { meetingManager } from "@App/libs/meeting/meetingManager";
@@ -17,18 +18,26 @@ import { displayNameOf } from "../types";
 export function ParticipantsPanel({
   state,
   onStartPrivateChat,
+  participantVolumes,
+  onParticipantVolumeChange,
 }: {
   state: MeetingState;
   onStartPrivateChat?: (uniqId: string) => void;
+  participantVolumes: Record<string, number>;
+  onParticipantVolumeChange: (uniqId: string, volume: number) => void;
 }) {
   const { t } = useTranslation();
   const theme = useTheme();
   const [kicking, setKicking] = useState<string | null>(null);
-  const [hoveredMember, setHoveredMember] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<{ left: number; top: number; uniqId: string; name: string } | null>(null);
+  const [volumeTarget, setVolumeTarget] = useState<{ anchor: HTMLElement; uniqId: string; name: string } | null>(null);
   const longPressTimer = useRef<number | null>(null);
   const selfId = realTimeColab.getUniqId() ?? "";
   const amHost = !!state.hostId && state.hostId === selfId;
+
+  useEffect(() => {
+    setVolumeTarget((target) => target && !state.members.some((member) => member.uniqId === target.uniqId) ? null : target);
+  }, [state.members]);
 
   const clearLongPress = () => {
     if (longPressTimer.current !== null) {
@@ -98,10 +107,26 @@ export function ParticipantsPanel({
             onPointerUp={clearLongPress}
             onPointerCancel={clearLongPress}
             onPointerLeave={clearLongPress}
-            onMouseEnter={() => setHoveredMember(member.uniqId)}
-            onMouseLeave={() => setHoveredMember((current) => (current === member.uniqId ? null : current))}
             secondaryAction={(
               <Stack direction="row" spacing={0.25} alignItems="center">
+                {!isSelf && (
+                  <Tooltip title={t("meeting.participantVolume", "个人音量")} disableInteractive>
+                    <IconButton
+                      size="small"
+                      aria-label={`${t("meeting.participantVolume", "个人音量")} ${name}`}
+                      aria-haspopup="dialog"
+                      aria-expanded={volumeTarget?.uniqId === member.uniqId}
+                      onPointerDown={(event) => { event.stopPropagation(); clearLongPress(); }}
+                      onContextMenu={(event) => event.stopPropagation()}
+                      onClick={(event) => setVolumeTarget({ anchor: event.currentTarget, uniqId: member.uniqId, name })}
+                      sx={{ width: 40, height: 40, color: "primary.main" }}
+                    >
+                      {(participantVolumes[member.uniqId] ?? 1) === 0
+                        ? <VolumeOffIcon sx={{ fontSize: 18 }} />
+                        : <VolumeUpIcon sx={{ fontSize: 18 }} />}
+                    </IconButton>
+                  </Tooltip>
+                )}
                 {!isSelf && onStartPrivateChat && (
                   <Tooltip title={t("meeting.sendMessage", "发送消息")}>
                     <IconButton
@@ -119,38 +144,29 @@ export function ParticipantsPanel({
                   <Tooltip title={t("meeting.hostBadge", "房主")}>
                     <StarIcon sx={{ fontSize: 16, color: "warning.main", mx: 0.5 }} />
                   </Tooltip>
-                ) : amHost ? (
-                  <>
+                ) : amHost && !isSelf ? (
+                  <Tooltip title={t("meeting.moreActions", "更多操作")} disableInteractive>
                     <IconButton
                       size="small"
-                      edge="end"
-                      aria-label={t("meeting.setHost", "设置为主持人")}
-                      title={t("meeting.setHost", "设置为主持人")}
-                      onClick={() => meetingManager.setHost(member.uniqId)}
-                      sx={{ width: 40, height: 40, color: "warning.main", opacity: hoveredMember === member.uniqId ? 1 : 0, transition: "opacity 160ms", "&:focus-visible": { opacity: 1 } }}
-                    >
-                      <StarBorderRoundedIcon sx={{ fontSize: 18 }} />
-                    </IconButton>
-                    <IconButton
-                      size="small"
-                      edge="end"
-                      color="error"
-                      aria-label={`${t("meeting.kick", "移出会议")} ${name}`}
+                      aria-label={`${t("meeting.moreActions", "更多操作")} ${name}`}
+                      aria-haspopup="menu"
+                      aria-expanded={contextMenu?.uniqId === member.uniqId}
                       disabled={kicking === member.uniqId}
-                      onClick={() => {
-                        setKicking(member.uniqId);
-                        meetingManager.kick(member.uniqId);
-                        setTimeout(() => setKicking(null), 1200);
+                      onPointerDown={(event) => { event.stopPropagation(); clearLongPress(); }}
+                      onContextMenu={(event) => event.stopPropagation()}
+                      onClick={(event) => {
+                        const rect = event.currentTarget.getBoundingClientRect();
+                        setContextMenu({ left: rect.right, top: rect.bottom, uniqId: member.uniqId, name });
                       }}
-                      sx={{ width: 40, height: 40 }}
+                      sx={{ width: 40, height: 40, color: "text.secondary" }}
                     >
-                      <PersonRemoveIcon sx={{ fontSize: 17 }} />
+                      <MoreVertIcon sx={{ fontSize: 20 }} />
                     </IconButton>
-                  </>
+                  </Tooltip>
                 ) : undefined}
               </Stack>
             )}
-            sx={{ borderRadius: 2, pr: isSelf ? 1 : 10 }}
+            sx={{ borderRadius: 2, pr: isSelf ? (isHost ? 5 : 1) : amHost && !isHost ? 17 : isHost ? 14 : 12 }}
           >
             <ListItemAvatar sx={{ minWidth: 40 }}>
               <Avatar sx={{ width: 32, height: 32, fontSize: 14, bgcolor: isHost ? alpha(theme.palette.primary.main, 0.13) : theme.palette.action.hover, color: isHost ? theme.palette.primary.main : theme.palette.text.secondary, fontWeight: 750 }}>
@@ -170,6 +186,40 @@ export function ParticipantsPanel({
         </Typography>
       )}
       </List>
+      <Popover
+        open={volumeTarget !== null && state.members.some((member) => member.uniqId === volumeTarget.uniqId)}
+        anchorEl={volumeTarget?.anchor}
+        onClose={() => setVolumeTarget(null)}
+        anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
+        transformOrigin={{ vertical: "top", horizontal: "right" }}
+        slotProps={{ paper: { role: "dialog", "aria-label": volumeTarget ? `${t("meeting.participantVolume", "个人音量")} ${volumeTarget.name}` : undefined, sx: { width: 248, p: 2, borderRadius: 2 } } }}
+      >
+        {volumeTarget && (
+          <Box>
+            <Stack direction="row" justifyContent="space-between" alignItems="baseline" spacing={1}>
+              <Typography noWrap sx={{ fontSize: "0.8rem", fontWeight: 750 }}>
+                {volumeTarget.name} · {t("meeting.participantVolume", "个人音量")}
+              </Typography>
+              <Typography sx={{ fontSize: "0.78rem", color: "text.secondary", flexShrink: 0 }}>
+                {Math.round((participantVolumes[volumeTarget.uniqId] ?? 1) * 100)}%
+              </Typography>
+            </Stack>
+            <Slider
+              min={0}
+              max={200}
+              step={1}
+              value={Math.round((participantVolumes[volumeTarget.uniqId] ?? 1) * 100)}
+              aria-label={`${volumeTarget.name} ${t("meeting.participantVolume", "个人音量")}`}
+              getAriaValueText={(value) => `${value}%`}
+              onChange={(_, value) => onParticipantVolumeChange(volumeTarget.uniqId, (value as number) / 100)}
+              sx={{ mt: 0.5 }}
+            />
+            <Typography sx={{ color: "text.secondary", fontSize: "0.7rem" }}>
+              {t("meeting.participantVolumeHint", "仅影响你听到的声音")}
+            </Typography>
+          </Box>
+        )}
+      </Popover>
       <Menu
         open={contextMenu !== null}
         onClose={() => setContextMenu(null)}

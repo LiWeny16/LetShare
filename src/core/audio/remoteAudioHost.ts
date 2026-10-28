@@ -123,11 +123,12 @@ export class RemoteAudioHost {
   /** 热更新偏好。**用户主动改音频设置 = 用户决定**：允许在此切回管线（反抖动契约的显式时机之一）。 */
   setPrefs(prefs: AudioPrefs): void {
     if (this.disposed) return;
+    const previous = this.prefs;
     this.prefs = { ...prefs, volume: clampSpeakerVolume(prefs.volume) };
     if (!this.stream) return;
-    this.pipeline.update({ clarity: this.prefs.clarity, widen: this.prefs.widen });
+    if (previous.clarity !== this.prefs.clarity || previous.widen !== this.prefs.widen) this.pipeline.update({ clarity: this.prefs.clarity, widen: this.prefs.widen });
     this.reconcile("setPrefs");
-    this.applySinkId();
+    if (previous.sinkId !== this.prefs.sinkId) this.applySinkId(true);
   }
 
   /**
@@ -233,9 +234,11 @@ export class RemoteAudioHost {
   /** 全部状态跃迁的唯一入口：纯函数裁决 → 结构性互斥 → 事件（P3）。 */
   private reconcile(reason: string): void {
     const decision = decide(this.ctxState(), this.elementState(), this.prefs);
+    const previous = this.designated;
     this.designated = decision.audibleVia;
     this.gainCapped = decision.gainCapped;
     this.applyDecision(decision);
+    if (previous !== decision.audibleVia && decision.audibleVia !== "none") this.applySinkId(true);
     console.log(`[RemoteAudioHost] audibleVia=${decision.audibleVia} reason=${decision.reason} trigger=${reason}`);
     this.emit();
   }
@@ -336,9 +339,9 @@ export class RemoteAudioHost {
     if (owned) el.remove();
   }
 
-  private applySinkId(): void {
+  private applySinkId(forceDefault = false): void {
     const sinkId = this.prefs.sinkId;
-    if (sinkId) applySinkRouting(this.pipeline, this.output, this.designated === "pipeline", sinkId);
+    if (sinkId || forceDefault) applySinkRouting(this.pipeline, this.output, this.designated === "pipeline", sinkId ?? "");
   }
 
   // ─── 内部：存活看门狗（C-10）────────────────────────────────────

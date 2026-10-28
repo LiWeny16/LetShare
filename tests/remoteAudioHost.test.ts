@@ -11,8 +11,68 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { PROBE_INTERVAL_MS, RemoteAudioHost } from "../src/core/audio/remoteAudioHost";
+import { RemoteAudioPipeline } from "../src/core/audio/remoteAudioPipeline";
 import { buildPlaybackDump } from "../src/diagnostics/index";
 import { flushMicrotasks, makeElement, makeFakeClock, makeHost, makePipeline, makeStream } from "./fixtures/fakeAudio";
+
+test("volume changes do not rebuild processing or reroute the output device", () => {
+  const pipeline = makePipeline("running");
+  const originalUpdate = pipeline.update.bind(pipeline);
+  const updates: Array<{ volume?: number; clarity?: boolean; widen?: boolean }> = [];
+  pipeline.update = (options) => { updates.push(options); originalUpdate(options); };
+  const { clock } = makeFakeClock();
+  const { host } = makeHost(pipeline, clock);
+  host.setStream(makeStream());
+  updates.length = 0;
+  host.setPrefs({ volume: 0.5, clarity: true, widen: false });
+  assert.equal(updates.at(-1)?.volume, 0.5);
+  assert.equal(updates.some((options) => options.clarity !== undefined || options.widen !== undefined), false);
+  host.setPrefs({ volume: 0.5, clarity: false, widen: false });
+  assert.equal(updates.some((options) => options.clarity === false), true);
+  host.dispose();
+});
+
+test("selected output follows playback path changes and can return to default", () => {
+  const pipeline = makePipeline("suspended");
+  const pipelineSinks: string[] = [];
+  pipeline.setSinkId = async (id) => { pipelineSinks.push(id); return true; };
+  const output = makeElement();
+  const elementSinks: string[] = [];
+  output.setSinkId = async (id) => { elementSinks.push(id); };
+  const { host } = makeHost(pipeline, makeFakeClock().clock, output);
+  host.setPrefs({ volume: 1, clarity: true, widen: false, sinkId: "speaker" });
+  host.setStream(makeStream());
+  assert.equal(elementSinks.at(-1), "speaker");
+  pipeline.ctx = "running";
+  host.setPrefs({ volume: 0.5, clarity: true, widen: false, sinkId: "speaker" });
+  assert.equal(pipelineSinks.at(-1), "speaker");
+  const calls = pipelineSinks.length;
+  host.setPrefs({ volume: 0.6, clarity: true, widen: false, sinkId: "speaker" });
+  assert.equal(pipelineSinks.length, calls);
+  host.setPrefs({ volume: 0.6, clarity: true, widen: false });
+  assert.equal(pipelineSinks.at(-1), "");
+  host.setPrefs({ volume: 0.6, clarity: true, widen: false, sinkId: "speaker" });
+  pipeline.ctx = "suspended";
+  pipeline.emit();
+  assert.equal(elementSinks.at(-1), "speaker");
+  host.dispose();
+});
+
+test("AudioContext construction failure falls back to element while honoring local mute", () => {
+  const output = makeElement();
+  const host = new RemoteAudioHost(new RemoteAudioPipeline(() => { throw new Error("AudioContext limit"); }), {
+    clock: makeFakeClock().clock,
+    createSinkElement: () => makeElement(),
+    createOutputElement: () => output,
+  });
+  host.setPrefs({ volume: 0, clarity: true, widen: false });
+  host.setStream(makeStream());
+  assert.equal(host.state.audibleVia, "element");
+  assert.equal(output.volume, 0);
+  host.setPrefs({ volume: 0.5, clarity: true, widen: false });
+  assert.equal(output.volume, 0.5);
+  host.dispose();
+});
 
 // ─── C-11 / C-12：解码 sink ────────────────────────────────────────
 

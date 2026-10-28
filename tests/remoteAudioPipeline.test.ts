@@ -176,6 +176,19 @@ test("拓扑切换: update({widen:true}) 重建图为展宽拓扑；音量热更
   pipeline.detach();
 });
 
+test("AudioContext 创建失败时回退元素路径，且可在之后重试", () => {
+  const fake = makeFakeCtx();
+  let attempts = 0;
+  const pipeline = new RemoteAudioPipeline(() => {
+    if (++attempts === 1) throw new Error("AudioContext limit");
+    return fake.ctx as unknown as AudioContext;
+  });
+  assert.equal(pipeline.attach(makeFakeStream()), false);
+  assert.equal(pipeline.hasGraph(), false);
+  assert.equal(pipeline.attach(makeFakeStream()), true);
+  pipeline.detach();
+});
+
 test("无 AudioContext 环境: attach 返回 false 不抛（元素路径兜底）", () => {
   // 不注入工厂 → 默认工厂在 Node（window undefined）返回 null
   const pipeline = new RemoteAudioPipeline(() => null);

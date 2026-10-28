@@ -83,6 +83,8 @@ export type PlaybackDump = {
    * `gainCapped === true` 且 `audibleVia.decision === "element"` ⇒ “我的 >100% 音量当前没生效”。无 host 为 null。
    */
   gainCapped: boolean | null;
+  /** Meeting playback has independent hosts; each entry describes one remote track. */
+  participants?: Array<{ memberId: string; trackId: string; playback: PlaybackDump }>;
 };
 
 export type ConnectionDump = {
