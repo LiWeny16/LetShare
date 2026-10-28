@@ -21,6 +21,7 @@ import { fetchTurnCredentials, type TurnIceServer } from "@App/libs/connection/p
 import alertUseMUI from "@App/libs/tools/alert";
 import i18n from "@App/libs/i18n/i18n";
 import { configurePublishPeerConnection } from "./meetingSdp";
+import { meetingConnectionState, meetingPeerConnectionConstructor } from "./meetingCompat";
 import { acquireMeetingAudio, acquireMeetingMedia, acquireMeetingVideo, mediaErrorKind, microphoneErrorKind, type MicrophoneError } from "./meetingMedia";
 import {
   nextVideoAdaptationLevel,
@@ -31,6 +32,7 @@ import { orderVideoCodecs, type VideoCodecPrioritySetting } from "@App/libs/call
 import { nsPipeline } from "@App/libs/call/noiseSuppression";
 import {
   extractFailedPublisher,
+  isMeetingBackgroundError,
   isMeetingChannelEvent,
   isTransientMeetingError,
 } from "./meetingSignalFilter";
@@ -107,7 +109,7 @@ export type PresentationState = {
   presenterFollowEpoch: number;
   whiteboardViewport?: WhiteboardViewport;
 };
-export type MeetingErrorKind = "not-found" | "unavailable" | "forbidden" | "unknown";
+export type MeetingErrorKind = "not-found" | "unavailable" | "forbidden" | "unsupported" | "unknown";
 export type MeetingError = { kind: MeetingErrorKind; message: string; code?: number; roomId?: string };
 
 /** 会议事件总线载荷：聊天/画板/结束/被移出/分组指令（UI 层订阅消费）。 */
@@ -352,6 +354,7 @@ class MeetingManagerImpl implements MeetingManager {
   private resolveCreate: ((id: string) => void) | null = null;
   private rejectCreate: ((e: Error) => void) | null = null;
   private lifecycle = 0;
+  private joinAckTimer: number | null = null;
   /** Meeting-owned keep-alive; ordinary room presence is intentionally not reused. */
   private meetingHeartbeatTimer: number | null = null;
   private minutesSegmentQueue: Array<Omit<MeetingTranscriptSegment, "speakerId" | "speakerName">> = [];
@@ -386,8 +389,28 @@ class MeetingManagerImpl implements MeetingManager {
     return () => this.eventListeners.delete(cb);
   }
   private setStage(stage: MeetingStage): void {
+    if (stage !== "joining") this.clearJoinAckTimer();
     this.state = { ...this.state, stage, inMeeting: stage === "in-meeting" };
     this.emit();
+  }
+
+  private clearJoinAckTimer(): void {
+    if (this.joinAckTimer !== null) window.clearTimeout(this.joinAckTimer);
+    this.joinAckTimer = null;
+  }
+
+  /** Retry an unanswered join after the server's error-suppression window. */
+  private watchJoinAcknowledgement(roomId: string, lifecycle: number): void {
+    this.clearJoinAckTimer();
+    this.joinAckTimer = window.setTimeout(() => {
+      if (!this.isCurrentMeeting(roomId, lifecycle) || this.state.stage !== "joining") return;
+      this.sendMeeting("meeting:join", { roomId, userName: realTimeColab.getUserName() ?? this.clientId().split(":", 1)[0] }, roomId);
+      this.joinAckTimer = window.setTimeout(() => {
+        if (!this.isCurrentMeeting(roomId, lifecycle) || this.state.stage !== "joining") return;
+        this.sendMeeting("meeting:leave", {}, roomId);
+        this.abortFailedJoin({ kind: "unavailable", message: "会议加入超时，请检查网络后重试" });
+      }, 8000);
+    }, 12000);
   }
 
   private abortFailedJoin(error: MeetingError): void {
@@ -450,7 +473,7 @@ class MeetingManagerImpl implements MeetingManager {
       roomId: this.state.roomId ?? null,
       stage: this.state.stage,
       remoteTracks: this.state.remoteTracks.map(remoteTrackDump),
-      subscribers: [...this.subscribers].map(([publisherId, pc]) => ({ publisherId, connectionState: pc.connectionState })),
+      subscribers: [...this.subscribers].map(([publisherId, pc]) => ({ publisherId, connectionState: meetingConnectionState(pc) })),
       publishPcState: this.pc?.connectionState ?? null,
     };
   }
@@ -542,7 +565,9 @@ class MeetingManagerImpl implements MeetingManager {
         this.updateLocalTrack(kind, newTrack);
         return { pc: null, renegotiate: false };
       }
-      const candidates = pc.getTransceivers().filter((item) => item.sender !== this.screenSender && item.receiver.track.kind === kind);
+      const candidates = typeof pc.getTransceivers === "function"
+        ? pc.getTransceivers().filter((item) => item.sender !== this.screenSender && item.receiver.track.kind === kind)
+        : [];
       const transceiver = candidates.find((item) => item.sender.track === oldTrack) ?? candidates[0];
       if (transceiver) {
         if (transceiver.sender.track !== newTrack) await transceiver.sender.replaceTrack(newTrack);
@@ -553,7 +578,16 @@ class MeetingManagerImpl implements MeetingManager {
         }
         return { pc, renegotiate: false };
       }
-      if (!newTrack) return { pc, renegotiate: false };
+      // Older WebRTC implementations have senders but no transceiver API.
+      const sender = typeof pc.getSenders === "function"
+        ? pc.getSenders().find((item) => item !== this.screenSender && item.track === oldTrack && oldTrack !== null)
+        : undefined;
+      if (sender && typeof sender.replaceTrack === "function") {
+        await sender.replaceTrack(newTrack);
+        return { pc, renegotiate: false };
+      }
+      if (sender) pc.removeTrack(sender);
+      if (!newTrack) return { pc, renegotiate: Boolean(sender) };
       pc.addTrack(newTrack, stream ?? new MediaStream([newTrack]));
       return { pc, renegotiate: true };
     });
@@ -948,7 +982,7 @@ class MeetingManagerImpl implements MeetingManager {
   }
 
   private async samplePublishNetwork(pc: RTCPeerConnection): Promise<void> {
-    if (this.networkSampleInFlight || this.pc !== pc || pc.connectionState === "closed") return;
+    if (this.networkSampleInFlight || this.pc !== pc || meetingConnectionState(pc) === "closed") return;
     this.networkSampleInFlight = true;
     try {
       const stats = await pc.getStats();
@@ -1069,9 +1103,9 @@ class MeetingManagerImpl implements MeetingManager {
 
   async joinMeeting(roomId: string): Promise<void> {
     if (this.state.inMeeting || this.state.stage === "joining") return;
-    // 会议号必须是 4 位数字，否则拒绝加入（防止以任意文件房间号自动建房）。
-    if (!/^\d{4}$/.test(roomId)) {
-      console.warn("[meeting] 会议号必须是 4 位数字:", roomId);
+    // 主会议或分组会议号必须符合受支持的格式；服务器仍校验会议是否存在及访问权限。
+    if (!this.isMeetingRoom(roomId)) {
+      console.warn("[meeting] 会议号格式无效:", roomId);
       return;
     }
     const lifecycle = ++this.lifecycle;
@@ -1089,6 +1123,10 @@ class MeetingManagerImpl implements MeetingManager {
     this.subscriberOfferProcessing.clear();
     this.publishOfferPc = null;
     this.meetingChannel = roomId;
+    if (!meetingPeerConnectionConstructor() || typeof MediaStream === "undefined") {
+      this.abortFailedJoin({ kind: "unsupported", message: "当前浏览器不支持会议音视频，请更新浏览器或使用系统浏览器打开。" });
+      return;
+    }
     const defaultMicOn = settingsStore.get("meetingMicrophoneDefaultOn") ?? false;
     const defaultCameraOn = settingsStore.get("meetingCameraDefaultOn") ?? false;
     this.state = { ...this.state, roomId, title: undefined, hostId: undefined, members: [], remoteTracks: [], muted: !defaultMicOn, cameraOn: defaultCameraOn, inviteStates: {}, applicationStates: {}, mediaError: undefined, meetingError: undefined, presentation: { mode: "", ownerId: "", epoch: 0, screenOwnerId: "", screenEpoch: 0, whiteboardActive: false, whiteboardLeaderId: "", whiteboardEpoch: 0, whiteboardVisible: false, whiteboardForceOpen: false, whiteboardFocusEpoch: 0, focusTarget: "", focusEpoch: 0, presenterId: "", presenterEpoch: 0, presenterTarget: "", presenterFollowEpoch: 0 }, minutes: { ...EMPTY_MINUTES } };
@@ -1112,6 +1150,7 @@ class MeetingManagerImpl implements MeetingManager {
       roomId,
       userName: realTimeColab.getUserName() ?? this.clientId().split(":", 1)[0],
     }, roomId);
+    this.watchJoinAcknowledgement(roomId, lifecycle);
     this.sendLocalMediaState(roomId);
     this.startMeetingHeartbeat(roomId);
     this.broadcastSourceRoomStatus(true);
@@ -1212,7 +1251,8 @@ class MeetingManagerImpl implements MeetingManager {
     } catch (error) {
       if (this.isCurrentMeeting(roomId, lifecycle)) {
         console.warn("[meeting] 发布端 PC 创建失败", error);
-        this.setStage("idle");
+        this.sendMeeting("meeting:leave", {}, roomId);
+        this.abortFailedJoin({ kind: (error as Error)?.name === "NotSupportedError" ? "unsupported" : "unavailable", message: "无法建立会议音视频连接，请检查浏览器和网络后重试。" });
       }
     }
   }
@@ -1413,36 +1453,40 @@ class MeetingManagerImpl implements MeetingManager {
   }
 
   private async createPublishPC(expectedRoomId = this.meetingChannel, expectedLifecycle = this.lifecycle, extraTracks: MediaStreamTrack[] = []): Promise<void> {
-    const pc = new RTCPeerConnection(this.rtcConfig());
+    const PeerConnection = meetingPeerConnectionConstructor();
+    if (!PeerConnection) throw new DOMException("WebRTC is unavailable", "NotSupportedError");
+    const pc = new PeerConnection(this.rtcConfig());
     this.pc = pc;
-    configurePublishPeerConnection(pc, this.localStream, extraTracks);
-    const screenTrack = extraTracks.find((track) => track === this.screenSender?.track);
-    if (screenTrack) this.screenSender = pc.getSenders().find((sender) => sender.track === screenTrack) ?? null;
-    this.applyVideoCodecPreference(pc);
-    pc.onicecandidate = (ev) => {
-      if (ev.candidate && this.isCurrentMeeting(expectedRoomId, expectedLifecycle) && this.pc === pc) {
-        this.sendMeeting("meeting:ice", { candidate: ev.candidate.toJSON() }, expectedRoomId);
-      }
-    };
-    pc.ontrack = (ev) => {
-      if (!this.isCurrentMeeting(expectedRoomId, expectedLifecycle) || this.pc !== pc) return;
-      const uid = this.currentTrackPublisher ?? "";
-      this.addRemote(uid, ev.streams[0], ev.track.kind === "audio" ? "audio" : "video");
-    };
-    pc.onconnectionstatechange = () => {
-      if (!this.isCurrentMeeting(expectedRoomId, expectedLifecycle) || this.pc !== pc) return;
-      if (pc.connectionState === "connected") {
-        this.setStage("in-meeting");
-        // 恢复成功：清计数（下次断连重新有界重试），并刷新可能已过期的 TURN 凭据
-        this.publishRecoveryAttempts = 0;
-        this.publishReconnecting = false;
-        void this.ensureMeetingTurnServers().then(() => this.applyTurnToMeetingPcs());
-      } else if (pc.connectionState === "disconnected" || pc.connectionState === "failed") {
-        this.beginPublishRecovery(expectedRoomId, expectedLifecycle);
-      }
-    };
-    this.startAdaptiveVideoControl(pc);
     try {
+      if (typeof pc.addTrack !== "function") throw new DOMException("WebRTC track publishing is unavailable", "NotSupportedError");
+      configurePublishPeerConnection(pc, this.localStream, extraTracks);
+      const screenTrack = extraTracks.find((track) => track === this.screenSender?.track);
+      if (screenTrack) this.screenSender = pc.getSenders().find((sender) => sender.track === screenTrack) ?? null;
+      this.applyVideoCodecPreference(pc);
+      pc.onicecandidate = (ev) => {
+        if (ev.candidate && this.isCurrentMeeting(expectedRoomId, expectedLifecycle) && this.pc === pc) {
+          this.sendMeeting("meeting:ice", { candidate: ev.candidate.toJSON() }, expectedRoomId);
+        }
+      };
+      pc.ontrack = (ev) => {
+        if (!this.isCurrentMeeting(expectedRoomId, expectedLifecycle) || this.pc !== pc) return;
+        const uid = this.currentTrackPublisher ?? "";
+        this.addRemote(uid, ev.streams[0] ?? new MediaStream([ev.track]), ev.track.kind === "audio" ? "audio" : "video", ev.track);
+      };
+      const onConnectionStateChange = () => {
+        if (!this.isCurrentMeeting(expectedRoomId, expectedLifecycle) || this.pc !== pc) return;
+        if (meetingConnectionState(pc) === "connected") {
+          // 恢复成功：清计数（下次断连重新有界重试），并刷新可能已过期的 TURN 凭据
+          this.publishRecoveryAttempts = 0;
+          this.publishReconnecting = false;
+          void this.ensureMeetingTurnServers().then(() => this.applyTurnToMeetingPcs());
+        } else if (meetingConnectionState(pc) === "disconnected" || meetingConnectionState(pc) === "failed") {
+          this.beginPublishRecovery(expectedRoomId, expectedLifecycle);
+        }
+      };
+      if (typeof (pc as { connectionState?: string }).connectionState === "string") pc.onconnectionstatechange = onConnectionStateChange;
+      else pc.oniceconnectionstatechange = onConnectionStateChange;
+      this.startAdaptiveVideoControl(pc);
       const sent = await this.enqueuePublishOffer(pc, expectedRoomId, expectedLifecycle);
       if (!sent) {
         if (this.pc === pc) this.pc = null;
@@ -1460,7 +1504,14 @@ class MeetingManagerImpl implements MeetingManager {
   private applyVideoCodecPreference(pc: RTCPeerConnection): void {
     const priority = settingsStore.get("videoCodecPriority") as VideoCodecPrioritySetting;
     if (!priority || priority === "auto") return;
-    const capabilities = RTCRtpSender.getCapabilities?.("video");
+    if (typeof RTCRtpSender === "undefined" || typeof pc.getTransceivers !== "function") return;
+    let capabilities: RTCRtpCapabilities | null | undefined;
+    try {
+      capabilities = RTCRtpSender.getCapabilities?.("video");
+    } catch (error) {
+      console.warn("[meeting] video codec capabilities unavailable", error);
+      return;
+    }
     if (!capabilities?.codecs?.length) return;
     const ordered = orderVideoCodecs(priority, capabilities.codecs);
     if (!ordered) return;
@@ -1495,7 +1546,7 @@ class MeetingManagerImpl implements MeetingManager {
     this.publishReconnecting = true;
     this.publishRecoveryAttempts++;
     const pc = this.pc;
-    if (!pc || pc.connectionState === "closed") {
+    if (!pc || meetingConnectionState(pc) === "closed") {
       this.publishReconnecting = false;
       return;
     }
@@ -1520,8 +1571,8 @@ class MeetingManagerImpl implements MeetingManager {
           if (
             this.isCurrentMeeting(roomId, lifecycle) &&
             this.pc &&
-            this.pc.connectionState !== "connected" &&
-            this.pc.connectionState !== "closed"
+            meetingConnectionState(this.pc) !== "connected" &&
+            meetingConnectionState(this.pc) !== "closed"
           ) {
             this.beginPublishRecovery(roomId, lifecycle);
           }
@@ -1535,7 +1586,7 @@ class MeetingManagerImpl implements MeetingManager {
     if (this.meetingTurnServers.length === 0) return;
     const config = this.rtcConfig();
     for (const pc of [this.pc, ...this.subscribers.values()]) {
-      if (!pc || pc.connectionState === "closed") continue;
+      if (!pc || meetingConnectionState(pc) === "closed") continue;
       try {
         pc.setConfiguration(config);
       } catch {
@@ -1552,8 +1603,8 @@ class MeetingManagerImpl implements MeetingManager {
       if (
         !this.isCurrentMeeting(roomId, lifecycle) ||
         this.subscribers.get(publisherId) !== pc ||
-        pc.connectionState === "connected" ||
-        pc.connectionState === "closed"
+        meetingConnectionState(pc) === "connected" ||
+        meetingConnectionState(pc) === "closed"
       ) {
         return;
       }
@@ -1670,7 +1721,7 @@ class MeetingManagerImpl implements MeetingManager {
     const existing = this.subscribers.get(publisherId);
     if (existing) {
       // closed/failed 的订阅 PC 不得复用（发布者重进/重连场景），替换为新 PC
-      if (existing.connectionState === "closed" || existing.connectionState === "failed") {
+      if (meetingConnectionState(existing) === "closed" || meetingConnectionState(existing) === "failed") {
         this.subscribers.delete(publisherId);
         this.removeRemoteTracksOf(publisherId);
         this.lastSubscriberOfferSdp.delete(publisherId);
@@ -1678,7 +1729,9 @@ class MeetingManagerImpl implements MeetingManager {
         return existing;
       }
     }
-    const pc = new RTCPeerConnection(this.rtcConfig());
+    const PeerConnection = meetingPeerConnectionConstructor();
+    if (!PeerConnection) return null;
+    const pc = new PeerConnection(this.rtcConfig());
     this.subscribers.set(publisherId, pc);
     pc.onicecandidate = (ev) => {
       if (ev.candidate && this.isCurrentMeeting(roomId, lifecycle) && this.subscribers.get(publisherId) === pc) {
@@ -1687,12 +1740,11 @@ class MeetingManagerImpl implements MeetingManager {
     };
     pc.ontrack = (ev) => {
       if (!this.isCurrentMeeting(roomId, lifecycle) || this.subscribers.get(publisherId) !== pc) return;
-      this.addRemote(publisherId, ev.streams[0], ev.track.kind === "audio" ? "audio" : "video", ev.track);
+      this.addRemote(publisherId, ev.streams[0] ?? new MediaStream([ev.track]), ev.track.kind === "audio" ? "audio" : "video", ev.track);
     };
-    pc.onconnectionstatechange = () => {
+    const onConnectionStateChange = () => {
       if (!this.isCurrentMeeting(roomId, lifecycle) || this.subscribers.get(publisherId) !== pc) return;
-      if (pc.connectionState === "connected") {
-        this.setStage("in-meeting");
+      if (meetingConnectionState(pc) === "connected") {
         this.clearSubscriberDegradedTimer(publisherId);
         // 恢复成功：重置计数，让后续网络抖动仍拥有完整的有界重试预算
         this.resetSubscriberRecovery(publisherId);
@@ -1701,7 +1753,7 @@ class MeetingManagerImpl implements MeetingManager {
       }
       // disconnected：不立即拆连接 —— 短暂抖动通常自行恢复。挂宽限观察，
       // 到期仍未 connected 则提前重建订阅（不等浏览器拖到 failed 的几十秒）。
-      if (pc.connectionState === "disconnected") {
+      if (meetingConnectionState(pc) === "disconnected") {
         this.markSubscriberDegraded(publisherId, roomId, lifecycle, pc);
         return;
       }
@@ -1709,7 +1761,7 @@ class MeetingManagerImpl implements MeetingManager {
       // 并按成员级重新订阅（有界：连续失败达到上限后停止，等待 membership 事件恢复）。
       this.clearSubscriberDegradedTimer(publisherId);
       if (
-        (pc.connectionState === "failed" || pc.connectionState === "closed") &&
+        (meetingConnectionState(pc) === "failed" || meetingConnectionState(pc) === "closed") &&
         this.subscribers.get(publisherId) === pc
       ) {
         this.subscribers.delete(publisherId);
@@ -1726,6 +1778,8 @@ class MeetingManagerImpl implements MeetingManager {
         }
       }
     };
+    if (typeof (pc as { connectionState?: string }).connectionState === "string") pc.onconnectionstatechange = onConnectionStateChange;
+    else pc.oniceconnectionstatechange = onConnectionStateChange;
     return pc;
   }
 
@@ -1760,6 +1814,7 @@ class MeetingManagerImpl implements MeetingManager {
         // to chat, subscribe, share later, or open the whiteboard.
         const joined = data?.joined === true;
         const stage = joined && this.state.stage === "joining" ? "in-meeting" : this.state.stage;
+        if (joined) this.clearJoinAckTimer();
         if (host || title || incomingPresentation || incomingMinutes || joined) {
           this.state = {
             ...this.state,
@@ -1796,6 +1851,9 @@ class MeetingManagerImpl implements MeetingManager {
           this.recoverFailedSubscription(msg);
           return;
         }
+        // A delayed heartbeat/media-state error may belong to the room being
+        // left. It cannot decide whether the current meeting exists or joined.
+        if (this.state.stage === "joining" && isMeetingBackgroundError(msg)) return;
         // 等待 create 回包期间收到服务器错误（如旧后端不支持 meeting:create）：
         // 立即 reject，避免空等 5s 超时掩盖真实原因。
         this.rejectCreate?.(new Error(msg));
@@ -2246,6 +2304,7 @@ class MeetingManagerImpl implements MeetingManager {
       roomId,
       userName: realTimeColab.getUserName() ?? this.clientId().split(":", 1)[0],
     }, roomId);
+    this.watchJoinAcknowledgement(roomId, lifecycle);
     this.startMeetingHeartbeat(roomId);
     const screenTrack = this.screenSender?.track?.readyState === "live" ? this.screenSender.track : null;
     try {
@@ -2253,7 +2312,8 @@ class MeetingManagerImpl implements MeetingManager {
     } catch (error) {
       if (this.isCurrentMeeting(roomId, lifecycle)) {
         console.warn("[meeting] 重连后发布端 PC 重建失败", error);
-        this.setStage("idle");
+        this.sendMeeting("meeting:leave", {}, roomId);
+        this.abortFailedJoin({ kind: "unavailable", message: "会议连接重建失败，请重试。" });
       }
     }
   }
@@ -2336,7 +2396,7 @@ class MeetingManagerImpl implements MeetingManager {
     // paths; one received track is not a completed subscription.
     const kinds = new Set(this.state.remoteTracks.filter((t) => t.uniqId === uid).map((t) => t.kind));
     kinds.add(kind);
-    if (this.subscribers.get(uid)?.connectionState === "connected" && (kinds.has("audio") || kinds.has("video"))) {
+    if ((this.subscribers.get(uid) && meetingConnectionState(this.subscribers.get(uid)!) === "connected") && (kinds.has("audio") || kinds.has("video"))) {
       this.subscriptionRecoveryCycles.delete(uid);
     }
     const trackId = track?.id ?? stream.id;
@@ -2772,6 +2832,7 @@ class MeetingManagerImpl implements MeetingManager {
       roomId,
       userName: realTimeColab.getUserName() ?? this.clientId().split(":", 1)[0],
     });
+    this.watchJoinAcknowledgement(roomId, lifecycle);
     this.sendLocalMediaState(roomId);
     this.startMeetingHeartbeat(roomId);
     try {
@@ -2779,7 +2840,8 @@ class MeetingManagerImpl implements MeetingManager {
     } catch (error) {
       if (this.isCurrentMeeting(roomId, lifecycle)) {
         console.warn("[meeting] 切换房间后发布端 PC 创建失败", error);
-        this.setStage("idle");
+        this.sendMeeting("meeting:leave", {}, roomId);
+        this.abortFailedJoin({ kind: "unavailable", message: "切换会议失败，请重试。" });
       }
     }
   }

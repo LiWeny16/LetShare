@@ -26,6 +26,7 @@ export default function MeetingPage() {
   const nav = useNavigate()
   const [sp] = useSearchParams()
   const room = sp.get("room") ?? ""
+  const validRoom = /^\d{4}(?:B\d{1,2})?$/.test(room)
   const source = sp.get("source") ?? ""
   const autoScreen = sp.get("screen") === "1"
   const [userName, setUserName] = useState(realTimeColab.getUserName() ?? "")
@@ -84,6 +85,7 @@ export default function MeetingPage() {
     let cancelled = false
     let screenTimer: number | undefined
     void (async () => {
+      if (room && !validRoom) return
       if (!realTimeColab.isConnected()) {
         // 保持原始房间订阅：source 提供时不进入 transport-only，让服务器能
         // 把本端记在 sourceRoom 成员表里（meeting:invite / 在线名单依赖它）。
@@ -97,6 +99,10 @@ export default function MeetingPage() {
           setConnectionError(true)
           return
         }
+      }
+      if (room && realTimeColab.getResolvedServerType() !== "china") {
+        setConnectionError(true)
+        return
       }
       // The same tab can navigate directly from one meeting URL to another.
       // Leave the old meeting before attempting the new join, otherwise the
@@ -125,9 +131,11 @@ export default function MeetingPage() {
       // 且 meeting:ws-reconnected 会静默重新入会。leaveMeeting 幂等。
       void meetingManager.leaveMeeting()
     }
-  }, [nameConfirmed, room, source, autoScreen])
+  }, [nameConfirmed, room, source, autoScreen, validRoom])
 
-  const routeError = room && managerState.meetingError?.roomId === room
+  const routeError = room && !validRoom
+    ? { kind: "not-found", message: "会议不存在" } satisfies MeetingError
+    : room && managerState.meetingError?.roomId === room
     ? managerState.meetingError
     : connectionError
       ? { kind: "unavailable", message: "无法连接会议服务" } satisfies MeetingError
@@ -187,6 +195,7 @@ export default function MeetingPage() {
 
 function MeetingRouteError({ error, onBack, onRetry }: { error: MeetingError; onBack: () => void; onRetry: () => void }) {
   const notFound = error.kind === "not-found"
+  const unsupported = error.kind === "unsupported"
   return (
     <Box
       data-testid={notFound ? "meeting-not-found" : "meeting-unavailable"}
@@ -195,10 +204,10 @@ function MeetingRouteError({ error, onBack, onRetry }: { error: MeetingError; on
       <Paper elevation={0} sx={{ width: "min(100%, 480px)", p: { xs: 3, sm: 4 }, borderRadius: 4, border: "1px solid", borderColor: "divider", textAlign: "center" }}>
         <Typography sx={{ fontSize: "3rem", lineHeight: 1, mb: 2 }}>{notFound ? "404" : "!"}</Typography>
         <Typography variant="h5" sx={{ fontWeight: 850, mb: 1 }}>
-          {notFound ? "会议不存在或已结束" : "暂时无法连接会议"}
+          {notFound ? "会议不存在或已结束" : unsupported ? "当前浏览器不支持会议" : "暂时无法连接会议"}
         </Typography>
         <Typography color="text.secondary" sx={{ mb: 3 }}>
-          {notFound ? "请检查会议号或邀请链接，然后重新加入。" : "会议服务暂时不可用，请稍后重试。"}
+          {notFound ? "请检查会议号或邀请链接，然后重新加入。" : unsupported ? "请更新浏览器，或使用最新版系统浏览器打开会议链接。" : "会议连接暂时不可用，请检查网络和浏览器后重试。"}
         </Typography>
         <Stack direction={{ xs: "column", sm: "row" }} spacing={1.25} justifyContent="center">
           <Button variant="outlined" onClick={onBack}>返回首页</Button>

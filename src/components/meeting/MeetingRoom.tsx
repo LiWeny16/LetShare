@@ -193,6 +193,8 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
   const elapsed = useMeetingTimer(state.stage);
   const microphoneProblem = state.microphoneError === "denied"
     ? t("meeting.microphoneDenied", "麦克风权限未获允许，其他人听不到你。请在浏览器的网站权限和手机系统的应用权限中允许麦克风，然后重试。")
+    : state.microphoneError === "timeout"
+      ? t("meeting.microphoneTimeout", "麦克风授权等待超时，仍可继续参会。请处理浏览器权限提示后重试。")
     : state.microphoneError === "not-found"
       ? t("meeting.microphoneMissing", "未找到可用麦克风。请检查设备或蓝牙耳机连接，也可在会议设置中选择其他麦克风后重试。")
       : state.microphoneError === "busy"
@@ -888,7 +890,7 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
         </Stack>
       </Box>
 
-      {(state.microphoneError || state.microphonePending) && (
+      {state.microphoneError && !state.microphonePending && (
         <Alert
           severity="warning"
           data-testid="meeting-microphone-error"
@@ -902,15 +904,11 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
               onClick={() => meetingManager.setMuted(false)}
               sx={{ whiteSpace: "nowrap" }}
             >
-              {state.microphonePending ? t("meeting.microphoneOpening", "正在开启…") : t("meeting.microphoneRetry", "重试麦克风")}
+              {t("meeting.microphoneRetry", "重试麦克风")}
             </Button>
           ) : undefined}
         >
-          {state.microphonePending
-            ? state.stage === "joining"
-              ? t("meeting.mediaRequesting", "正在检查媒体设备，请处理浏览器或系统的麦克风、摄像头授权提示。")
-              : t("meeting.microphoneRequesting", "正在请求麦克风，请处理浏览器或系统的授权提示。")
-            : microphoneProblem}
+          {microphoneProblem}
         </Alert>
       )}
 
@@ -1121,7 +1119,7 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
             flexDirection: "column",
             minHeight: 0,
             width: isMobileBp ? "auto" : panelWidth,
-            borderRadius: { xs: 2, sm: 2.5 },
+            borderRadius: { xs: 2.5, sm: 3 },
             overflow: "hidden",
             border: (th) => `1px solid ${alpha(th.palette.divider, 0.75)}`,
             bgcolor: "background.paper",
@@ -1138,10 +1136,16 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
             value={panelTab}
             onChange={(_, value) => setPanelTab(value)}
             variant="fullWidth"
-            sx={{ minHeight: 48, borderBottom: (th) => `1px solid ${alpha(th.palette.divider, 0.75)}`, "& .MuiTabs-indicator": { height: 3, borderRadius: "3px 3px 0 0" } }}
+            sx={{
+              flexShrink: 0, minHeight: 48, mx: 1.25, mt: 1.25, p: 0.5, borderRadius: 2.25,
+              bgcolor: (th) => th.palette.mode === "dark" ? alpha(th.palette.common.white, 0.06) : "#f2f4f7",
+              "& .MuiTabs-indicator": { display: "none" },
+              "& .MuiTab-root": { minWidth: 0, minHeight: 44, px: 0.5, borderRadius: 1.75, color: "text.secondary", transition: "color 150ms ease, background-color 150ms ease, box-shadow 150ms ease" },
+              "& .MuiTab-root.Mui-selected": { color: BLUE, bgcolor: "background.paper", boxShadow: "0 2px 8px rgba(24, 39, 75, 0.08)" },
+            }}
           >
             <Tab icon={<ChatIcon sx={{ fontSize: 18 }} />} iconPosition="start" label={t("meeting.chat", "聊天")} sx={{ minHeight: 48, fontSize: "0.8rem", fontWeight: 750, textTransform: "none" }} />
-            <Tab icon={<PeopleIcon sx={{ fontSize: 18 }} />} iconPosition="start" label={`${t("meeting.participants", "成员")} ${state.members.length + 1}`} sx={{ minHeight: 48, fontSize: "0.8rem", fontWeight: 750, textTransform: "none" }} />
+            <Tab icon={<PeopleIcon sx={{ fontSize: 18 }} />} iconPosition="start" label={<Box component="span" sx={{ display: "inline-flex", alignItems: "center", gap: 0.5 }}>{t("meeting.participants", "成员")}<Box component="span" sx={{ px: 0.65, py: 0.1, borderRadius: 1, bgcolor: alpha(BLUE, 0.08), fontSize: "0.68rem", fontVariantNumeric: "tabular-nums" }}>{state.members.length + 1}</Box></Box>} sx={{ minHeight: 48, fontSize: "0.8rem", fontWeight: 750, textTransform: "none" }} />
             <Tab icon={<AutoAwesomeIcon sx={{ fontSize: 18 }} />} iconPosition="start" label="AI 纪要" sx={{ minHeight: 48, fontSize: "0.8rem", fontWeight: 750, textTransform: "none" }} />
           </Tabs>
           <Box sx={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
@@ -1151,6 +1155,7 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
             <Box sx={{ display: panelTab === 1 ? "flex" : "none", flex: 1, minHeight: 0, flexDirection: "column" }}>
               <ParticipantsPanel
                 state={state}
+                onInvite={() => setInviteOpen(true)}
                 participantVolumes={participantVolumes}
                 onParticipantVolumeChange={(uniqId, volume) => {
                   remoteAudioHostRef.current?.setMemberVolume(uniqId, volume);

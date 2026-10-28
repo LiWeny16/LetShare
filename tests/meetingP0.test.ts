@@ -18,9 +18,18 @@ import { join } from "node:path";
 
 import {
   extractFailedPublisher,
+  isMeetingBackgroundError,
   isMeetingChannelEvent,
   isTransientMeetingError,
 } from "../src/app/libs/meeting/meetingSignalFilter";
+
+test("background errors cannot be confused with a join result", () => {
+  assert.equal(isMeetingBackgroundError("meeting:heartbeat 不是当前会议连接"), true);
+  assert.equal(isMeetingBackgroundError("meeting:media-state 不是当前会议连接"), true);
+  assert.equal(isMeetingBackgroundError("会议不存在"), false);
+  assert.equal(isMeetingBackgroundError("meeting:join 缺少房间"), false);
+  assert.equal(isMeetingBackgroundError("meeting:heartbeat-extra invalid"), false);
+});
 
 function repoPath(p: string): string {
   return join(process.cwd(), p);
@@ -180,7 +189,7 @@ test("meetingManager: 订阅 PC failed/closed 清理 + 成员级重订阅；WS �
   // 订阅 PC 失败清理（closed participant 不得留存在 subscribers map）
   assert.match(
     src,
-    /pc\.connectionState === "failed" \|\| pc\.connectionState === "closed"/,
+    /meetingConnectionState\(pc\) === "failed" \|\| meetingConnectionState\(pc\) === "closed"/,
     "订阅 PC failed/closed 必须清理",
   );
 });

@@ -6,7 +6,7 @@ import { VitePWA } from 'vite-plugin-pwa'
 export default defineConfig({
   base: "./",
   build: {
-    target: "esnext",
+    target: ["chrome87", "edge87", "firefox78", "safari14"],
     rollupOptions: {
       input: {
         index: resolve(__dirname, "index.html"),

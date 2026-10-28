@@ -42,6 +42,11 @@ export function isTransientMeetingError(message: string | null | undefined): boo
   );
 }
 
+/** Heartbeat/media updates are separate from the server's response to meeting:join. */
+export function isMeetingBackgroundError(message: string | null | undefined): boolean {
+  return typeof message === "string" && /^meeting:(heartbeat|media-state)(\s|$)/.test(message);
+}
+
 /**
  * 从订阅类错误文本中提取受影响的发布者（成员级重试目标）。
  * 服务器格式：

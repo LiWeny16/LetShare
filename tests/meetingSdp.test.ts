@@ -20,6 +20,22 @@ test("meeting publish PC gets valid SDP-capable media sections without local med
   assert.deepEqual(addedTransceivers, ["audio", "video"]);
 });
 
+test("older publish PC without transceivers creates a negotiable data channel", () => {
+  const channels: string[] = [];
+  configurePublishPeerConnection({ addTrack() {}, createDataChannel(label: string) { channels.push(label); } }, null);
+  assert.deepEqual(channels, ["meeting-placeholder"]);
+});
+
+test("a throwing transceiver implementation falls back to a data channel", () => {
+  const channels: string[] = [];
+  configurePublishPeerConnection({ addTrack() {}, addTransceiver() { throw new TypeError("unsupported"); }, createDataChannel(label: string) { channels.push(label); } }, null);
+  assert.deepEqual(channels, ["meeting-placeholder"]);
+});
+
+test("publish PC reports unsupported when it cannot make an SDP section", () => {
+  assert.throws(() => configurePublishPeerConnection({ addTrack() {} }, null), { name: "NotSupportedError" });
+});
+
 test("meeting publish PC keeps real local tracks instead of adding fallback sections", () => {
   const addedTracks: FakeTrack[] = [];
   const addedTransceivers: string[] = [];

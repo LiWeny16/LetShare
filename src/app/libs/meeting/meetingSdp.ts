@@ -2,7 +2,8 @@ export type MeetingMediaKind = "audio" | "video";
 
 type PublishPeerConnection = {
   addTrack(track: MediaStreamTrack, stream: MediaStream): unknown;
-  addTransceiver(kind: MeetingMediaKind, init?: { direction?: RTCRtpTransceiverDirection }): unknown;
+  addTransceiver?(kind: MeetingMediaKind, init?: { direction?: RTCRtpTransceiverDirection }): unknown;
+  createDataChannel?(label: string): unknown;
 };
 
 /**
@@ -27,6 +28,19 @@ export function configurePublishPeerConnection(
   // A media-less RTCPeerConnection creates an empty SDP without ICE credentials.
   // Keep the publisher connection valid so a user who denied media can still join,
   // subscribe to other members, and start screen sharing later.
-  pc.addTransceiver("audio", { direction: "inactive" });
-  pc.addTransceiver("video", { direction: "inactive" });
+  if (typeof pc.addTransceiver === "function") {
+    try {
+      pc.addTransceiver("audio", { direction: "inactive" });
+      pc.addTransceiver("video", { direction: "inactive" });
+      return;
+    } catch (error) {
+      if (typeof pc.createDataChannel !== "function") throw error;
+    }
+  }
+  if (typeof pc.createDataChannel === "function") {
+    // Older implementations can generate ICE-capable SDP via a data channel.
+    pc.createDataChannel("meeting-placeholder");
+  } else {
+    throw new DOMException("WebRTC media negotiation is unavailable", "NotSupportedError");
+  }
 }

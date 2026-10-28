@@ -7,12 +7,27 @@ import {
   type VideoQualitySetting,
 } from "@App/libs/call/videoCapture";
 import { nsPipeline, type NsAlgorithm } from "@App/libs/call/noiseSuppression";
+import { boundedMediaCapture } from "./meetingCompat";
 
 export type MeetingNsMode = "off" | "browser" | "rnnoise" | "gtcrn";
 
-export type MicrophoneError = "denied" | "not-found" | "busy" | "unsupported" | "insecure" | "paused" | "ended" | "failed";
+export type MicrophoneError = "denied" | "not-found" | "busy" | "unsupported" | "insecure" | "paused" | "ended" | "timeout" | "failed";
 
 let meetingAudioCaptureQueue: Promise<void> = Promise.resolve();
+
+type LegacyNavigator = Navigator & {
+  getUserMedia?: (constraints: MediaStreamConstraints, success: (stream: MediaStream) => void, failure: (error: DOMException) => void) => void;
+  webkitGetUserMedia?: LegacyNavigator["getUserMedia"];
+  mozGetUserMedia?: LegacyNavigator["getUserMedia"];
+};
+
+function legacyCapture(kind: "audio" | "video"): Promise<MediaStream> | null {
+  if (typeof navigator === "undefined") return null;
+  const nav = navigator as LegacyNavigator;
+  const getUserMedia = nav.getUserMedia ?? nav.webkitGetUserMedia ?? nav.mozGetUserMedia;
+  if (!getUserMedia) return null;
+  return new Promise((resolve, reject) => getUserMedia.call(nav, { [kind]: true }, resolve, reject));
+}
 
 async function withMeetingAudioCaptureLock<T>(capture: () => Promise<T>): Promise<T> {
   const previous = meetingAudioCaptureQueue;
@@ -29,6 +44,7 @@ async function withMeetingAudioCaptureLock<T>(capture: () => Promise<T>): Promis
 export function microphoneErrorKind(error: unknown): MicrophoneError {
   if (typeof window !== "undefined" && window.isSecureContext === false) return "insecure";
   const name = (error as DOMException)?.name;
+  if (name === "TimeoutError") return "timeout";
   if (name === "NotAllowedError" || name === "SecurityError") return "denied";
   if (name === "NotFoundError" || name === "OverconstrainedError" || name === "DevicesNotFoundError") return "not-found";
   if (name === "NotReadableError" || name === "TrackStartError" || name === "AbortError") return "busy";
@@ -65,7 +81,14 @@ async function acquireMeetingAudioLocked(isCurrent: () => boolean): Promise<Medi
     throw new DOMException("Meeting microphone capture was superseded", "AbortError");
   }
   if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
-    throw new DOMException("Microphone capture is unavailable in this browser context", "NotSupportedError");
+    const legacy = legacyCapture("audio");
+    if (!legacy) throw new DOMException("Microphone capture is unavailable in this browser context", "NotSupportedError");
+    const stream = await legacy;
+    if (!isCurrent()) {
+      stream.getTracks().forEach((track) => track.stop());
+      throw new DOMException("Meeting microphone capture was superseded", "AbortError");
+    }
+    return stream;
   }
   const settings = getMeetingMediaSettings();
   const tracks: MediaStreamTrack[] = [];
@@ -121,21 +144,26 @@ async function acquireMeetingAudioLocked(isCurrent: () => boolean): Promise<Medi
 }
 
 export function acquireMeetingAudio(isCurrent: () => boolean = () => true): Promise<MediaStream> {
-  return withMeetingAudioCaptureLock(() => acquireMeetingAudioLocked(isCurrent));
+  return withMeetingAudioCaptureLock(() => {
+    let expired = false;
+    return boundedMediaCapture(acquireMeetingAudioLocked(() => !expired && isCurrent()), 15_000, () => { expired = true; });
+  });
 }
 
 /** Capture only the meeting camera through the same video pipeline as LetShare calls. */
 export async function acquireMeetingVideo(): Promise<MediaStream> {
   if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
-    throw new DOMException("Camera capture is unavailable in this browser context", "NotSupportedError");
+    const legacy = legacyCapture("video");
+    if (!legacy) throw new DOMException("Camera capture is unavailable in this browser context", "NotSupportedError");
+    return boundedMediaCapture(legacy);
   }
   const settings = getMeetingMediaSettings();
-  return acquireCallVideo({
+  return boundedMediaCapture(acquireCallVideo({
     deviceId: settings.videoDeviceId || undefined,
     quality: settings.videoQuality,
     degradation: settings.videoDegradation,
     background: settings.videoBackground,
-  });
+  }));
 }
 
 /** Capture only the requested meeting media kinds. Disabled kinds never call getUserMedia. */

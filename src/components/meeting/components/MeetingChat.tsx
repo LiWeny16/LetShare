@@ -8,6 +8,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Box,
+  Avatar,
   Button,
   IconButton,
   InputBase,
@@ -263,10 +264,13 @@ export function MeetingChat({ initialTarget }: { initialTarget?: string | null }
 
   return (
     <Stack sx={{ height: "100%", minHeight: 0 }}>
+      <Stack direction="row" alignItems="center" justifyContent="center" spacing={0.5} sx={{ px: 1, pt: 1.75, pb: 0.5, color: "text.secondary" }}>
+        <LockIcon sx={{ fontSize: 13 }} /><Typography sx={{ fontSize: "0.7rem" }}>{t("meeting.chatPrivacy", "消息仅在场成员可见")}</Typography>
+      </Stack>
       <Box
         ref={listRef}
         sx={{
-          flex: 1, minHeight: 0, overflowY: "auto", px: 1.5, py: 1, userSelect: "text",
+          flex: 1, minHeight: 0, overflowY: "auto", px: 1.75, py: 1, userSelect: "text",
           "&::-webkit-scrollbar": { width: 5 }, "&::-webkit-scrollbar-thumb": { borderRadius: 3, bgcolor: "action.selected" },
         }}
       >
@@ -275,11 +279,14 @@ export function MeetingChat({ initialTarget }: { initialTarget?: string | null }
             {t("meeting.chatEmpty", "会议聊天 · 消息仅在场成员可见")}
           </Typography>
         )}
-        {msgs.map((m, i) => (
-          <Box key={i} sx={{ mb: 1.25, display: "flex", flexDirection: "column", alignItems: m.self ? "flex-end" : "flex-start" }}>
+        {msgs.map((m, i) => {
+          const name = m.self ? (realTimeColab.getUserName() || t("meeting.you", "我")) : (members.find((member) => member.uniqId === m.from)?.name || displayNameOf(m.from));
+          return <Stack key={i} direction={m.self ? "row-reverse" : "row"} spacing={1} sx={{ mb: 2, alignItems: "flex-start" }}>
+            <Avatar sx={{ width: 32, height: 32, flexShrink: 0, bgcolor: m.self ? alpha(theme.palette.primary.main, 0.12) : alpha(theme.palette.primary.main, 0.065), color: m.self ? "primary.main" : "text.secondary", fontSize: "0.75rem", fontWeight: 750 }}>{name.slice(0, 1).toUpperCase()}</Avatar>
+            <Box sx={{ minWidth: 0, maxWidth: "calc(100% - 40px)", display: "flex", flexDirection: "column", alignItems: m.self ? "flex-end" : "flex-start" }}>
             <Typography sx={{ fontSize: "0.68rem", color: "text.secondary", mb: 0.25, px: 0.5, fontVariantNumeric: "tabular-nums", display: "flex", alignItems: "center", gap: 0.5 }}>
               {m.to && <LockIcon sx={{ fontSize: "0.75rem", opacity: 0.7 }} aria-label={t("meeting.chatPrivateTag", "私聊")} />}
-              {m.self ? t("meeting.you", "我") : displayNameOf(m.from)}
+              {m.self ? t("meeting.you", "我") : name}
               {m.to && !m.self && ` → ${displayNameOf(m.to)}`}
               {" · "}
               {new Date(m.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
@@ -296,21 +303,24 @@ export function MeetingChat({ initialTarget }: { initialTarget?: string | null }
               <Paper
                 elevation={0}
                 sx={{
-                  px: 1.25, py: 0.75, borderRadius: 2, maxWidth: "88%",
-                  bgcolor: m.self ? "primary.main" : theme.palette.mode === "dark" ? alpha("#fff", 0.07) : alpha("#000", 0.05),
-                  color: m.self ? "primary.contrastText" : "text.primary",
-                  fontSize: "0.82rem", lineHeight: 1.45, wordBreak: "break-word", whiteSpace: "pre-wrap",
+                  px: 1.5, py: 1, borderRadius: 2, maxWidth: "100%",
+                  borderTopRightRadius: m.self ? 0.5 : 2, borderTopLeftRadius: m.self ? 2 : 0.5,
+                  bgcolor: m.self ? alpha(theme.palette.primary.main, theme.palette.mode === "dark" ? 0.2 : 0.09) : "action.hover",
+                  color: "text.primary",
+                  fontSize: "0.82rem", lineHeight: 1.55, wordBreak: "break-word", whiteSpace: "pre-wrap",
                 }}
               >
                 {m.text}
               </Paper>
             )}
-          </Box>
-        ))}
+            </Box>
+          </Stack>;
+        })}
       </Box>
-      <Box sx={{ p: 1, display: "flex", flexDirection: "column", gap: 0.75 }}>
+      <Box sx={{ px: 1.75, pb: 1.75, pt: 0.75, display: "flex", flexDirection: "column", gap: 0.75 }}>
         {/* 成员选择：所有人（公聊）或具体成员（私聊 + 定向文件） */}
         <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
+          <Typography sx={{ color: "text.secondary", fontSize: "0.72rem", flexShrink: 0 }}>{t("meeting.sendTo", "发送给")}</Typography>
           {privateTarget ? (
             <PersonIcon sx={{ fontSize: "1rem", color: "text.secondary" }} />
           ) : (
@@ -322,8 +332,9 @@ export function MeetingChat({ initialTarget }: { initialTarget?: string | null }
             onChange={(e) => setTarget(e.target.value as string)}
             aria-label={t("meeting.chatTarget", "消息接收者")}
             sx={{
-              flex: 1, minWidth: 0, fontSize: "0.78rem", borderRadius: 2,
-              "& .MuiSelect-select": { py: 0.5, px: 1 },
+              minWidth: 0, maxWidth: "70%", fontSize: "0.78rem", borderRadius: 2,
+              "& .MuiOutlinedInput-notchedOutline": { border: 0 },
+              "& .MuiSelect-select": { py: 0.5, pl: 0.5 },
             }}
             disabled={members.length === 0 && target === PRIVATE_ALL}
           >
@@ -344,7 +355,7 @@ export function MeetingChat({ initialTarget }: { initialTarget?: string | null }
         </Box>
         <Paper
           elevation={0}
-          sx={{ display: "flex", alignItems: "center", gap: 0.5, px: 1, borderRadius: 3, bgcolor: "action.hover" }}
+          sx={{ display: "flex", flexDirection: "column", alignItems: "stretch", p: 0.75, borderRadius: 2, border: "1px solid", borderColor: "divider", bgcolor: "background.paper" }}
         >
           <input
             ref={fileInputRef}
@@ -355,6 +366,16 @@ export function MeetingChat({ initialTarget }: { initialTarget?: string | null }
               if (file) void sendTargetedFile(file);
             }}
           />
+          <InputBase
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
+            placeholder={privateTarget ? t("meeting.chatPrivatePlaceholder", "私聊 {{name}}…", { name: privateTarget.name || displayNameOf(privateTarget.uniqId) }) : t("meeting.chatPlaceholder", "说点什么…")}
+            multiline
+            maxRows={4}
+            sx={{ minHeight: 42, alignItems: "flex-start", fontSize: "0.85rem", px: 1, py: 0.75 }}
+          />
+          <Stack direction="row" alignItems="center">
           <Tooltip
             title={
               target === PRIVATE_ALL
@@ -375,19 +396,6 @@ export function MeetingChat({ initialTarget }: { initialTarget?: string | null }
               </IconButton>
             </span>
           </Tooltip>
-          <InputBase
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
-            placeholder={
-              privateTarget
-                ? t("meeting.chatPrivatePlaceholder", "私聊 {{name}}…", { name: privateTarget.name || displayNameOf(privateTarget.uniqId) })
-                : t("meeting.chatPlaceholder", "发送消息…")
-            }
-            multiline
-            maxRows={4}
-            sx={{ flex: 1, fontSize: "0.85rem", py: 0.75, px: 0.5 }}
-          />
           <Tooltip title={t("meeting.chatSelectAll", "全选聊天内容")}>
             <IconButton
               size="small"
@@ -405,10 +413,11 @@ export function MeetingChat({ initialTarget }: { initialTarget?: string | null }
             disabled={!input.trim() || sending}
             color="primary"
             aria-label={t("meeting.sendChat", "发送消息")}
-            sx={{ width: 40, height: 40 }}
+            sx={{ width: 40, height: 40, ml: "auto", borderRadius: 1.5, bgcolor: alpha(theme.palette.primary.main, 0.08) }}
           >
             <SendIcon sx={{ fontSize: 19 }} />
           </IconButton>
+          </Stack>
         </Paper>
       </Box>
     </Stack>
@@ -440,7 +449,7 @@ function AttachmentBubble({
       data-status={attachment.status}
       data-direction={attachment.direction}
       elevation={0}
-      sx={{ width: "min(248px, 88vw)", overflow: "hidden", borderRadius: 2, border: "1px solid", borderColor: "divider", bgcolor: "background.paper" }}
+      sx={{ width: "min(248px, 100%)", overflow: "hidden", borderRadius: 2, border: "1px solid", borderColor: "divider", bgcolor: "background.paper" }}
     >
       {isImage && attachment.url && (
         <Box
