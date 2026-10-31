@@ -192,7 +192,7 @@ export function ParticipantsPanel({
           spacing={0.25}
           sx={{
             position: "absolute", left: "50%", bottom: 12, transform: "translateX(-50%)", zIndex: 2,
-            p: 0.5, borderRadius: 3.5, bgcolor: "#FCFCFC",
+            p: 0.5, borderRadius: 3.5, bgcolor: "background.paper",
             boxShadow: "0 5px 20px rgba(30, 48, 80, 0.14)",
           }}
         >

@@ -133,7 +133,7 @@ export function MemberTile({ tile, isFocused, onFocus }: MemberTileProps) {
         position: "relative",
         borderRadius: 2,
         overflow: "hidden",
-        bgcolor: "#eef2f7",
+        bgcolor: theme.palette.mode === "dark" ? alpha(theme.palette.common.white, 0.08) : "#eef2f7",
         aspectRatio: tile.isScreen || tile.isExpanded ? "auto" : "16 / 9",
         height: tile.isScreen || tile.isExpanded ? "100%" : undefined,
         minHeight: 0,
@@ -180,7 +180,7 @@ export function MemberTile({ tile, isFocused, onFocus }: MemberTileProps) {
           // Keep the media element renderable while the first frame arrives.
           // The avatar layer below covers it until videoReady; opacity: 0 can
           // make Chromium defer the very first remote frame indefinitely.
-          style={{ width: "100%", height: "100%", objectFit: tile.isScreen ? "contain" : "cover", display: "block", background: "#eef2f7", opacity: 1 }}
+          style={{ width: "100%", height: "100%", objectFit: tile.isScreen ? "contain" : "cover", display: "block", background: theme.palette.mode === "dark" ? theme.palette.background.default : "#eef2f7", opacity: 1 }}
         />
       )}
       {!showVideo && (
@@ -195,7 +195,7 @@ export function MemberTile({ tile, isFocused, onFocus }: MemberTileProps) {
             justifyContent: "center",
             boxSizing: "border-box",
             pb: compact && tile.isSelf && !tile.isScreen ? "40px" : 0,
-            bgcolor: "#eef2f7",
+            bgcolor: theme.palette.mode === "dark" ? theme.palette.background.paper : "#eef2f7",
           }}
         >
           <motion.div layout={motionEnabled}>

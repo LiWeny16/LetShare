@@ -98,7 +98,7 @@ export default function MeetingAiBriefPanel({
   const hasUpdates = decisions.length + actions.length + questions.length > 0;
 
   return (
-    <Box data-testid="meeting-ai-minutes-panel" sx={{ height: "100%", minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column", overflowX: "hidden", bgcolor: "#F9F9F9" }}>
+    <Box data-testid="meeting-ai-minutes-panel" sx={{ height: "100%", minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column", overflowX: "hidden", bgcolor: (theme) => theme.palette.mode === "dark" ? theme.palette.background.paper : "#F9F9F9" }}>
       <Box sx={{ px: MEETING_PANEL_GUTTER, pt: 2, pb: 1, flexShrink: 0 }}>
         <Stack direction="row" alignItems="center" spacing={0.5} sx={{ minWidth: 0 }}>
           <AutoAwesomeOutlinedIcon sx={{ color: "primary.main", fontSize: 20, flexShrink: 0 }} />
@@ -110,7 +110,7 @@ export default function MeetingAiBriefPanel({
             {modelText && <Typography sx={{ ...textWrap, mt: 0.5, color: "text.disabled", fontSize: "0.75rem" }}>{modelText}</Typography>}
           </Box>
           <Tooltip title={t("meeting.aiBriefExpand", "展开完整纪要")}>
-            <IconButton size="small" onClick={onExpand} aria-label={t("meeting.aiBriefExpand", "展开完整纪要")} sx={{ width: 40, height: 40, flexShrink: 0, color: "#1677ff" }}><OpenInFullIcon fontSize="small" /></IconButton>
+            <IconButton size="small" onClick={onExpand} aria-label={t("meeting.aiBriefExpand", "展开完整纪要")} sx={{ width: 40, height: 40, flexShrink: 0, color: "primary.main" }}><OpenInFullIcon fontSize="small" /></IconButton>
           </Tooltip>
           <Tooltip title={t("meeting.aiBriefMore", "纪要更多操作")}>
             <IconButton size="small" onClick={(event) => setMenuAnchor(event.currentTarget)} aria-label={t("meeting.aiBriefMore", "纪要更多操作")} aria-haspopup="menu" aria-expanded={Boolean(menuAnchor)} sx={{ width: 40, height: 40, flexShrink: 0, color: "text.secondary" }}><MoreHorizIcon /></IconButton>

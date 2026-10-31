@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Box } from "@mui/material";
+import { Box, useTheme } from "@mui/material";
 import { Excalidraw } from "@excalidraw/excalidraw";
 import { LaserPointer as ExcalidrawLaserPointer } from "@excalidraw/laser-pointer";
 import type { BinaryFiles, ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
@@ -82,6 +82,7 @@ function scenePointSpan(elements: readonly OrderedExcalidrawElement[]): number {
  * the same board and stale snapshots cannot overwrite newer work.
  */
 export function ExcalidrawBoard({ followPresentation = true }: ExcalidrawBoardProps) {
+  const theme = useTheme();
   const apiRef = useRef<ExcalidrawImperativeAPI | null>(null);
   const boardRef = useRef<HTMLDivElement | null>(null);
   const laserCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -489,7 +490,7 @@ export function ExcalidrawBoard({ followPresentation = true }: ExcalidrawBoardPr
         autoFocus
         handleKeyboardGlobally
         isCollaborating
-        theme="light"
+        theme={theme.palette.mode}
         gridModeEnabled
         initialData={{ elements: [], appState: { viewBackgroundColor: "#ffffff" } }}
         UIOptions={{

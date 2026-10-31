@@ -3,6 +3,9 @@ import { useEffect, useRef, useState } from "react"
 import { useNavigate, useSearchParams } from "react-router-dom"
 import { Box, Button, DialogActions, DialogContent, DialogTitle, Paper, Stack, TextField, Typography } from "@mui/material"
 import { useTranslation } from "react-i18next"
+import { observer } from "mobx-react-lite"
+import { CssBaseline, ThemeProvider, useMediaQuery } from "@mui/material"
+import { themes } from "@Com/Theme/themes"
 import { meetingManager } from "@App/libs/meeting/meetingManager"
 import type { MeetingError } from "@App/libs/meeting/meetingManager"
 import realTimeColab from "@App/libs/connection/colabLib"
@@ -24,7 +27,17 @@ import AlertPortal from "../components/Alert"
  * （连接流程只挂在 share 页）。挂载时若未连接先 connectToServer，再发 join，
  * 否则 sendMeetingMessage 会被 isConnected 检查静默丢弃。
  */
-export default function MeetingPage() {
+const ThemedMeetingPage = observer(() => {
+  const selected = settingsStore.get("userTheme") || "light"
+  const systemPrefersDark = useMediaQuery("(prefers-color-scheme: dark)")
+  const key = selected === "system" ? (systemPrefersDark ? "dark" : "light") : selected
+  const theme = themes[key as keyof typeof themes] ?? themes.light
+  return <ThemeProvider theme={theme}><CssBaseline /><MeetingPage /></ThemeProvider>
+})
+
+export default ThemedMeetingPage
+
+function MeetingPage() {
   const { t } = useTranslation()
   const nav = useNavigate()
   const [sp] = useSearchParams()
@@ -203,7 +216,7 @@ function MeetingRouteError({ error, onBack, onRetry }: { error: MeetingError; on
   return (
     <Box
       data-testid={notFound ? "meeting-not-found" : "meeting-unavailable"}
-      sx={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", px: 2, bgcolor: "#f4f7fb" }}
+      sx={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", px: 2, bgcolor: "background.default" }}
     >
       <Paper elevation={0} sx={{ width: "min(100%, 480px)", p: { xs: 3, sm: 4 }, borderRadius: 4, border: "1px solid", borderColor: "divider", textAlign: "center" }}>
         <Typography sx={{ fontSize: "3rem", lineHeight: 1, mb: 2 }}>{notFound ? "404" : "!"}</Typography>

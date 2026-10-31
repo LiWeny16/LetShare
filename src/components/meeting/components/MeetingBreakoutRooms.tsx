@@ -52,7 +52,7 @@ export function MeetingBreakoutRooms({ roomId, mainRoom, rooms, canManage, conne
     {error && <Typography role="alert" sx={{ color: "error.main", fontSize: "0.75rem", mb: 0.75 }}>{error}</Typography>}
     {roomId !== main && <Button fullWidth size="small" variant="outlined" onClick={() => run(() => meetingManager.enterBreakoutRoom(main))} sx={{ mb: 1, minHeight: 40, borderRadius: 2, textTransform: "none", lineHeight: 1.3 }}>{t("meeting.breakoutReturnMain", "返回主会场")}</Button>}
     <Stack spacing={1}>
-      {rooms.map((room) => <Box key={room.room} sx={{ minWidth: 0, borderRadius: 2.5, bgcolor: "#F1F1F1", p: 1.25 }}>
+      {rooms.map((room) => <Box key={room.room} sx={{ minWidth: 0, borderRadius: 2.5, bgcolor: (theme) => theme.palette.mode === "dark" ? theme.palette.background.default : "#F1F1F1", p: 1.25 }}>
         <Stack direction="row" alignItems="center" spacing={0.5}>
           {editing === room.room ? <>
             <InputBase autoFocus value={name} onChange={(event) => setName(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") saveName(); if (event.key === "Escape") setEditing(null); }} inputProps={{ maxLength: 80, "aria-label": t("meeting.breakoutName", "房间名称") }} sx={{ flex: 1, minWidth: 0, minHeight: 40, px: 1, bgcolor: "background.paper", borderRadius: 1, fontSize: "0.875rem" }} />

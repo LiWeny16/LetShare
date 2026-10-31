@@ -100,9 +100,6 @@ export interface MeetingRoomProps {
   onExit: () => void;
 }
 
-const STAGE = "#FCFCFC";
-const BLUE = "#1677ff";
-
 function MeetingElapsed({ stage }: { stage: MeetingStage }) {
   const elapsed = useMeetingTimer(stage);
   return <Typography sx={{ fontSize: "0.76rem", color: "text.secondary", fontVariantNumeric: "tabular-nums" }}>{formatDuration(elapsed)}</Typography>;
@@ -120,6 +117,11 @@ async function toggleFullscreen(element: HTMLElement | null): Promise<void> {
 export default function MeetingRoom({ onExit }: MeetingRoomProps) {
   const { t } = useTranslation();
   const theme = useTheme();
+  const BLUE = theme.palette.primary.main;
+  const dark = theme.palette.mode === "dark";
+  const pageBackground = dark || theme.palette.background.default !== "#fff" ? theme.palette.background.default : "#F1F1F1";
+  const stageBackground = dark ? theme.palette.background.paper : "#FCFCFC";
+  const panelBackground = dark ? theme.palette.background.paper : "#F9F9F9";
   const isMobileBp = useMediaQuery(theme.breakpoints.down("sm"));
   const isTabletBp = useMediaQuery(theme.breakpoints.down("md"));
   const prefersReducedMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
@@ -679,11 +681,11 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
         inset: 0,
         zIndex: 1200,
         overflow: "hidden",
-        bgcolor: "#F1F1F1",
+        bgcolor: pageBackground,
         color: "text.primary",
         fontFamily: '"Inter", "PingFang SC", "Microsoft YaHei", sans-serif',
         "& .MuiTypography-root, & .MuiButton-root, & .MuiTab-root, & .MuiInputBase-root": { fontFamily: "inherit" },
-        "&:fullscreen": { bgcolor: "#F1F1F1" },
+        "&:fullscreen": { bgcolor: pageBackground },
       }}
     >
       {/* D5 可见降级：自动播放被拒 → 常驻琥珀 chip（非阻断式，不挡会议操作）；
@@ -767,7 +769,7 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
           display: "flex",
           alignItems: "center",
           gap: { xs: 1, sm: 2 },
-          bgcolor: "#F1F1F1",
+          bgcolor: pageBackground,
         }}
       >
         <LetShareWordmark />
@@ -875,7 +877,7 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
           display: "flex",
           gap: { xs: 0.75, sm: 1.25 },
           p: { xs: 0.75, sm: 1.25 },
-          bgcolor: "#F1F1F1",
+          bgcolor: pageBackground,
         }}
       >
         <MeetingStageMotionContext.Provider value={stageMotionEnabled}>
@@ -893,13 +895,13 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
               display: "flex",
               flexDirection: "column",
               overflow: "hidden",
-              bgcolor: STAGE,
+              bgcolor: stageBackground,
               borderRadius: 3.5,
               boxShadow: "0 12px 30px rgba(44, 57, 78, 0.12), 0 2px 8px rgba(44, 57, 78, 0.06)",
             }}
           >
             {!minutesExpanded && <Stack direction="row" alignItems="center" spacing={1} sx={{ px: { xs: 1, sm: 1.5 }, pt: 0.5, minHeight: 44, flexShrink: 0, minWidth: 0 }}>
-              <Typography sx={{ color: "#13233d", fontSize: "0.75rem", fontWeight: 750, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              <Typography sx={{ color: "text.primary", fontSize: "0.75rem", fontWeight: 750, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                 {activeSharingMode === "screen" ? t("meeting.screenSharing", "正在共享屏幕") : activeSharingMode === "whiteboard" ? t("meeting.whiteboard", "白板") : t("meeting.stage", "会议舞台")}
               </Typography>
               <Chip
@@ -908,7 +910,7 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
                 data-media-error={state.mediaError || ""}
                 label={state.stage === "in-meeting" ? t("meeting.inMeeting", "会议中") : t("meeting.joining", "正在加入")}
                 size="small"
-                sx={{ height: 23, flexShrink: 0, color: "#355070", bgcolor: alpha(BLUE, 0.08), border: `1px solid ${alpha(BLUE, 0.12)}`, fontSize: "0.68rem", fontWeight: 700 }}
+                sx={{ height: 23, flexShrink: 0, color: "text.secondary", bgcolor: alpha(BLUE, 0.08), border: `1px solid ${alpha(BLUE, 0.12)}`, fontSize: "0.68rem", fontWeight: 700 }}
               />
               <Box sx={{ flex: 1, minWidth: 0 }} />
               <Tooltip title={stageFocusMode ? t("meeting.stageRestore", "还原布局") : t("meeting.stageFocus", "专注舞台")}>
@@ -921,7 +923,7 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
                     if (next) setPanelOpen(false);
                     else setPanelOpen(true);
                   }}
-                  sx={{ width: 40, height: 40, color: stageFocusMode ? BLUE : "#58708e", bgcolor: "rgba(255,255,255,.82)", border: `1px solid ${alpha(BLUE, 0.12)}` }}
+                  sx={{ width: 40, height: 40, color: stageFocusMode ? BLUE : "text.secondary", bgcolor: stageBackground, border: `1px solid ${alpha(BLUE, 0.12)}` }}
                 >
                   {stageFocusMode ? <FullscreenExitIcon fontSize="small" /> : <CenterFocusStrongIcon fontSize="small" />}
                 </IconButton>
@@ -931,7 +933,7 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
                   data-testid="meeting-stage-fullscreen"
                   aria-label={nativeFullscreen === "stage" ? t("meeting.exitFullscreen", "退出全屏") : t("meeting.fullscreen", "全屏舞台")}
                   onClick={() => void toggleFullscreen(stageRef.current)}
-                  sx={{ width: 40, height: 40, color: nativeFullscreen === "stage" ? BLUE : "#58708e", bgcolor: "rgba(255,255,255,.82)", border: `1px solid ${alpha(BLUE, 0.12)}` }}
+                  sx={{ width: 40, height: 40, color: nativeFullscreen === "stage" ? BLUE : "text.secondary", bgcolor: stageBackground, border: `1px solid ${alpha(BLUE, 0.12)}` }}
                 >
                   {nativeFullscreen === "stage" ? <FullscreenExitIcon fontSize="small" /> : <FullscreenIcon fontSize="small" />}
                 </IconButton>
@@ -941,7 +943,7 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
                   data-testid="meeting-stage-fullscreen-chat"
                   aria-label={nativeFullscreen === "room" ? t("meeting.exitFullscreen", "退出全屏") : t("meeting.fullscreenWithChat", "全屏并保留聊天")}
                   onClick={() => { setPanelOpen(true); void toggleFullscreen(meetingShellRef.current); }}
-                  sx={{ width: 40, height: 40, color: nativeFullscreen === "room" ? BLUE : "#58708e", bgcolor: "rgba(255,255,255,.82)", border: `1px solid ${alpha(BLUE, 0.12)}` }}
+                  sx={{ width: 40, height: 40, color: nativeFullscreen === "room" ? BLUE : "text.secondary", bgcolor: stageBackground, border: `1px solid ${alpha(BLUE, 0.12)}` }}
                 >
                   {nativeFullscreen === "room" ? <FullscreenExitIcon fontSize="small" /> : <PictureInPictureAltIcon fontSize="small" />}
                 </IconButton>
@@ -1093,7 +1095,7 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
             minHeight: 0,
             borderRadius: 3.5,
             overflow: "hidden",
-            bgcolor: "#F9F9F9",
+          bgcolor: panelBackground,
             '&[data-compact-icons="true"] .MuiTab-iconWrapper': { display: "none" },
             '&[data-compact-count="true"] .meeting-panel-count': { display: "none" },
             boxShadow: "0 10px 28px rgba(47, 73, 112, 0.13), 0 2px 8px rgba(47, 73, 112, 0.06)",
@@ -1180,10 +1182,10 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          bgcolor: "#F1F1F1",
+          bgcolor: pageBackground,
         }}
       >
-        <Paper data-testid="meeting-toolbar" elevation={0} sx={{ display: "flex", alignItems: "center", gap: { xs: 0.25, sm: 0.5 }, width: { xs: "100%", sm: 480 }, maxWidth: "100%", minWidth: 0, px: { xs: 0.5, sm: 1 }, py: 0.5, borderRadius: 3.5, bgcolor: "#FCFCFC", boxShadow: "0 8px 24px rgba(63, 68, 91, 0.16), 0 2px 8px rgba(63, 68, 91, 0.07)" }}>
+        <Paper data-testid="meeting-toolbar" elevation={0} sx={{ display: "flex", alignItems: "center", gap: { xs: 0.25, sm: 0.5 }, width: { xs: "100%", sm: 480 }, maxWidth: "100%", minWidth: 0, px: { xs: 0.5, sm: 1 }, py: 0.5, borderRadius: 3.5, bgcolor: stageBackground, boxShadow: "0 8px 24px rgba(63, 68, 91, 0.16), 0 2px 8px rgba(63, 68, 91, 0.07)" }}>
         <Box
           sx={{
             flex: 1,
@@ -1323,7 +1325,7 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
       >
         <DialogTitle component="div" sx={{ p: 0 }}>
           <Stack direction="row" alignItems="center" spacing={1.5} sx={{ px: { xs: 2, sm: 2.75 }, py: { xs: 2, sm: 2.5 } }}>
-            <Box sx={{ width: 46, height: 46, borderRadius: 2.5, display: "grid", placeItems: "center", flexShrink: 0, bgcolor: "#e8f1ff", color: BLUE }}>
+            <Box sx={{ width: 46, height: 46, borderRadius: 2.5, display: "grid", placeItems: "center", flexShrink: 0, bgcolor: alpha(BLUE, 0.1), color: BLUE }}>
               <GroupsIcon />
             </Box>
             <Box sx={{ minWidth: 0, flex: 1 }}>
@@ -1334,11 +1336,11 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
                 {t("meeting.applyRequestsSubtitle", "确认后申请人将直接进入会议")}
               </Typography>
             </Box>
-            <Chip label={t("meeting.peopleCount", { count: state.applicants.size, defaultValue: "{{count}} 人" })} size="small" color="primary" sx={{ fontWeight: 800, bgcolor: "#e8f1ff", color: BLUE }} />
+            <Chip label={t("meeting.peopleCount", { count: state.applicants.size, defaultValue: "{{count}} 人" })} size="small" color="primary" sx={{ fontWeight: 800, bgcolor: alpha(BLUE, 0.1), color: BLUE }} />
           </Stack>
         </DialogTitle>
-        <DialogContent sx={{ p: { xs: 1.75, sm: 2.5 }, bgcolor: "#f6f8fc" }}>
-          <Paper elevation={0} sx={{ display: "flex", alignItems: "flex-start", gap: 1, p: 1.35, borderRadius: 2.5, bgcolor: "#edf5ff", color: "#174c91", border: "1px solid rgba(22, 119, 255, 0.12)" }}>
+        <DialogContent sx={{ p: { xs: 1.75, sm: 2.5 }, bgcolor: dark ? "background.default" : "#f6f8fc" }}>
+          <Paper elevation={0} sx={{ display: "flex", alignItems: "flex-start", gap: 1, p: 1.35, borderRadius: 2.5, bgcolor: alpha(BLUE, dark ? 0.18 : 0.08), color: "text.primary", border: `1px solid ${alpha(BLUE, 0.12)}` }}>
             <CheckIcon sx={{ mt: 0.1, fontSize: 19, flexShrink: 0 }} />
             <Typography sx={{ fontSize: "0.8rem", lineHeight: 1.55 }}>
               {t("meeting.applyRequestsDirectJoinHint", "接受后将直接加入当前会议，申请人无需再次接听邀请。")}
@@ -1355,7 +1357,7 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
                 <Paper key={a.requestId} elevation={0} data-testid={`meeting-applicant-card-${a.requestId}`} sx={{ p: { xs: 1.35, sm: 1.5 }, borderRadius: 2.75, bgcolor: "background.paper", border: "1px solid rgba(35, 76, 132, 0.11)", boxShadow: "0 5px 16px rgba(27, 59, 107, 0.06)" }}>
                   <Stack direction={{ xs: "column", sm: "row" }} spacing={{ xs: 1.2, sm: 1.5 }} alignItems={{ xs: "stretch", sm: "center" }}>
                     <Stack direction="row" spacing={1.15} alignItems="center" sx={{ minWidth: 0, flex: 1 }}>
-                      <Box sx={{ width: 40, height: 40, minWidth: 40, borderRadius: 2.25, display: "grid", placeItems: "center", bgcolor: "#eaf2ff", color: BLUE }}>
+                      <Box sx={{ width: 40, height: 40, minWidth: 40, borderRadius: 2.25, display: "grid", placeItems: "center", bgcolor: alpha(BLUE, 0.1), color: BLUE }}>
                         <PersonAddAlt1Icon fontSize="small" />
                       </Box>
                       <Box sx={{ minWidth: 0 }}>
@@ -1391,6 +1393,7 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
 
 function ScreenStage({ tile, isFocused, onFocus, controlsHidden = false }: { tile: MemberTileData; isFocused: boolean; onFocus: () => void; controlsHidden?: boolean }) {
   const { t } = useTranslation();
+  const BLUE = useTheme().palette.primary.main;
   const containerRef = useRef<HTMLDivElement | null>(null);
   const ref = useRef<HTMLVideoElement | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -1474,6 +1477,7 @@ function _ActiveSharingBar({
   onSelectMode: (mode: "screen" | "whiteboard") => void;
 }) {
   const barRef = useRef<HTMLDivElement | null>(null);
+  const BLUE = useTheme().palette.primary.main;
   const dragRef = useRef<{ pointerId: number; offsetX: number; offsetY: number } | null>(null);
   const [position, setPosition] = useState({ left: 12, top: 10 });
   const [centered, setCentered] = useState(true);
@@ -1695,6 +1699,8 @@ function ActiveSharingBarV2({
   onSelectMode: (mode: "screen" | "whiteboard" | "camera") => void;
 }) {
   const { t } = useTranslation();
+  const theme = useTheme();
+  const BLUE = theme.palette.primary.main;
   const [collapsed, setCollapsed] = useState(false);
   const { barRef, position, centered, onDragStart, onDragMove, onDragEnd, onDragKeyDown } = useMeetingFloatingDrag(collapsed);
   const label = mode === "whiteboard" ? t("meeting.presentationWhiteboard", "白板") : mode === "camera" ? t("meeting.presentationVideo", "视频") : t("meeting.presentationScreen", "屏幕");
@@ -1725,7 +1731,7 @@ function ActiveSharingBarV2({
         px: { xs: 0.45, sm: 0.7 },
         py: 0.45,
         borderRadius: 2.5,
-        bgcolor: "rgba(255,255,255,.95)",
+        bgcolor: theme.palette.background.paper,
         border: `1px solid ${alpha(BLUE, 0.18)}`,
         boxShadow: "0 8px 24px rgba(14,29,53,.16)",
         backdropFilter: "blur(16px)",
@@ -1750,7 +1756,7 @@ function ActiveSharingBarV2({
       </Box>
       <Stack direction="row" alignItems="center" spacing={0.4} sx={{ px: 0.45, minHeight: 32, minWidth: 0, maxWidth: "100%" }}>
         {mode === "whiteboard" ? <EditIcon sx={{ fontSize: 16, color: BLUE }} /> : mode === "camera" ? <VideocamIcon sx={{ fontSize: 16, color: BLUE }} /> : <ScreenShareIcon sx={{ fontSize: 16, color: BLUE }} />}
-        <Typography sx={{ fontSize: { xs: "0.74rem", sm: "0.72rem" }, fontWeight: 800, color: "#13233d", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{label}</Typography>
+        <Typography sx={{ fontSize: { xs: "0.74rem", sm: "0.72rem" }, fontWeight: 800, color: "text.primary", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{label}</Typography>
       </Stack>
       <Tooltip title={collapsed ? t("meeting.presentationExpandControls", "展开共享控制") : t("meeting.presentationCollapseControls", "收起共享控制")}>
         <IconButton
@@ -1778,7 +1784,7 @@ function ActiveSharingBarV2({
           minHeight: 32,
           borderRadius: 1.5,
           overflow: "hidden",
-          bgcolor: "#f4f7fb",
+          bgcolor: theme.palette.mode === "dark" ? "action.hover" : "#f4f7fb",
           "& .MuiToggleButton-root": {
             minWidth: { xs: 34, sm: 48 },
             minHeight: 30,
@@ -1786,7 +1792,7 @@ function ActiveSharingBarV2({
             py: 0.25,
             border: 0,
             borderRadius: 0,
-            color: "#687386",
+            color: "text.secondary",
             fontSize: { xs: "0.68rem", sm: "0.7rem" },
             fontWeight: 750,
             textTransform: "none",
@@ -1794,7 +1800,7 @@ function ActiveSharingBarV2({
           },
           "& .MuiToggleButton-root.Mui-selected": {
             color: BLUE,
-            bgcolor: "#e7f0ff",
+            bgcolor: alpha(BLUE, 0.14),
           },
           "& .MuiToggleButton-root.Mui-disabled": { opacity: 0.35 },
         }}
@@ -1860,6 +1866,8 @@ function ActiveSharingSurface({
   onActivate: () => void;
 }) {
   const { t } = useTranslation();
+  const theme = useTheme();
+  const BLUE = theme.palette.primary.main;
   const motionEnabled = useContext(MeetingStageMotionContext);
   const [layoutMoving, setLayoutMoving] = useState(false);
   useEffect(() => {
@@ -1874,7 +1882,7 @@ function ActiveSharingSurface({
       role="region"
       aria-label={label}
       onClick={compact || (mode === "screen" && tile) ? onActivate : undefined}
-      sx={{ position: "relative", width: "100%", height: "100%", minHeight: 0, overflow: "hidden", borderRadius: 2, bgcolor: "#f4f7fb", border: `1px solid ${alpha(BLUE, 0.16)}`, cursor: mode === "screen" && tile ? "pointer" : "default" }}
+      sx={{ position: "relative", width: "100%", height: "100%", minHeight: 0, overflow: "hidden", borderRadius: 2, bgcolor: theme.palette.mode === "dark" ? "background.default" : "#f4f7fb", border: `1px solid ${alpha(BLUE, 0.16)}`, cursor: mode === "screen" && tile ? "pointer" : "default" }}
     >
       <Stack direction="row" alignItems="center" spacing={0.75} sx={{ display: "none", position: "absolute", top: 10, left: 12, zIndex: 9, px: 1, py: 0.5, borderRadius: 1.5, bgcolor: "rgba(255,255,255,.9)", color: "#13233d", boxShadow: "0 4px 14px rgba(14,29,53,.12)" }}>
         <ScreenShareIcon sx={{ fontSize: 15, color: BLUE }} />

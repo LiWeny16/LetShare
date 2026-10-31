@@ -252,15 +252,15 @@ export default function MeetingMediaSettingsDialog({ open, onClose, onMediaSetti
           display: "flex",
           flexDirection: { xs: "column", sm: "row" },
           p: 0,
-          bgcolor: "#F9F9F9",
+          bgcolor: theme.palette.mode === "dark" ? "background.paper" : "#F9F9F9",
           minHeight: 0,
           overflow: "hidden",
         }}
       >
-        <Box component="nav" aria-label={t("meeting.settingsNavigation", "设置分类")} sx={{ width: { xs: "100%", sm: 208 }, minHeight: 0, maxHeight: { xs: "min(40dvh, 190px)", sm: "none" }, overflowY: "auto", flexShrink: 0, boxSizing: "border-box", p: 2, bgcolor: "#F1F1F1" }}>
-          <TextField fullWidth size="small" value={search} onChange={(event) => { setSearch(event.target.value); if (contentRef.current) contentRef.current.scrollTop = 0; }} placeholder={t("meeting.settingsSearch", "搜索设置")} inputProps={{ "aria-label": t("meeting.settingsSearch", "搜索设置") }} InputProps={{ startAdornment: <SearchIcon sx={{ mr: 0.75, fontSize: 19, color: "text.secondary" }} /> }} sx={{ "& .MuiOutlinedInput-root": { bgcolor: "#FCFCFC", borderRadius: 2 } }} />
+        <Box component="nav" aria-label={t("meeting.settingsNavigation", "设置分类")} sx={{ width: { xs: "100%", sm: 208 }, minHeight: 0, maxHeight: { xs: "min(40dvh, 190px)", sm: "none" }, overflowY: "auto", flexShrink: 0, boxSizing: "border-box", p: 2, bgcolor: theme.palette.mode === "dark" ? "background.default" : "#F1F1F1" }}>
+          <TextField fullWidth size="small" value={search} onChange={(event) => { setSearch(event.target.value); if (contentRef.current) contentRef.current.scrollTop = 0; }} placeholder={t("meeting.settingsSearch", "搜索设置")} inputProps={{ "aria-label": t("meeting.settingsSearch", "搜索设置") }} InputProps={{ startAdornment: <SearchIcon sx={{ mr: 0.75, fontSize: 19, color: "text.secondary" }} /> }} sx={{ "& .MuiOutlinedInput-root": { bgcolor: "background.paper", borderRadius: 2 } }} />
           <Stack direction={{ xs: "row", sm: "column" }} useFlexGap spacing={0.5} sx={{ mt: 1.5, flexWrap: "wrap", alignItems: "stretch", maxHeight: { xs: 104, sm: "none" }, overflowY: "auto" }}>
-            {visibleSections.map((section) => <Button key={section.id} size="small" onClick={() => navigateTo(section.id)} aria-current={activeSection === section.id ? "location" : undefined} sx={{ minWidth: 0, minHeight: 40, px: 1.25, justifyContent: { xs: "center", sm: "flex-start" }, color: activeSection === section.id ? "primary.main" : "text.secondary", bgcolor: activeSection === section.id ? "#FCFCFC" : "transparent", borderRadius: 2, textTransform: "none", textAlign: "left", lineHeight: 1.3, whiteSpace: "normal" }}>{section.title}</Button>)}
+            {visibleSections.map((section) => <Button key={section.id} size="small" onClick={() => navigateTo(section.id)} aria-current={activeSection === section.id ? "location" : undefined} sx={{ minWidth: 0, minHeight: 40, px: 1.25, justifyContent: { xs: "center", sm: "flex-start" }, color: activeSection === section.id ? "primary.main" : "text.secondary", bgcolor: activeSection === section.id ? "background.paper" : "transparent", borderRadius: 2, textTransform: "none", textAlign: "left", lineHeight: 1.3, whiteSpace: "normal" }}>{section.title}</Button>)}
           </Stack>
         </Box>
         <Box ref={contentRef} sx={{ flex: 1, minWidth: 0, minHeight: 0, overflowY: "auto", overflowX: "hidden", overscrollBehavior: "contain", WebkitOverflowScrolling: "touch", p: { xs: 2, sm: 3 }, display: "flex", flexDirection: "column", gap: 2.5, "& > section + section": { borderTop: "1px solid", borderColor: "divider", pt: 2.5 } }}>
@@ -457,7 +457,7 @@ export default function MeetingMediaSettingsDialog({ open, onClose, onMediaSetti
         </Group>}
         </Box>
       </DialogContent>
-      <DialogActions sx={{ px: { xs: 2, sm: 3 }, py: 1.5, gap: 1, flexShrink: 0, flexWrap: "wrap", bgcolor: "#F9F9F9", backgroundImage: { xs: "none", sm: "linear-gradient(to right, #F1F1F1 208px, #F9F9F9 208px)" } }}>
+      <DialogActions sx={{ px: { xs: 2, sm: 3 }, py: 1.5, gap: 1, flexShrink: 0, flexWrap: "wrap", bgcolor: theme.palette.mode === "dark" ? "background.paper" : "#F9F9F9", backgroundImage: theme.palette.mode === "dark" ? "none" : { xs: "none", sm: "linear-gradient(to right, #F1F1F1 208px, #F9F9F9 208px)" } }}>
         <Typography sx={{ mr: "auto", color: "text.secondary", fontSize: "0.7rem" }}>{t("meeting.settingsSaved", "设置会自动保存")}</Typography>
         <Button variant="contained" onClick={onClose} sx={{ minHeight: 40, borderRadius: 2.5, px: 2, textTransform: "none", fontWeight: 750 }}>{t("meeting.done", "完成")}</Button>
       </DialogActions>

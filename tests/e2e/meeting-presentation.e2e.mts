@@ -109,13 +109,13 @@ test("presentation owner + Excalidraw sync + right panel opener are real UI flow
       permissions: ["camera", "microphone"],
       viewport: { width, height },
     });
-    await context.addInitScript((arg: { name: string; token: string; ws: string; sourceRoom: string; lowEnd: boolean }) => {
+    await context.addInitScript((arg: { name: string; token: string; ws: string; sourceRoom: string; lowEnd: boolean; guestTheme: string }) => {
       Object.defineProperty(navigator, "hardwareConcurrency", { configurable: true, value: arg.lowEnd ? 2 : 8 });
       Object.defineProperty(navigator, "deviceMemory", { configurable: true, value: arg.lowEnd ? 2 : 8 });
       localStorage.setItem("memorableState", JSON.stringify({ memorable: { userId: arg.name, uniqId: `${arg.name}:presentation` } }));
       localStorage.setItem("user_settings", JSON.stringify({
         roomId: arg.sourceRoom,
-        userTheme: arg.name === "bob" ? "green" : "light",
+        userTheme: arg.name === "bob" ? arg.guestTheme : "light",
         userLanguage: "zh-CN",
         serverMode: "custom",
         customServerUrl: arg.ws,
@@ -125,7 +125,7 @@ test("presentation owner + Excalidraw sync + right panel opener are real UI flow
         version: "0",
         isNewUser: false,
       }));
-    }, { name, token: TOKEN, ws: WS, sourceRoom: SOURCE_ROOM, lowEnd: name === "bob" });
+    }, { name, token: TOKEN, ws: WS, sourceRoom: SOURCE_ROOM, lowEnd: name === "bob", guestTheme: process.env.E2E_GUEST_THEME ?? "green" });
     const page = await context.newPage();
     page.on("pageerror", (error) => console.log(`[${name}] pageerror`, error.message));
     page.on("console", (message) => console.log(`[${name}][console]`, message.text().slice(0, 240)));
@@ -228,7 +228,21 @@ test("presentation owner + Excalidraw sync + right panel opener are real UI flow
   assert.equal(titleStyle.shadow, "none");
   assert.equal(titleStyle.selection, "rgb(190, 219, 255)", "meeting title selection should use the light theme");
   const guestSelection = await guest.getByText("Presentation UX 验证", { exact: true }).evaluate((element) => getComputedStyle(element, "::selection").backgroundColor);
-  assert.equal(guestSelection, "rgb(196, 231, 198)", "meeting selection should follow the green theme");
+  const guestTheme = process.env.E2E_GUEST_THEME ?? "green";
+  const expectedTheme = guestTheme === "dark"
+    ? { selection: "rgb(49, 91, 142)", background: "rgb(18, 18, 18)", accent: "rgb(144, 202, 249)" }
+    : { selection: "rgb(196, 231, 198)", background: "rgb(241, 248, 233)", accent: "rgb(56, 142, 60)" };
+  assert.equal(guestSelection, expectedTheme.selection, "meeting text selection should follow the saved theme");
+  assert.equal(await guest.getByTestId("meeting-shell").evaluate((element) => getComputedStyle(element).backgroundColor), expectedTheme.background, "meeting background should follow the saved theme");
+  assert.equal(await guest.getByTestId("meeting-member-tile-bob:presentation").locator(".MuiAvatar-root").evaluate((element) => getComputedStyle(element).backgroundColor), expectedTheme.accent, "meeting accent should follow the saved theme");
+  if (guestTheme === "dark") {
+    await guest.getByTestId("meeting-media-settings-open").click();
+    const settingsDialog = guest.getByTestId("meeting-media-settings-dialog");
+    await settingsDialog.waitFor({ state: "visible" });
+    assert.equal(await settingsDialog.locator("nav").evaluate((element) => getComputedStyle(element).backgroundColor), expectedTheme.background, "dark meeting settings navigation should use the dark background");
+    await guest.getByRole("button", { name: /完成|done/i }).click();
+    await settingsDialog.waitFor({ state: "hidden" });
+  }
   await titleInput.fill("团队例会");
   await titleInput.press("Enter");
   await guest.getByText("团队例会", { exact: true }).waitFor({ state: "visible" });
@@ -384,6 +398,9 @@ test("presentation owner + Excalidraw sync + right panel opener are real UI flow
   await until("screen and whiteboard coexist", async () => (await observableMeetingState(host)).screenOn === true, 15_000);
   await host.getByTestId("meeting-excalidraw-board").waitFor({ state: "visible" });
   await guest.getByTestId("meeting-excalidraw-board").waitFor({ state: "visible" });
+  if (guestTheme === "dark") {
+    await guest.getByTestId("meeting-excalidraw-board").locator(".excalidraw.theme--dark").waitFor({ state: "visible" });
+  }
   await host.getByTestId("meeting-active-sharing").waitFor({ state: "visible" });
   assert.equal(await host.getByTestId("meeting-active-sharing").getAttribute("data-mode"), "whiteboard");
   const excalidrawBoard = host.getByTestId("meeting-excalidraw-board");
