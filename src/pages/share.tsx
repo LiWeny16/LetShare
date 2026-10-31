@@ -9,7 +9,7 @@ import AddIcon from "@mui/icons-material/Add";
 import GroupsIcon from "@mui/icons-material/Groups";
 import PhonelinkIcon from "@mui/icons-material/Phonelink";
 import PhonelinkRingIcon from "@mui/icons-material/PhonelinkRing";
-import { ButtonBase, CssBaseline, GlobalStyles } from '@mui/material';
+import { ButtonBase, CssBaseline } from '@mui/material';
 import { createTheme, ThemeProvider, useTheme } from '@mui/material/styles';
 import {
   Dialog,
@@ -2909,14 +2909,6 @@ const ThemedShare = observer(() => {
   return (
     <ThemeProvider theme={actualTheme}>
       <CssBaseline />
-      <GlobalStyles
-        styles={(theme) => ({
-          '::selection': {
-            backgroundColor: theme.palette.primary.light,
-            color: theme.palette.getContrastText(theme.palette.primary.light),
-          },
-        })}
-      />
       <Share />
     </ThemeProvider>
   );

@@ -573,7 +573,7 @@ test("transfer error does not fire both toast and status bar update simultaneous
 
   // handleConnectionLost uses the persistent status bar only; transfer error
   // toasts are emitted by individual transfer-error handlers when needed.
-  const connLostBody = extractMethodBody(source, "public handleConnectionLost");
+  const connLostBody = extractMethodBody(source, "public async handleConnectionLost");
   const connStatusCount = (connLostBody.match(/this\.setTransferStatus/g) ?? []).length;
   const connAlertCount = (connLostBody.match(/alertUseMUI/g) ?? []).length;
 

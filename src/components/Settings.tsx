@@ -27,7 +27,7 @@ import alertUseMUI from '@App/libs/tools/alert';
 import ThemeSelector from './Theme/ThemeSelector';
 import { validateRoomName, getDeviceType } from '@App/libs/tools/tools';
 import realTimeColab from '@App/libs/connection/colabLib';
-import i18n from '@App/libs/i18n/i18n';
+import { setAppLanguage } from '@App/libs/i18n/i18n';
 import { useTranslation } from 'react-i18next';
 import SettingsIcon from '@mui/icons-material/Settings';
 // import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
@@ -124,26 +124,7 @@ const SettingsPage = () => {
   };
 
   const handleChangeLanguage = (event: SelectChangeEvent<LanguageType>) => {
-    const newLang = event.target.value as LanguageType;
-    settingsStore.update('userLanguage', newLang);
-
-    const resolveLang = (lang: LanguageType) => {
-      if (lang === 'system') {
-        const browserLang = navigator.language.toLowerCase();
-        if (browserLang.startsWith('zh')) return 'zh';
-        if (browserLang.startsWith('ms')) return 'ms';
-        if (browserLang.startsWith('id')) return 'id';
-        return 'en';
-      }
-      return lang;
-    };
-
-    const finalLang = resolveLang(newLang);
-    i18n.changeLanguage(finalLang).then(() => {
-      document.title = i18n.t('meta.title');
-    });
-
-    console.log('Language changed to:', newLang);
+    void setAppLanguage(event.target.value as LanguageType);
   };
 
 

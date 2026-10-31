@@ -3,26 +3,28 @@ import { initReactI18next } from 'react-i18next';
 import LanguageDetector from 'i18next-browser-languagedetector';
 import settingsStore from '../mobx/mobx';
 import { resources } from './translation';
+import { resolveLanguagePreference, type LanguagePreference } from './language';
 
 
 
-// 从 MobX store 获取语言设置
-const storedLang = settingsStore.get('userLanguage') as LanguageType | null;
+const getEffectiveLang = () => resolveLanguagePreference(
+    settingsStore.get('userLanguage') ?? 'system',
+    typeof navigator === 'undefined' ? '' : navigator.language,
+);
 
-// Default new users to English; users can still switch to system language in settings.
-const userLang: LanguageType = storedLang ?? 'en';
+function updateDocumentLanguage(language: string) {
+    if (typeof document === 'undefined') return;
+    document.title = i18n.t('meta.title');
+    document.documentElement.lang = language;
+}
 
-// 解析最终用于 i18n 的语言
-const getEffectiveLang = (): string => {
-    if (userLang === 'system') {
-        const lang = navigator.language.toLowerCase();
-        if (lang.startsWith('zh')) return 'zh';
-        if (lang.startsWith('ms')) return 'ms';
-        if (lang.startsWith('id')) return 'id';
-        return 'en';
-    }
-    return userLang;
-};
+/** Persist and apply language changes consistently from any application surface. */
+export async function setAppLanguage(preference: LanguagePreference): Promise<void> {
+    settingsStore.update('userLanguage', preference);
+    const language = getEffectiveLang();
+    await i18n.changeLanguage(language);
+    updateDocumentLanguage(language);
+}
 
 i18n
     .use(LanguageDetector)
@@ -42,9 +44,15 @@ i18n
             order: [],
             caches: [],
         },
-    }).then(() => {
-        document.title = i18n.t('meta.title');
-        document.documentElement.lang = getEffectiveLang();
+    }).then(() => updateDocumentLanguage(getEffectiveLang()));
+
+if (typeof window !== 'undefined') {
+    window.addEventListener('languagechange', () => {
+        if (settingsStore.get('userLanguage') === 'system') {
+            const language = getEffectiveLang();
+            void i18n.changeLanguage(language).then(() => updateDocumentLanguage(language));
+        }
     });
+}
 
 export default i18n;

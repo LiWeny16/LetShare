@@ -441,7 +441,7 @@ export function ExcalidrawBoard({ followPresentation = true }: ExcalidrawBoardPr
       data-laser-count={laserCount}
       sx={{
         position: "absolute",
-        inset: 12,
+        inset: 4,
         zIndex: 7,
         overflow: "visible",
         minWidth: 0,
@@ -450,7 +450,7 @@ export function ExcalidrawBoard({ followPresentation = true }: ExcalidrawBoardPr
         containerName: "meeting-excalidraw",
         borderRadius: 3,
         bgcolor: "#fff",
-        boxShadow: "0 18px 60px rgba(3, 12, 28, .32)",
+        boxShadow: "0 4px 18px rgba(3, 12, 28, .12)",
         "& .excalidraw": { width: "100%", height: "100%", minWidth: 0, minHeight: 0, position: "relative", overflow: "visible" },
         // Excalidraw's mobile breakpoint is based on the browser viewport.
         // A meeting can have a much narrower stage while the browser is still

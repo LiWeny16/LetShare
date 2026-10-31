@@ -16,43 +16,45 @@ export function useSpeakingUsers(sources: SpeakingSource[]): Set<string> {
   const [speaking, setSpeaking] = useState<Set<string>>(new Set());
 
   useEffect(() => {
-    if (typeof window === "undefined" || sources.length === 0) {
-      setSpeaking(new Set());
+    const activeSources = sources.filter((source) => source.enabled && source.track && source.track.readyState === "live");
+    if (typeof window === "undefined" || activeSources.length === 0) {
+      setSpeaking((previous) => previous.size ? new Set() : previous);
       return;
     }
     const win = window as typeof window & { webkitAudioContext?: typeof AudioContext };
     const AudioContextCtor = win.AudioContext ?? win.webkitAudioContext;
     if (!AudioContextCtor) {
-      setSpeaking(new Set());
+      setSpeaking((previous) => previous.size ? new Set() : previous);
       return;
     }
 
     let context: AudioContext | null = null;
-    const analysers = new Map<string, AnalyserNode>();
+    const analysers = new Map<string, { analyser: AnalyserNode; values: Uint8Array<ArrayBuffer> }>();
     try {
       context = new AudioContextCtor();
       if (context.state === "suspended") void context.resume();
-      for (const source of sources) {
-        if (!source.enabled || !source.track || source.track.readyState !== "live") continue;
+      for (const source of activeSources) {
+        if (!source.track) continue;
         const analyser = context.createAnalyser();
         analyser.fftSize = 512;
         analyser.smoothingTimeConstant = 0.72;
         context.createMediaStreamSource(new MediaStream([source.track])).connect(analyser);
-        analysers.set(source.uniqId, analyser);
+        analysers.set(source.uniqId, { analyser, values: new Uint8Array(analyser.fftSize) });
       }
     } catch {
       context?.close();
-      setSpeaking(new Set());
+      setSpeaking((previous) => previous.size ? new Set() : previous);
       return;
     }
 
     const activity = new Map<string, { active: boolean; lastVoiceAt: number }>();
     let frame = 0;
+    let published = new Set<string>();
+    setSpeaking((previous) => previous.size ? new Set() : previous);
     const sample = () => {
       const now = performance.now();
       const next = new Set<string>();
-      for (const [uniqId, analyser] of analysers) {
-        const values = new Uint8Array(analyser.fftSize);
+      for (const [uniqId, { analyser, values }] of analysers) {
         analyser.getByteTimeDomainData(values);
         let sum = 0;
         for (const value of values) {
@@ -64,10 +66,10 @@ export function useSpeakingUsers(sources: SpeakingSource[]): Set<string> {
         activity.set(uniqId, state);
         if (state.active) next.add(uniqId);
       }
-      setSpeaking((previous) => {
-        if (previous.size === next.size && [...previous].every((id) => next.has(id))) return previous;
-        return next;
-      });
+      if (published.size !== next.size || [...published].some((id) => !next.has(id))) {
+        published = next;
+        setSpeaking(next);
+      }
       frame = window.setTimeout(sample, SPEECH_SAMPLE_MS);
     };
     sample();

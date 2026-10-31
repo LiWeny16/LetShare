@@ -26,7 +26,7 @@ test("PRO activation stores auth before the relay connection can be refreshed", 
   const activationStart = dialogSource.indexOf("const result = await activatePro(userId, code);");
   assert.notEqual(activationStart, -1, "activation request should exist");
 
-  const successAlertIndex = dialogSource.indexOf("alertUseMUI('PRO 已激活！50MB+ 服务器中转已解锁(上限 3GB)'", activationStart);
+  const successAlertIndex = dialogSource.indexOf("alertUseMUI(t('proPlan.activatedMessage')", activationStart);
   assert.notEqual(successAlertIndex, -1, "success alert should exist");
 
   const activationBlock = dialogSource.slice(activationStart, successAlertIndex);

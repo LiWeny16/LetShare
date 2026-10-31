@@ -1,11 +1,11 @@
 /** Meeting participant list with host actions and a direct private-chat entry. */
 import { useEffect, useRef, useState } from "react";
-import { alpha, Avatar, Box, Button, Divider, IconButton, InputBase, List, ListItem, ListItemAvatar, ListItemText, Menu, MenuItem, Popover, Slider, Stack, Tooltip, Typography, useTheme } from "@mui/material";
+import { alpha, Avatar, Box, Divider, IconButton, InputBase, List, ListItem, ListItemAvatar, ListItemText, MenuItem, Popover, Slider, Stack, Tooltip, Typography, useTheme } from "@mui/material";
 import ChatBubbleOutlineIcon from "@mui/icons-material/ChatBubbleOutline";
 import MicOffIcon from "@mui/icons-material/MicOff";
 import MicNoneIcon from "@mui/icons-material/MicNone";
 import SearchIcon from "@mui/icons-material/Search";
-import AddIcon from "@mui/icons-material/Add";
+import PersonAddOutlinedIcon from "@mui/icons-material/PersonAddOutlined";
 import CampaignIcon from "@mui/icons-material/Campaign";
 import PersonIcon from "@mui/icons-material/Person";
 import MoreVertIcon from "@mui/icons-material/MoreVert";
@@ -17,6 +17,9 @@ import realTimeColab from "@App/libs/connection/colabLib";
 import { meetingManager } from "@App/libs/meeting/meetingManager";
 import type { MeetingState } from "@App/libs/meeting/meetingManager";
 import { displayNameOf } from "../types";
+import { MeetingMenu } from "./MeetingMenu";
+import { MeetingBreakoutRooms } from "./MeetingBreakoutRooms";
+import { MEETING_PANEL_GUTTER } from "../designTokens";
 
 export function ParticipantsPanel({
   state,
@@ -69,49 +72,17 @@ export function ParticipantsPanel({
   });
 
   return (
-    <Stack sx={{ flex: 1, minHeight: 0 }}>
-      <Box sx={{ px: 2, pt: 2, pb: 1.25 }}>
+    <Stack sx={{ flex: 1, minWidth: 0, minHeight: 0, position: "relative" }}>
+      <Box sx={{ px: MEETING_PANEL_GUTTER, pt: 2, pb: 1.25 }}>
         <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={1}>
-          <Typography sx={{ fontSize: "0.95rem", fontWeight: 800 }}>{t("meeting.membersTitle", "会议成员")} <Box component="span" sx={{ ml: 0.5, color: "text.secondary", fontSize: "0.75rem", fontWeight: 500, fontVariantNumeric: "tabular-nums" }}>{rows.length}</Box></Typography>
-          <Button size="small" startIcon={<AddIcon />} onClick={onInvite} sx={{ minHeight: 40, px: 0.5, textTransform: "none", whiteSpace: "nowrap" }}>{t("meeting.invite", "邀请")}</Button>
+          <Typography sx={{ fontSize: "1rem", fontWeight: 800 }}>{t("meeting.membersTitle", "会议成员")} <Box component="span" sx={{ ml: 0.5, color: "text.secondary", fontSize: "0.75rem", fontWeight: 500, fontVariantNumeric: "tabular-nums" }}>{rows.length}</Box></Typography>
         </Stack>
         <Box sx={{ mt: 1, px: 1.25, display: "flex", alignItems: "center", gap: 0.75, minHeight: 42, borderRadius: 2, bgcolor: "action.hover" }}>
           <SearchIcon sx={{ color: "text.secondary", fontSize: 19 }} />
-          <InputBase value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t("meeting.searchMembers", "搜索成员")} inputProps={{ "aria-label": t("meeting.searchMembers", "搜索成员") }} sx={{ flex: 1, minWidth: 0, fontSize: "0.8rem" }} />
+          <InputBase value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t("meeting.searchMembers", "搜索成员")} inputProps={{ "aria-label": t("meeting.searchMembers", "搜索成员") }} sx={{ flex: 1, minWidth: 0, fontSize: "0.875rem" }} />
         </Box>
       </Box>
-      {amHost && (
-        <Stack spacing={1} sx={{ px: 2, pb: 1.75, pt: 0.5 }}>
-          <Typography sx={{ px: 0.5, color: "text.secondary", fontSize: "0.72rem", fontWeight: 750 }}>
-            {t("meeting.hostControls", "主持人控制")}
-          </Typography>
-          <Stack direction="row" spacing={0.75}>
-            <Button
-              fullWidth
-              size="small"
-              variant="outlined"
-              startIcon={<MicOffIcon sx={{ fontSize: 17 }} />}
-              onClick={() => meetingManager.muteAll()}
-              sx={{ minHeight: 42, borderRadius: 1.75, borderColor: "divider", bgcolor: "action.hover", color: "text.secondary", textTransform: "none", fontSize: "0.72rem", fontWeight: 700, whiteSpace: "nowrap" }}
-            >
-              {t("meeting.muteAll", "全员静音")}
-            </Button>
-            <Button
-              fullWidth
-              size="small"
-              variant="outlined"
-              startIcon={<CampaignIcon sx={{ fontSize: 17 }} />}
-              onClick={() => meetingManager.requestEveryoneUnmute()}
-              sx={{ minHeight: 42, borderRadius: 1.75, borderColor: "divider", bgcolor: "action.hover", color: "text.secondary", textTransform: "none", fontSize: "0.72rem", fontWeight: 700, whiteSpace: "nowrap" }}
-            >
-              {t("meeting.requestUnmute", "请求开麦")}
-            </Button>
-          </Stack>
-        </Stack>
-      )}
-      {amHost && <Divider sx={{ mx: 2 }} />}
-      <List dense sx={{ overflowY: "auto", flex: 1, minHeight: 0, px: 1, py: 1 }}>
-      <Typography sx={{ px: 1, py: 0.75, color: "text.secondary", fontSize: "0.7rem" }}>{t("meeting.inMeeting", "会议中")} · {rows.length} {t("meeting.peopleUnit", "人")}</Typography>
+      <List dense sx={{ overflowY: "auto", overflowX: "hidden", flex: 1, width: "100%", minWidth: 0, minHeight: 0, boxSizing: "border-box", px: MEETING_PANEL_GUTTER, pt: 1, pb: 10, scrollPaddingBottom: "80px" }}>
       {filteredRows.map((member) => {
         const isHost = member.uniqId === state.hostId;
         const isSelf = member.uniqId === selfId;
@@ -120,6 +91,7 @@ export function ParticipantsPanel({
         return (
           <ListItem
             key={member.uniqId}
+            disableGutters
             onContextMenu={(event) => openContextMenu(event, member.uniqId, name)}
             onPointerDown={(event) => {
               if (event.pointerType === "mouse" || !amHost || isSelf || isHost) return;
@@ -129,8 +101,21 @@ export function ParticipantsPanel({
             onPointerUp={clearLongPress}
             onPointerCancel={clearLongPress}
             onPointerLeave={clearLongPress}
-            secondaryAction={(
-              <Stack direction="row" spacing={0.25} alignItems="center">
+            sx={{ borderRadius: 2, minWidth: 0, minHeight: 68, gap: 0.5 }}
+          >
+            <ListItemAvatar sx={{ minWidth: 40 }}>
+              <Avatar sx={{ width: 36, height: 36, fontSize: 14, bgcolor: isHost ? alpha(theme.palette.primary.main, 0.1) : alpha(theme.palette.primary.main, 0.055), color: isHost ? theme.palette.primary.main : theme.palette.text.secondary, fontWeight: 750 }}>
+                {name.slice(0, 1).toUpperCase() || <PersonIcon />}
+              </Avatar>
+            </ListItemAvatar>
+            <ListItemText
+              primary={isSelf ? `${name} (${t("meeting.you", "我")})` : name}
+              secondary={<Stack direction="row" spacing={0.5} alignItems="center" sx={{ mt: 0.3, minWidth: 0, color: muted === false ? "success.main" : "text.secondary", "& svg": { flexShrink: 0 } }}>{muted === false ? <MicNoneIcon sx={{ fontSize: 14 }} /> : muted === true ? <MicOffIcon sx={{ fontSize: 14 }} /> : null}<Box component="span" sx={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{isHost ? `${t("meeting.hostBadge", "主持人")} · ` : ""}{muted === false ? t("meeting.microphoneOn", "麦克风已开启") : muted === true ? t("meeting.microphoneOff", "麦克风已关闭") : t("meeting.memberJoined", "已加入会议")}</Box></Stack>}
+              sx={{ minWidth: 0, flex: "1 1 0" }}
+              primaryTypographyProps={{ fontSize: "0.875rem", fontWeight: 700, noWrap: true, title: name }}
+              secondaryTypographyProps={{ component: "div", fontSize: "0.75rem", noWrap: true }}
+            />
+              <Stack direction="row" spacing={0.25} alignItems="center" sx={{ flexShrink: 0 }}>
                 {!isSelf && (
                   <Tooltip title={t("meeting.participantVolume", "个人音量")} disableInteractive>
                     <IconButton
@@ -153,7 +138,6 @@ export function ParticipantsPanel({
                   <Tooltip title={t("meeting.sendMessage", "发送消息")}>
                     <IconButton
                       size="small"
-                      edge="end"
                       aria-label={`${t("meeting.sendMessage", "发送消息")} ${name}`}
                       onClick={() => onStartPrivateChat(member.uniqId)}
                       sx={{ width: 40, height: 40, color: "primary.main" }}
@@ -187,44 +171,66 @@ export function ParticipantsPanel({
                   </Tooltip>
                 ) : undefined}
               </Stack>
-            )}
-            sx={{ borderRadius: 2, minHeight: 68, pr: isSelf ? (isHost ? 5 : 1) : amHost && !isHost ? 17 : isHost ? 14 : 12 }}
-          >
-            <ListItemAvatar sx={{ minWidth: 40 }}>
-              <Avatar sx={{ width: 36, height: 36, fontSize: 14, bgcolor: isHost ? alpha(theme.palette.primary.main, 0.1) : alpha(theme.palette.primary.main, 0.055), color: isHost ? theme.palette.primary.main : theme.palette.text.secondary, fontWeight: 750 }}>
-                {name.slice(0, 1).toUpperCase() || <PersonIcon />}
-              </Avatar>
-            </ListItemAvatar>
-            <ListItemText
-              primary={isSelf ? `${name} (${t("meeting.you", "我")})` : name}
-              secondary={<Stack direction="row" spacing={0.5} alignItems="center" sx={{ mt: 0.3, color: muted === false ? "success.main" : "text.secondary" }}>{muted === false ? <MicNoneIcon sx={{ fontSize: 14 }} /> : muted === true ? <MicOffIcon sx={{ fontSize: 14 }} /> : null}<Box component="span">{isHost ? `${t("meeting.hostBadge", "主持人")} · ` : ""}{muted === false ? t("meeting.microphoneOn", "麦克风已开启") : muted === true ? t("meeting.microphoneOff", "麦克风已关闭") : t("meeting.memberJoined", "已加入会议")}</Box></Stack>}
-              primaryTypographyProps={{ fontSize: "0.84rem", fontWeight: 700, noWrap: true }}
-              secondaryTypographyProps={{ component: "div", fontSize: "0.69rem", noWrap: true }}
-            />
           </ListItem>
         );
       })}
       {filteredRows.length === 0 && (
-        <Typography sx={{ color: "text.disabled", fontSize: "0.78rem", textAlign: "center", mt: 3 }}>
+        <Typography sx={{ color: "text.disabled", fontSize: "0.875rem", textAlign: "center", mt: 3 }}>
           {t("meeting.noMatchingMembers", "没有找到匹配的成员")}
         </Typography>
       )}
+      {state.roomId && <ListItem disablePadding sx={{ display: "block", width: "100%", minWidth: 0, boxSizing: "border-box", mt: 1 }}>
+        <MeetingBreakoutRooms roomId={state.roomId} mainRoom={state.breakoutMain} rooms={state.breakoutRooms ?? []} canManage={amHost} connected={state.stage === "in-meeting"} />
+      </ListItem>}
       </List>
+        <Stack
+          role="group"
+          aria-label={t("meeting.participantActions", "成员操作")}
+          data-testid={amHost ? "meeting-host-controls" : "meeting-participant-controls"}
+          direction="row"
+          alignItems="center"
+          spacing={0.25}
+          sx={{
+            position: "absolute", left: "50%", bottom: 12, transform: "translateX(-50%)", zIndex: 2,
+            p: 0.5, borderRadius: 3.5, bgcolor: "#FCFCFC",
+            boxShadow: "0 5px 20px rgba(30, 48, 80, 0.14)",
+          }}
+        >
+          <Tooltip title={t("meeting.inviteAction", "邀请")}>
+            <IconButton aria-label={t("meeting.inviteAction", "邀请")} onClick={onInvite} sx={{ width: 44, height: 44, borderRadius: 1.75, color: "text.secondary", "&:hover": { color: "primary.main", bgcolor: alpha(theme.palette.primary.main, 0.08) } }}>
+              <PersonAddOutlinedIcon sx={{ fontSize: 20 }} />
+            </IconButton>
+          </Tooltip>
+          {amHost && <>
+          <Divider orientation="vertical" flexItem sx={{ my: 1 }} />
+          <Tooltip title={t("meeting.muteAll", "全员静音")}>
+            <IconButton aria-label={t("meeting.muteAll", "全员静音")} onClick={() => meetingManager.muteAll()} sx={{ width: 44, height: 44, borderRadius: 1.75, color: "text.secondary", "&:hover": { color: "primary.main", bgcolor: alpha(theme.palette.primary.main, 0.08) } }}>
+              <MicOffIcon sx={{ fontSize: 20 }} />
+            </IconButton>
+          </Tooltip>
+          <Divider orientation="vertical" flexItem sx={{ my: 1 }} />
+          <Tooltip title={t("meeting.requestUnmute", "请求开麦")}>
+            <IconButton aria-label={t("meeting.requestUnmute", "请求开麦")} onClick={() => meetingManager.requestEveryoneUnmute()} sx={{ width: 44, height: 44, borderRadius: 1.75, color: "text.secondary", "&:hover": { color: "primary.main", bgcolor: alpha(theme.palette.primary.main, 0.08) } }}>
+              <CampaignIcon sx={{ fontSize: 20 }} />
+            </IconButton>
+          </Tooltip>
+          </>}
+        </Stack>
       <Popover
         open={volumeTarget !== null && state.members.some((member) => member.uniqId === volumeTarget.uniqId)}
         anchorEl={volumeTarget?.anchor}
         onClose={() => setVolumeTarget(null)}
         anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
         transformOrigin={{ vertical: "top", horizontal: "right" }}
-        slotProps={{ paper: { role: "dialog", "aria-label": volumeTarget ? `${t("meeting.participantVolume", "个人音量")} ${volumeTarget.name}` : undefined, sx: { width: 248, p: 2, borderRadius: 2 } } }}
+        slotProps={{ paper: { role: "dialog", "aria-label": volumeTarget ? `${t("meeting.participantVolume", "个人音量")} ${volumeTarget.name}` : undefined, sx: { width: 248, maxWidth: "calc(100vw - 32px)", p: 2, borderRadius: 2 } } }}
       >
         {volumeTarget && (
           <Box>
             <Stack direction="row" justifyContent="space-between" alignItems="baseline" spacing={1}>
-              <Typography noWrap sx={{ fontSize: "0.8rem", fontWeight: 750 }}>
+              <Typography noWrap sx={{ minWidth: 0, fontSize: "0.875rem", fontWeight: 750 }}>
                 {volumeTarget.name} · {t("meeting.participantVolume", "个人音量")}
               </Typography>
-              <Typography sx={{ fontSize: "0.78rem", color: "text.secondary", flexShrink: 0 }}>
+              <Typography sx={{ fontSize: "0.875rem", color: "text.secondary", flexShrink: 0 }}>
                 {Math.round((participantVolumes[volumeTarget.uniqId] ?? 1) * 100)}%
               </Typography>
             </Stack>
@@ -238,13 +244,13 @@ export function ParticipantsPanel({
               onChange={(_, value) => onParticipantVolumeChange(volumeTarget.uniqId, (value as number) / 100)}
               sx={{ mt: 0.5 }}
             />
-            <Typography sx={{ color: "text.secondary", fontSize: "0.7rem" }}>
+            <Typography sx={{ color: "text.secondary", fontSize: "0.75rem" }}>
               {t("meeting.participantVolumeHint", "仅影响你听到的声音")}
             </Typography>
           </Box>
         )}
       </Popover>
-      <Menu
+      <MeetingMenu
         open={contextMenu !== null}
         onClose={() => setContextMenu(null)}
         anchorReference="anchorPosition"
@@ -271,7 +277,7 @@ export function ParticipantsPanel({
         >
           {t("meeting.kick", "移出会议")}
         </MenuItem>
-      </Menu>
+      </MeetingMenu>
     </Stack>
   );
 }

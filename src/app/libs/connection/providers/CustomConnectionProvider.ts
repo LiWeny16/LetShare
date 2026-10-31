@@ -2,7 +2,7 @@
 import { validateRoomName } from "../../tools/tools";
 import settingsStore from "../../mobx/mobx";
 import { getProToken } from "../proUpgrade";
-import { resolveCustomServerAuthToken } from "../publicServerAuth";
+import { isPublicCustomServerUrl, resolveCustomServerAuthToken } from "../publicServerAuth";
 
 export class CustomConnectionProvider implements IConnectionProvider {
   private ws: WebSocket | null = null;
@@ -26,9 +26,15 @@ export class CustomConnectionProvider implements IConnectionProvider {
     }
 
     try {
-      const serverUrl = String(settingsStore.get("customServerUrl") || "").trim();
+      const configuredServerUrl = String(settingsStore.get("customServerUrl") || "").trim();
+      // An explicitly configured local preview can use its own backend without
+      // overwriting the saved public relay or affecting production builds.
+      const previewServerUrl = import.meta.env?.DEV && isPublicCustomServerUrl(configuredServerUrl)
+        ? String(import.meta.env.VITE_LETSHARE_DEV_WS || "").trim()
+        : "";
+      const serverUrl = previewServerUrl || configuredServerUrl;
       const configuredAuthToken = settingsStore.get("authToken");
-      const authToken = resolveCustomServerAuthToken(serverUrl, configuredAuthToken);
+      const authToken = resolveCustomServerAuthToken(configuredServerUrl, configuredAuthToken);
       if (!authToken) {
         console.error(" 缺少认证Token，请在设置中配置");
         return false;

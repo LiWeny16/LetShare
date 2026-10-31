@@ -10,6 +10,7 @@ import {
   CircularProgress,
 } from '@mui/material';
 import React from 'react';
+import { useTranslation } from 'react-i18next';
 import alertUseMUI from '@App/libs/tools/alert';
 import WorkspacePremiumIcon from '@mui/icons-material/WorkspacePremium';
 import VerifiedIcon from '@mui/icons-material/Verified';
@@ -27,6 +28,7 @@ type Props = {
 };
 
 const ProUpgradeDialog = ({ open, onClose, isPro = false }: Props) => {
+  const { t } = useTranslation();
   const [inviteCode, setInviteCode] = React.useState('');
   const [inviteError, setInviteError] = React.useState('');
   const [copied, setCopied] = React.useState(false);
@@ -55,13 +57,13 @@ const ProUpgradeDialog = ({ open, onClose, isPro = false }: Props) => {
   const handleActivatePro = async () => {
     const code = inviteCode.trim();
     if (!code) {
-      setInviteError('请输入邀请码');
+      setInviteError(t('proPlan.enterCode'));
       return;
     }
 
     const userId = realTimeColab.getUniqId();
     if (!userId) {
-      setInviteError('用户ID未初始化，请刷新页面后重试');
+      setInviteError(t('proPlan.missingUser'));
       return;
     }
 
@@ -74,9 +76,9 @@ const ProUpgradeDialog = ({ open, onClose, isPro = false }: Props) => {
       setInviteError('');
       setShowActivate(false);
       onClose();
-      alertUseMUI('PRO 已激活！50MB+ 服务器中转已解锁(上限 3GB)', 3000, { kind: 'success' });
+      alertUseMUI(t('proPlan.activatedMessage'), 3000, { kind: 'success' });
     } catch (err: any) {
-      setInviteError(err.message || '激活失败');
+      setInviteError(err.message || t('proPlan.activationFailed'));
       clearProCookie();
     } finally {
       setIsActivating(false);
@@ -85,7 +87,7 @@ const ProUpgradeDialog = ({ open, onClose, isPro = false }: Props) => {
   const handleDowngrade = () => {
     clearProCookie();
     onClose();
-    alertUseMUI('已降级为 Free 计划', 2000, { kind: 'info' });
+    alertUseMUI(t('proPlan.downgraded'), 2000, { kind: 'info' });
   };
 
   return (
@@ -108,14 +110,14 @@ const ProUpgradeDialog = ({ open, onClose, isPro = false }: Props) => {
             fontWeight={700}
             sx={{ letterSpacing: '-0.01em', lineHeight: 1.35 }}
           >
-            选择计划
+            {t('proPlan.choose')}
           </Typography>
           <Typography
             variant="caption"
             color="text.secondary"
             sx={{ display: 'block', mt: 0.6, lineHeight: 1.5 }}
           >
-            解锁服务器中转传输，体验更稳定快速的连接
+            {t('proPlan.subtitle')}
           </Typography>
         </Box>
 
@@ -149,7 +151,7 @@ const ProUpgradeDialog = ({ open, onClose, isPro = false }: Props) => {
                 lineHeight: 1.8,
               }}
             >
-              当前计划
+              {t('proPlan.current')}
             </Box>
           )}
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 1.5 }}>
@@ -171,20 +173,20 @@ const ProUpgradeDialog = ({ open, onClose, isPro = false }: Props) => {
                 Free
               </Typography>
               <Typography variant="caption" color="text.secondary">
-                基础体验
+                {t('proPlan.basic')}
               </Typography>
             </Box>
             <Box sx={{ flex: 1 }} />
             <Typography fontWeight={700} fontSize="1.05rem" color="text.secondary">
-              免费
+              {t('proPlan.free')}
             </Typography>
           </Box>
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
             <Typography variant="caption" color="text.secondary" sx={{ lineHeight: 1.7 }}>
-              P2P 直连传输（不限大小）
+              {t('proPlan.p2p')}
             </Typography>
             <Typography variant="caption" color="text.secondary" sx={{ lineHeight: 1.7 }}>
-              服务器中转（≤3GB PRO / ≤50MB 免费）
+              {t('proPlan.relayLimits')}
             </Typography>
           </Box>
           {isPro && (
@@ -196,7 +198,7 @@ const ProUpgradeDialog = ({ open, onClose, isPro = false }: Props) => {
               onClick={handleDowngrade}
               sx={{ mt: 2, textTransform: 'none', borderRadius: 2, fontSize: '0.75rem' }}
             >
-              降级为 Free
+              {t('proPlan.downgrade')}
             </Button>
           )}
         </Box>
@@ -233,7 +235,7 @@ const ProUpgradeDialog = ({ open, onClose, isPro = false }: Props) => {
               lineHeight: 1.8,
             }}
           >
-            {isPro ? '当前计划' : '推荐'}
+            {isPro ? t('proPlan.current') : t('proPlan.recommended')}
           </Box>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 1.5 }}>
             <Box
@@ -263,7 +265,7 @@ const ProUpgradeDialog = ({ open, onClose, isPro = false }: Props) => {
                 PRO
               </Typography>
               <Typography variant="caption" color="text.secondary">
-                完整体验
+                {t('proPlan.complete')}
               </Typography>
             </Box>
             <Box sx={{ flex: 1 }} />
@@ -280,19 +282,19 @@ const ProUpgradeDialog = ({ open, onClose, isPro = false }: Props) => {
                 color="text.secondary"
                 sx={{ fontSize: '0.65rem' }}
               >
-                /年
+                {t('proPlan.perYear')}
               </Typography>
             </Box>
           </Box>
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
             <Typography variant="caption" sx={{ lineHeight: 1.7, color: 'text.primary' }}>
-              P2P 直连传输（不限大小）
+              {t('proPlan.p2p')}
             </Typography>
             <Typography variant="caption" sx={{ lineHeight: 1.7, color: 'text.primary' }}>
-              服务器中转（上限 3GB）
+              {t('proPlan.relayPro')}
             </Typography>
             <Typography variant="caption" sx={{ lineHeight: 1.7, color: 'text.primary' }}>
-              优先技术支持
+              {t('proPlan.prioritySupport')}
             </Typography>
           </Box>
           {!isPro && !showActivate && (
@@ -313,13 +315,13 @@ const ProUpgradeDialog = ({ open, onClose, isPro = false }: Props) => {
                 },
               }}
             >
-              升级到 PRO
+              {t('proPlan.upgrade')}
             </Button>
           )}
           {isPro && (
             <Box sx={{ textAlign: 'center', mt: 1.5 }}>
               <Typography variant="caption" color="success.main" fontWeight={600}>
-                ✓ 已激活
+                ✓ {t('proPlan.activated')}
               </Typography>
             </Box>
           )}
@@ -341,12 +343,12 @@ const ProUpgradeDialog = ({ open, onClose, isPro = false }: Props) => {
           }}
         >
           <Typography variant="caption" color="text.secondary" sx={{ flexShrink: 0 }}>
-            购买联系
+            {t('proPlan.contact')}
           </Typography>
           <Typography variant="caption" fontWeight={600} sx={{ letterSpacing: '0.01em' }}>
             {PRO_EMAIL}
           </Typography>
-          <Tooltip title={copied ? '已复制' : '复制邮箱'} arrow>
+          <Tooltip title={copied ? t('proPlan.copied') : t('proPlan.copyEmail')} arrow>
             <IconButton size="small" onClick={handleCopyEmail} sx={{ p: 0.5, ml: -0.5 }}>
               <ContentCopyIcon
                 sx={{
@@ -364,7 +366,7 @@ const ProUpgradeDialog = ({ open, onClose, isPro = false }: Props) => {
           <Box sx={{ display: 'flex', gap: 1 }}>
             <TextField
               size="small"
-              label="激活码"
+              label={t('proPlan.activationCode')}
               fullWidth
               value={inviteCode}
               onChange={(e) => {
@@ -399,7 +401,7 @@ const ProUpgradeDialog = ({ open, onClose, isPro = false }: Props) => {
                 },
               }}
             >
-              {isActivating ? <CircularProgress size={20} color="inherit" /> : '激活'}
+              {isActivating ? <CircularProgress size={20} color="inherit" /> : t('proPlan.activate')}
             </Button>
           </Box>
         </Collapse>

@@ -109,11 +109,13 @@ test("presentation owner + Excalidraw sync + right panel opener are real UI flow
       permissions: ["camera", "microphone"],
       viewport: { width, height },
     });
-    await context.addInitScript((arg: { name: string; token: string; ws: string; sourceRoom: string }) => {
+    await context.addInitScript((arg: { name: string; token: string; ws: string; sourceRoom: string; lowEnd: boolean }) => {
+      Object.defineProperty(navigator, "hardwareConcurrency", { configurable: true, value: arg.lowEnd ? 2 : 8 });
+      Object.defineProperty(navigator, "deviceMemory", { configurable: true, value: arg.lowEnd ? 2 : 8 });
       localStorage.setItem("memorableState", JSON.stringify({ memorable: { userId: arg.name, uniqId: `${arg.name}:presentation` } }));
       localStorage.setItem("user_settings", JSON.stringify({
         roomId: arg.sourceRoom,
-        userTheme: "light",
+        userTheme: arg.name === "bob" ? "green" : "light",
         userLanguage: "zh-CN",
         serverMode: "custom",
         customServerUrl: arg.ws,
@@ -123,7 +125,7 @@ test("presentation owner + Excalidraw sync + right panel opener are real UI flow
         version: "0",
         isNewUser: false,
       }));
-    }, { name, token: TOKEN, ws: WS, sourceRoom: SOURCE_ROOM });
+    }, { name, token: TOKEN, ws: WS, sourceRoom: SOURCE_ROOM, lowEnd: name === "bob" });
     const page = await context.newPage();
     page.on("pageerror", (error) => console.log(`[${name}] pageerror`, error.message));
     page.on("console", (message) => console.log(`[${name}][console]`, message.text().slice(0, 240)));
@@ -191,6 +193,9 @@ test("presentation owner + Excalidraw sync + right panel opener are real UI flow
   await host.getByTestId("meeting-media-settings-dialog").waitFor({ state: "hidden" });
   await visibleButton(host, /开启摄像头|start video/i).click();
   await visibleButton(host, /关闭摄像头|stop video/i).waitFor({ state: "visible" });
+  const selfVideo = host.getByTestId("meeting-member-tile-alice:presentation").locator("video");
+  await selfVideo.waitFor({ state: "visible" });
+  assert.equal(await selfVideo.evaluate((video: HTMLVideoElement) => video.disablePictureInPicture), true, "meeting video should suppress browser picture-in-picture controls");
   await visibleButton(host, /关闭摄像头|stop video/i).click();
   await visibleButton(host, /开启摄像头|start video/i).waitFor({ state: "visible" });
   await visibleButton(host, /解除静音|unmute/i).click();
@@ -206,6 +211,88 @@ test("presentation owner + Excalidraw sync + right panel opener are real UI flow
   await until("guest meeting route", async () => (await guest.evaluate(() => location.hash)).includes("/meeting"));
   await confirmMeetingName(guest, "Presentation guest");
   await until("guest connected", async () => (await guest.getByTestId("meeting-stage").getAttribute("data-stage")) === "in-meeting", 40_000);
+  const titleButton = host.getByRole("button", { name: /修改会议名称|edit meeting name/i });
+  assert.equal(await titleButton.locator("svg").count(), 0, "meeting title must not show an edit icon");
+  await titleButton.hover();
+  await until("meeting title hover highlight", async () => titleButton.evaluate((element) => getComputedStyle(element).backgroundColor !== "rgba(0, 0, 0, 0)"), 2_000);
+  const titlePosition = await titleButton.boundingBox();
+  await titleButton.click();
+  const titleInput = host.getByRole("textbox", { name: /修改会议名称|edit meeting name/i });
+  const inputPosition = await titleInput.boundingBox();
+  assert.ok(titlePosition && inputPosition && Math.abs(titlePosition.x - inputPosition.x) <= 6, "title editing must stay in place");
+  const titleStyle = await titleInput.evaluate((input) => {
+    const parent = input.closest(".MuiInputBase-root")!;
+    return { background: getComputedStyle(parent).backgroundColor, shadow: getComputedStyle(parent).boxShadow, selection: getComputedStyle(input, "::selection").backgroundColor };
+  });
+  assert.equal(titleStyle.background, "rgba(0, 0, 0, 0)");
+  assert.equal(titleStyle.shadow, "none");
+  assert.equal(titleStyle.selection, "rgb(190, 219, 255)", "meeting title selection should use the light theme");
+  const guestSelection = await guest.getByText("Presentation UX 验证", { exact: true }).evaluate((element) => getComputedStyle(element, "::selection").backgroundColor);
+  assert.equal(guestSelection, "rgb(196, 231, 198)", "meeting selection should follow the green theme");
+  await titleInput.fill("团队例会");
+  await titleInput.press("Enter");
+  await guest.getByText("团队例会", { exact: true }).waitFor({ state: "visible" });
+  assert.equal(await guest.getByRole("button", { name: /修改会议名称|edit meeting name/i }).count(), 0, "non-host title must remain read-only");
+  assert.equal(await host.locator('[data-stage-motion]').getAttribute("data-stage-motion"), "on");
+  assert.equal(await guest.locator('[data-stage-motion]').getAttribute("data-stage-motion"), "off");
+  await host.emulateMedia({ reducedMotion: "reduce" });
+  await host.waitForFunction(() => document.querySelector('[data-stage-motion]')?.getAttribute("data-stage-motion") === "off");
+  await host.emulateMedia({ reducedMotion: "no-preference" });
+  await host.waitForFunction(() => document.querySelector('[data-stage-motion]')?.getAttribute("data-stage-motion") === "on");
+  const lowEndTile = guest.getByTestId("meeting-member-tile-bob:presentation");
+  await lowEndTile.click();
+  const lowEndFrames = await guest.evaluate(async () => {
+    const values: Array<{ opacity: string; transform: string; stageOpacity: string }> = [];
+    for (let frame = 0; frame < 12; frame += 1) {
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      const tile = document.querySelector('[data-testid="meeting-stage-surface"] [data-testid="meeting-member-tile-bob:presentation"]');
+      if (tile?.parentElement) {
+        const style = getComputedStyle(tile.parentElement);
+        const stage = document.querySelector('[data-testid="meeting-stage-content"]');
+        values.push({ opacity: style.opacity, transform: style.transform, stageOpacity: stage ? getComputedStyle(stage).opacity : "missing" });
+      }
+    }
+    return values;
+  });
+  assert.ok(lowEndFrames.length > 0 && lowEndFrames.every((frame) => frame.opacity === "1" && frame.transform === "none" && frame.stageOpacity === "1"), "low-end devices should switch without a fade or transform");
+  await lowEndTile.click();
+
+  // A focused camera tile and the stage toolbar must occupy separate rows.
+  const hostTile = host.getByTestId("meeting-member-tile-alice:presentation");
+  await hostTile.click();
+  const focusFrames = await host.evaluate(async () => {
+    const ratios: number[] = [];
+    const movement: Array<{ moving: boolean; visibility: string; transform: string }> = [];
+    for (let frame = 0; frame < 20; frame += 1) {
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      const elements = document.querySelectorAll('[data-testid="meeting-stage-surface"] [data-testid="meeting-member-tile-alice:presentation"] .MuiAvatar-root, [data-testid="meeting-stage-surface"] [data-testid="meeting-member-tile-alice:presentation"] [data-testid="meeting-member-fullscreen"]');
+      for (const element of elements) {
+        const rect = element.getBoundingClientRect();
+        if (rect.height > 0 && getComputedStyle(element).visibility === "visible") ratios.push(rect.width / rect.height);
+      }
+      const tile = document.querySelector('[data-testid="meeting-stage-surface"] [data-testid="meeting-member-tile-alice:presentation"]');
+      const control = tile?.querySelector('[data-testid="meeting-member-fullscreen"]');
+      if (tile && control && tile.parentElement) movement.push({ moving: tile.getAttribute("data-layout-moving") === "true", visibility: getComputedStyle(control).visibility, transform: getComputedStyle(tile.parentElement).transform });
+    }
+    return { ratios, movement };
+  });
+  assert.ok(focusFrames.ratios.length > 0 && focusFrames.ratios.every((ratio) => Math.abs(ratio - 1) < 0.08), "avatar and controls stay round during the focus transition");
+  assert.ok(focusFrames.movement.some((frame) => frame.moving && frame.transform !== "none"), `focus transition should animate its layout: ${JSON.stringify(focusFrames.movement)}`);
+  assert.ok(focusFrames.movement.every((frame) => !frame.moving || frame.visibility === "hidden"), `controls should be hidden while moving: ${JSON.stringify(focusFrames.movement)}`);
+  await host.getByTestId("meeting-stage-surface").locator('[data-testid="meeting-member-fullscreen"]').waitFor({ state: "visible" });
+  await host.waitForFunction(() => {
+    const toolbar = document.querySelector('[data-testid="meeting-stage-fullscreen-chat"]');
+    const tile = document.querySelector('[data-testid="meeting-stage-surface"] [data-testid="meeting-member-tile-alice:presentation"]');
+    if (!toolbar || !tile) return false;
+    return toolbar.getBoundingClientRect().bottom <= tile.getBoundingClientRect().top + 1;
+  });
+  const toolbarHit = await host.getByTestId("meeting-stage-fullscreen-chat").evaluate((button) => {
+    const box = button.getBoundingClientRect();
+    const target = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
+    return target === button || button.contains(target);
+  });
+  assert.equal(toolbarHit, true, "stage toolbar button must not be covered by the focused tile");
+  await hostTile.click();
 
   // Host-only media controls are real server-authorized meeting actions:
   // the guest first unmutes, then host mutes everyone and sends an unmute request.
@@ -222,6 +309,22 @@ test("presentation owner + Excalidraw sync + right panel opener are real UI flow
   await host.getByTestId("meeting-panel-toggle").waitFor({ state: "visible" });
   await host.getByTestId("meeting-panel-toggle").click();
   await host.getByTestId("meeting-panel").waitFor({ state: "visible" });
+  const resizeHandle = host.getByRole("separator", { name: /调整面板宽度|resize panel/i });
+  const handleRect = await resizeHandle.boundingBox();
+  assert.ok(handleRect, "panel resize handle must be visible");
+  const indicator = await resizeHandle.evaluate((element) => ({
+    line: getComputedStyle(element, "::after").height,
+    hitWidth: getComputedStyle(element, "::before").width,
+    leftHit: document.elementFromPoint(element.getBoundingClientRect().left - 4, element.getBoundingClientRect().top + element.getBoundingClientRect().height / 2) === element,
+  }));
+  assert.ok(parseFloat(indicator.line) <= 48 && parseFloat(indicator.hitWidth) >= 16 && indicator.leftHit, `resize indicator and hit area: ${JSON.stringify(indicator)}`);
+  const oldPanelWidth = await host.getByTestId("meeting-panel").evaluate((element) => element.getBoundingClientRect().width);
+  await host.mouse.move(handleRect!.x - 4, handleRect!.y + handleRect!.height / 2);
+  await host.mouse.down();
+  await host.mouse.move(handleRect!.x - 40, handleRect!.y + handleRect!.height / 2);
+  await host.mouse.up();
+  assert.ok(await host.getByTestId("meeting-panel").evaluate((element) => element.getBoundingClientRect().width) > oldPanelWidth + 20, "enlarged hit area must resize the panel");
+  await resizeHandle.dblclick();
 
   // The host starts a real screen capture, then opens the independent
   // whiteboard session without stopping the screen track.
@@ -229,6 +332,7 @@ test("presentation owner + Excalidraw sync + right panel opener are real UI flow
   await visibleButton(host, /停止共享|stop sharing/i).waitFor({ state: "visible" });
   await host.getByTestId("meeting-active-sharing").waitFor({ state: "visible" });
   assert.equal(await host.getByTestId("meeting-active-sharing").getAttribute("data-mode"), "screen");
+  assert.equal(await host.getByTestId("meeting-active-sharing").locator("video").evaluate((video: HTMLVideoElement) => video.disablePictureInPicture), true, "shared screen should suppress browser picture-in-picture controls");
   assert.equal(await host.locator('[data-testid="meeting-active-sharing"]').count(), 1, "only one Active Sharing surface is allowed");
   const activeSharingBar = host.getByTestId("meeting-active-sharing-bar");
   assert.equal(
@@ -252,6 +356,14 @@ test("presentation owner + Excalidraw sync + right panel opener are real UI flow
   await host.mouse.up();
   const afterDrag = await activeSharingBar.boundingBox();
   assert.ok(afterDrag && Math.abs(afterDrag.x - beforeDrag!.x) > 20, "Active Sharing must be draggable");
+  const movedHandle = await dragHandle.boundingBox();
+  assert.ok(movedHandle, "sharing drag handle remains visible");
+  await host.mouse.move(movedHandle!.x + movedHandle!.width / 2, movedHandle!.y + movedHandle!.height / 2);
+  await host.mouse.down();
+  await host.mouse.move(movedHandle!.x + movedHandle!.width / 2 - 70, movedHandle!.y + movedHandle!.height / 2 - 8);
+  await host.mouse.up();
+  await host.mouse.move(0, 0);
+  await host.keyboard.press("Escape");
   await host.getByTestId("meeting-stage-fullscreen").waitFor({ state: "visible" });
   await host.getByTestId("meeting-stage-fullscreen-chat").waitFor({ state: "visible" });
   await host.getByTestId("meeting-stage-focus").click();
@@ -275,6 +387,27 @@ test("presentation owner + Excalidraw sync + right panel opener are real UI flow
   await host.getByTestId("meeting-active-sharing").waitFor({ state: "visible" });
   assert.equal(await host.getByTestId("meeting-active-sharing").getAttribute("data-mode"), "whiteboard");
   const excalidrawBoard = host.getByTestId("meeting-excalidraw-board");
+  await host.getByTestId("meeting-member-tile-alice:presentation").click();
+  await host.getByTestId("meeting-whiteboard-toggle").click();
+  const compactBoard = host.getByTestId("meeting-active-sharing");
+  await compactBoard.getByText(/白板正在共享|board is being shared/i).waitFor({ state: "visible" });
+  await compactBoard.click();
+  await excalidrawBoard.waitFor({ state: "visible" });
+  await host.waitForFunction(() => {
+    const board = document.querySelector<HTMLElement>('[data-testid="meeting-excalidraw-board"]');
+    const canvas = board?.querySelector<HTMLCanvasElement>(".excalidraw__canvas.interactive");
+    if (!board || !canvas) return false;
+    const boardRect = board.getBoundingClientRect();
+    const canvasRect = canvas.getBoundingClientRect();
+    const scale = window.devicePixelRatio || 1;
+    return Math.abs(boardRect.height - canvasRect.height) < 2 && Math.abs(boardRect.width - canvasRect.width) < 2
+      && Math.abs(canvas.height / scale - board.clientHeight) < 3 && Math.abs(canvas.width / scale - board.clientWidth) < 3;
+  }, null, { timeout: 10_000 });
+  const topInset = await excalidrawBoard.evaluate((board) => {
+    const stage = board.closest('[data-testid="meeting-stage-surface"]');
+    return stage ? board.getBoundingClientRect().top - stage.getBoundingClientRect().top : Number.POSITIVE_INFINITY;
+  });
+  assert.ok(topInset <= 68, `whiteboard should use the space below the stage toolbar: ${topInset}px`);
   const primaryToolIds = ["selection", "rectangle", "diamond", "ellipse", "arrow", "line", "freedraw", "text", "image", "eraser"];
   for (const viewport of [{ width: 768, height: 720 }, { width: 390, height: 844 }]) {
     await host.setViewportSize(viewport);
@@ -523,6 +656,35 @@ test("presentation owner + Excalidraw sync + right panel opener are real UI flow
   assert.match(mobileSharingBar.text, /取消跟随|跟随|邀请/);
   assert.doesNotMatch(mobileSharingBar.text, /全员聚焦|请求聚焦|请求跟随/,
     `mobile sharing bar should not expose legacy focus labels: ${mobileSharingBar.text}`);
+
+  for (const page of [host, guest]) {
+    await page.setViewportSize({ width: 320, height: 720 });
+    const bar = page.getByTestId("meeting-active-sharing-bar");
+    const assertInsideViewport = async () => {
+      const geometry = await bar.evaluate((element) => {
+        const rect = element.getBoundingClientRect();
+        return {
+          left: rect.left, right: rect.right, width: rect.width, viewport: window.innerWidth,
+          children: Array.from(element.children).map((child) => {
+            const box = child.getBoundingClientRect();
+            return { left: box.left, right: box.right };
+          }),
+        };
+      });
+      assert.ok(geometry.left >= 0 && geometry.right <= geometry.viewport + 1, `sharing bar leaves viewport: ${JSON.stringify(geometry)}`);
+      assert.ok(geometry.children.every((child) => child.left >= geometry.left - 1 && child.right <= geometry.right + 1), `sharing controls leave bar: ${JSON.stringify(geometry)}`);
+      return geometry;
+    };
+    await assertInsideViewport();
+    await page.getByTestId("meeting-active-sharing-collapse").click();
+    const collapsed = await assertInsideViewport();
+    assert.ok(collapsed.width < 210, `collapsed bar should fit its controls: ${JSON.stringify(collapsed)}`);
+    const handle = bar.getByRole("button", { name: /拖动共享控制栏|drag sharing/i });
+    await handle.focus();
+    for (let i = 0; i < 12; i += 1) await page.keyboard.press("Shift+ArrowRight");
+    await page.getByTestId("meeting-active-sharing-expand").click();
+    await assertInsideViewport();
+  }
 
   console.log("[e2e] presentation lease, Excalidraw scene sync, panel opener, desktop/mobile screenshots passed");
 });

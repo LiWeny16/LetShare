@@ -77,7 +77,7 @@ test("meeting without camera or microphone still joins and keeps meeting control
   await page.waitForFunction(() => document.querySelectorAll("button").length > 0, null, { timeout: 30_000 });
   await page.locator('button[aria-label="plus"]:visible').first().click();
   await page.getByRole("menuitem", { name: /创建会议|Create meeting/ }).click();
-  await page.getByText("MEETING PASS", { exact: true }).waitFor({ state: "visible", timeout: 15_000 });
+  await page.getByTestId("meeting-pass").waitFor({ state: "visible", timeout: 15_000 });
   // M-04/M-10: the create dialog changes from "开始会议" to "进入会议"
   // after reserving the room; keep the assertion language-independent.
   await page

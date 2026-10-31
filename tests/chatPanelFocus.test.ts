@@ -17,13 +17,13 @@ test("chat panel blurs icon triggers before opening portal UI", () => {
 
   assert.match(
     source,
-    /onClick=\{\(e\)\s*=>\s*\{\s*blurTrigger\(e\);\s*setEmojiAnchor\(e\.currentTarget\);\s*\}\}\s*size="small"\s*>\s*<EmojiIcon\s*\/>/,
+    /onClick=\{\(e\)\s*=>\s*\{\s*blurTrigger\(e\);\s*setEmojiAnchor\(e\.currentTarget\);\s*\}\}[\s\S]*?<EmojiIcon\b/,
     "emoji Popover trigger should blur before opening the portal"
   );
 
   assert.match(
     source,
-    /onClick=\{\(e\)\s*=>\s*\{[\s\S]*blurTrigger\(e\);[\s\S]*fileInputRef\.current\?\.click\(\)[\s\S]*\}\}\s*size="small"[\s\S]*<AttachFileIcon\s*\/>/,
+    /icon:\s*<AttachFileIcon\b[^>]*\/>,[\s\S]*?action:\s*\(\)\s*=>\s*\{\s*blurTrigger2\(\);\s*setTimeout\(\(\)\s*=>\s*fileInputRef\.current\?\.click\(\)/,
     "file picker trigger should blur before opening follow-up modal flows"
   );
 });

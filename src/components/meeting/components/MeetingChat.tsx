@@ -5,7 +5,7 @@
  * 定向文件复用 realTimeColab.sendFileAuto（P2P probe 验证 → 自动 relay），
  * 不复制新的文件协议。
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
   Box,
   Avatar,
@@ -30,7 +30,7 @@ import PersonIcon from "@mui/icons-material/Person";
 import CancelIcon from "@mui/icons-material/Cancel";
 import DownloadIcon from "@mui/icons-material/Download";
 import InsertDriveFileIcon from "@mui/icons-material/InsertDriveFile";
-import SelectAllIcon from "@mui/icons-material/SelectAll";
+import EmojiEmotionsOutlinedIcon from "@mui/icons-material/EmojiEmotionsOutlined";
 import { useTranslation } from "react-i18next";
 import { meetingManager } from "@App/libs/meeting/meetingManager";
 import {
@@ -41,6 +41,11 @@ import {
 import realTimeColab from "@App/libs/connection/colabLib";
 import type { FileTransferUiUpdate } from "@App/libs/connection/ServerFileTransfer";
 import { displayNameOf } from "../types";
+import { EMOJI_LIST } from "../../Chat/emoji";
+import { ChatEmptyState } from "../../Chat/ChatEmptyState";
+import { chatComposerSendSx, chatComposerSurfaceSx } from "../../Chat/composerStyles";
+import { MeetingMenu } from "./MeetingMenu";
+import { MEETING_FIELD_INSET, MEETING_PANEL_GUTTER } from "../designTokens";
 
 type ChatMsg = {
   from: string;
@@ -72,16 +77,21 @@ function formatSize(bytes: number): string {
   return `${bytes} B`;
 }
 
-export function MeetingChat({ initialTarget }: { initialTarget?: string | null } = {}) {
+export const MeetingChat = memo(function MeetingChat({ initialTarget }: { initialTarget?: string | null } = {}) {
   const { t } = useTranslation();
   const theme = useTheme();
   const [msgs, setMsgs] = useState<ChatMsg[]>([]);
   const [input, setInput] = useState("");
   const [target, setTarget] = useState<string>(PRIVATE_ALL);
   const [sending, setSending] = useState(false);
+  const [emojiAnchor, setEmojiAnchor] = useState<HTMLElement | null>(null);
   const [members, setMembers] = useState<{ uniqId: string; name?: string }[]>([]);
+  const [selfName, setSelfName] = useState(() => realTimeColab.getUserName() ?? "");
+  const membersRef = useRef<Array<{ uniqId: string; name?: string }>>([]);
+  const selfNameRef = useRef(selfName);
   const listRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const inputRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null);
   const clientIdRef = useRef<string>("");
   const roomIdRef = useRef<string>(meetingManager.getState().roomId ?? "");
   const attachmentUrlsRef = useRef(new Set<string>());
@@ -101,7 +111,17 @@ export function MeetingChat({ initialTarget }: { initialTarget?: string | null }
         roomIdRef.current = nextRoomId;
         setMsgs(historyMessages(nextRoomId));
       }
-      setMembers(s.members.filter((m) => m.uniqId !== clientIdRef.current));
+      const nextSelfName = realTimeColab.getUserName() ?? "";
+      if (nextSelfName !== selfNameRef.current) {
+        selfNameRef.current = nextSelfName;
+        setSelfName(nextSelfName);
+      }
+      const nextMembers = s.members.filter((m) => m.uniqId !== clientIdRef.current);
+      const previousMembers = membersRef.current;
+      if (nextMembers.length !== previousMembers.length || nextMembers.some((member, index) => member.uniqId !== previousMembers[index].uniqId || member.name !== previousMembers[index].name)) {
+        membersRef.current = nextMembers;
+        setMembers(nextMembers);
+      }
     });
     return () => {
       unsubState();
@@ -222,15 +242,15 @@ export function MeetingChat({ initialTarget }: { initialTarget?: string | null }
     setInput("");
   };
 
-  const selectAllMessages = () => {
-    const element = listRef.current;
-    if (!element || typeof window === "undefined") return;
-    const selection = window.getSelection();
-    if (!selection) return;
-    const range = document.createRange();
-    range.selectNodeContents(element);
-    selection.removeAllRanges();
-    selection.addRange(range);
+  const insertEmoji = (emoji: string) => {
+    const start = inputRef.current?.selectionStart ?? input.length;
+    const end = inputRef.current?.selectionEnd ?? start;
+    setInput((current) => `${current.slice(0, start)}${emoji}${current.slice(end)}`);
+    setEmojiAnchor(null);
+    window.requestAnimationFrame(() => {
+      inputRef.current?.focus();
+      inputRef.current?.setSelectionRange(start + emoji.length, start + emoji.length);
+    });
   };
 
   const pickFile = () => {
@@ -262,65 +282,60 @@ export function MeetingChat({ initialTarget }: { initialTarget?: string | null }
     [target, members]
   );
 
+  const messageRows = useMemo(() => msgs.map((m, i) => {
+    const name = m.self ? (selfName || t("meeting.you", "我")) : (members.find((member) => member.uniqId === m.from)?.name || displayNameOf(m.from));
+    return <Stack key={i} direction={m.self ? "row-reverse" : "row"} spacing={1} sx={{ mb: 2, alignItems: "flex-start" }}>
+      <Avatar sx={{ width: 32, height: 32, flexShrink: 0, bgcolor: m.self ? alpha(theme.palette.primary.main, 0.12) : alpha(theme.palette.primary.main, 0.065), color: m.self ? "primary.main" : "text.secondary", fontSize: "0.75rem", fontWeight: 750 }}>{name.slice(0, 1).toUpperCase()}</Avatar>
+      <Box sx={{ minWidth: 0, maxWidth: "calc(100% - 40px)", display: "flex", flexDirection: "column", alignItems: m.self ? "flex-end" : "flex-start" }}>
+      <Typography sx={{ fontSize: "0.75rem", color: "text.secondary", mb: 0.25, px: 0.5, fontVariantNumeric: "tabular-nums", display: "flex", alignItems: "center", gap: 0.5 }}>
+        {m.to && <LockIcon sx={{ fontSize: "0.75rem", opacity: 0.7 }} aria-label={t("meeting.chatPrivateTag", "私聊")} />}
+        {m.self ? t("meeting.you", "我") : name}
+        {m.to && !m.self && ` → ${displayNameOf(m.to)}`}
+        {" · "}
+        {new Date(m.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+      </Typography>
+      {m.file ? (
+        <AttachmentBubble
+          attachment={m.file}
+          onCancel={() => {
+            if (m.file?.direction === "send") realTimeColab.abortFileTransferToUser();
+            else if (m.file) realTimeColab.cancelReceivingServerTransfer(m.file.transferId);
+          }}
+        />
+      ) : (
+        <Paper
+          elevation={0}
+          sx={{
+            px: 1.5, py: 1, borderRadius: 2, maxWidth: "100%",
+            borderTopRightRadius: m.self ? 0.5 : 2, borderTopLeftRadius: m.self ? 2 : 0.5,
+            bgcolor: m.self ? alpha(theme.palette.primary.main, theme.palette.mode === "dark" ? 0.2 : 0.09) : "action.hover",
+            color: "text.primary",
+            fontSize: "0.875rem", lineHeight: 1.55, wordBreak: "break-word", whiteSpace: "pre-wrap",
+          }}
+        >
+          {m.text}
+        </Paper>
+      )}
+      </Box>
+    </Stack>;
+  }), [msgs, members, selfName, t, theme]);
+
   return (
     <Stack sx={{ height: "100%", minHeight: 0 }}>
-      <Stack direction="row" alignItems="center" justifyContent="center" spacing={0.5} sx={{ px: 1, pt: 1.75, pb: 0.5, color: "text.secondary" }}>
-        <LockIcon sx={{ fontSize: 13 }} /><Typography sx={{ fontSize: "0.7rem" }}>{t("meeting.chatPrivacy", "消息仅在场成员可见")}</Typography>
-      </Stack>
       <Box
         ref={listRef}
         sx={{
-          flex: 1, minHeight: 0, overflowY: "auto", px: 1.75, py: 1, userSelect: "text",
+          flex: 1, minHeight: 0, overflowY: "auto", px: MEETING_PANEL_GUTTER, py: 1, userSelect: "text",
+          display: msgs.length === 0 ? "flex" : "block", flexDirection: "column",
           "&::-webkit-scrollbar": { width: 5 }, "&::-webkit-scrollbar-thumb": { borderRadius: 3, bgcolor: "action.selected" },
         }}
       >
-        {msgs.length === 0 && (
-          <Typography sx={{ color: "text.disabled", fontSize: "0.75rem", textAlign: "center", mt: 3, px: 2, lineHeight: 1.6 }}>
-            {t("meeting.chatEmpty", "会议聊天 · 消息仅在场成员可见")}
-          </Typography>
-        )}
-        {msgs.map((m, i) => {
-          const name = m.self ? (realTimeColab.getUserName() || t("meeting.you", "我")) : (members.find((member) => member.uniqId === m.from)?.name || displayNameOf(m.from));
-          return <Stack key={i} direction={m.self ? "row-reverse" : "row"} spacing={1} sx={{ mb: 2, alignItems: "flex-start" }}>
-            <Avatar sx={{ width: 32, height: 32, flexShrink: 0, bgcolor: m.self ? alpha(theme.palette.primary.main, 0.12) : alpha(theme.palette.primary.main, 0.065), color: m.self ? "primary.main" : "text.secondary", fontSize: "0.75rem", fontWeight: 750 }}>{name.slice(0, 1).toUpperCase()}</Avatar>
-            <Box sx={{ minWidth: 0, maxWidth: "calc(100% - 40px)", display: "flex", flexDirection: "column", alignItems: m.self ? "flex-end" : "flex-start" }}>
-            <Typography sx={{ fontSize: "0.68rem", color: "text.secondary", mb: 0.25, px: 0.5, fontVariantNumeric: "tabular-nums", display: "flex", alignItems: "center", gap: 0.5 }}>
-              {m.to && <LockIcon sx={{ fontSize: "0.75rem", opacity: 0.7 }} aria-label={t("meeting.chatPrivateTag", "私聊")} />}
-              {m.self ? t("meeting.you", "我") : name}
-              {m.to && !m.self && ` → ${displayNameOf(m.to)}`}
-              {" · "}
-              {new Date(m.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-            </Typography>
-            {m.file ? (
-              <AttachmentBubble
-                attachment={m.file}
-                onCancel={() => {
-                  if (m.file?.direction === "send") realTimeColab.abortFileTransferToUser();
-                  else if (m.file) realTimeColab.cancelReceivingServerTransfer(m.file.transferId);
-                }}
-              />
-            ) : (
-              <Paper
-                elevation={0}
-                sx={{
-                  px: 1.5, py: 1, borderRadius: 2, maxWidth: "100%",
-                  borderTopRightRadius: m.self ? 0.5 : 2, borderTopLeftRadius: m.self ? 2 : 0.5,
-                  bgcolor: m.self ? alpha(theme.palette.primary.main, theme.palette.mode === "dark" ? 0.2 : 0.09) : "action.hover",
-                  color: "text.primary",
-                  fontSize: "0.82rem", lineHeight: 1.55, wordBreak: "break-word", whiteSpace: "pre-wrap",
-                }}
-              >
-                {m.text}
-              </Paper>
-            )}
-            </Box>
-          </Stack>;
-        })}
+        {msgs.length === 0 ? <ChatEmptyState /> : messageRows}
       </Box>
-      <Box sx={{ px: 1.75, pb: 1.75, pt: 0.75, display: "flex", flexDirection: "column", gap: 0.75 }}>
+      <Box sx={{ px: MEETING_PANEL_GUTTER, pb: MEETING_PANEL_GUTTER, pt: 0.75, display: "flex", flexDirection: "column", gap: 0.75 }}>
         {/* 成员选择：所有人（公聊）或具体成员（私聊 + 定向文件） */}
-        <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
-          <Typography sx={{ color: "text.secondary", fontSize: "0.72rem", flexShrink: 0 }}>{t("meeting.sendTo", "发送给")}</Typography>
+        <Box sx={{ display: "flex", alignItems: "center", flexWrap: "wrap", minWidth: 0, gap: 0.5, px: MEETING_FIELD_INSET }}>
+          <Typography sx={{ color: "text.secondary", fontSize: "0.75rem", flexShrink: 0 }}>{t("meeting.sendTo", "发送给")}</Typography>
           {privateTarget ? (
             <PersonIcon sx={{ fontSize: "1rem", color: "text.secondary" }} />
           ) : (
@@ -332,30 +347,25 @@ export function MeetingChat({ initialTarget }: { initialTarget?: string | null }
             onChange={(e) => setTarget(e.target.value as string)}
             aria-label={t("meeting.chatTarget", "消息接收者")}
             sx={{
-              minWidth: 0, maxWidth: "70%", fontSize: "0.78rem", borderRadius: 2,
+              flex: "1 1 96px", minWidth: 0, maxWidth: "100%", fontSize: "0.875rem", borderRadius: 2,
               "& .MuiOutlinedInput-notchedOutline": { border: 0 },
               "& .MuiSelect-select": { py: 0.5, pl: 0.5 },
             }}
             disabled={members.length === 0 && target === PRIVATE_ALL}
           >
-            <MenuItem value={PRIVATE_ALL} sx={{ fontSize: "0.8rem" }}>
+            <MenuItem value={PRIVATE_ALL} sx={{ fontSize: "0.875rem" }}>
               {t("meeting.chatToAll", "所有人（公聊）")}
             </MenuItem>
             {members.map((m) => (
-              <MenuItem key={m.uniqId} value={m.uniqId} sx={{ fontSize: "0.8rem" }}>
+              <MenuItem key={m.uniqId} value={m.uniqId} sx={{ fontSize: "0.875rem" }}>
                 {m.name || displayNameOf(m.uniqId)}
               </MenuItem>
             ))}
           </Select>
-          {members.length === 0 && (
-            <Typography sx={{ fontSize: "0.68rem", color: "text.disabled", ml: 0.5 }}>
-              {t("meeting.chatNoMembers", "暂无其他成员")}
-            </Typography>
-          )}
         </Box>
         <Paper
           elevation={0}
-          sx={{ display: "flex", flexDirection: "column", alignItems: "stretch", p: 0.75, borderRadius: 2, border: "1px solid", borderColor: "divider", bgcolor: "background.paper" }}
+          sx={chatComposerSurfaceSx}
         >
           <input
             ref={fileInputRef}
@@ -366,16 +376,6 @@ export function MeetingChat({ initialTarget }: { initialTarget?: string | null }
               if (file) void sendTargetedFile(file);
             }}
           />
-          <InputBase
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
-            placeholder={privateTarget ? t("meeting.chatPrivatePlaceholder", "私聊 {{name}}…", { name: privateTarget.name || displayNameOf(privateTarget.uniqId) }) : t("meeting.chatPlaceholder", "说点什么…")}
-            multiline
-            maxRows={4}
-            sx={{ minHeight: 42, alignItems: "flex-start", fontSize: "0.85rem", px: 1, py: 0.75 }}
-          />
-          <Stack direction="row" alignItems="center">
           <Tooltip
             title={
               target === PRIVATE_ALL
@@ -396,33 +396,61 @@ export function MeetingChat({ initialTarget }: { initialTarget?: string | null }
               </IconButton>
             </span>
           </Tooltip>
-          <Tooltip title={t("meeting.chatSelectAll", "全选聊天内容")}>
+          <InputBase
+            inputRef={inputRef}
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send(); } }}
+            placeholder={privateTarget ? t("meeting.chatPrivatePlaceholder", "私聊 {{name}}…", { name: privateTarget.name || displayNameOf(privateTarget.uniqId) }) : t("meeting.chatPlaceholder", "说点什么…")}
+            multiline
+            maxRows={4}
+            sx={{ flex: 1, minWidth: 0, minHeight: 40, fontSize: "0.875rem", px: 0.5, py: 1 }}
+          />
+          <Tooltip title={t("meeting.chatEmoji", "选择表情")}>
             <IconButton
               size="small"
-              onClick={selectAllMessages}
-              aria-label={t("meeting.chatSelectAll", "全选聊天内容")}
-              data-testid="meeting-chat-select-all"
+              onClick={(event) => setEmojiAnchor(event.currentTarget)}
+              aria-label={t("meeting.chatEmoji", "选择表情")}
+              aria-haspopup="menu"
+              aria-expanded={Boolean(emojiAnchor)}
+              data-testid="meeting-chat-emoji"
               sx={{ width: 40, height: 40 }}
             >
-              <SelectAllIcon sx={{ fontSize: 19 }} />
+              <EmojiEmotionsOutlinedIcon sx={{ fontSize: 19 }} />
             </IconButton>
           </Tooltip>
-          <IconButton
-            size="small"
-            onClick={send}
-            disabled={!input.trim() || sending}
-            color="primary"
-            aria-label={t("meeting.sendChat", "发送消息")}
-            sx={{ width: 40, height: 40, ml: "auto", borderRadius: 1.5, bgcolor: alpha(theme.palette.primary.main, 0.08) }}
+          <MeetingMenu
+            anchorEl={emojiAnchor}
+            open={Boolean(emojiAnchor)}
+            onClose={() => {
+              setEmojiAnchor(null);
+              window.requestAnimationFrame(() => inputRef.current?.focus());
+            }}
+            anchorOrigin={{ vertical: "top", horizontal: "left" }}
+            transformOrigin={{ vertical: "bottom", horizontal: "left" }}
+            disableRestoreFocus
+            sx={{ "& .MuiMenu-list": { display: "grid", gridTemplateColumns: "repeat(5, 40px)", gap: 0.25 }, "& .MuiMenuItem-root": { minWidth: 40, minHeight: 40, justifyContent: "center", p: 0, fontSize: "1.25rem" } }}
           >
-            <SendIcon sx={{ fontSize: 19 }} />
-          </IconButton>
-          </Stack>
+            {EMOJI_LIST.map((emoji) => <MenuItem key={emoji} onClick={() => insertEmoji(emoji)} aria-label={`${t("meeting.insertEmoji", "插入表情")} ${emoji}`}>{emoji}</MenuItem>)}
+          </MeetingMenu>
+          <Tooltip title={t("meeting.sendChat", "发送消息")}>
+            <span>
+              <IconButton
+                size="small"
+                onClick={send}
+                disabled={!input.trim() || sending}
+                aria-label={t("meeting.sendChat", "发送消息")}
+                sx={chatComposerSendSx}
+              >
+                <SendIcon sx={{ fontSize: 19 }} />
+              </IconButton>
+            </span>
+          </Tooltip>
         </Paper>
       </Box>
     </Stack>
   );
-}
+});
 
 function AttachmentBubble({
   attachment,
@@ -472,8 +500,8 @@ function AttachmentBubble({
         <Stack direction="row" spacing={1} alignItems="center">
           <InsertDriveFileIcon sx={{ color: "primary.main", flexShrink: 0 }} />
           <Box sx={{ flex: 1, minWidth: 0 }}>
-            <Typography noWrap sx={{ fontSize: "0.78rem", fontWeight: 750 }}>{attachment.name}</Typography>
-            <Typography sx={{ fontSize: "0.68rem", color: "text.secondary" }}>{formatSize(attachment.size)}</Typography>
+            <Typography noWrap sx={{ fontSize: "0.875rem", fontWeight: 750 }}>{attachment.name}</Typography>
+            <Typography sx={{ fontSize: "0.75rem", color: "text.secondary" }}>{formatSize(attachment.size)}</Typography>
           </Box>
           {attachment.status === "completed" && attachment.url && (
             <Button
@@ -495,7 +523,7 @@ function AttachmentBubble({
           )}
         </Stack>
         {isActive && <LinearProgress variant="determinate" value={Math.max(0, Math.min(100, attachment.progress))} aria-label={`${attachment.name} 传输进度`} />}
-        <Typography sx={{ fontSize: "0.68rem", color: attachment.status === "error" ? "error.main" : "text.secondary" }}>
+        <Typography sx={{ fontSize: "0.75rem", color: attachment.status === "error" ? "error.main" : "text.secondary" }}>
           {statusLabel}
         </Typography>
       </Stack>

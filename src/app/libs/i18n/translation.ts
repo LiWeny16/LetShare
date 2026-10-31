@@ -1,10 +1,32 @@
+import { meetingPrejoinTranslations } from './meetingPrejoinTranslations';
+import { meetingAdditionalEnglish } from './meetingAdditionalTranslations';
+import { meetingAdditionalChinese } from './meetingAdditionalChinese';
+import { meetingAiBriefTranslations } from './meetingAiBriefTranslations';
+import { meetingAiMoreTranslations } from './meetingAiMoreTranslations';
+import { meetingPresentationTranslations } from './meetingPresentationTranslations';
+import { meetingSettingsSearchTranslations } from './meetingSettingsSearchTranslations';
+import { fileTransferV2Translations } from './fileTransferV2Translations';
+import { malayAdditionalTranslations } from './malayAdditionalTranslations';
+import { indonesianAdditionalTranslations } from './indonesianAdditionalTranslations';
+import { indonesianBaseTranslations } from './indonesianBaseTranslations';
+
 const sharedMalayTranslation = {
     translation: {
         meta: {
             title: "LetShare | Perkongsian Fail & Teks Merentas Platform"
         },
+        fileTransferV2: fileTransferV2Translations.ms,
+        proPlan: {
+            choose: "Pilih pelan", subtitle: "Buka pemindahan melalui pelayan untuk sambungan yang lebih stabil.", current: "Pelan semasa", basic: "Asas", free: "Percuma",
+            p2p: "Pemindahan P2P terus (tiada had saiz)", relayLimits: "Pelayan perantara (PRO ≤3GB / Percuma ≤50MB)", downgrade: "Tukar ke Free",
+            recommended: "Disyorkan", complete: "Akses penuh", perYear: "/tahun", relayPro: "Pelayan perantara (sehingga 3GB)", prioritySupport: "Sokongan keutamaan",
+            upgrade: "Naik taraf ke PRO", activated: "Diaktifkan", contact: "Hubungi untuk membeli", copied: "Disalin", copyEmail: "Salin e-mel",
+            activationCode: "Kod pengaktifan", activate: "Aktifkan", enterCode: "Masukkan kod jemputan", missingUser: "ID pengguna belum tersedia. Muat semula dan cuba lagi.",
+            activatedMessage: "PRO diaktifkan! Pemindahan perantara sehingga 3GB telah dibuka.", activationFailed: "Pengaktifan gagal", downgraded: "Beralih ke pelan Free"
+        },
         welcome: "Selamat datang ke Aplikasi Saya",
         language: "Bahasa",
+        user: { idCopied: "ID pengguna disalin" }, workspace: { quickActions: "Akses pantas", quickActionsSub: "Mesyuarat dan pemindahan fail" },
         button: {
             file: "Fail",
             image: "Gambar",
@@ -30,6 +52,7 @@ const sharedMalayTranslation = {
             openRoomSetting: "Klik untuk tetapkan ID bilik"
         },
         dialog: {
+            currentText: "Teks yang dipilih",
             newShare: "Kongsi Baru",
             incomingMessage: "Anda menerima mesej, adakah anda mahu terima?",
             inputText: "Masukkan Teks"
@@ -83,6 +106,7 @@ const sharedMalayTranslation = {
         },
         // settings
         settings: {
+            displayName: "Nama paparan",
             title: "Tetapan",
             languageLabel: "Bahasa",
             languageOptions: {
@@ -135,10 +159,12 @@ const sharedMalayTranslation = {
             }
         },
         footer: {
+            qrScanPrompt: "Imbas kod QR untuk menyambung", qrConnect: "Sambung", qrShare: "Kongsi",
             shareTitle: "Kongsi · Segera",
             qrPrompt: "Imbas kod QR untuk menyertai bilik:",
         },
         chat: {
+            deleteHistoryFailed: "Tidak dapat memadam sejarah sembang. Sila cuba lagi.",
             noMessages: "Tiada mesej sembang",
             inputPlaceholder: "Taip mesej...",
             deleteHistory: "Padam sejarah sembang",
@@ -184,6 +210,7 @@ const sharedMalayTranslation = {
             display: "ID anda"
         },
         alert: {
+            unknownError: "Ralat tidak diketahui",
             invalidRoom: "Nama bilik tidak sah",
             newUser: "Pengguna baru telah bersambung: {{name}}",
             transferCancelled: "Pihak lawan membatalkan pemindahan!",
@@ -349,11 +376,13 @@ const sharedMalayTranslation = {
 export const resources = {
     en: {
         translation: {
+            fileTransferV2: fileTransferV2Translations.en,
             meta: {
                 title: "LetShare | Cross-platform File & Text Sharing"
             },
             welcome: "Welcome to My App",
             language: "Language",
+            user: { idCopied: "User ID copied" }, workspace: { quickActions: "Quick actions", quickActionsSub: "Meetings and file transfers" },
             button: {
                 file: "File",
                 image: "Image",
@@ -379,6 +408,7 @@ export const resources = {
                 openRoomSetting: "Click to set room ID"
             },
             dialog: {
+                currentText: "Current selected text",
                 newShare: "New Share",
                 incomingMessage: "You received a message, accept it?",
                 inputText: "Input Text"
@@ -434,6 +464,7 @@ export const resources = {
             },
             // Settings
             settings: {
+                displayName: "Display name",
                 title: "Settings",
                 languageLabel: "Language",
                 languageOptions: {
@@ -486,11 +517,18 @@ export const resources = {
                 }
             },
             footer: {
+                qrScanPrompt: "Scan the QR code to connect", qrConnect: "Connect", qrShare: "Share",
                 shareTitle: "Share · Instantly",
                 qrPrompt: "Scan the QR code to join room:",
             },
             chat: {
+                deleteHistoryFailed: "Could not delete chat history. Please retry.",
                 noMessages: "No chat messages yet",
+                self: "Me", redpacketOpened: "Gift opened", redpacketTitle: "Best wishes", redpacketSub: "Gift envelope", redpacketView: "View",
+                redpacketCongrats: "Best wishes", redpacketFake: "(Demo gift; the amount is for entertainment only)",
+                menuFolder: "Folder", menuFile: "File", menuImage: "Image", menuClipboard: "Clipboard", menuRedpacket: "Gift envelope", redpacketDefaultMsg: "Best wishes",
+                menuVideo: "Video call", redpacketSend: "Send a gift", redpacketMsg: "Add a message…", redpacketSendBtn: "Send gift", plusMenu: "More actions",
+                unsupportedFile: "Unsupported file message", dropToSend: "Drop to send", dropFolderHint: "Multiple files and folders are packaged with their paths preserved",
                 inputPlaceholder: "Type a message...",
                 deleteHistory: "Delete chat history",
                 sendFile: "Send file",
@@ -535,6 +573,7 @@ export const resources = {
                 display: "Your ID"
             },
             alert: {
+                unknownError: "Unknown error",
                 invalidRoom: "Invalid room name",
                 newUser: "New user connected: {{name}}",
                 transferCancelled: "The other party cancelled the transfer!",
@@ -638,6 +677,17 @@ export const resources = {
                 timeout: "Background page exceeded {{seconds}} seconds, disconnecting server for saving"
             },
             call: {
+                voice: "Voice call", video: "Video call", incomingVideo: "Incoming video call", incomingVoice: "Incoming voice call",
+                ringing: "Incoming call…", accept: "Accept", decline: "Decline", deviceDefault: "System default", connecting: "Connecting…",
+                p2p: "P2P direct", relay: "Relay", direct: "Direct", close: "Close", audioBlocked: "🔇 Audio is off · Tap to enable",
+                gpu: "Video display problem detected. Try turning off browser hardware acceleration and restarting your browser.", voiceOnly: "Voice call in progress",
+                unmute: "Unmute", mute: "Mute", audioSettings: "Audio settings", videoSettings: "Video settings", videoOff: "Stop video", videoOn: "Start video",
+                hangup: "Hang up", microphone: "Microphone", speaker: "Speaker", volume: "Volume", inputLevel: "Input level", camera: "Camera",
+                videoBackground: "Background", bgOff: "Original", bgBlur: "Blur (browser)", videoQuality: "Resolution / frame rate", videoBitrate: "Bitrate limit",
+                bitrateAuto: "Automatic", videoCodec: "Video codec", codecAuto: "Automatic", codecNextCall: "Changes apply to the next call",
+                videoDegradation: "Degradation preference", degradeFrame: "Prioritize frame rate", degradeBalanced: "Balanced", degradeResolution: "Prioritize resolution",
+                audioContentHint: "Audio type", audioSpeech: "Voice", audioMusic: "Music / high fidelity", alreadyInCall: "This user is already on a call",
+                startFailed: "Could not start the call. Check your camera and microphone permissions.",
                 echoCancelType: "Echo cancellation",
                 echoBrowser: "Browser (default)",
                 echoSystem: "System-level (experimental)",
@@ -662,6 +712,14 @@ export const resources = {
                 qualityTooltipJitter: "Jitter",
                 qualityTooltipLoss: "Loss"
             },
+            proPlan: {
+                choose: "Choose a plan", subtitle: "Unlock server relay for a more reliable connection.", current: "Current plan", basic: "Basic", free: "Free",
+                p2p: "Direct P2P transfers (no size limit)", relayLimits: "Server relay (PRO ≤3GB / Free ≤50MB)", downgrade: "Switch to Free",
+                recommended: "Recommended", complete: "Full access", perYear: "/year", relayPro: "Server relay (up to 3GB)", prioritySupport: "Priority support",
+                upgrade: "Upgrade to PRO", activated: "Activated", contact: "Purchase contact", copied: "Copied", copyEmail: "Copy email",
+                activationCode: "Activation code", activate: "Activate", enterCode: "Enter an invitation code", missingUser: "User ID is unavailable. Refresh and try again.",
+                activatedMessage: "PRO activated! Server relay transfers up to 3GB are unlocked.", activationFailed: "Activation failed", downgraded: "Switched to the Free plan"
+            },
             conn: {
                 connecting: "Connecting…",
                 connected: "Connected",
@@ -669,6 +727,12 @@ export const resources = {
                 disconnected: "Disconnected"
             },
             meeting: {
+                ...meetingPrejoinTranslations.en,
+                ...meetingAdditionalEnglish,
+                ...meetingAiBriefTranslations.en,
+                ...meetingAiMoreTranslations.en,
+                ...meetingPresentationTranslations.en,
+                ...meetingSettingsSearchTranslations.en,
                 invite: "Invite members",
                 inviteTitle: "Invite members",
                 inviteMeetingId: "Meeting ID",
@@ -693,6 +757,31 @@ export const resources = {
                 invDecline: "Decline",
                 inviteAcceptedToast: "{{name}} accepted the invitation",
                 inviteRejectedToast: "{{name}} declined the invitation",
+                invitePass: "MEETING INVITATION", inviteOnlineMembers: "Online in the original room", inviteAgain: "Invite again", host: "Host", meetingId: "Meeting ID",
+                meetingPass: "Meeting pass", untitled: "Untitled meeting", editMeetingTitle: "Edit meeting name", whiteboard: "Whiteboard", settings: "Meeting settings",
+                stage: "Meeting stage", inMeeting: "In meeting", joining: "Joining…", you: "You", member: "Member",
+                chat: "Chat", participants: "Members", aiMinutesShort: "AI notes", aiMinutes: "AI notes",
+                membersTitle: "Meeting members", searchMembers: "Search members", peopleUnit: "people", peopleCount_one: "{{count}} person", peopleCount_other: "{{count}} people", changeLanguage: "Change language", panelNavigation: "Meeting panel",
+                participantVolume: "Volume", participantVolumeHint: "Only affects what you hear", sendMessage: "Message",
+                hostBadge: "Host", moreActions: "More actions", microphoneOn: "Microphone on", microphoneOff: "Microphone off",
+                memberJoined: "In meeting", noMatchingMembers: "No matching members", participantActions: "Member actions",
+                muteAll: "Mute all", requestUnmute: "Ask to unmute", setHost: "Make host", kick: "Remove from meeting",
+                chatPrivacy: "Messages are visible only to people in the meeting", sendTo: "Send to", chatPlaceholder: "Say something…",
+                chatEmoji: "Choose emoji", insertEmoji: "Insert emoji", sendChat: "Send message",
+                microphoneOpening: "Starting…", microphoneRetry: "Retry mic", unmute: "Unmute", mute: "Mute",
+                stopVideo: "Stop video", startVideo: "Start video", stopShare: "Stop sharing", shareScreen: "Share screen",
+                panelClose: "Hide panel", panelOpen: "Show panel", leave: "Leave", leaveOptions: "Leave options",
+                endForAll: "End meeting", cancel: "Cancel", screenSharing: "Screen sharing", breakoutChip: "Breakout",
+                breakoutRoomsTitle: "Breakout rooms", breakoutRecallAll: "Bring everyone back", breakoutNew: "New room",
+                breakoutDefaultName: "Room {{number}}", breakoutEmptyHost: "Create a room for members to join freely.",
+                breakoutEmptyMember: "There are no breakout rooms yet.", breakoutDisconnected: "Connection lost. Reconnect and try again.",
+                breakoutNameInvalid: "Room names must be 1–40 characters.", breakoutName: "Room name", breakoutSaveName: "Save name",
+                breakoutReturnMain: "Return to main room", breakoutEmptyRoom: "No members yet", breakoutRename: "Rename",
+                breakoutDeleteOccupied: "Members must leave before deleting", breakoutDelete: "Delete room",
+                breakoutCurrent: "Current room", breakoutJoin: "Join room", breakoutJoined: "Joined breakout room", breakoutRecalled: "Returned to main room",
+                endedToast: "Meeting ended", kickedToast: "You have been removed from the meeting", mutedByHost: "The host muted everyone", unmuteRequested: "The host asked you to unmute",
+                stageRestore: "Restore layout", stageFocus: "Focus stage", exitFullscreen: "Exit full screen", fullscreen: "Full screen", fullscreenWithChat: "Full screen with chat",
+                endDialogTitle: "End meeting?", endDialogBody: "Everyone will leave and the meeting ID will be released.",
                 chatToAll: "Everyone (public)",
                 chatTarget: "Message recipient",
                 chatNoMembers: "No other members yet",
@@ -705,11 +794,13 @@ export const resources = {
     },
     zh: {
         translation: {
+            fileTransferV2: fileTransferV2Translations.zh,
             meta: {
                 title: "乐享Share | 文件 & 文本跨平台共享"
             },
             welcome: "欢迎使用我的应用",
             language: "语言",
+            user: { idCopied: "已复制用户 ID" }, workspace: { quickActions: "快捷入口", quickActionsSub: "会议与文件传输" },
             button: {
                 file: "文件",
                 image: "图片",
@@ -735,6 +826,7 @@ export const resources = {
                 openRoomSetting: "点此设置房间号"
             },
             dialog: {
+                currentText: "当前选中的文本",
                 newShare: "新分享",
                 incomingMessage: "您有来自外部的消息，是否接受？",
                 inputText: "输入文本"
@@ -790,6 +882,7 @@ export const resources = {
             },
             // Settings
             settings: {
+                displayName: "显示名称",
                 title: "设置",
                 languageLabel: "语言/Language",
                 languageOptions: {
@@ -844,11 +937,17 @@ export const resources = {
                 }
             },
             footer: {
+                qrScanPrompt: "扫描二维码连接", qrConnect: "连接", qrShare: "分享",
                 shareTitle: "分享·一触即发",
                 qrPrompt: "扫描二维码以加入房间:",
             },
             chat: {
+                deleteHistoryFailed: "无法删除聊天记录，请重试。",
                 noMessages: "暂无聊天记录",
+                self: "我", redpacketOpened: "红包已拆开", redpacketTitle: "恭喜发财，大吉大利", redpacketSub: "微信红包", redpacketView: "查看",
+                redpacketCongrats: "恭喜发财，大吉大利", redpacketFake: "（演示红包，金额仅为娱乐）", menuFolder: "文件夹", menuFile: "文件", menuImage: "图片", menuClipboard: "剪贴板",
+                menuRedpacket: "红包", redpacketDefaultMsg: "恭喜发财，大吉大利", menuVideo: "视频通话", redpacketSend: "发红包", redpacketMsg: "祝福语…",
+                redpacketSendBtn: "塞钱进红包", plusMenu: "功能", unsupportedFile: "暂不支持的文件消息", dropToSend: "松开即可发送", dropFolderHint: "多文件和文件夹会自动打包并保留路径",
                 inputPlaceholder: "输入消息...",
                 deleteHistory: "删除聊天记录",
                 sendFile: "发送文件",
@@ -893,6 +992,7 @@ export const resources = {
                 display: "你的ID"
             },
             alert: {
+                unknownError: "未知错误",
                 invalidRoom: "房间名不合法",
                 newUser: "新用户已连接: {{name}}",
                 transferCancelled: "对方取消了传输！",
@@ -996,6 +1096,14 @@ export const resources = {
                 timeout: "后台页面超过 {{seconds}} 秒，断开服务器以节省资源"
             },
             call: {
+                voice: "语音通话", video: "视频通话", incomingVideo: "视频来电", incomingVoice: "语音来电", ringing: "来电中…", accept: "接听", decline: "拒绝",
+                deviceDefault: "系统默认", connecting: "连接中…", p2p: "P2P 直连", relay: "中继", direct: "直连", close: "关闭", audioBlocked: "🔇 声音未开启 · 点此恢复",
+                gpu: "检测到视频画面异常：可能是浏览器图形加速（GPU）问题，请关闭「使用图形加速」并重启浏览器", voiceOnly: "语音通话中",
+                unmute: "取消静音", mute: "静音", audioSettings: "音频设置", videoSettings: "视频设置", videoOff: "关闭视频", videoOn: "开启视频", hangup: "挂断",
+                microphone: "麦克风", speaker: "扬声器", volume: "音量", inputLevel: "输入电平", camera: "摄像头", videoBackground: "背景", bgOff: "原画（关闭）",
+                bgBlur: "模糊（浏览器原生）", videoQuality: "分辨率/帧率", videoBitrate: "码率上限", bitrateAuto: "自动", videoCodec: "编码器", codecAuto: "自动",
+                codecNextCall: "通话中修改将于下次通话生效", videoDegradation: "降级策略", degradeFrame: "帧率优先", degradeBalanced: "自动平衡", degradeResolution: "分辨率优先",
+                audioContentHint: "声音类型", audioSpeech: "人声优先", audioMusic: "音乐/高保真", alreadyInCall: "该用户已在通话中", startFailed: "无法启动通话，请检查摄像头和麦克风权限。",
                 echoCancelType: "回声消除",
                 echoBrowser: "浏览器（默认）",
                 echoSystem: "系统级（实验）",
@@ -1020,6 +1128,13 @@ export const resources = {
                 qualityTooltipJitter: "抖动",
                 qualityTooltipLoss: "丢包"
             },
+            proPlan: {
+                choose: "选择计划", subtitle: "解锁服务器中转传输，体验更稳定快速的连接", current: "当前计划", basic: "基础体验", free: "免费",
+                p2p: "P2P 直连传输（不限大小）", relayLimits: "服务器中转（≤3GB PRO / ≤50MB 免费）", downgrade: "降级为 Free", recommended: "推荐",
+                complete: "完整体验", perYear: "/年", relayPro: "服务器中转（上限 3GB）", prioritySupport: "优先技术支持", upgrade: "升级到 PRO", activated: "已激活",
+                contact: "购买联系", copied: "已复制", copyEmail: "复制邮箱", activationCode: "激活码", activate: "激活", enterCode: "请输入邀请码",
+                missingUser: "用户 ID 未初始化，请刷新页面后重试", activatedMessage: "PRO 已激活！服务器中转已解锁（上限 3GB）", activationFailed: "激活失败", downgraded: "已降级为 Free 计划"
+            },
             conn: {
                 connecting: "连接中…",
                 connected: "已连接",
@@ -1027,7 +1142,33 @@ export const resources = {
                 disconnected: "已断开"
             },
             meeting: {
+                ...meetingPrejoinTranslations.zh,
+                ...meetingAdditionalChinese,
+                ...meetingAiBriefTranslations.zh,
+                ...meetingAiMoreTranslations.zh,
+                ...meetingPresentationTranslations.zh,
+                ...meetingSettingsSearchTranslations.zh,
                 invite: "邀请成员",
+                meetingPass: "会议凭证", untitled: "未命名会议", editMeetingTitle: "修改会议名称", whiteboard: "白板", settings: "会议设置", stage: "会议舞台", inMeeting: "会议中", joining: "正在加入…", you: "我", member: "成员",
+                chat: "聊天", participants: "成员", aiMinutes: "AI 会议纪要", membersTitle: "会议成员", searchMembers: "搜索成员", peopleUnit: "人",
+                peopleCount_one: "{{count}} 人", peopleCount_other: "{{count}} 人", participantVolume: "个人音量", participantVolumeHint: "仅影响你听到的声音",
+                sendMessage: "发送消息", hostBadge: "主持人", moreActions: "更多操作", microphoneOn: "麦克风已开启", microphoneOff: "麦克风已关闭",
+                memberJoined: "已加入会议", noMatchingMembers: "没有找到匹配的成员", participantActions: "成员操作", muteAll: "全员静音", requestUnmute: "请求开麦",
+                setHost: "设置为主持人", kick: "移出会议", chatPrivacy: "消息仅在场成员可见", sendTo: "发送给", chatPlaceholder: "说点什么…", chatEmoji: "选择表情",
+                insertEmoji: "插入表情", sendChat: "发送消息", microphoneOpening: "正在开启…", microphoneRetry: "重试麦克风", unmute: "解除静音", mute: "静音",
+                stopVideo: "关闭摄像头", startVideo: "开启摄像头", stopShare: "停止共享", shareScreen: "共享屏幕", panelClose: "收起面板", panelOpen: "打开面板",
+                leave: "离开", leaveOptions: "更多离会选项", endForAll: "结束会议", cancel: "取消", screenSharing: "正在共享屏幕", breakoutChip: "分组讨论",
+                breakoutJoined: "已进入分组讨论", breakoutRecalled: "已返回主会场", endedToast: "会议已结束", kickedToast: "你已被移出会议", mutedByHost: "主持人已将全员静音",
+                unmuteRequested: "主持人邀请你开启麦克风", stageRestore: "还原布局", stageFocus: "专注舞台", exitFullscreen: "退出全屏", fullscreen: "全屏舞台",
+                fullscreenWithChat: "全屏并保留聊天", endDialogTitle: "结束会议？", endDialogBody: "全体成员将被移出会议，会议号立即释放。",
+                invitePass: "会议邀请", inviteOnlineMembers: "同房间在线成员", inviteAgain: "再次邀请", host: "主持人", meetingId: "会议号",
+                aiMinutesShort: "AI 纪要", peopleCount: "{{count}} 人", changeLanguage: "切换语言", panelNavigation: "会议面板",
+                breakoutRoomsTitle: "分组房间", breakoutRecallAll: "召回所有成员", breakoutNew: "新建房间",
+                breakoutDefaultName: "分组 {{number}}", breakoutEmptyHost: "创建房间后，成员可以自由加入。",
+                breakoutEmptyMember: "暂时没有分组房间。", breakoutDisconnected: "会议连接已断开，请恢复连接后重试。",
+                breakoutNameInvalid: "房间名称需为 1 至 40 个字符。", breakoutName: "房间名称", breakoutSaveName: "保存名称",
+                breakoutReturnMain: "返回主会场", breakoutEmptyRoom: "暂无成员", breakoutRename: "修改名称",
+                breakoutDeleteOccupied: "成员离开后可删除", breakoutDelete: "删除房间", breakoutCurrent: "当前房间", breakoutJoin: "加入房间",
                 inviteTitle: "邀请成员",
                 inviteMeetingId: "会议号",
                 inviteEmptyRoom: "当前原始房间暂无其他在线用户",
@@ -1062,13 +1203,37 @@ export const resources = {
 
         }
     },
-    ms: sharedMalayTranslation,
+    ms: {
+        translation: {
+            ...sharedMalayTranslation.translation,
+            transfer: { ...sharedMalayTranslation.translation.transfer, ...malayAdditionalTranslations.transfer },
+            chat: { ...sharedMalayTranslation.translation.chat, ...malayAdditionalTranslations.chat },
+            call: { ...sharedMalayTranslation.translation.call, ...malayAdditionalTranslations.call },
+            meeting: { ...sharedMalayTranslation.translation.meeting, ...malayAdditionalTranslations.meeting, ...meetingSettingsSearchTranslations.ms },
+        }
+    },
     id: {
         ...sharedMalayTranslation,
         translation: {
             ...sharedMalayTranslation.translation,
+            ...indonesianBaseTranslations,
+            transfer: { ...sharedMalayTranslation.translation.transfer, ...indonesianBaseTranslations.transfer },
+            call: { ...sharedMalayTranslation.translation.call, ...indonesianAdditionalTranslations.call },
+            meeting: { ...sharedMalayTranslation.translation.meeting, ...indonesianAdditionalTranslations.meeting, ...meetingSettingsSearchTranslations.id },
+            fileTransferV2: fileTransferV2Translations.id,
+            user: { idCopied: "ID pengguna disalin" }, workspace: { quickActions: "Akses cepat", quickActionsSub: "Rapat dan transfer file" },
+            proPlan: {
+                choose: "Pilih paket", subtitle: "Aktifkan relai server untuk koneksi yang lebih stabil.", current: "Paket saat ini", basic: "Dasar", free: "Gratis",
+                p2p: "Transfer P2P langsung (tanpa batas ukuran)", relayLimits: "Relai server (PRO ≤3GB / Gratis ≤50MB)", downgrade: "Beralih ke Free",
+                recommended: "Disarankan", complete: "Akses penuh", perYear: "/tahun", relayPro: "Relai server (hingga 3GB)", prioritySupport: "Dukungan prioritas",
+                upgrade: "Upgrade ke PRO", activated: "Diaktifkan", contact: "Kontak pembelian", copied: "Disalin", copyEmail: "Salin email",
+                activationCode: "Kode aktivasi", activate: "Aktifkan", enterCode: "Masukkan kode undangan", missingUser: "ID pengguna belum tersedia. Muat ulang dan coba lagi.",
+                activatedMessage: "PRO aktif! Transfer relai server hingga 3GB terbuka.", activationFailed: "Aktivasi gagal", downgraded: "Beralih ke paket Free"
+            },
             alert: {
                 ...sharedMalayTranslation.translation.alert,
+                ...indonesianBaseTranslations.alert,
+                unknownError: "Kesalahan tidak diketahui",
                 p2pOnlyOverseas: "Transfer file memerlukan koneksi peer-to-peer langsung. Kedua pengguna harus online.",
                 passwordRequired: "Keanggotaan PRO diperlukan untuk mentransfer file di atas 50MB (maks 3GB). Upgrade di Pengaturan",
                 fileTooLarge: "Batas ukuran file adalah 3GB per file. Pastikan ruang disk mencukupi",
@@ -1076,6 +1241,7 @@ export const resources = {
             },
             toast: {
                 ...sharedMalayTranslation.translation.toast,
+                ...indonesianBaseTranslations.toast,
                 serverTransferMode: "Beralih ke mode transfer server",
                 duplicateFilesSkipped: "{{count}} file duplikat dengan jalur dan isi yang sama dilewati dalam kelompok ini.",
                 fileReadFailed: "Beberapa file tidak dapat dibaca atau dikemas. Tidak ada file yang dikirim; pilih ulang lalu coba lagi.",
@@ -1085,6 +1251,8 @@ export const resources = {
             },
             chat: {
                 ...sharedMalayTranslation.translation.chat,
+                ...indonesianAdditionalTranslations.chat,
+                deleteHistoryFailed: "Tidak dapat menghapus riwayat chat. Silakan coba lagi.",
                 deleteHistoryConfirm: "Hapus semua riwayat chat dengan {{name}}? Ini tidak dapat dibatalkan.",
                 messageCount: "{{count}} pesan",
                 startChat: "Mulai mengobrol",

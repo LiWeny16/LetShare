@@ -1,9 +1,9 @@
+import { MeetingDialog as Dialog } from "./MeetingDialog";
 import type { ChangeEvent, KeyboardEvent } from "react";
 import {
   Box,
   Button,
   CircularProgress,
-  Dialog,
   DialogActions,
   DialogContent,
   DialogTitle,
@@ -200,7 +200,7 @@ export default function MeetingCreateDialog({
                     {isCreated && createdMeeting ? (
                       <>
                         <Stack direction="row" alignItems="center" justifyContent="space-between" gap={1}>
-                          <Typography sx={{ fontSize: "0.63rem", letterSpacing: "0.16em", fontWeight: 800, color: "primary.main" }}>MEETING PASS</Typography>
+                          <Typography data-testid="meeting-pass" sx={{ fontSize: "0.63rem", letterSpacing: "0.12em", fontWeight: 800, color: "primary.main" }}>{t("meeting.meetingPass", "会议凭证")}</Typography>
                           <Stack direction="row" alignItems="center" gap={0.35} sx={{ color: "text.secondary" }}><WorkspacePremiumOutlinedIcon sx={{ fontSize: 15 }} /><Typography sx={{ fontSize: "0.68rem" }}>{t("meeting.host", "主持人")}</Typography></Stack>
                         </Stack>
                         <Typography sx={{ mt: 1.45, fontSize: "0.68rem", color: "text.secondary" }}>{t("meeting.meetingId", "会议号")}</Typography>
@@ -221,7 +221,7 @@ export default function MeetingCreateDialog({
                       </>
                     ) : (
                       <>
-                        <Typography sx={{ fontSize: "0.63rem", letterSpacing: "0.16em", fontWeight: 800, color: "text.secondary" }}>MEETING PASS</Typography>
+                        <Typography data-testid="meeting-pass" sx={{ fontSize: "0.63rem", letterSpacing: "0.12em", fontWeight: 800, color: "text.secondary" }}>{t("meeting.meetingPass", "会议凭证")}</Typography>
                         <Typography sx={{ mt: 2.1, fontSize: "1.02rem", fontWeight: 700, color: "text.primary" }}>{t("meeting.passPending", "会议号将在创建后生成")}</Typography>
                         <Typography sx={{ mt: 0.7, fontSize: "0.76rem", lineHeight: 1.55, color: "text.secondary" }}>{t("meeting.passPendingSub", "点击“开始会议”后即可复制会议号和邀请链接。")}</Typography>
                       </>

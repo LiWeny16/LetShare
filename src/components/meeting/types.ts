@@ -23,6 +23,10 @@ export interface MemberTileData {
   /** 静音 / 摄像头状态（用于右下角状态图标）。 */
   muted: boolean;
   cameraOn: boolean;
+  /** Local media controls follow the same pending/error state as the toolbar. */
+  microphonePending?: boolean;
+  microphoneError?: boolean;
+  mediaControlsDisabled?: boolean;
   /** Speaking state belongs to member camera tiles, never to Active Sharing. */
   isSpeaking?: boolean;
   /** Render this member as the selected large-stage tile. */

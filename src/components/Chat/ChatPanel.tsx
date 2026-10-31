@@ -3,7 +3,9 @@ import {
     Box,
     Typography,
     TextField,
+    InputBase,
     IconButton,
+    Tooltip,
     Slide,
     useTheme,
     Backdrop,
@@ -34,6 +36,9 @@ import alertUseMUI from '@App/libs/tools/alert';
 import FileBubble from './FileBubble';
 import ImageBubble from './ImageBubble';
 import FilePreviewDialog from '../FilePreviewDialog';
+import { EMOJI_LIST } from './emoji';
+import { ChatEmptyState } from './ChatEmptyState';
+import { chatComposerSendSx, chatComposerSurfaceSx } from './composerStyles';
 import type { FileChatMessage, FileMetadata, TextChatMessage } from '@App/libs/chat/ChatHistoryManager';
 import { buildRedPacket, parseRedPacket, type RedPacketPayload } from '@App/libs/chat/redpacket';
 import { bundleTransferEntriesWithInfo, collectDroppedTransferEntries, type TransferBundleResult, type TransferEntry } from '@App/libs/chat/fileBundle';
@@ -46,9 +51,6 @@ interface ChatPanelProps {
     /** 「+」面板里的视频通话：由上层发起（compose startCall） */
     onVideoCall?: () => void;
 }
-
-// 表情包占位符
-const EMOJI_LIST = ['😀', '😍', '🤔', '👍', '❤️', '😂', '😢', '😮', '🎉', '🔥'];
 
 /** 红包拆开"原地放大"动画 */
 const redpacketPop = keyframes`
@@ -174,7 +176,7 @@ class ChatPanelErrorBoundary extends React.Component<
 }
 
 const ChatPanelContent: React.FC<ChatPanelProps> = ({ open, onClose, targetUserId, targetUserName, onVideoCall }) => {
-    const { t } = useTranslation();
+    const { t, i18n } = useTranslation();
     const theme = useTheme();
     const [visible, setVisible] = useState(open);
     const [inputValue, setInputValue] = useState('');
@@ -582,10 +584,10 @@ const ChatPanelContent: React.FC<ChatPanelProps> = ({ open, onClose, targetUserI
         const isToday = date.toDateString() === now.toDateString();
 
         if (isToday) {
-            return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+            return date.toLocaleTimeString(i18n.resolvedLanguage || i18n.language, { hour: '2-digit', minute: '2-digit' });
         } else {
-            return date.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' }) + ' ' +
-                date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+            return date.toLocaleDateString(i18n.resolvedLanguage || i18n.language, { month: 'short', day: 'numeric' }) + ' ' +
+                date.toLocaleTimeString(i18n.resolvedLanguage || i18n.language, { hour: '2-digit', minute: '2-digit' });
         }
     };
 
@@ -701,7 +703,7 @@ const ChatPanelContent: React.FC<ChatPanelProps> = ({ open, onClose, targetUserI
                 return (
                     <Box key={messageId} sx={{ display: 'flex', justifyContent: isMyMessage ? 'flex-end' : 'flex-start', mb: 1 }}>
                         <Box sx={{ maxWidth: '82%', px: 1.5, py: 1, borderRadius: 2, bgcolor: '#f4f7fb', border: '1px dashed #cbd5e1', color: '#667085' }}>
-                            <Typography variant="caption" sx={{ fontWeight: 700 }}>暂不支持的文件消息</Typography>
+                            <Typography variant="caption" sx={{ fontWeight: 700 }}>{t('chat.unsupportedFile', '暂不支持的文件消息')}</Typography>
                         </Box>
                     </Box>
                 );
@@ -883,8 +885,8 @@ const ChatPanelContent: React.FC<ChatPanelProps> = ({ open, onClose, targetUserI
                                 >
                                     <Box sx={{ textAlign: 'center', px: 3, py: 2, borderRadius: 3, bgcolor: '#fff', boxShadow: 3 }}>
                                         <FolderIcon sx={{ fontSize: 36, color: '#1677ff', mb: 0.5 }} />
-                                        <Typography sx={{ fontWeight: 700, color: '#172033' }}>松开即可发送</Typography>
-                                        <Typography variant="caption" sx={{ color: '#667085' }}>多文件和文件夹会自动打包并保留路径</Typography>
+                                        <Typography sx={{ fontWeight: 700, color: '#172033' }}>{t('chat.dropToSend', '松开即可发送')}</Typography>
+                                        <Typography variant="caption" sx={{ color: '#667085' }}>{t('chat.dropFolderHint', '多文件和文件夹会自动打包并保留路径')}</Typography>
                                     </Box>
                                 </Box>
                             )}
@@ -966,19 +968,7 @@ const ChatPanelContent: React.FC<ChatPanelProps> = ({ open, onClose, targetUserI
                                 }}
                             >
                                 {!hasMessages ? (
-                                    <Box
-                                        sx={{
-                                            flex: 1,
-                                            display: 'flex',
-                                            alignItems: 'center',
-                                            justifyContent: 'center',
-                                            color: 'text.secondary',
-                                        }}
-                                    >
-                                        <Typography variant="body2">
-                                            {t('chat.noMessages', '暂无聊天记录')}
-                                        </Typography>
-                                    </Box>
+                                    <ChatEmptyState />
                                 ) : (
                                     <>
                                         {visibleMessages.map((msg, i) => renderMessage(msg, i, visibleMessages))}
@@ -992,7 +982,6 @@ const ChatPanelContent: React.FC<ChatPanelProps> = ({ open, onClose, targetUserI
                                 sx={{
                                     px: { xs: 1.5, sm: 2.5 },
                                     py: 2,
-                                    borderTop: `1px solid ${theme.palette.divider}`,
                                     display: 'flex',
                                     flexDirection: 'column',
                                     gap: 1,
@@ -1013,12 +1002,12 @@ const ChatPanelContent: React.FC<ChatPanelProps> = ({ open, onClose, targetUserI
                                             gap: 1,
                                             px: 0.5,
                                             py: 1.5,
-                                            bgcolor: theme.palette.grey[50],
-                                            borderRadius: 2,
+                                            bgcolor: 'action.hover',
+                                            borderRadius: 3,
                                         }}
                                     >
                                         {[
-                                            { key: 'folder', icon: <FolderIcon sx={{ fontSize: 26 }} />, label: '文件夹', action: () => { blurTrigger2(); setTimeout(() => folderInputRef.current?.click(), 0); } },
+                                            { key: 'folder', icon: <FolderIcon sx={{ fontSize: 26 }} />, label: t('chat.menuFolder', '文件夹'), action: () => { blurTrigger2(); setTimeout(() => folderInputRef.current?.click(), 0); } },
                                             {key: 'file', icon: <AttachFileIcon sx={{ fontSize: 26 }} />, label: t('chat.menuFile', '文件'), action: () => { blurTrigger2(); setTimeout(() => fileInputRef.current?.click(), 0); } },
                                             { key: 'image', icon: <ImageIcon sx={{ fontSize: 26 }} />, label: t('chat.menuImage', '图片'), action: () => { blurTrigger2(); setTimeout(() => imageInputRef.current?.click(), 0); } },
                                             { key: 'clipboard', icon: <ContentPasteIcon sx={{ fontSize: 26 }} />, label: t('chat.menuClipboard', '剪贴板'), action: () => void handleSendClipboard() },
@@ -1026,17 +1015,19 @@ const ChatPanelContent: React.FC<ChatPanelProps> = ({ open, onClose, targetUserI
                                             { key: 'video', icon: <VideocamIcon sx={{ fontSize: 26 }} />, label: t('chat.menuVideo', '视频通话'), action: () => { setPlusPanelOpen(false); onVideoCall?.(); } },
                                         ].map((item) => (
                                             <Box
+                                                component="button"
+                                                type="button"
                                                 key={item.key}
                                                 onClick={item.action}
                                                 sx={{
                                                     display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0.5,
-                                                    minHeight: 68, py: 1.25, borderRadius: 2, cursor: 'pointer', userSelect: 'none',
-                                                    bgcolor: '#fff', boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
-                                                    '&:hover': { bgcolor: '#fafafa' },
+                                                    minWidth: 0, minHeight: 68, py: 1.25, border: 0, borderRadius: 2, cursor: 'pointer', userSelect: 'none',
+                                                    color: 'text.primary', bgcolor: 'background.paper', boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
+                                                    '&:hover': { bgcolor: 'action.hover' },
                                                 }}
                                             >
                                                 {item.icon}
-                                                <Typography variant="caption" sx={{ color: '#333', fontWeight: 500 }}>
+                                                <Typography variant="caption" sx={{ color: 'text.primary', fontWeight: 500, overflowWrap: 'anywhere' }}>
                                                     {item.label}
                                                 </Typography>
                                             </Box>
@@ -1097,41 +1088,44 @@ const ChatPanelContent: React.FC<ChatPanelProps> = ({ open, onClose, targetUserI
                                         </Button>
                                     </Box>
                                 )}
-                                <Box sx={{ display: 'flex', alignItems: 'flex-end', gap: 1 }}>
-                                <Box sx={{ flex: 1 }}>
-                                    <TextField
-                                        fullWidth
+                                <Box sx={chatComposerSurfaceSx}>
+                                    <Tooltip title={t('chat.plusMenu', '功能')}>
+                                        <IconButton
+                                            onClick={(e) => { blurTrigger(e); setPlusPanelOpen((v) => !v); }}
+                                            color={plusPanelOpen ? 'primary' : 'default'}
+                                            aria-label={t('chat.plusMenu', '功能')}
+                                            aria-expanded={plusPanelOpen}
+                                            sx={{ width: 40, height: 40, flexShrink: 0 }}
+                                        >
+                                            {plusPanelOpen ? <CloseIcon /> : <AddIcon />}
+                                        </IconButton>
+                                    </Tooltip>
+                                    <InputBase
                                         multiline
                                         maxRows={4}
                                         value={inputValue}
                                         onChange={(e) => setInputValue(e.target.value)}
                                         placeholder={t('chat.inputPlaceholder', '输入消息...')}
-                                        variant="outlined"
-                                        size="small"
                                         onKeyDown={(e) => {
-                                            if (e.key === 'Enter' && !e.shiftKey) {
+                                            if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
                                                 e.preventDefault();
                                                 handleSendMessage();
                                             }
                                         }}
-                                        sx={{
-                                            '& .MuiOutlinedInput-root': {
-                                                borderRadius: 3,
-                                            },
-                                        }}
+                                        sx={{ flex: 1, minWidth: 0, minHeight: 40, fontSize: '0.875rem', px: 0.5, py: 1 }}
                                     />
-                                </Box>
-
-                                <Box sx={{ display: 'flex', gap: 0.5 }}>
+                                    <Tooltip title={t('meeting.chatEmoji', '选择表情')}>
                                     <IconButton
                                         onClick={(e) => {
                                             blurTrigger(e);
                                             setEmojiAnchor(e.currentTarget);
                                         }}
-                                        size="small"
+                                        aria-label={t('meeting.chatEmoji', '选择表情')}
+                                        sx={{ width: 40, height: 40, flexShrink: 0 }}
                                     >
-                                        <EmojiIcon />
+                                        <EmojiIcon sx={{ fontSize: 20 }} />
                                     </IconButton>
+                                    </Tooltip>
 
                                     <input
                                         type="file"
@@ -1155,36 +1149,18 @@ const ChatPanelContent: React.FC<ChatPanelProps> = ({ open, onClose, targetUserI
                                         onChange={handleFileSelect}
                                         {...({ webkitdirectory: '', directory: '' } as Record<string, string>)}
                                     />
-                                    {/* 附件入口（保留原行为：blur 后触发文件选择） */}
-                                    <IconButton
-                                        onClick={(e) => {
-                                            blurTrigger(e);
-                                            // setTimeout 避免 MUI 内部事件链阻塞 Chrome 弹出文件对话框
-                                            setTimeout(() => fileInputRef.current?.click(), 0);
-                                        }}
-                                        size="small"
-                                    >
-                                        <AttachFileIcon />
-                                    </IconButton>
-                                    {/* 「+」功能面板按钮 */}
-                                    <IconButton
-                                        onClick={(e) => { blurTrigger(e); setPlusPanelOpen((v) => !v); }}
-                                        color={plusPanelOpen ? 'primary' : 'default'}
-                                        size="small"
-                                        aria-label={t('chat.plusMenu', '功能')}
-                                    >
-                                        {plusPanelOpen ? <CloseIcon /> : <AddIcon />}
-                                    </IconButton>
-
+                                    <Tooltip title={t('meeting.sendChat', '发送消息')}>
+                                    <span>
                                     <IconButton
                                         onClick={handleSendMessage}
                                         disabled={!inputValue.trim()}
-                                        color="primary"
-                                        size="small"
+                                        aria-label={t('meeting.sendChat', '发送消息')}
+                                        sx={chatComposerSendSx}
                                     >
-                                        <SendIcon />
+                                        <SendIcon sx={{ fontSize: 19 }} />
                                     </IconButton>
-                                </Box>
+                                    </span>
+                                    </Tooltip>
                                 </Box>
                             </Box>
                         </Box>

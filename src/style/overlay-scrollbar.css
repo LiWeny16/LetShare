@@ -1,0 +1,63 @@
+/* Native scrolling remains enabled; its visual thumb is drawn above content. */
+html.app-overlay-scrollbars,
+html.app-overlay-scrollbars *,
+html.app-overlay-scrollbars *::before,
+html.app-overlay-scrollbars *::after {
+  scrollbar-width: none !important;
+  -ms-overflow-style: none;
+}
+
+html.app-overlay-scrollbars::-webkit-scrollbar,
+html.app-overlay-scrollbars *::-webkit-scrollbar {
+  width: 0 !important;
+  height: 0 !important;
+  display: none !important;
+}
+
+.app-scrollbar {
+  position: fixed;
+  z-index: 2147483000;
+  box-sizing: border-box;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 160ms ease-out;
+}
+
+.app-scrollbar[data-visible="true"] {
+  opacity: 1;
+}
+
+.app-scrollbar__thumb {
+  position: absolute;
+  border-radius: 999px;
+  background: rgba(91, 102, 118, 0.42);
+  background-clip: padding-box;
+  border: 3px solid transparent;
+  box-sizing: border-box;
+  pointer-events: none;
+  touch-action: none;
+}
+
+.app-scrollbar[data-visible="true"] .app-scrollbar__thumb {
+  pointer-events: auto;
+}
+
+.app-scrollbar__thumb:hover,
+.app-scrollbar__thumb:active {
+  background-color: rgba(75, 86, 102, 0.66);
+}
+
+.app-scrollbar--vertical .app-scrollbar__thumb { width: 12px; }
+.app-scrollbar--horizontal .app-scrollbar__thumb { height: 12px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .app-scrollbar { transition: none; }
+}
+
+@media (forced-colors: active) {
+  html:not(.app-overlay-scrollbars), html:not(.app-overlay-scrollbars) * { scrollbar-width: auto !important; scrollbar-color: auto !important; -ms-overflow-style: auto !important; }
+  html:not(.app-overlay-scrollbars)::-webkit-scrollbar, html:not(.app-overlay-scrollbars) *::-webkit-scrollbar { width: auto !important; height: auto !important; display: initial !important; }
+  html:not(.app-overlay-scrollbars)::-webkit-scrollbar-thumb, html:not(.app-overlay-scrollbars) *::-webkit-scrollbar-thumb { background: CanvasText !important; border: 0 !important; }
+  html:not(.app-overlay-scrollbars)::-webkit-scrollbar-track, html:not(.app-overlay-scrollbars) *::-webkit-scrollbar-track { background: Canvas !important; }
+  .app-scrollbar { display: none; }
+}

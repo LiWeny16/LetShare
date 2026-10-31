@@ -37,21 +37,37 @@ test("meeting prejoin matches the ready state without layout shifts", async (t) 
       authToken: token,
       ablyKey: "",
       transferPriority: "p2p",
+      micDeviceId: "missing-saved-microphone",
+      videoDeviceId: "missing-saved-camera",
       version: "3.8.4",
       isNewUser: false,
     }));
   }, { token: TOKEN, ws: WS });
 
   const page = await context.newPage();
+  const deviceWarnings: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "warning" && /out-of-range value/i.test(message.text())) deviceWarnings.push(message.text());
+  });
   await page.goto(`${SITE}/?room=e2e-prejoin#`, { waitUntil: "domcontentloaded", timeout: 60_000 });
   await page.waitForFunction(() => document.querySelectorAll("button").length > 0, null, { timeout: 30_000 });
   await page.locator('button[aria-label="plus"]:visible').first().click();
   await page.getByRole("menuitem", { name: /创建会议/ }).click();
 
   // The ID is reserved by the real Go server as soon as the create dialog opens.
-  await page.getByText("MEETING PASS", { exact: true }).waitFor({ state: "visible", timeout: 15_000 });
+  await page.getByTestId("meeting-pass").waitFor({ state: "visible", timeout: 15_000 });
   await page.getByTestId("prejoin-mic-device").waitFor({ state: "visible" });
   await page.getByTestId("prejoin-camera-device").waitFor({ state: "visible" });
+  assert.match(await page.getByTestId("prejoin-mic-device").innerText(), /已保存设备/);
+  assert.match(await page.getByTestId("prejoin-camera-device").innerText(), /已保存设备/);
+  const storedDevices = await page.evaluate(() => JSON.parse(localStorage.getItem("user_settings") || "{}"));
+  assert.equal(storedDevices.micDeviceId, "missing-saved-microphone");
+  assert.equal(storedDevices.videoDeviceId, "missing-saved-camera");
+  await page.getByTestId("prejoin-mic-device").getByRole("combobox").click();
+  await page.getByRole("option", { name: "系统默认麦克风" }).click();
+  await page.getByTestId("prejoin-camera-device").getByRole("combobox").click();
+  await page.getByRole("option", { name: "系统默认摄像头" }).click();
+  assert.deepEqual(deviceWarnings, [], "saved device IDs must not trigger MUI out-of-range warnings");
   await page.getByTestId("prejoin-ping").waitFor({ state: "visible" });
   assert.equal(await page.getByTestId("prejoin-mic-test").count(), 0, "microphone test button was removed");
   assert.equal(await page.getByTestId("prejoin-latency-test").count(), 0, "latency test button was removed");
@@ -108,7 +124,7 @@ test("meeting prejoin matches the ready state without layout shifts", async (t) 
   }
 
   await page.getByLabel("会议名称").fill("Prejoin ready flow");
-  await page.getByRole("button", { name: "进入会议" }).click();
+  await page.getByRole("button", { name: /进入会议|Enter meeting/ }).click();
   await page.waitForURL(/#\/meeting\?room=\d{4}/, { timeout: 30_000 });
   await page.getByTestId("meeting-name-gate").waitFor({ state: "visible" });
   await page.getByTestId("meeting-name-input").fill("Prejoin attendee");

@@ -86,7 +86,7 @@ test("server relay binary chunks without a receive session publish a persistent 
 });
 
 test("server relay connection loss publishes a persistent retry status", () => {
-  const body = extractMethodBody(serverFileTransferSource, "public handleConnectionLost");
+  const body = extractMethodBody(serverFileTransferSource, "public async handleConnectionLost");
 
   assert.match(body, /const displayReason = reason \|\| t\('alert\.serverConnectionLost'\)/);
   assert.match(body, /this\.setTransferStatus\(\s*displayReason,\s*"error"/);
@@ -140,7 +140,7 @@ test("P2P channel close publishes a persistent retry status for active transfers
   const closeStart = colabLibSource.indexOf("channel.onclose = () =>");
   assert.notEqual(closeStart, -1, "P2P channel close handler should exist");
 
-  const closeEnd = colabLibSource.indexOf("channel.onerror = () =>", closeStart);
+  const closeEnd = colabLibSource.indexOf("channel.onerror = (event) =>", closeStart);
   assert.notEqual(closeEnd, -1, "P2P channel close handler should end before error handler");
 
   const body = colabLibSource.slice(closeStart, closeEnd);
@@ -157,11 +157,11 @@ test("initial unopened P2P channel close does not show disconnected toast", () =
   const closeStart = colabLibSource.indexOf("channel.onclose = () =>");
   assert.notEqual(closeStart, -1, "P2P channel close handler should exist");
 
-  const closeEnd = colabLibSource.indexOf("channel.onerror = () =>", closeStart);
+  const closeEnd = colabLibSource.indexOf("channel.onerror = (event) =>", closeStart);
   assert.notEqual(closeEnd, -1, "P2P channel close handler should end before error handler");
 
   const body = colabLibSource.slice(closeStart, closeEnd);
-  const guardIndex = body.indexOf("if (hadOpenDataChannel)");
+  const guardIndex = body.indexOf("if (hadOpenDataChannel && !this.isMeetingPage())");
   const toastIndex = body.indexOf('alertUseMUI(t("alert.p2pDisconnected"');
 
   assert.notEqual(guardIndex, -1, "disconnected toast should be guarded by opened-channel state");
@@ -209,10 +209,10 @@ test("P2P file metadata rejection reasons remain visible", () => {
   assert.match(branch, /this\.queueDirectDiskReceive\(\s*id,\s*channel,\s*\{\s*\.\.\.normalizedMeta,/);
   assert.match(
     branch,
-    /const cacheLimitMessage = this\.getReceivedCacheLimitMessage\(cacheGuard\);[\s\S]*this\.queueDirectDiskReceive\(\s*id,\s*channel,\s*\{\s*\.\.\.normalizedMeta,/,
+    /const cacheLimitMessage = this\.getReceivedCacheLimitMessage\(\{[\s\S]*?\.\.\.cacheGuard,[\s\S]*?\}\);[\s\S]*?this\.queueDirectDiskReceive\(\s*id,\s*channel,\s*\{\s*\.\.\.normalizedMeta,[\s\S]*?\}, cacheLimitMessage\)/,
     "P2P cache overflow should route to direct-to-disk with the visible cache limit reason"
   );
-  assertBranchPublishesReasonStatus(branch, "alert.insufficientMemory", statusPattern);
+  assert.match(branch, /alert\.insufficientMemory[\s\S]*?this\.queueDirectDiskReceive\([\s\S]*?\}, reason\)/);
 
   const directSaveBody = extractMethodBody(colabLibSource, "private queueDirectDiskReceive");
   assert.match(directSaveBody, /const fullMessage = cacheLimitMessage/);
@@ -234,8 +234,8 @@ test("server relay incoming request rejection reasons remain visible", () => {
 
   assertBranchPublishesReasonStatus(body, "alert.metadataInvalid", statusPattern, "return;");
   assertBranchPublishesReasonStatus(body, "alert.fileTooLarge", statusPattern, "return;");
-  const cacheBranchStart = body.indexOf("this.getReceivedCacheLimitMessage");
-  assert.notEqual(cacheBranchStart, -1, "server cache overflow branch should exist");
+  const cacheBranchStart = body.indexOf('if (storageMode === "reject")');
+  assert.notEqual(cacheBranchStart, -1, "server unsupported direct-save branch should exist");
   const cacheBranchEnd = body.indexOf("return;", cacheBranchStart);
   assert.notEqual(cacheBranchEnd, -1, "server unsupported direct-save branch should return");
   const cacheBranch = body.slice(cacheBranchStart, cacheBranchEnd);

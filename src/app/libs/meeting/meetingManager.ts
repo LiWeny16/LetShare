@@ -21,6 +21,7 @@ import { fetchTurnCredentials, type TurnIceServer } from "@App/libs/connection/p
 import alertUseMUI from "@App/libs/tools/alert";
 import i18n from "@App/libs/i18n/i18n";
 import { configurePublishPeerConnection } from "./meetingSdp";
+import { limitMeetingTitle } from "./meetingTitle";
 import { meetingConnectionState, meetingPeerConnectionConstructor } from "./meetingCompat";
 import { acquireMeetingAudio, acquireMeetingMedia, acquireMeetingVideo, mediaErrorKind, microphoneErrorKind, type MicrophoneError } from "./meetingMedia";
 import {
@@ -74,6 +75,7 @@ export type MeetingMemberMediaState = {
   screenTrackId?: string;
 };
 export type MemberInfo = { uniqId: string; name?: string; media: MeetingMemberMediaState };
+export type BreakoutRoom = { room: string; name: string; members: Array<{ uniqId: string; name: string }> };
 export type RemoteTrack = {
   uniqId: string;
   kind: "audio" | "video" | "screen";
@@ -161,6 +163,8 @@ export interface MeetingState {
   sourceRoomId?: string;
   stage: MeetingStage;
   members: MemberInfo[];
+  breakoutMain?: string;
+  breakoutRooms?: BreakoutRoom[];
   remoteTracks: RemoteTrack[];
   muted: boolean;
   cameraOn: boolean;
@@ -244,6 +248,11 @@ export interface MeetingManager {
   breakoutCreate(assignments: { room: string; members: string[] }[]): void;
   /** 房主：召回所有分组（成员自动回主会场）。 */
   breakoutRecall(): void;
+  createBreakoutRoom(): void;
+  renameBreakoutRoom(room: string, name: string): void;
+  deleteBreakoutRoom(room: string): void;
+  enterBreakoutRoom(room: string): void;
+  recallBreakoutRooms(): void;
   /** 切换到另一会议房间（breakout 场景：保留本地媒体，重建发布/订阅 PC）。 */
   switchMeeting(roomId: string): void;
   /** 记录原始房间号（meeting 页从 URL source 或当前文件房间恢复；会议号与原始房间号必须分开）。 */
@@ -1129,7 +1138,7 @@ class MeetingManagerImpl implements MeetingManager {
     }
     const defaultMicOn = settingsStore.get("meetingMicrophoneDefaultOn") ?? false;
     const defaultCameraOn = settingsStore.get("meetingCameraDefaultOn") ?? false;
-    this.state = { ...this.state, roomId, title: undefined, hostId: undefined, members: [], remoteTracks: [], muted: !defaultMicOn, cameraOn: defaultCameraOn, inviteStates: {}, applicationStates: {}, mediaError: undefined, meetingError: undefined, presentation: { mode: "", ownerId: "", epoch: 0, screenOwnerId: "", screenEpoch: 0, whiteboardActive: false, whiteboardLeaderId: "", whiteboardEpoch: 0, whiteboardVisible: false, whiteboardForceOpen: false, whiteboardFocusEpoch: 0, focusTarget: "", focusEpoch: 0, presenterId: "", presenterEpoch: 0, presenterTarget: "", presenterFollowEpoch: 0 }, minutes: { ...EMPTY_MINUTES } };
+    this.state = { ...this.state, roomId, title: undefined, hostId: undefined, breakoutMain: undefined, breakoutRooms: [], members: [], remoteTracks: [], muted: !defaultMicOn, cameraOn: defaultCameraOn, inviteStates: {}, applicationStates: {}, mediaError: undefined, meetingError: undefined, presentation: { mode: "", ownerId: "", epoch: 0, screenOwnerId: "", screenEpoch: 0, whiteboardActive: false, whiteboardLeaderId: "", whiteboardEpoch: 0, whiteboardVisible: false, whiteboardForceOpen: false, whiteboardFocusEpoch: 0, focusTarget: "", focusEpoch: 0, presenterId: "", presenterEpoch: 0, presenterTarget: "", presenterFollowEpoch: 0 }, minutes: { ...EMPTY_MINUTES } };
     this.setStage("joining");
     // 公网会议不能只依赖 STUN：云端 SFU 的 UDP 端口并不保证对所有客户端可达。
     // 先尽快取得短效 TURN；端点失败时最多等待 2.5s 后继续纯 STUN，不阻塞会议创建。
@@ -1299,7 +1308,7 @@ class MeetingManagerImpl implements MeetingManager {
     this.meetingChannel = "";
     const defaultMicOn = settingsStore.get("meetingMicrophoneDefaultOn") ?? false;
     const defaultCameraOn = settingsStore.get("meetingCameraDefaultOn") ?? false;
-    this.state = { ...this.state, roomId: undefined, title: undefined, hostId: undefined, members: [], remoteTracks: [], muted: !defaultMicOn, cameraOn: defaultCameraOn, screenOn: false, presentation: { mode: "", ownerId: "", epoch: 0, screenOwnerId: "", screenEpoch: 0, whiteboardActive: false, whiteboardLeaderId: "", whiteboardEpoch: 0, whiteboardVisible: false, whiteboardForceOpen: false, whiteboardFocusEpoch: 0, focusTarget: "", focusEpoch: 0, presenterId: "", presenterEpoch: 0, presenterTarget: "", presenterFollowEpoch: 0 }, inviteStates: {}, minutes: { ...EMPTY_MINUTES } };
+    this.state = { ...this.state, roomId: undefined, title: undefined, hostId: undefined, breakoutMain: undefined, breakoutRooms: [], members: [], remoteTracks: [], muted: !defaultMicOn, cameraOn: defaultCameraOn, screenOn: false, presentation: { mode: "", ownerId: "", epoch: 0, screenOwnerId: "", screenEpoch: 0, whiteboardActive: false, whiteboardLeaderId: "", whiteboardEpoch: 0, whiteboardVisible: false, whiteboardForceOpen: false, whiteboardFocusEpoch: 0, focusTarget: "", focusEpoch: 0, presenterId: "", presenterEpoch: 0, presenterTarget: "", presenterFollowEpoch: 0 }, inviteStates: {}, minutes: { ...EMPTY_MINUTES } };
     this.setStage("idle");
   }
 
@@ -1446,7 +1455,7 @@ class MeetingManagerImpl implements MeetingManager {
   // ── 发布 PC ─────────────────────────────────────────────
   updateMeetingTitle(title: string): void {
     if (!this.isMeetingRoom(this.meetingChannel)) return;
-    const nextTitle = title.trim().slice(0, 64);
+    const nextTitle = limitMeetingTitle(title.trim());
     this.state = { ...this.state, title: nextTitle || undefined };
     this.emit();
     this.sendMeeting("meeting:update", { title: nextTitle }, this.meetingChannel);
@@ -1804,7 +1813,7 @@ class MeetingManagerImpl implements MeetingManager {
       case "meeting:info": {
         if (!isMeetingChannelEvent(channel, this.meetingChannel)) return;
         const host = data?.host as string | undefined;
-        const title = data?.title as string | undefined;
+        const title = typeof data?.title === "string" ? data.title : undefined;
         const incomingPresentation = this.parsePresentation(data?.presentation);
         const incomingMinutes = this.parseMinutes(data?.minutes);
         // `meeting:info` is sent only after the server has validated the room
@@ -1815,15 +1824,15 @@ class MeetingManagerImpl implements MeetingManager {
         const joined = data?.joined === true;
         const stage = joined && this.state.stage === "joining" ? "in-meeting" : this.state.stage;
         if (joined) this.clearJoinAckTimer();
-        if (host || title || incomingPresentation || incomingMinutes || joined) {
+        if (host || title !== undefined || incomingPresentation || incomingMinutes || joined) {
           this.state = {
             ...this.state,
             stage,
             inMeeting: stage === "in-meeting",
             hostId: host || this.state.hostId,
-            title: title || this.state.title,
+            title: title === undefined ? this.state.title : title || undefined,
             presentation: incomingPresentation ?? this.state.presentation,
-            minutes: incomingMinutes ? { ...incomingMinutes, consented: false } : this.state.minutes,
+            minutes: incomingMinutes ? { ...incomingMinutes, consented: this.state.stage === "in-meeting" && this.state.minutes.running && incomingMinutes.running && this.state.minutes.consented } : this.state.minutes,
           };
           this.emit();
         }
@@ -2048,7 +2057,12 @@ class MeetingManagerImpl implements MeetingManager {
         if (!isMeetingChannelEvent(channel, this.meetingChannel)) return;
         const action = data?.action as string | undefined;
         const room = data?.room as string | undefined;
-        if (action === "invite" && room) {
+        if (action === "rooms" && Array.isArray(data?.rooms)) {
+          this.state = { ...this.state, breakoutMain: data.main, breakoutRooms: data.rooms, hostId: data.hostId || this.state.hostId };
+          this.emit();
+          return;
+        }
+        if ((action === "invite" || action === "enter") && room) {
           // 切入 breakout 房间（保留本地媒体流，重建 PC 与订阅）
           void this.switchMeeting(room);
         } else if (action === "recall" && room) {
@@ -2664,6 +2678,11 @@ class MeetingManagerImpl implements MeetingManager {
   breakoutRecall(): void {
     this.sendMeeting("meeting:breakout", { action: "recall" });
   }
+  createBreakoutRoom(): void { this.sendMeeting("meeting:breakout", { action: "create-room" }); }
+  renameBreakoutRoom(room: string, name: string): void { this.sendMeeting("meeting:breakout", { action: "rename-room", room, name }); }
+  deleteBreakoutRoom(room: string): void { this.sendMeeting("meeting:breakout", { action: "delete-room", room }); }
+  enterBreakoutRoom(room: string): void { this.sendMeeting("meeting:breakout", { action: "enter-room", room }); }
+  recallBreakoutRooms(): void { this.sendMeeting("meeting:breakout", { action: "recall-rooms" }); }
 
   // ── 会议邀请（Host 定向 / 被邀请方来电响应）────────────────
   setSourceRoomId(roomId: string): void {
@@ -2803,7 +2822,7 @@ class MeetingManagerImpl implements MeetingManager {
     this.publishOfferPc = null;
     // 1) 离开当前房间（不发 meeting:leave 也会因空房被清理，但显式发更快释放）
     if (prevChannel) {
-      this.sendMeeting("meeting:leave", {}, prevChannel);
+      this.sendMeeting("meeting:leave", { switchTo: roomId }, prevChannel);
     }
     // 2) 拆订阅 PC
     for (const sub of this.subscribers.values()) sub.getSenders().forEach((s) => s.track?.stop());

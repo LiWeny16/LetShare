@@ -24,8 +24,10 @@ test("server priority sends through public relay without silently falling back t
   assert.notEqual(serverBranchEnd, -1, "server-priority branch should end before the p2p-priority branch");
 
   const serverBranch = shareSource.slice(serverBranchStart, serverBranchEnd);
-  assert.match(serverBranch, /await realTimeColab\.sendFileViaServer\(targetUserId, selectedFile\);/);
+  assert.match(serverBranch, /await realTimeColab\.sendFileAuto\(targetUserId, selectedFile\);/);
   assert.doesNotMatch(serverBranch, /await realTimeColab\.sendFileToUser\(targetUserId, selectedFile\);/);
+  assert.match(colabLibSource, /if \(preferServer \|\| !this\.canSendFileToUser\(id\)\)\s*\{\s*await this\.sendFileViaServer\(id, file, undefined, fileKey\)/);
+  assert.match(colabLibSource, /startSendIfReady\(id, file, preferServer, v2Context\)/);
 });
 
 test("p2p priority still advertises explicit server fallback when direct transfer is unavailable", () => {
@@ -36,7 +38,7 @@ test("p2p priority still advertises explicit server fallback when direct transfe
   const fallbackStart = colabLibSource.indexOf("} catch (p2pError) {", autoSendBody);
   assert.notEqual(fallbackStart, -1, "p2p fallback catch branch should exist");
 
-  const fallbackEnd = colabLibSource.indexOf("await this.sendFileViaServer(id, file);", fallbackStart);
+  const fallbackEnd = colabLibSource.indexOf("await this.sendFileViaServer(id, file, undefined, fileKey);", fallbackStart);
   assert.notEqual(fallbackEnd, -1, "p2p fallback should still send through the server");
 
   const branch = colabLibSource.slice(fallbackStart, fallbackEnd);

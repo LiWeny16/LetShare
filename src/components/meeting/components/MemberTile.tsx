@@ -1,13 +1,19 @@
-import { useRef, useEffect, useState } from "react";
+import { useContext, useRef, useEffect, useState } from "react";
+import { motion } from "motion/react";
 import { Avatar, Box, IconButton, Tooltip, alpha, useTheme } from "@mui/material";
 import MicOffIcon from "@mui/icons-material/MicOff";
+import MicIcon from "@mui/icons-material/Mic";
 import VideocamOffIcon from "@mui/icons-material/VideocamOff";
+import VideocamIcon from "@mui/icons-material/Videocam";
 import PersonIcon from "@mui/icons-material/Person";
 import ScreenShareIcon from "@mui/icons-material/ScreenShare";
 import FullscreenIcon from "@mui/icons-material/Fullscreen";
 import FullscreenExitIcon from "@mui/icons-material/FullscreenExit";
 import type { MemberTileData } from "../types";
 import { bindMeetingVideo } from "../videoBinding";
+import { meetingManager } from "@App/libs/meeting/meetingManager";
+import { useTranslation } from "react-i18next";
+import { MeetingStageMotionContext } from "../meetingMotion";
 
 interface MemberTileProps {
   tile: MemberTileData;
@@ -21,9 +27,17 @@ interface MemberTileProps {
  */
 export function MemberTile({ tile, isFocused, onFocus }: MemberTileProps) {
   const theme = useTheme();
+  const { t } = useTranslation();
+  const motionEnabled = useContext(MeetingStageMotionContext);
   const tileRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [compact, setCompact] = useState(false);
+  const [layoutMoving, setLayoutMoving] = useState(false);
+
+  useEffect(() => {
+    if (!motionEnabled) setLayoutMoving(false);
+  }, [motionEnabled]);
 
   const showVideo = tile.cameraOn
     && tile.videoStream != null
@@ -46,6 +60,40 @@ export function MemberTile({ tile, isFocused, onFocus }: MemberTileProps) {
     return () => document.removeEventListener("fullscreenchange", syncFullscreen);
   }, []);
 
+  useEffect(() => {
+    const element = tileRef.current;
+    if (!element) return;
+    const updateSize = (width: number, height: number) => {
+      if (width <= 0 || height <= 0) return;
+      const next = width < 210 || height < 120;
+      setCompact((current) => current === next ? current : next);
+    };
+    const update = () => {
+      const { width, height } = element.getBoundingClientRect();
+      updateSize(width, height);
+    };
+    update();
+    if (typeof ResizeObserver !== "undefined") {
+      const observer = new ResizeObserver(([entry]) => {
+        if (entry) updateSize(entry.contentRect.width, entry.contentRect.height);
+      });
+      observer.observe(element);
+      return () => observer.disconnect();
+    }
+    window.addEventListener("resize", update);
+    return () => window.removeEventListener("resize", update);
+  }, []);
+
+  const controlSx = {
+    width: 40, height: 40, p: 0, color: "#fff", bgcolor: "transparent",
+    "&::before": { content: '""', position: "absolute", width: compact ? 28 : 40, height: compact ? 28 : 40, borderRadius: "50%", bgcolor: alpha("#0b1729", 0.65) },
+    "&:hover": { bgcolor: "transparent" },
+    "&:hover::before": { bgcolor: alpha("#0b1729", 0.82) },
+    "&.Mui-disabled": { color: alpha("#fff", 0.55), bgcolor: "transparent" },
+    "&.Mui-disabled::before": { bgcolor: alpha("#0b1729", 0.45) },
+    "& svg": { position: "relative", fontSize: compact ? 16 : 20 },
+  } as const;
+
   const toggleTileFullscreen = () => {
     if (document.fullscreenElement) {
       void document.exitFullscreen().catch(() => undefined);
@@ -57,11 +105,20 @@ export function MemberTile({ tile, isFocused, onFocus }: MemberTileProps) {
   };
 
   return (
+    <motion.div
+      layout={motionEnabled}
+      layoutId={motionEnabled ? `meeting-member-${tile.tileKey}` : undefined}
+      onLayoutAnimationStart={() => setLayoutMoving(true)}
+      onLayoutAnimationComplete={() => setLayoutMoving(false)}
+      style={{ width: "100%", height: tile.isScreen || tile.isExpanded ? "100%" : undefined, minHeight: 0 }}
+    >
     <Box
       ref={tileRef}
       data-testid={`meeting-member-tile-${tile.uniqId}`}
       data-camera-on={tile.cameraOn ? "true" : "false"}
       data-speaking={tile.isSpeaking ? "true" : "false"}
+      data-compact={compact ? "true" : "false"}
+      data-layout-moving={layoutMoving ? "true" : "false"}
       role="button"
       tabIndex={0}
       aria-label={tile.name}
@@ -90,22 +147,25 @@ export function MemberTile({ tile, isFocused, onFocus }: MemberTileProps) {
           ? `0 0 0 4px ${alpha(theme.palette.primary.main, 0.18)}`
           : tile.isSpeaking
             ? "0 0 0 3px rgba(34, 197, 94, 0.18)"
-            : "none",
-        animation: tile.isSpeaking ? "meeting-speaking-pulse 1100ms ease-in-out infinite" : "none",
+            : "0 2px 8px rgba(20, 28, 42, 0.08)",
+        animation: motionEnabled && tile.isSpeaking ? "meeting-speaking-pulse 1100ms ease-in-out infinite" : "none",
         "@keyframes meeting-speaking-pulse": {
           "0%, 100%": { outlineColor: "#22c55e", boxShadow: "0 0 0 0 rgba(34, 197, 94, 0)" },
           "50%": { outlineColor: "#86efac", boxShadow: "0 0 0 4px rgba(34, 197, 94, 0.22)" },
         },
         cursor: "pointer",
+        "&::after": { content: '""', position: "absolute", inset: 0, zIndex: 4, border: "1px solid rgba(32, 43, 59, 0.16)", borderRadius: "inherit", pointerEvents: "none" },
+        "@media (prefers-reduced-motion: reduce)": { animation: "none" },
         "&:focus-visible": { outline: `2px solid ${theme.palette.primary.main}`, outlineOffset: 2 },
       }}
     >
-      <Tooltip title={isFullscreen ? "退出全屏" : "全屏查看"}>
+      <Tooltip title={isFullscreen ? t("meeting.exitFullscreen", "退出全屏") : t("meeting.fullscreen", "全屏查看")}>
         <IconButton
           data-testid="meeting-member-fullscreen"
-          aria-label={isFullscreen ? "退出全屏" : "全屏查看"}
+          aria-label={isFullscreen ? t("meeting.exitFullscreen", "退出全屏") : t("meeting.fullscreen", "全屏查看")}
+          onKeyDown={(event) => event.stopPropagation()}
           onClick={(event) => { event.stopPropagation(); toggleTileFullscreen(); }}
-          sx={{ position: "absolute", top: 8, right: 8, zIndex: 3, width: 40, height: 40, color: "#fff", bgcolor: alpha("#0b1729", 0.56), "&:hover": { bgcolor: alpha("#0b1729", 0.76) } }}
+          sx={{ ...controlSx, position: "absolute", top: compact ? 0 : 8, left: compact ? 0 : undefined, right: compact ? undefined : 8, zIndex: 3, visibility: layoutMoving ? "hidden" : "visible" }}
         >
           {isFullscreen ? <FullscreenExitIcon fontSize="small" /> : <FullscreenIcon fontSize="small" />}
         </IconButton>
@@ -116,6 +176,7 @@ export function MemberTile({ tile, isFocused, onFocus }: MemberTileProps) {
           autoPlay
           playsInline
           muted
+          disablePictureInPicture
           // Keep the media element renderable while the first frame arrives.
           // The avatar layer below covers it until videoReady; opacity: 0 can
           // make Chromium defer the very first remote frame indefinitely.
@@ -132,12 +193,16 @@ export function MemberTile({ tile, isFocused, onFocus }: MemberTileProps) {
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
+            boxSizing: "border-box",
+            pb: compact && tile.isSelf && !tile.isScreen ? "40px" : 0,
             bgcolor: "#eef2f7",
           }}
         >
-          <Avatar sx={{ width: 56, height: 56, bgcolor: theme.palette.primary.main, fontSize: 24 }}>
-            {tile.name?.slice(0, 1).toUpperCase() || <PersonIcon />}
-          </Avatar>
+          <motion.div layout={motionEnabled}>
+            <Avatar sx={{ width: compact ? 36 : 56, height: compact ? 36 : 56, bgcolor: theme.palette.primary.main, fontSize: compact ? 16 : 24 }}>
+              {tile.name?.slice(0, 1).toUpperCase() || <PersonIcon />}
+            </Avatar>
+          </motion.div>
         </Box>
       )}
 
@@ -145,7 +210,7 @@ export function MemberTile({ tile, isFocused, onFocus }: MemberTileProps) {
       <Box
         sx={{
           position: "absolute",
-          left: 8,
+          left: compact ? 4 : 8,
           bottom: 8,
           px: 1,
           py: 0.25,
@@ -154,7 +219,7 @@ export function MemberTile({ tile, isFocused, onFocus }: MemberTileProps) {
           color: "#fff",
           fontSize: 12,
           fontWeight: 600,
-          maxWidth: "70%",
+          maxWidth: tile.isSelf && !tile.isScreen ? `calc(100% - ${compact ? 88 : 100}px)` : "70%",
           overflow: "hidden",
           textOverflow: "ellipsis",
           whiteSpace: "nowrap",
@@ -168,7 +233,31 @@ export function MemberTile({ tile, isFocused, onFocus }: MemberTileProps) {
       </Box>
 
       {/* 右下：音/视频状态图标 */}
-      <Box sx={{ position: "absolute", right: 8, bottom: 8, display: "flex", gap: 0.5 }}>
+      <Box sx={{ position: "absolute", right: compact ? 2 : 8, bottom: compact ? 0 : 8, display: "flex", gap: compact ? 0 : 0.5, visibility: layoutMoving ? "hidden" : "visible" }}>
+        {tile.isSelf && !tile.isScreen ? <>
+          <Tooltip title={tile.microphonePending ? t("meeting.microphoneOpening", "正在开启…") : tile.microphoneError ? t("meeting.microphoneRetry", "重试麦克风") : tile.muted ? t("meeting.unmute", "解除静音") : t("meeting.mute", "静音")}>
+            <span><IconButton
+              data-testid="meeting-self-microphone"
+              aria-label={tile.microphonePending ? t("meeting.microphoneOpening", "正在开启…") : tile.microphoneError ? t("meeting.microphoneRetry", "重试麦克风") : tile.muted ? t("meeting.unmute", "解除静音") : t("meeting.mute", "静音")}
+              aria-pressed={!tile.muted && !tile.microphoneError && !tile.microphonePending}
+              disabled={tile.mediaControlsDisabled || tile.microphonePending}
+              onKeyDown={(event) => event.stopPropagation()}
+              onClick={(event) => { event.stopPropagation(); meetingManager.setMuted(tile.microphoneError ? false : !tile.muted); }}
+              sx={controlSx}
+            >{tile.muted || tile.microphoneError || tile.microphonePending ? <MicOffIcon /> : <MicIcon />}</IconButton></span>
+          </Tooltip>
+          <Tooltip title={tile.cameraOn ? t("meeting.stopVideo", "关闭摄像头") : t("meeting.startVideo", "开启摄像头")}>
+            <span><IconButton
+              data-testid="meeting-self-camera"
+              aria-label={tile.cameraOn ? t("meeting.stopVideo", "关闭摄像头") : t("meeting.startVideo", "开启摄像头")}
+              aria-pressed={tile.cameraOn}
+              disabled={tile.mediaControlsDisabled}
+              onKeyDown={(event) => event.stopPropagation()}
+              onClick={(event) => { event.stopPropagation(); meetingManager.setCameraOn(!tile.cameraOn); }}
+              sx={controlSx}
+            >{tile.cameraOn ? <VideocamIcon /> : <VideocamOffIcon />}</IconButton></span>
+          </Tooltip>
+        </> : <>
         {tile.muted && (
           <Box
             sx={{
@@ -197,7 +286,9 @@ export function MemberTile({ tile, isFocused, onFocus }: MemberTileProps) {
             <VideocamOffIcon sx={{ fontSize: 14 }} />
           </Box>
         )}
+        </>}
       </Box>
     </Box>
+    </motion.div>
   );
 }

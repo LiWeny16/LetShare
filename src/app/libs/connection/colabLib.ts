@@ -1625,6 +1625,10 @@ export class RealTimeColab {
    return this.meetingActivityProvider?.() ?? false;
   }
 
+  private isMeetingPage(): boolean {
+   return typeof window !== "undefined" && window.location.hash.split("?")[0] === "#/meeting";
+  }
+
   /** 是否存在活跃通话/视频（供会议邀请弹窗等判断“忙线”）。 */
   public isCallActive(): boolean {
    return this.hasActiveCall();
@@ -2099,10 +2103,12 @@ export class RealTimeColab {
     if (currentUser.attempts >= CONFIG.MAX_RETRY_ATTEMPTS) {
      currentUser.status = "text-only";
      console.debug(`[DISCOVER] User ${fromId} P2P failed too many times, staying in text-only mode`);
-     alertUseMUI(t("alert.p2pFailed", { name: fromId.split(":")[0] }), 2000, { kind: "warning" });
-     // 海外后端额外提示：P2P 直连要求双方网络可穿透
-     if (this.connectionManager.getConnectionType() === "ably") {
-      alertUseMUI(t("alert.p2pOnlyOverseas"), 4000, { kind: "warning" });
+     if (!this.isMeetingPage()) {
+      alertUseMUI(t("alert.p2pFailed", { name: fromId.split(":")[0] }), 2000, { kind: "warning" });
+      // 海外后端额外提示：P2P 直连要求双方网络可穿透
+      if (this.connectionManager.getConnectionType() === "ably") {
+       alertUseMUI(t("alert.p2pOnlyOverseas"), 4000, { kind: "warning" });
+      }
      }
     } else {
      // 回退到text-only，等待下次discover重试
@@ -2564,9 +2570,11 @@ export class RealTimeColab {
     console.debug(`[DATACHANNEL] ${id} DataChannel opened, probing before marking P2P`);
    }
 
-   alertUseMUI(t("alert.newUser", { name: id.split(":")[0] }), 2000, {
-    kind: "success",
-   });
+   if (!this.isMeetingPage()) {
+    alertUseMUI(t("alert.newUser", { name: id.split(":")[0] }), 2000, {
+     kind: "success",
+    });
+   }
 
    this.updateUI();
    // 清除旧定时器（如果存在）
@@ -3281,7 +3289,7 @@ export class RealTimeColab {
     user.lastSeen = Date.now();
     this.userList.set(id, user);
     console.debug(` User ${id} switched to text-only mode, can continue text communication`);
-    if (hadOpenDataChannel) {
+    if (hadOpenDataChannel && !this.isMeetingPage()) {
      alertUseMUI(t("alert.p2pDisconnected", { name: id.split(":")[0] }), 2000, { kind: "warning", category: "transfer-status" });
     }
    } else {
@@ -4447,10 +4455,12 @@ export class RealTimeColab {
       user.lastSeen = Date.now();
       this.userList.set(id, user);
       console.debug(` User ${id} switched to text-only due to timeout`);
-      alertUseMUI(t("alert.p2pTimeout", { name: id.split(":")[0] }), 2000, { kind: "warning" });
-      // 海外后端额外提示：Ably 不支持服务器中转大文件，需 P2P 直连
-      if (this.connectionManager.getConnectionType() === "ably") {
-       alertUseMUI(t("alert.p2pOnlyOverseas"), 4000, { kind: "warning" });
+      if (!this.isMeetingPage()) {
+       alertUseMUI(t("alert.p2pTimeout", { name: id.split(":")[0] }), 2000, { kind: "warning" });
+       // 海外后端额外提示：Ably 不支持服务器中转大文件，需 P2P 直连
+       if (this.connectionManager.getConnectionType() === "ably") {
+        alertUseMUI(t("alert.p2pOnlyOverseas"), 4000, { kind: "warning" });
+       }
       }
      }
 

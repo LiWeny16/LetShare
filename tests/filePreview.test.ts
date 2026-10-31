@@ -102,13 +102,13 @@ test("FileBubble preview condition does NOT require isReceived (works for sent f
   // Instead verify the download button still respects isReceived but preview does not.
   // Since both conditions are in the same file, check that isCompleted && fileKey appears WITHOUT isReceived nearby for preview.
   // Simpler approach: verify the file has the pattern: isCompleted && fileKey && isPreviewable
-  assert.match(fileBubbleSource, /isCompleted\s*&&\s*\bfileKey\b\s*&&\s*\bisPreviewable\b/);
+  assert.match(fileBubbleSource, /isCompleted\s*&&\s*!isDirectDiskFile\s*&&\s*directFileLookup !== 'checking'\s*&&\s*fileKey\s*&&\s*isPreviewable\(fileCategory\)/);
 });
 
 test("FileBubble download button and preview button are both available for sent files with fileKey", () => {
   // Verify fileKey is used without isReceived guard for download/preview when completed
   // (direct-to-disk received files without fileKey should still work — they show isDirectSavedWithoutBrowserCopy)
-  assert.match(fileBubbleSource, /isCompleted\s*&&\s*\bfileKey\b/);
+  assert.match(fileBubbleSource, /isCompleted\s*&&\s*!isDirectDiskFile\s*&&\s*directFileLookup !== 'checking'\s*&&\s*fileKey\s*&&\s*\(/);
 });
 
 /* ── AC4: ChatPanel wires FilePreviewDialog ── */

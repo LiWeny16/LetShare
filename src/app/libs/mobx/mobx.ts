@@ -10,19 +10,16 @@ import { clearPersistedSettings } from '../settings/resetPersistence';
 const STORAGE_KEY = 'user_settings';
 /** Migrate legacy BCP-47 values before they reach MUI Select/i18next. */
 function normalizeLanguage(value: unknown): LanguageType {
-  if (value === 'zh-CN' || value === 'zh-TW' || value === 'zh-HK') return 'zh';
-  if (value === 'en-US' || value === 'en-GB') return 'en';
-  if (value === 'ms-MY') return 'ms';
-  if (value === 'id-ID') return 'id';
-  return value === 'system' || value === 'en' || value === 'zh' || value === 'ms' || value === 'id'
-    ? value
-    : 'en';
+  if (typeof value !== 'string') return 'system';
+  const base = value.toLowerCase().split(/[-_]/, 1)[0];
+  return base === 'system' || base === 'en' || base === 'zh' || base === 'ms' || base === 'id'
+    ? base : 'system';
 }
 
 const DEFAULT_SETTINGS = {
   roomId: '',
   userTheme: 'light' as ThemeKey,
-  userLanguage: 'en' as LanguageType,
+  userLanguage: 'system' as LanguageType,
   serverMode: 'custom' as 'ably' | 'custom',
   customServerUrl: PUBLIC_CUSTOM_SERVER_URL,
   authToken: PUBLIC_CUSTOM_SERVER_AUTH_TOKEN,
@@ -45,7 +42,7 @@ const DEFAULT_SETTINGS = {
   videoDegradation: "maintain-framerate" as "balanced" | "maintain-framerate" | "maintain-resolution", // 网络差时浏览器降级策略：默认帧率优先（流畅 > 码率/清晰度）
   meetingCameraDefaultOn: false as boolean,
   meetingMicrophoneDefaultOn: false as boolean,
-  version: "3.9.1",
+  version: "3.9.2",
   isNewUser: true
 };
 export type SettingsKey = keyof typeof DEFAULT_SETTINGS;

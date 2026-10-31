@@ -1,25 +1,24 @@
+import { MeetingDialog as Dialog } from "./components/MeetingDialog";
 /**
  * LetShare meeting room.
  * The meeting surface keeps the shared work area dominant while the
  * collaboration controls stay predictable: product bar, dark stage,
  * conversation rail, and a labelled control dock.
  */
-import { isValidElement, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { isValidElement, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { LayoutGroup, MotionConfig, motion } from "motion/react";
 import {
   alpha,
   Alert,
   Box,
   Button,
   Chip,
-  Dialog,
   DialogActions,
   DialogContent,
   DialogTitle,
   Divider,
   IconButton,
-  List,
-  ListItem,
-  ListItemText,
+  MenuItem,
   Paper,
   Stack,
   Tab,
@@ -40,17 +39,17 @@ import StopScreenShareIcon from "@mui/icons-material/StopScreenShare";
 import CallEndIcon from "@mui/icons-material/CallEnd";
 import EditIcon from "@mui/icons-material/Edit";
 import CloseIcon from "@mui/icons-material/Close";
-import ArrowBackIcon from "@mui/icons-material/ArrowBack";
 import ChevronLeftIcon from "@mui/icons-material/ChevronLeft";
 import ChevronRightIcon from "@mui/icons-material/ChevronRight";
+import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
 import LinkIcon from "@mui/icons-material/Link";
 import ChatIcon from "@mui/icons-material/Chat";
 import PeopleIcon from "@mui/icons-material/People";
 import GroupsIcon from "@mui/icons-material/Groups";
 import PersonAddAlt1Icon from "@mui/icons-material/PersonAddAlt1";
 import CheckIcon from "@mui/icons-material/Check";
-import LogoutIcon from "@mui/icons-material/Logout";
 import SettingsIcon from "@mui/icons-material/Settings";
+import LanguageIcon from "@mui/icons-material/Language";
 import AutoAwesomeIcon from "@mui/icons-material/AutoAwesome";
 import NotesOutlinedIcon from "@mui/icons-material/NotesOutlined";
 import DragIndicatorIcon from "@mui/icons-material/DragIndicator";
@@ -60,6 +59,7 @@ import CenterFocusStrongIcon from "@mui/icons-material/CenterFocusStrong";
 import PictureInPictureAltIcon from "@mui/icons-material/PictureInPictureAlt";
 import realTimeColab from "@App/libs/connection/colabLib";
 import settingsStore from "@App/libs/mobx/mobx";
+import { setAppLanguage } from "@App/libs/i18n/i18n";
 import {
   MeetingRemoteAudio,
   toAudioPrefs,
@@ -67,12 +67,15 @@ import {
 import { buildPlaybackDump, registerDiagnosticsProvider } from "../../diagnostics/index";
 import { useTranslation } from "react-i18next";
 import alertUseMUI from "@App/libs/tools/alert";
-import { meetingManager, type PresentationFocusTarget } from "@App/libs/meeting/meetingManager";
+import { meetingManager, type MeetingStage, type PresentationFocusTarget } from "@App/libs/meeting/meetingManager";
 import { getMeetingAiSecret, getMemberMeetingAiPreferences } from "@App/libs/meeting/meetingAi";
 import { finalizeMeetingMinutes, getMeetingMinutesSession, ensureMeetingMinutesSession, subscribeMeetingMinutesSession } from "@App/libs/meeting/meetingMinutesSession";
 import { saveMeetingMinutesHistory, toMeetingMinutesHistoryRecord } from "@App/libs/meeting/meetingMinutesHistory";
 import { VideoWall } from "./components/VideoWall";
 import { MemberTile } from "./components/MemberTile";
+import { MeetingMenu } from "./components/MeetingMenu";
+import { LetShareWordmark } from "./components/LetShareWordmark";
+import { MeetingTitle } from "./components/MeetingTitle";
 import { MeetingChat } from "./components/MeetingChat";
 import { ParticipantsPanel } from "./components/ParticipantsPanel";
 import { Whiteboard } from "./components/Whiteboard";
@@ -84,17 +87,26 @@ import MeetingMinutesConsentDialog from "./components/MeetingMinutesConsentDialo
 import MeetingMinutesEndScreen from "./components/MeetingMinutesEndScreen";
 import { useLocalStream } from "./hooks/useLocalStream";
 import { useMeetingTimer, formatDuration } from "./hooks/useMeetingTimer";
-import { useSpeakingUsers } from "./hooks/useSpeakingUsers";
+import { useMeetingFloatingDrag } from "./hooks/useMeetingFloatingDrag";
+import { useMeetingPanelResize } from "./hooks/useMeetingPanelResize";
+import { useSpeakingUsers, type SpeakingSource } from "./hooks/useSpeakingUsers";
 import { displayNameOf } from "./types";
 import type { MemberTileData, FormFactor } from "./types";
 import { bindMeetingVideo } from "./videoBinding";
+import { MEETING_PANEL_GUTTER } from "./designTokens";
+import { isLowEndMeetingDevice, MeetingStageMotionContext } from "./meetingMotion";
 
 export interface MeetingRoomProps {
   onExit: () => void;
 }
 
-const STAGE = "#ffffff";
+const STAGE = "#FCFCFC";
 const BLUE = "#1677ff";
+
+function MeetingElapsed({ stage }: { stage: MeetingStage }) {
+  const elapsed = useMeetingTimer(stage);
+  return <Typography sx={{ fontSize: "0.76rem", color: "text.secondary", fontVariantNumeric: "tabular-nums" }}>{formatDuration(elapsed)}</Typography>;
+}
 
 async function toggleFullscreen(element: HTMLElement | null): Promise<void> {
   if (typeof document === "undefined") return;
@@ -110,6 +122,9 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
   const theme = useTheme();
   const isMobileBp = useMediaQuery(theme.breakpoints.down("sm"));
   const isTabletBp = useMediaQuery(theme.breakpoints.down("md"));
+  const prefersReducedMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
+  const [lowEndDevice] = useState(() => typeof navigator !== "undefined" && isLowEndMeetingDevice(navigator as Navigator & { deviceMemory?: number }));
+  const stageMotionEnabled = !lowEndDevice && !prefersReducedMotion;
   const formFactor: FormFactor = isMobileBp ? "mobile" : isTabletBp ? "tablet" : "desktop";
 
   const state = meetingManager.getState();
@@ -143,20 +158,18 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
 
   const [panelOpen, setPanelOpen] = useState(!isMobileBp);
   const [panelTab, setPanelTab] = useState(0);
-  const [panelWidth, setPanelWidth] = useState(320);
-  const panelResizeRef = useRef<{ pointerId: number; startX: number; startWidth: number } | null>(null);
+  const { panelWidth, setPanelWidth, panelRef, onPanelResizeStart, onPanelResizeMove, onPanelResizeEnd, onPanelResizeKeyDown } = useMeetingPanelResize(panelOpen, isMobileBp, setPanelOpen);
   const [legacyWhiteboardOn, setLegacyWhiteboardOn] = useState(false);
   const [endDialogOpen, setEndDialogOpen] = useState(false);
+  const [leaveMenuAnchor, setLeaveMenuAnchor] = useState<HTMLElement | null>(null);
   const [meetingEnded, setMeetingEnded] = useState(false);
   const [endingMinutes, setEndingMinutes] = useState(false);
   const [endMinutesError, setEndMinutesError] = useState("");
   const endingRef = useRef(false);
-  const [breakoutOpen, setBreakoutOpen] = useState(false);
-  const [breakoutRooms, setBreakoutRooms] = useState(2);
-  const [breakoutActive, setBreakoutActive] = useState(false);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [applicantsOpen, setApplicantsOpen] = useState(false);
   const [mediaSettingsOpen, setMediaSettingsOpen] = useState(false);
+  const [languageAnchor, setLanguageAnchor] = useState<HTMLElement | null>(null);
   const [minutesExpanded, setMinutesExpanded] = useState(false);
   const [minutesConsentDecision, setMinutesConsentDecision] = useState<"pending" | "accepted" | "rejected">("pending");
   const [memberMinutesPreferences, setMemberMinutesPreferences] = useState(() => getMemberMeetingAiPreferences());
@@ -190,7 +203,6 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
       : t("meeting.wbOpen", "打开白板");
 
   const local = useLocalStream(state.inMeeting, state.cameraOn, state.muted);
-  const elapsed = useMeetingTimer(state.stage);
   const microphoneProblem = state.microphoneError === "denied"
     ? t("meeting.microphoneDenied", "麦克风权限未获允许，其他人听不到你。请在浏览器的网站权限和手机系统的应用权限中允许麦克风，然后重试。")
     : state.microphoneError === "timeout"
@@ -285,14 +297,19 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
     [screenTrack],
   );
 
+  const speakingSourcesRef = useRef<SpeakingSource[]>([]);
   const speakingSources = useMemo(() => {
     const localAudio = meetingManager.getLocalStream()?.getAudioTracks()[0] ?? local.stream?.getAudioTracks()[0];
-    return [
+    const next = [
       { uniqId: selfId, track: localAudio, enabled: state.inMeeting && !state.muted },
       ...state.remoteTracks
         .filter((remote) => remote.kind === "audio" && remote.track)
         .map((remote) => ({ uniqId: remote.uniqId, track: remote.track, enabled: true })),
     ];
+    const previous = speakingSourcesRef.current;
+    if (previous.length === next.length && next.every((source, index) => source.uniqId === previous[index].uniqId && source.track === previous[index].track && source.enabled === previous[index].enabled)) return previous;
+    speakingSourcesRef.current = next;
+    return next;
   }, [local.stream, selfId, state.inMeeting, state.muted, state.remoteTracks]);
   const speakingUsers = useSpeakingUsers(speakingSources);
 
@@ -307,10 +324,8 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
         onExit();
       } else if (ev.type === "meeting:breakout") {
         if (ev.data.action === "invite") {
-          setBreakoutActive(true);
           alertUseMUI(t("meeting.breakoutJoined", "已进入分组讨论"), 2000, { kind: "info" });
         } else if (ev.data.action === "recall") {
-          setBreakoutActive(false);
           alertUseMUI(t("meeting.breakoutRecalled", "已返回主会场"), 2000, { kind: "info" });
         }
       } else if (ev.type === "meeting:media-control") {
@@ -331,10 +346,10 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
         if (ev.data.action === "focus-request" && ev.data.requestId && ev.data.from) {
           setFocusRequest({ requestId: ev.data.requestId, from: ev.data.from, target: ev.data.target === "screen" ? "screen" : "whiteboard" });
         } else if (ev.data.action === "focus-requested") {
-          alertUseMUI(ev.data.target === "screen" ? "已向屏幕共享人发送聚焦请求" : "已向白板共享人发送聚焦请求", 2500, { kind: "info" });
+          alertUseMUI(ev.data.target === "screen" ? t("meeting.presentationFocusScreenRequested", "已向屏幕共享人发送聚焦请求") : t("meeting.presentationFocusBoardRequested", "已向白板共享人发送聚焦请求"), 2500, { kind: "info" });
         } else if (ev.data.action === "focus-response") {
-          const targetLabel = ev.data.target === "screen" ? "视频" : "白板";
-          alertUseMUI(ev.data.accepted ? `${targetLabel}聚焦请求已通过` : `${targetLabel}聚焦请求被拒绝`, 2500, { kind: ev.data.accepted ? "success" : "info" });
+          const targetLabel = ev.data.target === "screen" ? t("meeting.presentationVideoTarget", "视频") : t("meeting.presentationBoardTarget", "白板");
+          alertUseMUI(ev.data.accepted ? t("meeting.presentationFocusApproved", { defaultValue: "{{target}}聚焦请求已通过", target: targetLabel }) : t("meeting.presentationFocusDeclined", { defaultValue: "{{target}}聚焦请求被拒绝", target: targetLabel }), 2500, { kind: ev.data.accepted ? "success" : "info" });
         }
       }
     });
@@ -350,6 +365,9 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
       videoStream: state.cameraOn ? (meetingManager.getLocalStream() ?? local.stream) : null,
       muted: state.muted,
       cameraOn: state.cameraOn,
+      microphonePending: state.microphonePending,
+      microphoneError: Boolean(state.microphoneError),
+      mediaControlsDisabled: state.stage !== "in-meeting",
       isSpeaking: speakingUsers.has(selfId),
     }];
     if (state.screenOn && screenOwnerId === selfId && screenStream) {
@@ -464,7 +482,6 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
         ? "camera"
         : "";
   const hasGlobalSharing = globalSharingMode !== "";
-
   useEffect(() => {
     const syncFullscreenState = () => {
       if (document.fullscreenElement === stageRef.current) setNativeFullscreen("stage");
@@ -602,75 +619,31 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
           disabled={disabled}
           startIcon={icon}
           sx={{
-            minHeight: 38,
-            minWidth: { xs: 44, sm: "auto" },
-            px: { xs: 1.25, sm: 1.5 },
-            borderRadius: 1.75,
+            height: 48,
+            minHeight: 48,
+            width: 48,
+            minWidth: 48,
+            maxWidth: 48,
+            p: 0,
+            borderRadius: 2,
             color: danger ? "common.white" : active ? BLUE : "text.secondary",
             bgcolor: danger ? "error.main" : active ? alpha(BLUE, 0.1) : "transparent",
             opacity: disabled ? 0.48 : 1,
             fontWeight: 650,
-            fontSize: "0.78rem",
             textTransform: "none",
             transition: "transform 120ms ease-out, background-color 150ms ease-out, color 150ms ease-out",
             "&:hover": {
               bgcolor: danger ? "error.dark" : active ? alpha(BLUE, 0.16) : alpha(theme.palette.text.primary, 0.06),
             },
             "&:active": { transform: "scale(0.96)" },
-            "& .MuiButton-startIcon": { mr: { xs: 0, sm: 0.75 } },
-            "& .control-label": { display: { xs: "none", sm: "inline" } },
+            "& .MuiButton-startIcon": { m: 0 },
+            "& .MuiButton-startIcon > *:nth-of-type(1)": { fontSize: 21 },
           }}
         >
-          <Box component="span" className="control-label">{label}</Box>
         </Button>
       </span>
     </Tooltip>
     );
-  };
-
-  const breakoutPreview = useMemo(() => {
-    const others = state.members.filter((member) => member.uniqId !== selfId);
-    const groups: string[][] = Array.from({ length: breakoutRooms }, () => []);
-    others.forEach((member, index) => groups[index % breakoutRooms].push(member.uniqId));
-    return groups;
-  }, [breakoutRooms, selfId, state.members]);
-
-  const startBreakout = () => {
-    const assignments = breakoutPreview
-      .map((members, index) => ({ room: `${meetingId}B${index + 1}`, members }))
-      .filter((assignment) => assignment.members.length > 0);
-    if (assignments.length === 0) return;
-    meetingManager.breakoutCreate(assignments);
-    setBreakoutActive(true);
-    setBreakoutOpen(false);
-    alertUseMUI(t("meeting.breakoutStarted", "已开始分组讨论"), 2000, { kind: "success" });
-  };
-
-  const onPanelResizeStart = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (isMobileBp || !panelOpen) return;
-    event.preventDefault();
-    event.stopPropagation();
-    event.currentTarget.setPointerCapture(event.pointerId);
-    panelResizeRef.current = { pointerId: event.pointerId, startX: event.clientX, startWidth: panelWidth };
-  };
-
-  const onPanelResizeMove = (event: React.PointerEvent<HTMLDivElement>) => {
-    const drag = panelResizeRef.current;
-    if (!drag || drag.pointerId !== event.pointerId) return;
-    event.preventDefault();
-    const nextWidth = drag.startWidth - (event.clientX - drag.startX);
-    if (nextWidth <= 244) {
-      panelResizeRef.current = null;
-      setPanelOpen(false);
-      return;
-    }
-    setPanelWidth(Math.min(520, Math.max(260, nextWidth)));
-  };
-
-  const onPanelResizeEnd = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (panelResizeRef.current?.pointerId !== event.pointerId) return;
-    panelResizeRef.current = null;
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
   };
 
   const handleEndMeeting = async () => {
@@ -686,7 +659,7 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
       setMeetingEnded(true);
       meetingManager.endMeeting();
     } catch (error) {
-      setEndMinutesError(error instanceof Error ? error.message : "会议纪要生成失败，请稍后重试");
+      setEndMinutesError(error instanceof Error ? error.message : t("meeting.presentationEndMinutesError", "会议纪要生成失败，请稍后重试"));
     } finally {
       setEndingMinutes(false);
     }
@@ -706,9 +679,11 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
         inset: 0,
         zIndex: 1200,
         overflow: "hidden",
-        bgcolor: "background.paper",
+        bgcolor: "#F1F1F1",
         color: "text.primary",
-        "&:fullscreen": { bgcolor: "background.paper" },
+        fontFamily: '"Inter", "PingFang SC", "Microsoft YaHei", sans-serif',
+        "& .MuiTypography-root, & .MuiButton-root, & .MuiTab-root, & .MuiInputBase-root": { fontFamily: "inherit" },
+        "&:fullscreen": { bgcolor: "#F1F1F1" },
       }}
     >
       {/* D5 可见降级：自动播放被拒 → 常驻琥珀 chip（非阻断式，不挡会议操作）；
@@ -792,26 +767,18 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
           display: "flex",
           alignItems: "center",
           gap: { xs: 1, sm: 2 },
-          bgcolor: "background.paper",
-          borderBottom: (th) => `1px solid ${alpha(th.palette.divider, 0.7)}`,
+          bgcolor: "#F1F1F1",
         }}
       >
-        <BrandMark />
-        <Typography sx={{ fontWeight: 800, letterSpacing: "-0.04em", fontSize: { xs: "1rem", sm: "1.08rem" }, color: "#12306a" }}>
-          LetShare
-        </Typography>
+        <LetShareWordmark />
         <Divider orientation="vertical" flexItem sx={{ my: 1.35, display: { xs: "none", sm: "block" } }} />
-        <Typography noWrap sx={{ maxWidth: { xs: 130, sm: 280 }, fontSize: { xs: "0.82rem", sm: "0.9rem" }, fontWeight: 700 }}>
-          {title}
-        </Typography>
+        <MeetingTitle title={state.title} canEdit={amHost && !inBreakout && state.stage === "in-meeting"} onSave={(value) => meetingManager.updateMeetingTitle(value)} />
         {inBreakout && <Chip label={t("meeting.breakoutChip", "分组讨论")} size="small" color="warning" variant="outlined" />}
         <Box sx={{ flex: 1 }} />
         <Stack direction="row" alignItems="center" spacing={{ xs: 0.75, sm: 1.5 }}>
           <Stack direction="row" alignItems="center" spacing={0.6} sx={{ display: { xs: "none", sm: "flex" } }}>
             <Box sx={{ width: 7, height: 7, borderRadius: "50%", bgcolor: state.stage === "in-meeting" ? "success.main" : "warning.main" }} />
-            <Typography sx={{ fontSize: "0.76rem", color: "text.secondary", fontVariantNumeric: "tabular-nums" }}>
-              {formatDuration(elapsed)}
-            </Typography>
+            <MeetingElapsed stage={state.stage} />
           </Stack>
           <Chip
             data-testid="meeting-people-count"
@@ -846,30 +813,17 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
               />
             </Tooltip>
           )}
-          {meetingId && (
-            <>
-            <Button
-              size="small"
-              variant="outlined"
-              startIcon={<LinkIcon />}
-              data-testid="meeting-invite-open"
-              onClick={() => setInviteOpen(true)}
-              sx={{ display: { xs: "none", sm: "inline-flex" }, borderRadius: 2, textTransform: "none", fontWeight: 700, color: BLUE, borderColor: alpha(BLUE, 0.35) }}
-            >
-              {t("meeting.invite", "邀请成员")}
-            </Button>
-            <Tooltip title={t("meeting.invite", "邀请成员")}>
-              <IconButton
-                onClick={() => setInviteOpen(true)}
-                aria-label={t("meeting.invite", "邀请成员")}
-                data-testid="meeting-invite-open-mobile"
-                sx={{ display: { xs: "inline-flex", sm: "none" }, color: BLUE, bgcolor: alpha(BLUE, 0.07), width: 44, height: 44 }}
-              >
-                <LinkIcon />
-              </IconButton>
-            </Tooltip>
-            </>
-          )}
+          <Tooltip title={t("meeting.changeLanguage", "切换语言")}>
+            <IconButton aria-label={t("meeting.changeLanguage", "切换语言")} aria-haspopup="menu" aria-expanded={Boolean(languageAnchor)} onClick={(event) => setLanguageAnchor(event.currentTarget)} sx={{ color: "text.secondary", width: 40, height: 40 }}>
+              <LanguageIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+          <MeetingMenu anchorEl={languageAnchor} open={Boolean(languageAnchor)} onClose={() => setLanguageAnchor(null)}>
+            {([ ["zh", "简体中文"], ["en", "English"], ["ms", "Bahasa Melayu"], ["id", "Bahasa Indonesia"], ["system", "跟随系统 / System"] ] as const).map(([language, label]) => <MenuItem key={language} selected={settingsStore.get("userLanguage") === language} onClick={() => {
+              void setAppLanguage(language);
+              setLanguageAnchor(null);
+            }}>{label}</MenuItem>)}
+          </MeetingMenu>
           <Tooltip title={t("meeting.settings", "会议设置")}>
             <IconButton
               data-testid="meeting-media-settings-open"
@@ -921,10 +875,13 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
           display: "flex",
           gap: { xs: 0.75, sm: 1.25 },
           p: { xs: 0.75, sm: 1.25 },
-          bgcolor: "#f4f7fb",
+          bgcolor: "#F1F1F1",
         }}
       >
-        <Box sx={{ flex: 1, minWidth: 0, minHeight: 0, position: "relative", display: "flex", gap: 1 }}>
+        <MeetingStageMotionContext.Provider value={stageMotionEnabled}>
+        <MotionConfig transition={{ layout: { type: "spring", duration: 0.5, bounce: 0.12 }, opacity: { duration: 0.18 } }}>
+        <LayoutGroup id="meeting-stage-layout">
+        <Box data-stage-motion={stageMotionEnabled ? "on" : "off"} sx={{ flex: 1, minWidth: 0, minHeight: 0, position: "relative", display: "flex", gap: 1 }}>
           <Box
             ref={stageRef}
             data-testid="meeting-stage-surface"
@@ -933,14 +890,15 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
               minWidth: 0,
               minHeight: 0,
               position: "relative",
+              display: "flex",
+              flexDirection: "column",
               overflow: "hidden",
               bgcolor: STAGE,
-              borderRadius: { xs: 2, sm: 2.5 },
-              border: `1px solid ${alpha("#fff", 0.06)}`,
-              boxShadow: "0 14px 32px rgba(14, 29, 53, 0.12)",
+              borderRadius: 3.5,
+              boxShadow: "0 12px 30px rgba(44, 57, 78, 0.12), 0 2px 8px rgba(44, 57, 78, 0.06)",
             }}
           >
-            {!minutesExpanded && <Stack direction="row" alignItems="center" spacing={1} sx={{ position: "absolute", top: 10, left: 16, right: 10, zIndex: 2, pointerEvents: "auto", minWidth: 0 }}>
+            {!minutesExpanded && <Stack direction="row" alignItems="center" spacing={1} sx={{ px: { xs: 1, sm: 1.5 }, pt: 0.5, minHeight: 44, flexShrink: 0, minWidth: 0 }}>
               <Typography sx={{ color: "#13233d", fontSize: "0.75rem", fontWeight: 750, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                 {activeSharingMode === "screen" ? t("meeting.screenSharing", "正在共享屏幕") : activeSharingMode === "whiteboard" ? t("meeting.whiteboard", "白板") : t("meeting.stage", "会议舞台")}
               </Typography>
@@ -989,7 +947,7 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
                 </IconButton>
               </Tooltip>
             </Stack>}
-            <Box sx={{ position: "absolute", inset: 0, p: minutesExpanded ? 0 : { xs: 1, sm: 1.5 }, pt: minutesExpanded ? 0 : { xs: 5, sm: 5.5 }, minHeight: 0, display: "flex", flexDirection: "column" }}>
+            <Box data-testid="meeting-stage-content" sx={{ flex: 1, p: minutesExpanded ? 0 : activeSharingMode === "whiteboard" ? 0.5 : { xs: 1, sm: 1.5 }, pt: 0, minHeight: 0, display: "flex", flexDirection: "column" }}>
               <Box sx={{ display: minutesExpanded ? "flex" : "none", flex: 1, minHeight: 0, flexDirection: "column" }}>
                 <MeetingAiMinutesDialog
                   open={minutesExpanded}
@@ -1067,11 +1025,14 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
                   <MemberTile tile={tile} isFocused={focusId === tile.tileKey} onFocus={() => focusCameraTile(tile.tileKey)} />
                 </Box>
               )) : (
-                <Typography sx={{ p: 1, color: "text.secondary", fontSize: "0.75rem", textAlign: "center" }}>暂无摄像头成员</Typography>
+                <Typography sx={{ p: 1, color: "text.secondary", fontSize: "0.75rem", textAlign: "center" }}>{t("meeting.presentationNoCameraMembers", "暂无摄像头成员")}</Typography>
               )}
             </Stack>
           )}
         </Box>
+        </LayoutGroup>
+        </MotionConfig>
+        </MeetingStageMotionContext.Provider>
 
         {!panelOpen && !stageFocusMode && (
           <Tooltip title={t("meeting.panelOpen", "打开面板")}>
@@ -1100,59 +1061,84 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
         )}
         {panelOpen && !isMobileBp && <Box
           role="separator"
+          tabIndex={0}
           aria-orientation="vertical"
-          aria-label="调整面板宽度"
+          aria-controls="meeting-participants-panel"
+          aria-label={t("meeting.presentationResizePanel", "调整面板宽度")}
+          aria-valuemin={260}
+          aria-valuemax={520}
+          aria-valuenow={panelWidth}
           onPointerDown={onPanelResizeStart}
           onPointerMove={onPanelResizeMove}
           onPointerUp={onPanelResizeEnd}
           onPointerCancel={onPanelResizeEnd}
+          onLostPointerCapture={onPanelResizeEnd}
+          onKeyDown={onPanelResizeKeyDown}
           onDoubleClick={() => setPanelWidth(320)}
-          sx={{ width: 8, flexShrink: 0, cursor: "col-resize", touchAction: "none", position: "relative", "&::after": { content: '""', position: "absolute", left: 3, top: 10, bottom: 10, width: 2, borderRadius: 1, bgcolor: "transparent", transition: "background-color 120ms ease" }, "&:hover::after": { bgcolor: alpha(BLUE, 0.35) } }}
+          sx={{ width: 4, flexShrink: 0, cursor: "col-resize", touchAction: "none", position: "relative", zIndex: 2, "&::before": { content: '""', position: "absolute", inset: "0 -6px" }, "&::after": { content: '""', position: "absolute", left: "50%", top: "50%", transform: "translate(-50%, -50%)", width: 3, height: 48, maxHeight: "50%", borderRadius: 2, bgcolor: "transparent", pointerEvents: "none", transition: "background-color 120ms ease" }, "&:hover::after, &:focus-visible::after": { bgcolor: alpha(BLUE, 0.6) }, "&:focus-visible": { outline: "none" }, "@media (prefers-reduced-motion: reduce)": { "&::after": { transition: "none" } } }}
         />}
         <Paper
           component="aside"
+          ref={panelRef}
+          id="meeting-participants-panel"
           data-testid="meeting-panel"
+          data-compact-icons={isMobileBp || panelWidth < 300 ? "true" : "false"}
+          data-compact-count={isMobileBp || panelWidth < 340 ? "true" : "false"}
           elevation={0}
+          style={{ width: isMobileBp ? "auto" : panelWidth }}
           sx={{
             flexShrink: 0,
             display: panelOpen ? "flex" : "none",
             flexDirection: "column",
             minHeight: 0,
-            width: isMobileBp ? "auto" : panelWidth,
-            borderRadius: { xs: 2.5, sm: 3 },
+            borderRadius: 3.5,
             overflow: "hidden",
-            border: (th) => `1px solid ${alpha(th.palette.divider, 0.75)}`,
-            bgcolor: "background.paper",
-            boxShadow: "0 8px 24px rgba(14, 29, 53, 0.06)",
+            bgcolor: "#F9F9F9",
+            '&[data-compact-icons="true"] .MuiTab-iconWrapper': { display: "none" },
+            '&[data-compact-count="true"] .meeting-panel-count': { display: "none" },
+            boxShadow: "0 10px 28px rgba(47, 73, 112, 0.13), 0 2px 8px rgba(47, 73, 112, 0.06)",
             position: isMobileBp ? "fixed" : "static",
             left: isMobileBp ? 8 : undefined,
             right: isMobileBp ? 8 : undefined,
             top: isMobileBp ? 58 : undefined,
-            bottom: isMobileBp ? 66 : undefined,
+            bottom: isMobileBp ? 82 : undefined,
             zIndex: isMobileBp ? 40 : undefined,
           }}
         >
           <Tabs
+            data-testid="meeting-panel-tabs"
+            aria-label={t("meeting.panelNavigation", "会议面板")}
             value={panelTab}
             onChange={(_, value) => setPanelTab(value)}
             variant="fullWidth"
             sx={{
-              flexShrink: 0, minHeight: 48, mx: 1.25, mt: 1.25, p: 0.5, borderRadius: 2.25,
-              bgcolor: (th) => th.palette.mode === "dark" ? alpha(th.palette.common.white, 0.06) : "#f2f4f7",
+              flexShrink: 0, minHeight: 40, mx: MEETING_PANEL_GUTTER, mt: MEETING_PANEL_GUTTER, p: 0.5, borderRadius: 2.25, position: "relative", isolation: "isolate",
+              bgcolor: (th) => th.palette.mode === "dark" ? alpha(th.palette.common.white, 0.06) : "#F1F1F1",
               "& .MuiTabs-indicator": { display: "none" },
-              "& .MuiTab-root": { minWidth: 0, minHeight: 44, px: 0.5, borderRadius: 1.75, color: "text.secondary", transition: "color 150ms ease, background-color 150ms ease, box-shadow 150ms ease" },
-              "& .MuiTab-root.Mui-selected": { color: BLUE, bgcolor: "background.paper", boxShadow: "0 2px 8px rgba(24, 39, 75, 0.08)" },
+              "&::before": {
+                content: '""', position: "absolute", zIndex: 0, top: 4, bottom: 4, left: 4,
+                width: "calc((100% - 8px) / 3)", borderRadius: 1.75, bgcolor: "background.paper",
+                boxShadow: "0 2px 8px rgba(24, 39, 75, 0.08)", pointerEvents: "none",
+                transform: `translateX(${panelTab * 100}%)`, transition: "transform 360ms cubic-bezier(0.22, 1.35, 0.35, 1)",
+              },
+              "& .MuiTabs-scroller": { position: "relative", zIndex: 1 },
+              "& .MuiTab-root": { minWidth: 0, minHeight: 40, px: 0.25, borderRadius: 1.75, color: "text.secondary", fontSize: "0.75rem", whiteSpace: "nowrap", transition: "color 150ms ease, transform 120ms ease" },
+              "& .MuiTab-root:active": { transform: "scale(0.97)" },
+              "& .MuiTab-root.Mui-focusVisible": { outline: `2px solid ${BLUE}`, outlineOffset: -3 },
+              "& .MuiTab-iconWrapper": { display: "inline-flex", flexShrink: 0, marginRight: "3px !important", fontSize: 16 },
+              "& .MuiTab-root.Mui-selected": { color: BLUE },
+              "@media (prefers-reduced-motion: reduce)": { "&::before, & .MuiTab-root": { transition: "none" }, "& .MuiTab-root:active": { transform: "none" } },
             }}
           >
-            <Tab icon={<ChatIcon sx={{ fontSize: 18 }} />} iconPosition="start" label={t("meeting.chat", "聊天")} sx={{ minHeight: 48, fontSize: "0.8rem", fontWeight: 750, textTransform: "none" }} />
-            <Tab icon={<PeopleIcon sx={{ fontSize: 18 }} />} iconPosition="start" label={<Box component="span" sx={{ display: "inline-flex", alignItems: "center", gap: 0.5 }}>{t("meeting.participants", "成员")}<Box component="span" sx={{ px: 0.65, py: 0.1, borderRadius: 1, bgcolor: alpha(BLUE, 0.08), fontSize: "0.68rem", fontVariantNumeric: "tabular-nums" }}>{state.members.length + 1}</Box></Box>} sx={{ minHeight: 48, fontSize: "0.8rem", fontWeight: 750, textTransform: "none" }} />
-            <Tab icon={<AutoAwesomeIcon sx={{ fontSize: 18 }} />} iconPosition="start" label="AI 纪要" sx={{ minHeight: 48, fontSize: "0.8rem", fontWeight: 750, textTransform: "none" }} />
+            <Tab disableRipple id="meeting-panel-tab-chat" aria-controls="meeting-panel-content-chat" icon={<ChatIcon />} iconPosition="start" label={t("meeting.chat", "聊天")} sx={{ fontWeight: 750, textTransform: "none" }} />
+            <Tab disableRipple id="meeting-panel-tab-members" aria-controls="meeting-panel-content-members" icon={<PeopleIcon />} iconPosition="start" label={<Box component="span" sx={{ display: "inline-flex", alignItems: "center", gap: 0.35, minWidth: 0 }}>{t("meeting.participants", "成员")}<Box component="span" className="meeting-panel-count" sx={{ display: "inline-block", px: 0.5, py: 0.1, borderRadius: 1, bgcolor: alpha(BLUE, 0.08), fontSize: "0.62rem", fontVariantNumeric: "tabular-nums" }}>{state.members.length + 1}</Box></Box>} sx={{ fontWeight: 750, textTransform: "none" }} />
+            <Tab disableRipple id="meeting-panel-tab-notes" aria-controls="meeting-panel-content-notes" icon={<AutoAwesomeIcon />} iconPosition="start" label={t("meeting.aiMinutesShort", "AI 纪要")} sx={{ fontWeight: 750, textTransform: "none" }} />
           </Tabs>
           <Box sx={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
-            <Box sx={{ display: panelTab === 0 ? "flex" : "none", flex: 1, minHeight: 0, flexDirection: "column" }}>
+            <Box id="meeting-panel-content-chat" role="tabpanel" aria-labelledby="meeting-panel-tab-chat" sx={{ display: panelTab === 0 ? "flex" : "none", flex: 1, minHeight: 0, flexDirection: "column" }}>
               <MeetingChat initialTarget={privateChatTarget} />
             </Box>
-            <Box sx={{ display: panelTab === 1 ? "flex" : "none", flex: 1, minHeight: 0, flexDirection: "column" }}>
+            <Box id="meeting-panel-content-members" role="tabpanel" aria-labelledby="meeting-panel-tab-members" sx={{ display: panelTab === 1 ? "flex" : "none", flex: 1, minHeight: 0, flexDirection: "column" }}>
               <ParticipantsPanel
                 state={state}
                 onInvite={() => setInviteOpen(true)}
@@ -1168,8 +1154,8 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
                 }}
               />
             </Box>
-            <Box sx={{ display: panelTab === 2 ? "flex" : "none", flex: 1, minHeight: 0, flexDirection: "column" }}>
-              <Box sx={{ display: minutesExpanded ? "flex" : "none", flex: 1, minHeight: 0, flexDirection: "column" }}><Stack alignItems="center" justifyContent="center" spacing={1} sx={{ flex: 1, px: 2, textAlign: "center", color: "text.secondary" }}><NotesOutlinedIcon sx={{ color: BLUE, fontSize: 28 }} /><Typography sx={{ fontSize: "0.84rem", fontWeight: 800, color: "text.primary" }}>AI 会议纪要详情见左边</Typography><Typography sx={{ fontSize: "0.7rem", lineHeight: 1.5 }}>右侧保留聊天和成员，会议纪要正在左侧工作区展示。</Typography><Button variant="text" startIcon={<ArrowBackIcon />} onClick={() => setMinutesExpanded(false)} sx={{ mt: 0.5, minHeight: 40, color: BLUE, textTransform: "none", fontWeight: 800 }}>返回并关闭详情</Button></Stack></Box>
+            <Box id="meeting-panel-content-notes" role="tabpanel" aria-labelledby="meeting-panel-tab-notes" sx={{ display: panelTab === 2 ? "flex" : "none", flex: 1, minHeight: 0, flexDirection: "column" }}>
+              <Box sx={{ display: minutesExpanded ? "flex" : "none", flex: 1, minHeight: 0, flexDirection: "column" }}><Stack alignItems="center" justifyContent="center" spacing={1} sx={{ flex: 1, px: 2, textAlign: "center", color: "text.secondary" }}><NotesOutlinedIcon sx={{ color: BLUE, fontSize: 28 }} /><Typography sx={{ fontSize: "0.84rem", fontWeight: 800, color: "text.primary" }}>{t("meeting.presentationMinutesOnLeft", "AI 会议纪要详情见左边")}</Typography><Typography sx={{ fontSize: "0.7rem", lineHeight: 1.5 }}>{t("meeting.presentationMinutesPanelHint", "右侧保留聊天和成员，会议纪要正在左侧工作区展示。")}</Typography></Stack></Box>
               <Box sx={{ display: minutesExpanded ? "none" : "flex", flex: 1, minHeight: 0, flexDirection: "column" }}><MeetingAiMinutesDialog
                 open={panelTab === 2 && !minutesExpanded}
                 mode="panel"
@@ -1188,26 +1174,27 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
         component="footer"
         sx={{
           flexShrink: 0,
-          minHeight: { xs: 58, sm: 64 },
-          px: { xs: 0.75, sm: 2.5 },
-          py: 0.65,
+          minHeight: 64,
+          px: { xs: 1, sm: 2 },
+          py: 0.5,
           display: "flex",
           alignItems: "center",
-          gap: { xs: 0.25, sm: 1 },
-          bgcolor: "background.paper",
-          borderTop: (th) => `1px solid ${alpha(th.palette.divider, 0.75)}`,
+          justifyContent: "center",
+          bgcolor: "#F1F1F1",
         }}
       >
+        <Paper data-testid="meeting-toolbar" elevation={0} sx={{ display: "flex", alignItems: "center", gap: { xs: 0.25, sm: 0.5 }, width: { xs: "100%", sm: 480 }, maxWidth: "100%", minWidth: 0, px: { xs: 0.5, sm: 1 }, py: 0.5, borderRadius: 3.5, bgcolor: "#FCFCFC", boxShadow: "0 8px 24px rgba(63, 68, 91, 0.16), 0 2px 8px rgba(63, 68, 91, 0.07)" }}>
         <Box
           sx={{
             flex: 1,
             minWidth: 0,
             display: "flex",
             alignItems: "center",
-            gap: { xs: 0.25, sm: 1 },
-            overflowX: { xs: "auto", sm: "visible" },
-            scrollbarWidth: "none",
-            "&::-webkit-scrollbar": { display: "none" },
+            gap: { xs: 0.1, sm: 0.25 },
+            overflowX: "auto",
+            scrollbarWidth: "thin",
+            "&::-webkit-scrollbar": { height: 3 },
+            "&::-webkit-scrollbar-thumb": { borderRadius: 2, bgcolor: "action.selected" },
             "& > span": { flexShrink: 0 },
           }}
         >
@@ -1219,6 +1206,7 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
           !state.muted && !state.microphoneError && !state.microphonePending, false,
           state.stage !== "in-meeting" || state.microphonePending === true)}
         {control(state.cameraOn ? <VideocamIcon /> : <VideocamOffIcon />, state.cameraOn ? t("meeting.stopVideo", "关闭摄像头") : t("meeting.startVideo", "开启摄像头"), () => meetingManager.setCameraOn(!state.cameraOn), state.cameraOn, false, state.stage !== "in-meeting")}
+        <Divider orientation="vertical" flexItem sx={{ mx: 0.5, my: 1 }} />
         {control(state.screenOn ? <StopScreenShareIcon /> : <ScreenShareIcon />, state.screenOn ? t("meeting.stopShare", "停止共享") : t("meeting.shareScreen", "共享屏幕"), () => state.screenOn ? meetingManager.stopScreenShare() : void meetingManager.startScreenShare(), state.screenOn, false, state.stage !== "in-meeting")}
         {control(<EditIcon />, whiteboardLabel, () => {
           if (!state.presentation.whiteboardActive) {
@@ -1227,47 +1215,25 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
             setWhiteboardLocalVisible(!whiteboardOn);
           }
         }, whiteboardOn, false, state.stage !== "in-meeting", "meeting-whiteboard-toggle")}
+        {meetingId && control(<LinkIcon />, t("meeting.inviteAction", "邀请"), () => setInviteOpen(true), false, false, false, "meeting-invite-open")}
         {control(panelOpen ? <CloseIcon /> : <ChatIcon />, panelOpen ? t("meeting.panelClose", "收起面板") : t("meeting.panelOpen", "打开面板"), () => setPanelOpen((value) => !value), panelOpen)}
-        {amHost && !breakoutActive && control(<GroupsIcon />, t("meeting.breakout", "分组讨论"), () => setBreakoutOpen(true), false, false, state.stage !== "in-meeting")}
-        {amHost && breakoutActive && control(<GroupsIcon />, t("meeting.breakoutRecallBtn", "召集回归"), () => { meetingManager.breakoutRecall(); setBreakoutActive(false); }, false)}
          {control(<AutoAwesomeIcon />, t("meeting.aiMinutes", "AI 会议纪要"), () => setMinutesExpanded((value) => !value), minutesExpanded, false, state.stage !== "in-meeting", "meeting-ai-minutes-open")}
         </Box>
-        <Stack direction="row" alignItems="center" spacing={{ xs: 0.25, sm: 1 }} sx={{ flexShrink: 0 }}>
-          {amHost && (
-          <>
-            <Button
-              variant="outlined"
-              color="error"
-              startIcon={<CallEndIcon />}
-              aria-label={t("meeting.endForAll", "结束会议")}
-              onClick={() => setEndDialogOpen(true)}
-              sx={{ minHeight: 44, borderRadius: 2.5, fontWeight: 750, fontSize: "0.78rem", textTransform: "none", display: { xs: "none", sm: "inline-flex" } }}
-            >
-              {t("meeting.endForAll", "结束会议")}
-            </Button>
-            <Tooltip title={t("meeting.endForAll", "结束会议")}>
-              <IconButton
-                color="error"
-                aria-label={t("meeting.endForAll", "结束会议")}
-                onClick={() => setEndDialogOpen(true)}
-                sx={{ width: 44, height: 44, display: { xs: "inline-flex", sm: "none" } }}
-              >
-                <CallEndIcon />
-              </IconButton>
-            </Tooltip>
-          </>
-          )}
-          <Button
-          variant="contained"
-          color="error"
-          startIcon={<LogoutIcon />}
-          aria-label={t("meeting.leave", "离开")}
-          onClick={() => { void meetingManager.leaveMeeting(); onExit(); }}
-          sx={{ minHeight: 44, minWidth: 44, px: { xs: 1.25, sm: 2 }, borderRadius: 2.5, fontWeight: 800, fontSize: "0.78rem", textTransform: "none", boxShadow: "none", whiteSpace: "nowrap", "& .MuiButton-startIcon": { mr: { xs: 0, sm: 1 } } }}
-        >
-          <Box component="span" sx={{ display: { xs: "none", sm: "inline" } }}>{t("meeting.leave", "离开")}</Box>
-          </Button>
+        <Stack direction="row" alignItems="center" sx={{ flexShrink: 0, borderRadius: 2, bgcolor: (th) => alpha(th.palette.error.main, 0.08) }}>
+          <Tooltip title={t("meeting.leave", "离开")} arrow>
+            <IconButton aria-label={t("meeting.leave", "离开")} onClick={() => { void meetingManager.leaveMeeting(); onExit(); }} sx={{ width: 48, height: 48, color: "error.main", borderRadius: 2 }}>
+              <CallEndIcon sx={{ fontSize: 21 }} />
+            </IconButton>
+          </Tooltip>
+          {amHost && <>
+            <Divider orientation="vertical" flexItem sx={{ my: 1, borderColor: (th) => alpha(th.palette.error.main, 0.15) }} />
+            <IconButton aria-label={t("meeting.leaveOptions", "更多离会选项")} aria-haspopup="menu" aria-expanded={Boolean(leaveMenuAnchor)} onClick={(event) => setLeaveMenuAnchor(event.currentTarget)} sx={{ width: 40, height: 48, color: "error.main", borderRadius: 2 }}><KeyboardArrowDownIcon fontSize="small" /></IconButton>
+            <MeetingMenu anchorEl={leaveMenuAnchor} open={Boolean(leaveMenuAnchor)} onClose={() => setLeaveMenuAnchor(null)} anchorOrigin={{ vertical: "top", horizontal: "right" }} transformOrigin={{ vertical: "bottom", horizontal: "right" }}>
+              <MenuItem onClick={() => { setLeaveMenuAnchor(null); setEndDialogOpen(true); }} sx={{ color: "error.main", "&:hover": { bgcolor: (th) => alpha(th.palette.error.main, 0.08) } }}><CallEndIcon sx={{ fontSize: 18 }} />{t("meeting.endForAll", "结束会议")}</MenuItem>
+            </MeetingMenu>
+          </>}
         </Stack>
+        </Paper>
       </Box>
 
       <MeetingInviteDialog
@@ -1296,13 +1262,13 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
       />
 
       <Dialog open={focusRequest !== null} onClose={() => setFocusRequest(null)} maxWidth="xs" fullWidth data-testid="meeting-focus-request-dialog">
-        <DialogTitle sx={{ fontWeight: 800 }}>{focusRequest?.target === "screen" ? "视频聚焦请求" : t("meeting.focusRequestTitle", "白板聚焦请求")}</DialogTitle>
-        <DialogContent>
-          <Typography sx={{ color: "text.secondary", fontSize: "0.88rem" }}>
-            {focusRequest ? `${displayNameOf(focusRequest.from, t("meeting.member", "成员"))} 请求大家聚焦到${focusRequest.target === "screen" ? "视频" : "白板"}。` : ""}
+        <DialogTitle sx={{ px: { xs: 2, sm: 3 }, pt: { xs: 2, sm: 2.5 }, pb: 1.5, fontSize: "1rem", fontWeight: 750 }}>{focusRequest?.target === "screen" ? t("meeting.presentationScreenFocusTitle", "视频聚焦请求") : t("meeting.focusRequestTitle", "白板聚焦请求")}</DialogTitle>
+        <DialogContent sx={{ px: { xs: 2, sm: 3 }, pb: 2 }}>
+          <Typography sx={{ color: "text.secondary", fontSize: "0.875rem", lineHeight: 1.6 }}>
+            {focusRequest ? t("meeting.presentationFocusMessage", { defaultValue: "{{name}} 请求大家聚焦到{{target}}。", name: displayNameOf(focusRequest.from, t("meeting.member", "成员")), target: focusRequest.target === "screen" ? t("meeting.presentationVideoTarget", "视频") : t("meeting.presentationBoardTarget", "白板") }) : ""}
           </Typography>
         </DialogContent>
-        <DialogActions sx={{ px: 3, pb: 2.5 }}>
+        <DialogActions sx={{ px: { xs: 2, sm: 3 }, pt: 0, pb: { xs: 2, sm: 2.5 }, gap: 1, flexWrap: "wrap" }}>
           <Button onClick={() => {
             if (focusRequest) meetingManager.respondPresentationFocus(focusRequest.requestId, focusRequest.from, focusRequest.target, false);
             setFocusRequest(null);
@@ -1310,25 +1276,31 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
           <Button variant="contained" data-testid="meeting-focus-request-accept" onClick={() => {
             if (focusRequest) meetingManager.respondPresentationFocus(focusRequest.requestId, focusRequest.from, focusRequest.target, true);
             setFocusRequest(null);
-          }} sx={{ textTransform: "none", borderRadius: 2 }}>{focusRequest?.target === "screen" ? "聚焦视频" : t("meeting.focusAccept", "聚焦白板")}</Button>
+          }} sx={{ textTransform: "none", borderRadius: 2 }}>{focusRequest?.target === "screen" ? t("meeting.presentationFocusVideo", "聚焦视频") : t("meeting.presentationFocusBoard", "聚焦白板")}</Button>
         </DialogActions>
       </Dialog>
 
       <Dialog open={endDialogOpen} onClose={() => setEndDialogOpen(false)} maxWidth="xs" fullWidth>
-        <DialogTitle sx={{ fontWeight: 800 }}>{t("meeting.endDialogTitle", "结束会议？")}</DialogTitle>
-        <DialogContent>
-          <Typography sx={{ fontSize: "0.9rem", color: "text.secondary" }}>
+        <DialogTitle component="div" sx={{ px: { xs: 2, sm: 3 }, pt: { xs: 2, sm: 2.5 }, pb: 2 }}>
+          <Stack direction="row" alignItems="center" spacing={1.25}>
+            <Box sx={{ width: 40, height: 40, display: "grid", placeItems: "center", flexShrink: 0, borderRadius: 2, bgcolor: (th) => alpha(th.palette.error.main, 0.08), color: "error.main" }}><CallEndIcon sx={{ fontSize: 20 }} /></Box>
+            <Typography sx={{ flex: 1, minWidth: 0, fontSize: "1rem", fontWeight: 750, lineHeight: 1.3 }}>{t("meeting.endDialogTitle", "结束会议？")}</Typography>
+            <Tooltip title={t("meeting.invClose", "关闭")}><IconButton aria-label={t("meeting.invClose", "关闭")} onClick={() => setEndDialogOpen(false)} sx={{ width: 40, height: 40, color: "text.secondary" }}><CloseIcon fontSize="small" /></IconButton></Tooltip>
+          </Stack>
+        </DialogTitle>
+        <DialogContent sx={{ px: { xs: 2, sm: 3 }, pb: 2 }}>
+          <Typography sx={{ fontSize: "0.875rem", lineHeight: 1.6, color: "text.secondary" }}>
             {t("meeting.endDialogBody", "全体成员将被移出会议，会议号立即释放。")}
           </Typography>
-          <Typography sx={{ mt: 1.25, color: "#53708f", fontSize: "0.78rem", lineHeight: 1.55 }}>
-            结束前会合并最后一批转写，生成会议纪要并保存到本机历史。
+          <Typography sx={{ mt: 1.5, p: 1.5, borderRadius: 2, bgcolor: "action.hover", color: "text.secondary", fontSize: "0.75rem", lineHeight: 1.6 }}>
+            {t("meeting.presentationEndNotesHint", "结束前会合并最后一批转写，生成会议纪要并保存到本机历史。")}
           </Typography>
           {endMinutesError && <Typography sx={{ mt: 1, color: "error.main", fontSize: "0.76rem" }}>{endMinutesError}</Typography>}
         </DialogContent>
-        <DialogActions sx={{ px: 3, pb: 2.5 }}>
-          <Button onClick={() => setEndDialogOpen(false)} sx={{ textTransform: "none" }}>{t("meeting.cancel", "取消")}</Button>
-          <Button variant="contained" color="error" disabled={endingMinutes} sx={{ textTransform: "none", borderRadius: 2 }} onClick={() => void handleEndMeeting()}>
-            {endingMinutes ? "正在生成纪要…" : t("meeting.endForAll", "结束会议")}
+        <DialogActions sx={{ px: { xs: 2, sm: 3 }, pt: 0, pb: { xs: 2, sm: 2.5 }, gap: 1, flexWrap: "wrap" }}>
+          <Button variant="outlined" color="inherit" onClick={() => setEndDialogOpen(false)} sx={{ px: 2, borderColor: "divider" }}>{t("meeting.cancel", "取消")}</Button>
+          <Button variant="contained" color="error" disabled={endingMinutes} sx={{ px: 2 }} onClick={() => void handleEndMeeting()}>
+            {endingMinutes ? t("meeting.presentationEndNotesPending", "正在生成纪要…") : t("meeting.endForAll", "结束会议")}
           </Button>
         </DialogActions>
       </Dialog>
@@ -1362,7 +1334,7 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
                 {t("meeting.applyRequestsSubtitle", "确认后申请人将直接进入会议")}
               </Typography>
             </Box>
-            <Chip label={`${state.applicants.size} ${t("meeting.applyRequestsCount", "人")}`} size="small" color="primary" sx={{ fontWeight: 800, bgcolor: "#e8f1ff", color: BLUE }} />
+            <Chip label={t("meeting.peopleCount", { count: state.applicants.size, defaultValue: "{{count}} 人" })} size="small" color="primary" sx={{ fontWeight: 800, bgcolor: "#e8f1ff", color: BLUE }} />
           </Stack>
         </DialogTitle>
         <DialogContent sx={{ p: { xs: 1.75, sm: 2.5 }, bgcolor: "#f6f8fc" }}>
@@ -1413,48 +1385,12 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
         </DialogActions>
       </Dialog>
 
-      <Dialog open={breakoutOpen} onClose={() => setBreakoutOpen(false)} maxWidth="xs" fullWidth>
-        <DialogTitle sx={{ fontWeight: 800 }}>{t("meeting.breakout", "分组讨论")}</DialogTitle>
-        <DialogContent>
-          <Typography sx={{ fontSize: "0.82rem", color: "text.secondary", mb: 1.5 }}>
-            {t("meeting.breakoutDesc", "将参会成员自动均分到独立讨论室，你留守主会场，可随时召集回归。")}
-          </Typography>
-          <Stack direction="row" spacing={1} sx={{ mb: 1.5 }}>
-            {[2, 3, 4].map((count) => (
-              <Chip key={count} label={`${count} ${t("meeting.breakoutRooms", "组")}`} onClick={() => setBreakoutRooms(count)} color={breakoutRooms === count ? "primary" : "default"} variant={breakoutRooms === count ? "filled" : "outlined"} sx={{ fontWeight: 700 }} />
-            ))}
-          </Stack>
-          <List dense disablePadding>
-            {breakoutPreview.map((members, index) => (
-              <ListItem key={index} sx={{ px: 0, py: 0.25 }}>
-                <ListItemText primary={`${t("meeting.breakoutGroup", "分组")} ${index + 1} · ${meetingId}B${index + 1}`} secondary={members.length ? members.map((member) => displayNameOf(member)).join("、") : t("meeting.breakoutEmpty", "（空）")} primaryTypographyProps={{ fontSize: "0.82rem", fontWeight: 700 }} secondaryTypographyProps={{ fontSize: "0.76rem" }} />
-              </ListItem>
-            ))}
-          </List>
-        </DialogContent>
-        <DialogActions sx={{ px: 3, pb: 2.5 }}>
-          <Button onClick={() => setBreakoutOpen(false)} sx={{ textTransform: "none" }}>{t("meeting.cancel", "取消")}</Button>
-          <Button variant="contained" sx={{ textTransform: "none", borderRadius: 2 }} disabled={state.members.length === 0 || state.stage !== "in-meeting"} onClick={startBreakout}>
-            {t("meeting.breakoutStart", "开始分组")}
-          </Button>
-        </DialogActions>
-      </Dialog>
     </Stack>
   );
 }
 
-function BrandMark() {
-  return (
-    <Box aria-hidden sx={{ position: "relative", width: 25, height: 25, transform: "rotate(45deg)", flexShrink: 0 }}>
-      <Box sx={{ position: "absolute", width: 11, height: 11, top: 0, left: 0, borderRadius: 1.2, bgcolor: BLUE }} />
-      <Box sx={{ position: "absolute", width: 11, height: 11, top: 0, right: 0, borderRadius: 1.2, bgcolor: "#44a5ff" }} />
-      <Box sx={{ position: "absolute", width: 11, height: 11, bottom: 0, left: 0, borderRadius: 1.2, bgcolor: "#3e8fff" }} />
-      <Box sx={{ position: "absolute", width: 11, height: 11, bottom: 0, right: 0, borderRadius: 1.2, bgcolor: "#1354d8" }} />
-    </Box>
-  );
-}
-
-function ScreenStage({ tile, isFocused, onFocus }: { tile: MemberTileData; isFocused: boolean; onFocus: () => void }) {
+function ScreenStage({ tile, isFocused, onFocus, controlsHidden = false }: { tile: MemberTileData; isFocused: boolean; onFocus: () => void; controlsHidden?: boolean }) {
+  const { t } = useTranslation();
   const containerRef = useRef<HTMLDivElement | null>(null);
   const ref = useRef<HTMLVideoElement | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -1493,17 +1429,17 @@ function ScreenStage({ tile, isFocused, onFocus }: { tile: MemberTileData; isFoc
       }}
       sx={{ width: "100%", height: "100%", cursor: "pointer", outline: isFocused ? `2px solid ${BLUE}` : "none", outlineOffset: -2, "&:focus-visible": { outline: `2px solid ${BLUE}`, outlineOffset: -2 } }}
     >
-      <Tooltip title={isFullscreen ? "退出全屏" : "全屏查看"}>
+      <Tooltip title={isFullscreen ? t("meeting.exitFullscreen", "退出全屏") : t("meeting.presentationFullscreen", "全屏查看")}>
         <IconButton
           data-testid="meeting-screen-fullscreen"
-          aria-label={isFullscreen ? "退出全屏" : "全屏查看"}
+          aria-label={isFullscreen ? t("meeting.exitFullscreen", "退出全屏") : t("meeting.presentationFullscreen", "全屏查看")}
           onClick={toggleScreenFullscreen}
-          sx={{ position: "absolute", top: 8, right: 8, zIndex: 3, width: 40, height: 40, color: "#fff", bgcolor: "rgba(11,23,41,.56)", "&:hover": { bgcolor: "rgba(11,23,41,.76)" } }}
+          sx={{ position: "absolute", top: 8, right: 8, zIndex: 3, width: 40, height: 40, visibility: controlsHidden ? "hidden" : "visible", color: "#fff", bgcolor: "rgba(11,23,41,.56)", "&:hover": { bgcolor: "rgba(11,23,41,.76)" } }}
         >
           {isFullscreen ? <FullscreenExitIcon fontSize="small" /> : <FullscreenIcon fontSize="small" />}
         </IconButton>
       </Tooltip>
-      <video ref={ref} autoPlay playsInline muted style={{ width: "100%", height: "100%", objectFit: "contain", background: "#f4f7fb", display: "block" }} />
+      <video ref={ref} autoPlay playsInline muted disablePictureInPicture style={{ width: "100%", height: "100%", objectFit: "contain", background: "#f4f7fb", display: "block" }} />
     </Box>
   );
 }
@@ -1758,62 +1694,11 @@ function ActiveSharingBarV2({
   onReleasePresenter: () => void;
   onSelectMode: (mode: "screen" | "whiteboard" | "camera") => void;
 }) {
-  const barRef = useRef<HTMLDivElement | null>(null);
-  const dragRef = useRef<{ pointerId: number; offsetX: number; offsetY: number } | null>(null);
-  const [position, setPosition] = useState({ left: 12, top: 10 });
-  const [centered, setCentered] = useState(true);
+  const { t } = useTranslation();
   const [collapsed, setCollapsed] = useState(false);
-  const label = mode === "whiteboard" ? "白板" : mode === "camera" ? "视频" : "屏幕";
+  const { barRef, position, centered, onDragStart, onDragMove, onDragEnd, onDragKeyDown } = useMeetingFloatingDrag(collapsed);
+  const label = mode === "whiteboard" ? t("meeting.presentationWhiteboard", "白板") : mode === "camera" ? t("meeting.presentationVideo", "视频") : t("meeting.presentationScreen", "屏幕");
   const selectedTarget = presenterTarget || mode;
-
-  const onDragStart = (event: React.PointerEvent<HTMLDivElement>) => {
-    const bar = barRef.current;
-    const parent = bar?.parentElement;
-    if (!bar || !parent) return;
-    const rect = bar.getBoundingClientRect();
-    dragRef.current = { pointerId: event.pointerId, offsetX: event.clientX - rect.left, offsetY: event.clientY - rect.top };
-    event.currentTarget.setPointerCapture(event.pointerId);
-    event.preventDefault();
-    event.stopPropagation();
-  };
-  const onDragMove = (event: React.PointerEvent<HTMLDivElement>) => {
-    const drag = dragRef.current;
-    const bar = barRef.current;
-    const parent = bar?.parentElement;
-    if (!drag || !bar || !parent || drag.pointerId !== event.pointerId) return;
-    const parentRect = parent.getBoundingClientRect();
-    const maxLeft = Math.max(12, parentRect.width - bar.offsetWidth - 12);
-    const maxTop = Math.max(10, parentRect.height - bar.offsetHeight - 10);
-    setCentered(false);
-    setPosition({
-      left: Math.min(maxLeft, Math.max(12, event.clientX - parentRect.left - drag.offsetX)),
-      top: Math.min(maxTop, Math.max(10, event.clientY - parentRect.top - drag.offsetY)),
-    });
-    event.stopPropagation();
-  };
-  const onDragEnd = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (dragRef.current?.pointerId === event.pointerId) dragRef.current = null;
-    event.stopPropagation();
-  };
-
-  useEffect(() => {
-    if (centered) return;
-    const clampPosition = () => {
-      const bar = barRef.current;
-      const parent = bar?.parentElement;
-      if (!bar || !parent) return;
-      const parentRect = parent.getBoundingClientRect();
-      const maxLeft = Math.max(12, parentRect.width - bar.offsetWidth - 12);
-      const maxTop = Math.max(10, parentRect.height - bar.offsetHeight - 10);
-      setPosition((current) => ({
-        left: Math.min(maxLeft, Math.max(12, current.left)),
-        top: Math.min(maxTop, Math.max(10, current.top)),
-      }));
-    };
-    clampPosition();
-    window.addEventListener("resize", clampPosition);
-    return () => window.removeEventListener("resize", clampPosition);
-  }, [centered]);
 
   return (
     <Paper
@@ -1821,18 +1706,20 @@ function ActiveSharingBarV2({
       data-testid="meeting-active-sharing-bar"
       data-collapsed={collapsed ? "true" : "false"}
       elevation={0}
+      style={centered ? undefined : { left: position.left, top: position.top, transform: "none" }}
       onClick={(event) => event.stopPropagation()}
       sx={{
         position: "absolute",
-        left: centered ? { xs: 8, sm: "50%" } : position.left,
+        left: centered ? { xs: 12, sm: "50%" } : position.left,
         top: centered ? { xs: 70, sm: 10 } : position.top,
         transform: centered ? { xs: "none", sm: "translateX(-50%)" } : "none",
         zIndex: 20,
-        width: { xs: "calc(100% - 16px)", sm: "auto" },
-        maxWidth: "calc(100% - 16px)",
+        width: "max-content",
+        maxWidth: "calc(100% - 24px)",
+        boxSizing: "border-box",
         display: "flex",
         alignItems: "center",
-        justifyContent: { xs: "center", sm: "flex-start" },
+        justifyContent: "flex-start",
         flexWrap: { xs: "wrap", sm: "nowrap" },
         gap: { xs: 0.25, sm: 0.5 },
         px: { xs: 0.45, sm: 0.7 },
@@ -1851,20 +1738,25 @@ function ActiveSharingBarV2({
         onPointerMove={onDragMove}
         onPointerUp={onDragEnd}
         onPointerCancel={onDragEnd}
-        aria-label="拖动共享控制栏"
-        sx={{ display: "grid", placeItems: "center", width: { xs: 24, sm: 28 }, height: 32, flexShrink: 0, cursor: "grab", color: "#718096", touchAction: "none" }}
+        onLostPointerCapture={onDragEnd}
+        onKeyDown={onDragKeyDown}
+        role="button"
+        tabIndex={0}
+        aria-keyshortcuts="ArrowUp ArrowDown ArrowLeft ArrowRight"
+        aria-label={t("meeting.presentationDragBar", "拖动共享控制栏")}
+        sx={{ display: "grid", placeItems: "center", width: { xs: 24, sm: 28 }, height: 32, flexShrink: 0, cursor: "grab", color: "#718096", touchAction: "none", borderRadius: 1, "&:focus-visible": { outline: `2px solid ${BLUE}`, outlineOffset: -2 } }}
       >
         <DragIndicatorIcon sx={{ fontSize: 19 }} />
       </Box>
-      <Stack direction="row" alignItems="center" spacing={0.4} sx={{ px: 0.45, minHeight: 32 }}>
+      <Stack direction="row" alignItems="center" spacing={0.4} sx={{ px: 0.45, minHeight: 32, minWidth: 0, maxWidth: "100%" }}>
         {mode === "whiteboard" ? <EditIcon sx={{ fontSize: 16, color: BLUE }} /> : mode === "camera" ? <VideocamIcon sx={{ fontSize: 16, color: BLUE }} /> : <ScreenShareIcon sx={{ fontSize: 16, color: BLUE }} />}
-        <Typography sx={{ fontSize: { xs: "0.74rem", sm: "0.72rem" }, fontWeight: 800, color: "#13233d", whiteSpace: "nowrap" }}>{label}</Typography>
+        <Typography sx={{ fontSize: { xs: "0.74rem", sm: "0.72rem" }, fontWeight: 800, color: "#13233d", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{label}</Typography>
       </Stack>
-      <Tooltip title={collapsed ? "展开共享控制" : "收起共享控制"}>
+      <Tooltip title={collapsed ? t("meeting.presentationExpandControls", "展开共享控制") : t("meeting.presentationCollapseControls", "收起共享控制")}>
         <IconButton
           data-testid={collapsed ? "meeting-active-sharing-expand" : "meeting-active-sharing-collapse"}
           data-expand-direction={collapsed ? "right" : "left"}
-          aria-label={collapsed ? "展开共享控制" : "收起共享控制"}
+          aria-label={collapsed ? t("meeting.presentationExpandControls", "展开共享控制") : t("meeting.presentationCollapseControls", "收起共享控制")}
           size="small"
           onClick={() => setCollapsed((value) => !value)}
           sx={{ width: 32, height: 32, flexShrink: 0, color: BLUE }}
@@ -1878,7 +1770,7 @@ function ActiveSharingBarV2({
         exclusive
         value={selectedTarget}
         size="small"
-        aria-label="共享呈现目标"
+        aria-label={t("meeting.presentationTarget", "共享呈现目标")}
         onChange={(_, next: "screen" | "whiteboard" | "camera" | null) => {
           if (next) onSelectMode(next);
         }}
@@ -1907,41 +1799,41 @@ function ActiveSharingBarV2({
           "& .MuiToggleButton-root.Mui-disabled": { opacity: 0.35 },
         }}
       >
-        <ToggleButton value="camera" disabled={!isPresenter || !cameraAvailable} aria-label="呈现视频">
+        <ToggleButton value="camera" disabled={!isPresenter || !cameraAvailable} aria-label={t("meeting.presentationShowVideo", "呈现视频")}>
           <VideocamIcon sx={{ display: { xs: "inline-flex", sm: "none" }, fontSize: 15, mr: { xs: 0, sm: 0.35 } }} />
-          <Box component="span" sx={{ display: { xs: "none", sm: "inline" } }}>视频</Box>
+          <Box component="span" sx={{ display: { xs: "none", sm: "inline" } }}>{t("meeting.presentationVideo", "视频")}</Box>
         </ToggleButton>
-        <ToggleButton value="whiteboard" disabled={!isPresenter || !whiteboardAvailable} aria-label="呈现白板">
+        <ToggleButton value="whiteboard" disabled={!isPresenter || !whiteboardAvailable} aria-label={t("meeting.presentationShowBoard", "呈现白板")}>
           <EditIcon sx={{ display: { xs: "inline-flex", sm: "none" }, fontSize: 15, mr: { xs: 0, sm: 0.35 } }} />
-          <Box component="span" sx={{ display: { xs: "none", sm: "inline" } }}>白板</Box>
+          <Box component="span" sx={{ display: { xs: "none", sm: "inline" } }}>{t("meeting.presentationWhiteboard", "白板")}</Box>
         </ToggleButton>
-        <ToggleButton value="screen" disabled={!isPresenter || !screenAvailable} aria-label="呈现屏幕">
+        <ToggleButton value="screen" disabled={!isPresenter || !screenAvailable} aria-label={t("meeting.presentationShowScreen", "呈现屏幕")}>
           <ScreenShareIcon sx={{ display: { xs: "inline-flex", sm: "none" }, fontSize: 15, mr: { xs: 0, sm: 0.35 } }} />
-          <Box component="span" sx={{ display: { xs: "none", sm: "inline" } }}>屏幕</Box>
+          <Box component="span" sx={{ display: { xs: "none", sm: "inline" } }}>{t("meeting.presentationScreen", "屏幕")}</Box>
         </ToggleButton>
       </ToggleButtonGroup>
       {!isPresenter && presenterId && (
         <Button size="small" data-testid="meeting-sharing-follow-toggle" onClick={onToggleFollow} sx={{ minWidth: 0, px: 0.8, minHeight: 30, borderRadius: 1.5, fontSize: "0.72rem", textTransform: "none" }}>
-          {followPresenter ? "取消跟随" : "跟随共享人"}
+          {followPresenter ? t("meeting.presentationUnfollow", "取消跟随") : t("meeting.presentationFollow", "跟随共享人")}
         </Button>
       )}
       {isPresenter ? (
         <>
           <Button size="small" data-testid="meeting-sharing-request-follow-all" onClick={onRequestEveryoneFollow} sx={{ minWidth: 0, px: 0.8, minHeight: 30, borderRadius: 1.5, fontSize: "0.72rem", textTransform: "none" }}>
-            邀请跟随
+            {t("meeting.presentationInviteFollow", "邀请跟随")}
           </Button>
           <Button size="small" color="error" data-testid="meeting-sharing-end" onClick={onReleasePresenter} sx={{ minWidth: 0, px: 0.9, minHeight: 30, borderRadius: 1.5, fontSize: "0.72rem", textTransform: "none", fontWeight: 800 }}>
-            结束共享
+            {t("meeting.presentationEndSharing", "结束共享")}
           </Button>
         </>
       ) : (
         <Button size="small" data-testid="meeting-sharing-claim-presenter" onClick={onClaimPresenter} sx={{ minWidth: 0, px: 0.8, minHeight: 30, borderRadius: 1.5, fontSize: "0.72rem", textTransform: "none" }}>
-          成为共享人
+          {t("meeting.presentationBecomePresenter", "成为共享人")}
         </Button>
       )}
       {canClose && !isPresenter && (
-        <Tooltip title={mode === "whiteboard" ? "仅自己关闭白板" : "停止共享"}>
-          <IconButton size="small" onClick={onClose} aria-label={mode === "whiteboard" ? "仅自己关闭白板" : "停止共享"} sx={{ width: 30, height: 30 }}>
+        <Tooltip title={mode === "whiteboard" ? t("meeting.presentationCloseBoardLocal", "仅自己关闭白板") : t("meeting.stopShare", "停止共享")}>
+          <IconButton size="small" onClick={onClose} aria-label={mode === "whiteboard" ? t("meeting.presentationCloseBoardLocal", "仅自己关闭白板") : t("meeting.stopShare", "停止共享")} sx={{ width: 30, height: 30 }}>
             <CloseIcon sx={{ fontSize: 17 }} />
           </IconButton>
         </Tooltip>
@@ -1967,8 +1859,15 @@ function ActiveSharingSurface({
   compact?: boolean;
   onActivate: () => void;
 }) {
-  const label = mode === "whiteboard" ? "共享白板" : "正在共享屏幕";
+  const { t } = useTranslation();
+  const motionEnabled = useContext(MeetingStageMotionContext);
+  const [layoutMoving, setLayoutMoving] = useState(false);
+  useEffect(() => {
+    if (!motionEnabled || mode !== "screen") setLayoutMoving(false);
+  }, [mode, motionEnabled]);
+  const label = mode === "whiteboard" ? t("meeting.presentationSharedBoard", "共享白板") : t("meeting.screenSharing", "正在共享屏幕");
   return (
+    <motion.div layout={motionEnabled && mode === "screen"} layoutId={motionEnabled && mode === "screen" ? "meeting-screen-sharing" : undefined} initial={motionEnabled ? { opacity: 0.9 } : false} animate={{ opacity: 1 }} onLayoutAnimationStart={() => setLayoutMoving(true)} onLayoutAnimationComplete={() => setLayoutMoving(false)} style={{ width: "100%", height: "100%", minHeight: 0 }}>
     <Box
       data-testid="meeting-active-sharing"
       data-mode={mode}
@@ -1985,7 +1884,7 @@ function ActiveSharingSurface({
         compact ? (
           <Stack sx={{ width: "100%", height: "100%", alignItems: "center", justifyContent: "center", color: "text.secondary" }}>
             <EditIcon sx={{ color: BLUE, mb: 0.5 }} />
-            <Typography sx={{ fontSize: "0.78rem", fontWeight: 700 }}>白板正在共享，点击放大</Typography>
+            <Typography sx={{ fontSize: "0.78rem", fontWeight: 700 }}>{t("meeting.presentationExpandBoardHint", "白板正在共享，点击放大")}</Typography>
           </Stack>
         ) : boardMode === "excalidraw" ? (
           <ExcalidrawBoard followPresentation={followPresentation} />
@@ -1993,12 +1892,13 @@ function ActiveSharingSurface({
           <Whiteboard />
         )
       ) : tile ? (
-        <ScreenStage tile={tile} isFocused={false} onFocus={onActivate} />
+        <ScreenStage tile={tile} isFocused={false} onFocus={onActivate} controlsHidden={layoutMoving} />
       ) : (
         <Stack sx={{ width: "100%", height: "100%", alignItems: "center", justifyContent: "center", color: "text.secondary" }}>
-          <Typography sx={{ fontSize: "0.82rem" }}>正在连接共享画面…</Typography>
+          <Typography sx={{ fontSize: "0.82rem" }}>{t("meeting.presentationConnectingScreen", "正在连接共享画面…")}</Typography>
         </Stack>
       )}
     </Box>
+    </motion.div>
   );
 }

@@ -44,7 +44,7 @@ test("chat panel accepts dropped folders and multi-file selections", () => {
   assert.match(chatPanelSource, /multiple/);
   assert.match(chatPanelSource, /bundleTransferEntries/);
   assert.match(fileBundleSource, /relativePath/);
-  assert.match(fileBundleSource, /LetShare_\$\{Date\.now\(\)\}_bundle\.zip/);
+  assert.match(fileBundleSource, /LetShare_\$\{Date\.now\(\)\}\.zip/);
 });
 
 test("chat panel is narrow on desktop and full width only on mobile", () => {
@@ -60,7 +60,7 @@ test("folder and multi-file bundles retain relative paths", async () => {
     { file: makeTestFile("a", "a.txt"), relativePath: "project/a.txt" },
     { file: makeTestFile("b", "b.txt"), relativePath: "project/docs/b.txt" },
   ]);
-  assert.match(bundle.name, /^LetShare_\d+_bundle\.zip$/);
+  assert.match(bundle.name, /^LetShare_\d+\.zip$/);
   const zip = await JSZip.loadAsync(await bundle.arrayBuffer());
   assert.ok(zip.file("project/a.txt"));
   assert.ok(zip.file("project/docs/b.txt"));
@@ -101,10 +101,10 @@ test("meeting chat history survives remounts and clears at the meeting boundary"
   clearAllMeetingChatHistory();
 });
 
-test("meeting participant tab does not unmount chat and chat exposes select all", () => {
+test("meeting participant tab does not unmount chat and chat exposes emoji selection", () => {
   const meetingRoomSource = readFileSync(join(process.cwd(), "src", "components", "meeting", "MeetingRoom.tsx"), "utf8");
   const meetingChatSource = readFileSync(join(process.cwd(), "src", "components", "meeting", "components", "MeetingChat.tsx"), "utf8");
   assert.match(meetingRoomSource, /panelTab === 0 \? "flex" : "none"/);
   assert.match(meetingRoomSource, /panelTab === 1 \? "flex" : "none"/);
-  assert.match(meetingChatSource, /data-testid="meeting-chat-select-all"/);
+  assert.match(meetingChatSource, /data-testid="meeting-chat-emoji"/);
 });

@@ -1,6 +1,8 @@
+import { MeetingDialog as Dialog } from "../components/meeting/components/MeetingDialog";
 import { useEffect, useRef, useState } from "react"
 import { useNavigate, useSearchParams } from "react-router-dom"
-import { Box, Button, Dialog, DialogActions, DialogContent, DialogTitle, Paper, Stack, TextField, Typography } from "@mui/material"
+import { Box, Button, DialogActions, DialogContent, DialogTitle, Paper, Stack, TextField, Typography } from "@mui/material"
+import { useTranslation } from "react-i18next"
 import { meetingManager } from "@App/libs/meeting/meetingManager"
 import type { MeetingError } from "@App/libs/meeting/meetingManager"
 import realTimeColab from "@App/libs/connection/colabLib"
@@ -23,6 +25,7 @@ import AlertPortal from "../components/Alert"
  * 否则 sendMeetingMessage 会被 isConnected 检查静默丢弃。
  */
 export default function MeetingPage() {
+  const { t } = useTranslation()
   const nav = useNavigate()
   const [sp] = useSearchParams()
   const room = sp.get("room") ?? ""
@@ -134,11 +137,11 @@ export default function MeetingPage() {
   }, [nameConfirmed, room, source, autoScreen, validRoom])
 
   const routeError = room && !validRoom
-    ? { kind: "not-found", message: "会议不存在" } satisfies MeetingError
+    ? { kind: "not-found", message: t("meeting.entryNotFound", "会议不存在或已结束") } satisfies MeetingError
     : room && managerState.meetingError?.roomId === room
     ? managerState.meetingError
     : connectionError
-      ? { kind: "unavailable", message: "无法连接会议服务" } satisfies MeetingError
+      ? { kind: "unavailable", message: t("meeting.entryUnavailable", "暂时无法连接会议") } satisfies MeetingError
       : undefined
 
   const confirmName = () => {
@@ -162,15 +165,15 @@ export default function MeetingPage() {
         data-testid="meeting-name-gate"
         PaperProps={{ sx: { borderRadius: 3, minWidth: { xs: "min(92vw, 360px)", sm: 400 } } }}
       >
-        <DialogTitle>加入会议</DialogTitle>
+        <DialogTitle>{t("meeting.entryJoinTitle", "加入会议")}</DialogTitle>
         <DialogContent>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-            请设置你在本次会议中显示的名字。你的 uniqID 不会因改名而变化。
+            {t("meeting.entryNameHint", "请设置其他参会者看到的名字。")}
           </Typography>
           <TextField
             autoFocus
             fullWidth
-            label="会议内名称"
+            label={t("meeting.entryDisplayName", "会议内名称")}
             value={userName}
             inputProps={{ maxLength: 32, "data-testid": "meeting-name-input" }}
             onChange={(event) => setUserName(event.target.value)}
@@ -179,7 +182,7 @@ export default function MeetingPage() {
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 2.5 }}>
           <Button variant="contained" onClick={confirmName} disabled={!normalizeUserName(userName, "")}>
-            进入会议
+            {t("meeting.entryEnter", "进入会议")}
           </Button>
         </DialogActions>
       </Dialog>
@@ -194,6 +197,7 @@ export default function MeetingPage() {
 }
 
 function MeetingRouteError({ error, onBack, onRetry }: { error: MeetingError; onBack: () => void; onRetry: () => void }) {
+  const { t } = useTranslation()
   const notFound = error.kind === "not-found"
   const unsupported = error.kind === "unsupported"
   return (
@@ -204,14 +208,14 @@ function MeetingRouteError({ error, onBack, onRetry }: { error: MeetingError; on
       <Paper elevation={0} sx={{ width: "min(100%, 480px)", p: { xs: 3, sm: 4 }, borderRadius: 4, border: "1px solid", borderColor: "divider", textAlign: "center" }}>
         <Typography sx={{ fontSize: "3rem", lineHeight: 1, mb: 2 }}>{notFound ? "404" : "!"}</Typography>
         <Typography variant="h5" sx={{ fontWeight: 850, mb: 1 }}>
-          {notFound ? "会议不存在或已结束" : unsupported ? "当前浏览器不支持会议" : "暂时无法连接会议"}
+          {notFound ? t("meeting.entryNotFound", "会议不存在或已结束") : unsupported ? t("meeting.entryUnsupported", "当前浏览器不支持会议") : t("meeting.entryUnavailable", "暂时无法连接会议")}
         </Typography>
         <Typography color="text.secondary" sx={{ mb: 3 }}>
-          {notFound ? "请检查会议号或邀请链接，然后重新加入。" : unsupported ? "请更新浏览器，或使用最新版系统浏览器打开会议链接。" : "会议连接暂时不可用，请检查网络和浏览器后重试。"}
+          {notFound ? t("meeting.entryNotFoundHint", "请检查会议号或邀请链接，然后重新加入。") : unsupported ? t("meeting.entryUnsupportedHint", "请更新浏览器，或使用最新版系统浏览器打开会议链接。") : t("meeting.entryUnavailableHint", "会议连接暂时不可用，请检查网络和浏览器后重试。")}
         </Typography>
         <Stack direction={{ xs: "column", sm: "row" }} spacing={1.25} justifyContent="center">
-          <Button variant="outlined" onClick={onBack}>返回首页</Button>
-          <Button variant="contained" onClick={onRetry}>重新尝试</Button>
+          <Button variant="outlined" onClick={onBack}>{t("meeting.entryBack", "返回首页")}</Button>
+          <Button variant="contained" onClick={onRetry}>{t("meeting.entryRetry", "重新尝试")}</Button>
         </Stack>
       </Paper>
     </Box>

@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { resources } from "../src/app/libs/i18n/translation";
 
 const repoRoot = process.cwd();
 const serverSource = readFileSync(
@@ -18,10 +19,6 @@ const downloadSource = readFileSync(
 );
 const shareSource = readFileSync(
   join(repoRoot, "src", "pages", "share.tsx"),
-  "utf8"
-);
-const translationSource = readFileSync(
-  join(repoRoot, "src", "app", "libs", "i18n", "translation.ts"),
   "utf8"
 );
 
@@ -159,24 +156,18 @@ test("server relay pending direct-save requests prevent background lifecycle dis
 });
 
 test("direct-to-disk user-facing i18n keys exist in every configured locale", () => {
-  for (const locale of ["sharedMalayTranslation", "en", "zh"]) {
-    const localeStart = translationSource.indexOf(locale === "sharedMalayTranslation" ? "const sharedMalayTranslation" : `${locale}: {`);
-    assert.notEqual(localeStart, -1, `${locale} locale should exist`);
-    const localeEnd = locale === "sharedMalayTranslation"
-      ? translationSource.indexOf("export const resources", localeStart)
-      : translationSource.indexOf(locale === "en" ? "    zh: {" : "    ms: sharedMalayTranslation", localeStart);
-    assert.notEqual(localeEnd, -1, `${locale} locale should have an end marker`);
-    const block = translationSource.slice(localeStart, localeEnd);
-
-    for (const key of [
-      "directSavedNoBrowserHistory",
-      "fileSavedToDisk",
-      "fileSavedToDiskNoHistory",
-      "directSaveNoBrowserHistory",
-      "saveToDisk",
-      "savedToDiskFiles",
+  for (const [locale, { translation }] of Object.entries(resources)) {
+    for (const [section, key] of [
+      ["transfer", "directSavedNoBrowserHistory"],
+      ["chat", "fileSavedToDisk"],
+      ["chat", "fileSavedToDiskNoHistory"],
+      ["alert", "directSaveNoBrowserHistory"],
+      ["button", "saveToDisk"],
+      ["transfer", "savedToDiskFiles"],
     ]) {
-      assert.match(block, new RegExp(`${key}:`), `${locale} should define ${key}`);
+      const group = translation[section as keyof typeof translation] as Record<string, unknown>;
+      assert.equal(typeof group?.[key], "string", `${locale} should define ${section}.${key}`);
+      assert.ok(group[key], `${locale} should not leave ${section}.${key} empty`);
     }
   }
 });

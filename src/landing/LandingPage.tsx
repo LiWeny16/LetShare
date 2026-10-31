@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { PUBLIC_CUSTOM_SERVER_AUTH_TOKEN, PUBLIC_CUSTOM_SERVER_URL } from "@App/libs/connection/publicServerAuth";
+import { setAppLanguage } from "@App/libs/i18n/i18n";
+import settingsStore from "@App/libs/mobx/mobx";
+import { useTranslation } from "react-i18next";
+import { landingTranslations } from "./landingTranslations";
 import gsap from "gsap";
 import { ScrollTrigger } from "gsap/ScrollTrigger";
 import { useGSAP } from "@gsap/react";
@@ -10,117 +13,35 @@ type ThemeKey = "light" | "dark" | "blue" | "green" | "sunset" | "coolGray";
 
 type ModeKey = "direct" | "internet" | "clipboard";
 
-const themeOptions: Array<{ key: ThemeKey; label: string; color: string }> = [
-  { key: "light", label: "Light", color: "#f5f5f5" },
-  { key: "dark", label: "Dark", color: "#212121" },
-  { key: "blue", label: "Blue", color: "#1976d2" },
-  { key: "green", label: "Green", color: "#388e3c" },
-  { key: "sunset", label: "Sunset", color: "#f57c00" },
-  { key: "coolGray", label: "Cool gray", color: "#90a4ae" },
+const themeOptions: Array<{ key: ThemeKey; color: string }> = [
+  { key: "light", color: "#f5f5f5" },
+  { key: "dark", color: "#212121" },
+  { key: "blue", color: "#1976d2" },
+  { key: "green", color: "#388e3c" },
+  { key: "sunset", color: "#f57c00" },
+  { key: "coolGray", color: "#90a4ae" },
 ];
-
-const benefits = [
-  {
-    eyebrow: "No account",
-    title: "Open a room and move the file.",
-    copy: "LetShare starts in the browser. It keeps the first action close: pick a file, text, image, or clipboard content and send it.",
-  },
-  {
-    eyebrow: "Every screen",
-    title: "Desktop to phone without a detour.",
-    copy: "The interface is built for mixed devices, so your laptop, phone, and tablet can meet in the same lightweight room.",
-  },
-  {
-    eyebrow: "P2P first",
-    title: "Direct when possible, resilient when not.",
-    copy: "LetShare attempts direct peer-to-peer transfer and keeps text communication available through the public network path.",
-  },
-];
-
-const steps = [
-  "Open LetShare on two devices.",
-  "Join the same room or scan the QR code.",
-  "Send files, images, text, or clipboard content.",
-];
-
-const modes: Record<ModeKey, { label: string; title: string; copy: string; metric: string }> = {
-  direct: {
-    label: "P2P",
-    title: "Fast direct transfer",
-    copy: "When the network allows it, LetShare opens a peer-to-peer channel so larger file transfers avoid unnecessary hops.",
-    metric: "Direct path",
-  },
-  internet: {
-    label: "Internet",
-    title: "Fallback that stays understandable",
-    copy: "When a direct path cannot be established, the UI labels the public network path clearly instead of hiding it behind vague status text.",
-    metric: "Public path",
-  },
-  clipboard: {
-    label: "Clipboard",
-    title: "Small content stays instant",
-    copy: "Text, snippets, and clipboard content stay close to the main action, so quick handoffs do not feel like file management.",
-    metric: "Quick handoff",
-  },
-};
-
-const faqs = [
-  {
-    question: "Does LetShare need an account?",
-    answer: "No. The app is designed for quick sharing from the browser without a sign-in step.",
-  },
-  {
-    question: "Does it only work on the same Wi-Fi?",
-    answer: "LetShare tries peer-to-peer first and can still use the public network path for supported text communication when direct connection is unavailable.",
-  },
-  {
-    question: "Why is this separate from the app root?",
-    answer: "The landing page has its own HTML entry and animation bundle, so the sharing tool at the root URL does not load the marketing page code.",
-  },
-];
-
-const defaultStoredSettings = {
-  roomId: "",
-  userTheme: "light",
-  userLanguage: "en",
-  serverMode: "auto",
-  customServerUrl: PUBLIC_CUSTOM_SERVER_URL,
-  authToken: PUBLIC_CUSTOM_SERVER_AUTH_TOKEN,
-  ablyKey: "4TtssQ.e9OvDA:wYBGdtWQNgicbeIKNtgeV_s5XEKmfLKD_Gue5XQrWuw",
-  meetingMicrophoneDefaultOn: false,
-  version: "3.8.30",
-  isNewUser: true,
-};
 
 function readStoredTheme(): ThemeKey {
   try {
-    const raw = localStorage.getItem("user_settings");
-    const parsed = raw ? JSON.parse(raw) : null;
-    const value = parsed?.userTheme;
-    return themeOptions.some((theme) => theme.key === value) ? value : "light";
+    const value = settingsStore.get("userTheme");
+    return themeOptions.find((theme) => theme.key === value)?.key ?? "light";
   } catch {
     return "light";
   }
 }
 
-function storeTheme(theme: ThemeKey) {
-  try {
-    const raw = localStorage.getItem("user_settings");
-    const parsed = raw ? JSON.parse(raw) : {};
-    localStorage.setItem("user_settings", JSON.stringify({ ...defaultStoredSettings, ...parsed, userTheme: theme }));
-  } catch {
-    localStorage.setItem("user_settings", JSON.stringify({ ...defaultStoredSettings, userTheme: theme }));
-  }
-}
-
 export default function LandingPage() {
+  const { i18n } = useTranslation();
+  const copy = landingTranslations[i18n.resolvedLanguage?.startsWith("zh") ? "zh" : i18n.resolvedLanguage?.startsWith("id") ? "id" : i18n.resolvedLanguage?.startsWith("ms") ? "ms" : "en"];
   const rootRef = useRef<HTMLElement | null>(null);
   const visualRef = useRef<HTMLDivElement | null>(null);
   const [theme, setTheme] = useState<ThemeKey>(() => readStoredTheme());
   const [mode, setMode] = useState<ModeKey>("direct");
   const [openFaq, setOpenFaq] = useState(0);
+  const [language, setLanguage] = useState<LanguageType>(() => settingsStore.get("userLanguage") ?? "system");
 
-  const activeMode = useMemo(() => modes[mode], [mode]);
+  const activeMode = useMemo(() => copy.modes[mode], [copy, mode]);
 
   useEffect(() => {
     document.documentElement.style.colorScheme = theme === "dark" || theme === "coolGray" ? "dark" : "light";
@@ -129,7 +50,7 @@ export default function LandingPage() {
 
   useEffect(() => {
     ScrollTrigger.refresh();
-  }, [openFaq]);
+  }, [openFaq, copy]);
 
   useGSAP(() => {
     const root = rootRef.current;
@@ -239,37 +160,48 @@ export default function LandingPage() {
 
   const selectTheme = (nextTheme: ThemeKey) => {
     setTheme(nextTheme);
-    storeTheme(nextTheme);
+    settingsStore.update("userTheme", nextTheme);
   };
 
   return (
     <main className="letshare-landing" data-theme={theme} ref={rootRef}>
-      <header className="landing-nav" aria-label="LetShare site navigation">
-        <a className="brand-lockup" href="./" aria-label="Open LetShare app">
+      <header className="landing-nav" aria-label={copy.nav} style={{ gap: 8 }}>
+        <a className="brand-lockup" href="./" aria-label={copy.openAppLabel} style={{ fontSize: 16, flexShrink: 0 }}>
           <img src="/icons/startup-logo-192.png" alt="" width="32" height="32" />
           <span>LetShare</span>
         </a>
-        <nav className="nav-links" aria-label="Page sections">
-          <a href="#why">Why</a>
-          <a href="#flow">Flow</a>
-          <a href="#security">Security</a>
+        <nav className="nav-links" aria-label={copy.sections}>
+          <a href="#why">{copy.why}</a>
+          <a href="#flow">{copy.flow}</a>
+          <a href="#security">{copy.security}</a>
         </nav>
-        <div className="nav-actions">
-          <div className="theme-switcher" aria-label="Theme selector">
+        <div className="nav-actions" style={{ gap: 8, minWidth: 0 }}>
+          <div className="theme-switcher" aria-label={copy.themeSelector}>
             {themeOptions.map((option) => (
               <button
                 className="theme-swatch"
                 key={option.key}
                 type="button"
-                aria-label={`Use ${option.label} theme`}
+                aria-label={copy.useTheme(copy.themes[option.key])}
                 aria-pressed={theme === option.key}
-                title={option.label}
+                title={copy.themes[option.key]}
                 style={{ backgroundColor: option.color }}
                 onClick={() => selectTheme(option.key)}
               />
             ))}
           </div>
-          <a className="button button-primary" href="./">Open App</a>
+          <select aria-label={copy.language} title={copy.language} value={language} onChange={(event) => {
+            const next = event.target.value as LanguageType;
+            setLanguage(next);
+            void setAppLanguage(next);
+          }} style={{ width: 64, flex: "0 0 64px", maxWidth: "100%", minHeight: 40, padding: "0 4px", border: "1px solid var(--line)", borderRadius: 10, background: "var(--surface)", color: "var(--text)", font: "inherit", fontSize: 12 }}>
+            <option value="system">{i18n.resolvedLanguage?.startsWith("zh") ? "系统" : i18n.resolvedLanguage?.startsWith("id") ? "Otomatis" : "Auto"}</option>
+            <option value="zh">中文</option>
+            <option value="en">English</option>
+            <option value="ms">Melayu</option>
+            <option value="id">Indonesia</option>
+          </select>
+          <a className="button button-primary" href="./" style={{ whiteSpace: "nowrap" }}>{copy.openApp}</a>
         </div>
         <span className="scroll-progress" aria-hidden="true">
           <span className="scroll-progress-bar" />
@@ -284,69 +216,53 @@ export default function LandingPage() {
         </div>
 
         <div className="hero-copy-block">
-          <p className="hero-kicker">Browser-native sharing</p>
+          <p className="hero-kicker">{copy.kicker}</p>
           <h1 className="hero-title" id="hero-title">LetShare</h1>
-          <p className="hero-copy">
-            Fast file, image, text, and clipboard sharing across nearby devices. No login, no install, and no confusing connection labels.
-          </p>
-          <div className="hero-actions" aria-label="Primary actions">
-            <a className="button button-primary button-large" href="./">Open sharing app</a>
-            <a className="button button-secondary button-large" href="https://github.com/LiWeny16/LetShare" rel="noreferrer">View GitHub</a>
+          <p className="hero-copy">{copy.hero}</p>
+          <div className="hero-actions" aria-label={copy.actions}>
+            <a className="button button-primary button-large" href="./">{copy.openSharing}</a>
+            <a className="button button-secondary button-large" href="https://github.com/LiWeny16/LetShare" rel="noreferrer">{copy.github}</a>
           </div>
-          <dl className="hero-metrics" aria-label="LetShare highlights">
-            <div>
-              <dt>No account</dt>
-              <dd>Start in the tab</dd>
-            </div>
-            <div>
-              <dt>P2P first</dt>
-              <dd>Direct when available</dd>
-            </div>
-            <div>
-              <dt>Fallback clear</dt>
-              <dd>Internet path shown</dd>
-            </div>
+          <dl className="hero-metrics" aria-label={copy.highlights}>
+            {copy.metrics.map((item, index) => <div key={index}><dt>{item.title}</dt><dd>{item.copy}</dd></div>)}
           </dl>
         </div>
 
-        <div className="hero-visual" ref={visualRef} aria-label="LetShare product preview">
-          <img className="product-shot product-shot-desktop" src="/screenshots/desktop.png" alt="LetShare desktop sharing interface" width="1200" height="746" decoding="async" />
-          <img className="product-shot product-shot-mobile" src="/screenshots/mobile.jpg" alt="LetShare mobile sharing interface" width="393" height="852" decoding="async" />
+        <div className="hero-visual" ref={visualRef} aria-label={copy.preview}>
+          <img className="product-shot product-shot-desktop" src="/screenshots/desktop.png" alt={copy.desktopAlt} width="1200" height="746" decoding="async" />
+          <img className="product-shot product-shot-mobile" src="/screenshots/mobile.jpg" alt={copy.mobileAlt} width="393" height="852" decoding="async" />
           <div className="transfer-card product-shot" aria-hidden="true">
             <div className="transfer-topline">
               <span className="live-dot" />
-              <span>Transfer ready</span>
+              <span>{copy.transferReady}</span>
             </div>
             <strong>clipboard-note.txt</strong>
             <div className="transfer-progress"><span /></div>
             <div className="transfer-meta">
-              <span>Text + file path</span>
-              <b>P2P first</b>
+              <span>{copy.transferMeta}</span>
+              <b>{copy.p2pFirst}</b>
             </div>
           </div>
           <div className="floating-status product-shot" aria-hidden="true">
-            <span>Room ready</span>
-            <strong>3 devices online</strong>
+            <span>{copy.roomReady}</span>
+            <strong>{copy.devicesOnline}</strong>
           </div>
         </div>
       </section>
 
-      <section className="trust-strip landing-reveal" aria-label="Product facts">
-        <span>WebRTC when possible</span>
-        <span>Public network text fallback</span>
-        <span>Desktop and mobile browsers</span>
-        <span>Open source</span>
+      <section className="trust-strip landing-reveal" aria-label={copy.factsLabel}>
+        {copy.facts.map((fact, index) => <span key={index}>{fact}</span>)}
       </section>
 
       <section className="section-shell" id="why" aria-labelledby="why-title">
         <div className="section-heading landing-reveal">
-          <p className="section-kicker">Why it feels fast</p>
-          <h2 id="why-title">The page gets out of the way.</h2>
-          <p>LetShare is designed around the moment you already have: something on one device needs to be on another device.</p>
+          <p className="section-kicker">{copy.whyKicker}</p>
+          <h2 id="why-title">{copy.whyTitle}</h2>
+          <p>{copy.whyCopy}</p>
         </div>
         <div className="benefit-grid">
-          {benefits.map((benefit) => (
-            <article className="benefit-card landing-reveal" key={benefit.title}>
+          {copy.benefits.map((benefit, index) => (
+            <article className="benefit-card landing-reveal" key={index}>
               <p>{benefit.eyebrow}</p>
               <h3>{benefit.title}</h3>
               <span>{benefit.copy}</span>
@@ -357,12 +273,12 @@ export default function LandingPage() {
 
       <section className="section-shell flow-section" id="flow" aria-labelledby="flow-title">
         <div className="section-heading landing-reveal">
-          <p className="section-kicker">Flow</p>
-          <h2 id="flow-title">One room, three steps.</h2>
+          <p className="section-kicker">{copy.flowKicker}</p>
+          <h2 id="flow-title">{copy.flowTitle}</h2>
         </div>
         <ol className="step-list">
-          {steps.map((step, index) => (
-            <li className="landing-reveal" key={step}>
+          {copy.steps.map((step, index) => (
+            <li className="landing-reveal" key={index}>
               <span>{String(index + 1).padStart(2, "0")}</span>
               <strong>{step}</strong>
             </li>
@@ -372,13 +288,13 @@ export default function LandingPage() {
 
       <section className="section-shell interactive-section" id="security" aria-labelledby="mode-title">
         <div className="section-heading landing-reveal">
-          <p className="section-kicker">Connection clarity</p>
-          <h2 id="mode-title">Small status labels make a big difference.</h2>
-          <p>Switch the mode preview to see how the product explains the path without making users decode networking language.</p>
+          <p className="section-kicker">{copy.connectionKicker}</p>
+          <h2 id="mode-title">{copy.connectionTitle}</h2>
+          <p>{copy.connectionCopy}</p>
         </div>
         <div className="mode-panel landing-reveal">
-          <div className="mode-tabs" role="tablist" aria-label="Connection mode preview">
-            {(Object.keys(modes) as ModeKey[]).map((key) => (
+          <div className="mode-tabs" role="tablist" aria-label={copy.modesLabel}>
+            {(Object.keys(copy.modes) as ModeKey[]).map((key) => (
               <button
                 key={key}
                 type="button"
@@ -387,7 +303,7 @@ export default function LandingPage() {
                 className={mode === key ? "is-active" : ""}
                 onClick={() => setMode(key)}
               >
-                {modes[key].label}
+                {copy.modes[key].label}
               </button>
             ))}
           </div>
@@ -397,32 +313,32 @@ export default function LandingPage() {
             <p>{activeMode.copy}</p>
           </div>
           <div className="mode-diagram" aria-hidden="true">
-            <span className="device-node">Laptop</span>
+            <span className="device-node">{copy.laptop}</span>
             <span className="mode-path" />
-            <span className="device-node">Phone</span>
+            <span className="device-node">{copy.phone}</span>
           </div>
         </div>
       </section>
 
       <section className="showcase-section" aria-labelledby="showcase-title">
         <div className="showcase-copy landing-reveal">
-          <p className="section-kicker">Product signal</p>
-          <h2 id="showcase-title">A real interface, not a stock mockup.</h2>
-          <p>The landing page uses the actual LetShare screenshots so visitors understand what opens after the first click.</p>
+          <p className="section-kicker">{copy.showcaseKicker}</p>
+          <h2 id="showcase-title">{copy.showcaseTitle}</h2>
+          <p>{copy.showcaseCopy}</p>
         </div>
         <div className="showcase-media landing-reveal">
-          <img src="/screenshots/desktop.png" alt="LetShare desktop product view" width="1200" height="746" loading="lazy" decoding="async" />
+          <img src="/screenshots/desktop.png" alt={copy.showcaseAlt} width="1200" height="746" loading="lazy" decoding="async" />
         </div>
       </section>
 
       <section className="section-shell faq-section" aria-labelledby="faq-title">
         <div className="section-heading landing-reveal">
           <p className="section-kicker">FAQ</p>
-          <h2 id="faq-title">Quick answers before the first transfer.</h2>
+          <h2 id="faq-title">{copy.faqTitle}</h2>
         </div>
         <div className="faq-list">
-          {faqs.map((faq, index) => (
-            <article className="faq-item landing-reveal" key={faq.question}>
+          {copy.faqs.map((faq, index) => (
+            <article className="faq-item landing-reveal" key={index}>
               <button type="button" aria-expanded={openFaq === index} onClick={() => setOpenFaq(openFaq === index ? -1 : index)}>
                 <span>{faq.question}</span>
                 <span aria-hidden="true">{openFaq === index ? "-" : "+"}</span>
@@ -435,7 +351,7 @@ export default function LandingPage() {
 
       <footer className="landing-footer">
         <span>LetShare</span>
-        <a href="./">Open app</a>
+        <a href="./">{copy.openApp}</a>
         <a href="https://github.com/LiWeny16/LetShare" rel="noreferrer">GitHub</a>
       </footer>
     </main>

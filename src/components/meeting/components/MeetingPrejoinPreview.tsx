@@ -19,6 +19,7 @@ import SecurityRoundedIcon from "@mui/icons-material/SecurityRounded";
 import SpeedIcon from "@mui/icons-material/Speed";
 import VideocamIcon from "@mui/icons-material/Videocam";
 import VideocamOffIcon from "@mui/icons-material/VideocamOff";
+import { useTranslation } from "react-i18next";
 import settingsStore from "@App/libs/mobx/mobx";
 import { createInputLevelMeter, listAudioDevices, mergedAudioConstraints } from "@App/libs/call/audioCapture";
 import {
@@ -45,12 +46,11 @@ function stopStream(stream: MediaStream | null): void {
   stream?.getTracks().forEach((track) => track.stop());
 }
 
-function deviceLabel(device: MediaDeviceInfo, kind: "mic" | "camera", index: number): string {
-  return device.label || `${kind === "mic" ? "麦克风" : "摄像头"} ${index + 1}`;
-}
+type PreviewError = "audio-unsupported" | "audio-failed" | "video-unsupported" | "video-failed" | "";
 
 /** 入会前真实设备预览：只在用户打开开关时请求权限，不伪造摄像头/麦克风状态。 */
 export default function MeetingPrejoinPreview({ compact = false, isHost = false }: MeetingPrejoinPreviewProps) {
+  const { t } = useTranslation();
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [devices, setDevices] = useState<DeviceLists>({ mics: [], cameras: [] });
   const [micId, setMicId] = useState(String(settingsStore.get("micDeviceId") ?? ""));
@@ -62,7 +62,7 @@ export default function MeetingPrejoinPreview({ compact = false, isHost = false 
   const [micLevel, setMicLevel] = useState(0);
   const [latency, setLatency] = useState<number | null>(null);
   const [latencyTesting, setLatencyTesting] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<PreviewError>("");
 
   const refreshDevices = useCallback(async () => {
     if (!navigator.mediaDevices?.enumerateDevices) return;
@@ -106,7 +106,7 @@ export default function MeetingPrejoinPreview({ compact = false, isHost = false 
 
   const requestAudio = useCallback(async (preferredId = micId) => {
     if (!navigator.mediaDevices?.getUserMedia) {
-      setError("当前浏览器不支持麦克风采集");
+      setError("audio-unsupported");
       return false;
     }
     try {
@@ -133,14 +133,14 @@ export default function MeetingPrejoinPreview({ compact = false, isHost = false 
       return true;
     } catch (cause) {
       console.warn("[meeting] prejoin microphone capture failed", cause);
-      setError("无法打开麦克风，请检查权限或设备");
+      setError("audio-failed");
       return false;
     }
   }, [audioStream, micId, refreshDevices]);
 
   const requestVideo = useCallback(async (preferredId = cameraId) => {
     if (!navigator.mediaDevices?.getUserMedia) {
-      setError("当前浏览器不支持摄像头采集");
+      setError("video-unsupported");
       return false;
     }
     try {
@@ -162,7 +162,7 @@ export default function MeetingPrejoinPreview({ compact = false, isHost = false 
       return true;
     } catch (cause) {
       console.warn("[meeting] prejoin camera capture failed", cause);
-      setError("无法打开摄像头，请检查权限或设备");
+      setError("video-failed");
       return false;
     }
   }, [cameraId, refreshDevices, videoStream]);
@@ -247,26 +247,32 @@ export default function MeetingPrejoinPreview({ compact = false, isHost = false 
       : latency <= 180
         ? "#c88700"
         : "#d32f2f";
-  const pingLabel = latencyTesting ? "检测中" : latency === null ? "-- ms" : `${latency} ms`;
+  const pingLabel = latencyTesting ? t("meeting.prejoinTesting", "检测中") : latency === null ? "-- ms" : `${latency} ms`;
+  const errorText = error === "audio-unsupported" ? t("meeting.prejoinAudioUnsupported", "当前浏览器不支持麦克风采集。")
+    : error === "audio-failed" ? t("meeting.prejoinAudioFailed", "无法打开麦克风，请检查权限或设备。")
+      : error === "video-unsupported" ? t("meeting.prejoinVideoUnsupported", "当前浏览器不支持摄像头采集。")
+        : error === "video-failed" ? t("meeting.prejoinVideoFailed", "无法打开摄像头，请检查权限或设备。") : "";
 
   const deviceControls = (
     <Stack spacing={1.1}>
-      <Stack direction="row" spacing={0.75}>
+      <Stack direction={{ xs: "column", sm: "row" }} spacing={0.75}>
         <Stack spacing={0.45} sx={{ flex: 1, minWidth: 0 }}>
-          <Typography sx={{ fontSize: "0.68rem", color: "text.secondary", lineHeight: 1 }}>{"麦克风"}</Typography>
+          <Typography sx={{ fontSize: "0.68rem", color: "text.secondary", lineHeight: 1 }}>{t("meeting.prejoinMicrophone", "麦克风")}</Typography>
           <FormControl fullWidth size="small">
-            <Select data-testid="prejoin-mic-device" value={micId} displayEmpty inputProps={{ "aria-label": "麦克风" }} onChange={(event) => void changeMic(String(event.target.value))}>
-              <MenuItem value="">系统默认麦克风</MenuItem>
-              {devices.mics.map((device, index) => <MenuItem key={device.deviceId || `mic-${index}`} value={device.deviceId}>{deviceLabel(device, "mic", index)}</MenuItem>)}
+            <Select data-testid="prejoin-mic-device" value={micId} displayEmpty inputProps={{ "aria-label": t("meeting.prejoinMicrophone", "麦克风") }} onChange={(event) => void changeMic(String(event.target.value))} sx={{ minWidth: 0, fontSize: "0.78rem" }}>
+              <MenuItem value="">{t("meeting.prejoinDefaultMic", "系统默认麦克风")}</MenuItem>
+              {micId && !devices.mics.some((device) => device.deviceId === micId) && <MenuItem value={micId} disabled>{t("meeting.savedDeviceNotListed", "已保存设备（当前未列出）")}</MenuItem>}
+              {devices.mics.map((device, index) => <MenuItem key={device.deviceId || `mic-${index}`} value={device.deviceId}>{device.label || t("meeting.prejoinMicNumber", { defaultValue: "麦克风 {{number}}", number: index + 1 })}</MenuItem>)}
             </Select>
           </FormControl>
         </Stack>
         <Stack spacing={0.45} sx={{ flex: 1, minWidth: 0 }}>
-          <Typography sx={{ fontSize: "0.68rem", color: "text.secondary", lineHeight: 1 }}>{"摄像头"}</Typography>
+          <Typography sx={{ fontSize: "0.68rem", color: "text.secondary", lineHeight: 1 }}>{t("meeting.prejoinCamera", "摄像头")}</Typography>
           <FormControl fullWidth size="small">
-            <Select data-testid="prejoin-camera-device" value={cameraId} displayEmpty inputProps={{ "aria-label": "摄像头" }} onChange={(event) => void changeCamera(String(event.target.value))}>
-              <MenuItem value="">系统默认摄像头</MenuItem>
-              {devices.cameras.map((device, index) => <MenuItem key={device.deviceId || `camera-${index}`} value={device.deviceId}>{deviceLabel(device, "camera", index)}</MenuItem>)}
+            <Select data-testid="prejoin-camera-device" value={cameraId} displayEmpty inputProps={{ "aria-label": t("meeting.prejoinCamera", "摄像头") }} onChange={(event) => void changeCamera(String(event.target.value))} sx={{ minWidth: 0, fontSize: "0.78rem" }}>
+              <MenuItem value="">{t("meeting.prejoinDefaultCamera", "系统默认摄像头")}</MenuItem>
+              {cameraId && !devices.cameras.some((device) => device.deviceId === cameraId) && <MenuItem value={cameraId} disabled>{t("meeting.savedDeviceNotListed", "已保存设备（当前未列出）")}</MenuItem>}
+              {devices.cameras.map((device, index) => <MenuItem key={device.deviceId || `camera-${index}`} value={device.deviceId}>{device.label || t("meeting.prejoinCameraNumber", { defaultValue: "摄像头 {{number}}", number: index + 1 })}</MenuItem>)}
             </Select>
           </FormControl>
         </Stack>
@@ -277,7 +283,7 @@ export default function MeetingPrejoinPreview({ compact = false, isHost = false 
   const micLevelIndicator = (
     <Stack data-testid="prejoin-mic-level" direction="row" spacing={0.6} alignItems="center" sx={{ position: "absolute", right: 14, bottom: 10, width: "44%", height: 24, overflow: "hidden", visibility: micOn && audioStream ? "visible" : "hidden" }} aria-hidden={!micOn || !audioStream}>
       <GraphicEqIcon sx={{ fontSize: 16, color: micLevel > 0.02 ? "#2e7d32" : "text.disabled", flexShrink: 0 }} />
-      <Typography sx={{ fontSize: "0.67rem", color: "text.secondary", whiteSpace: "nowrap" }}>{micLevel > 0.02 ? "检测到声音" : "等待声音"}</Typography>
+      <Typography sx={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", fontSize: "0.67rem", color: "text.secondary", whiteSpace: "nowrap" }}>{micLevel > 0.02 ? t("meeting.prejoinVoiceDetected", "检测到声音") : t("meeting.prejoinAwaitingVoice", "等待声音")}</Typography>
       <LinearProgress variant="determinate" value={Math.round(micLevel * 100)} sx={{ flex: 1, minWidth: 24, height: 5, borderRadius: 3 }} />
     </Stack>
   );
@@ -286,27 +292,27 @@ export default function MeetingPrejoinPreview({ compact = false, isHost = false 
     <Stack data-testid="prejoin-content" spacing={compact ? 0 : 1.1} sx={{ width: "100%", maxWidth: compact ? "none" : 420, minWidth: 0, boxSizing: "border-box", p: compact ? 0 : { xs: 1.5, sm: 2 } }}>
       <Box sx={{ position: "relative", height: { xs: 180, sm: 270 }, borderRadius: compact ? "14px 14px 0 0" : 4, overflow: "hidden", bgcolor: "#e4e7eb", background: "#e4e7eb", border: compact ? "1px solid #d8dde3" : "none" }}>
         {cameraOn && videoStream ? (
-          <Box data-testid="prejoin-camera-preview" component="video" ref={videoRef} autoPlay muted playsInline sx={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+          <Box data-testid="prejoin-camera-preview" component="video" ref={videoRef} autoPlay muted playsInline disablePictureInPicture sx={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
         ) : (
-          <Box sx={{ width: 76, height: 76, borderRadius: "50%", display: "grid", placeItems: "center", bgcolor: "#cce9ff", color: "#217ac8", border: "1px solid #b5dcfa", fontSize: "2.1rem", fontWeight: 700, position: "absolute", left: "50%", top: "calc(50% - 12px)", transform: "translate(-50%, -50%)" }}>我</Box>
+          <Box sx={{ width: 76, height: 76, borderRadius: "50%", display: "grid", placeItems: "center", bgcolor: "#cce9ff", color: "#217ac8", border: "1px solid #b5dcfa", fontSize: "1.5rem", fontWeight: 700, position: "absolute", left: "50%", top: "calc(50% - 12px)", transform: "translate(-50%, -50%)" }}>{t("meeting.prejoinSelf", "我")}</Box>
         )}
         <Stack direction="row" alignItems="center" spacing={1.25} sx={{ position: "absolute", top: 14, left: 16, right: 16, color: "text.secondary" }}>
-          <Typography sx={{ fontSize: "0.72rem" }}>仅自己可见</Typography>
-          <Stack data-testid="prejoin-ping" direction="row" alignItems="center" spacing={0.35} aria-label={`网络延迟 ${pingLabel}`} sx={{ color: pingColor, minWidth: 0 }}>
+          <Typography sx={{ fontSize: "0.72rem" }}>{t("meeting.prejoinPrivate", "仅自己可见")}</Typography>
+          <Stack data-testid="prejoin-ping" direction="row" alignItems="center" spacing={0.35} aria-label={t("meeting.prejoinLatency", { defaultValue: "网络延迟 {{value}}", value: pingLabel })} sx={{ color: pingColor, minWidth: 0 }}>
             <SpeedIcon sx={{ fontSize: 15 }} />
             <Typography data-ping-state={latency === null ? "unknown" : latency <= 100 ? "green" : latency <= 180 ? "yellow" : "red"} sx={{ fontSize: "0.68rem", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>{pingLabel}</Typography>
           </Stack>
         </Stack>
-        {compact && !cameraOn && <Typography sx={{ position: "absolute", left: "50%", top: "calc(50% + 44px)", transform: "translateX(-50%)", color: "text.secondary", fontSize: "0.72rem", whiteSpace: "nowrap" }}>摄像头已关闭</Typography>}
-        {compact && <Typography sx={{ position: "absolute", bottom: 12, left: 16, color: "text.secondary", fontSize: "0.72rem", fontWeight: 600 }}>{isHost ? "我 · 主持人" : "我"}</Typography>}
+        {compact && !cameraOn && <Typography sx={{ position: "absolute", left: "50%", top: "calc(50% + 44px)", transform: "translateX(-50%)", maxWidth: "85%", textAlign: "center", color: "text.secondary", fontSize: "0.72rem" }}>{t("meeting.prejoinCameraOff", "摄像头已关闭")}</Typography>}
+        {compact && <Typography sx={{ position: "absolute", bottom: 12, left: 16, color: "text.secondary", fontSize: "0.72rem", fontWeight: 600 }}>{isHost ? t("meeting.prejoinHostSelf", "我 · 主持人") : t("meeting.prejoinSelf", "我")}</Typography>}
         {micLevelIndicator}
-        {!compact && <Chip size="small" label="入会前预览" sx={{ position: "absolute", top: 10, right: 10, bgcolor: "rgba(255,255,255,.88)", fontWeight: 700 }} />}
+        {!compact && <Chip size="small" label={t("meeting.prejoinPreview", "入会前预览")} sx={{ position: "absolute", top: 10, right: 10, bgcolor: "rgba(255,255,255,.88)", fontWeight: 700 }} />}
         {!compact && (
           <Stack direction="row" spacing={0.5} sx={{ position: "absolute", left: "50%", bottom: 10, transform: "translateX(-50%)" }}>
-            <IconButton aria-label={micOn ? "关闭麦克风" : "开启麦克风"} onClick={() => void toggleMic()} size="small" sx={{ width: 38, height: 38, bgcolor: "rgba(255,255,255,.92)", color: micOn ? "primary.main" : "text.secondary", "&:hover": { bgcolor: "#fff" } }}>
+            <IconButton aria-label={micOn ? t("meeting.prejoinMicTurnOff", "关闭麦克风") : t("meeting.prejoinMicTurnOn", "开启麦克风")} onClick={() => void toggleMic()} size="small" sx={{ width: 38, height: 38, bgcolor: "rgba(255,255,255,.92)", color: micOn ? "primary.main" : "text.secondary", "&:hover": { bgcolor: "#fff" } }}>
               {micOn ? <MicIcon fontSize="small" /> : <MicOffIcon fontSize="small" />}
             </IconButton>
-            <IconButton aria-label={cameraOn ? "关闭摄像头" : "开启摄像头"} onClick={() => void toggleCamera()} size="small" sx={{ width: 38, height: 38, bgcolor: "rgba(255,255,255,.92)", color: cameraOn ? "primary.main" : "text.secondary", "&:hover": { bgcolor: "#fff" } }}>
+            <IconButton aria-label={cameraOn ? t("meeting.prejoinCameraTurnOff", "关闭摄像头") : t("meeting.prejoinCameraTurnOn", "开启摄像头")} onClick={() => void toggleCamera()} size="small" sx={{ width: 38, height: 38, bgcolor: "rgba(255,255,255,.92)", color: cameraOn ? "primary.main" : "text.secondary", "&:hover": { bgcolor: "#fff" } }}>
               {cameraOn ? <VideocamIcon fontSize="small" /> : <VideocamOffIcon fontSize="small" />}
             </IconButton>
           </Stack>
@@ -315,11 +321,11 @@ export default function MeetingPrejoinPreview({ compact = false, isHost = false 
 
       {compact && (
         <Stack direction="row" divider={<Divider orientation="vertical" flexItem />} sx={{ border: "1px solid #d8dde3", borderTop: 0, borderRadius: "0 0 14px 14px", bgcolor: "#f2f4f6", p: 0.75 }}>
-          <Button fullWidth color="inherit" startIcon={micOn ? <MicIcon /> : <MicOffIcon />} onClick={() => void toggleMic()} sx={{ color: "text.secondary", py: 1, minHeight: 42, textTransform: "none" }}>
-            麦克风{micOn ? "开启" : "关闭"}
+          <Button fullWidth color="inherit" startIcon={micOn ? <MicIcon /> : <MicOffIcon />} onClick={() => void toggleMic()} sx={{ minWidth: 0, color: "text.secondary", py: 1, minHeight: 42, textTransform: "none", lineHeight: 1.2 }}>
+            {micOn ? t("meeting.prejoinMicOn", "麦克风开启") : t("meeting.prejoinMicOff", "麦克风关闭")}
           </Button>
-          <Button fullWidth color="inherit" startIcon={cameraOn ? <VideocamIcon /> : <VideocamOffIcon />} onClick={() => void toggleCamera()} sx={{ color: "text.secondary", py: 1, minHeight: 42, textTransform: "none" }}>
-            摄像头{cameraOn ? "开启" : "关闭"}
+          <Button fullWidth color="inherit" startIcon={cameraOn ? <VideocamIcon /> : <VideocamOffIcon />} onClick={() => void toggleCamera()} sx={{ minWidth: 0, color: "text.secondary", py: 1, minHeight: 42, textTransform: "none", lineHeight: 1.2 }}>
+            {cameraOn ? t("meeting.prejoinVideoOn", "摄像头开启") : t("meeting.prejoinVideoOff", "摄像头关闭")}
           </Button>
         </Stack>
       )}
@@ -329,12 +335,12 @@ export default function MeetingPrejoinPreview({ compact = false, isHost = false 
       {compact && (
         <Stack direction="row" alignItems="center" spacing={0.75} sx={{ minHeight: 16, mt: 0.75 }}>
           <SecurityRoundedIcon sx={{ fontSize: 15, color: "text.disabled" }} />
-          <Typography variant="caption" color="text.secondary" sx={{ fontSize: "0.68rem", lineHeight: 1.15 }}>开始会议前，音视频不会传给其他人</Typography>
+          <Typography variant="caption" color="text.secondary" sx={{ fontSize: "0.68rem", lineHeight: 1.25 }}>{t("meeting.prejoinPrivacy", "入会前，音视频不会传给其他人。")}</Typography>
         </Stack>
       )}
 
-      <Typography aria-live="polite" sx={{ height: error ? 22 : 0, color: "error.main", fontSize: "0.72rem", lineHeight: 1.4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", visibility: error ? "visible" : "hidden" }}>
-        {error || "—"}
+      <Typography aria-live="polite" sx={{ display: error ? "block" : "none", color: "error.main", fontSize: "0.72rem", lineHeight: 1.4, overflowWrap: "anywhere" }}>
+        {errorText}
       </Typography>
     </Stack>
   );

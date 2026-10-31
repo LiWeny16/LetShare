@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { chromium, type Page } from "playwright";
 
-const SITE = "http://localhost:5173";
+const SITE = process.env.E2E_SITE ?? "http://localhost:5173";
 const WS = process.env.E2E_WS ?? "ws://localhost:8080/";
 const SOURCE_ROOM = "e2ebreak1";
 const TOKEN = createHash("sha256").update("sever_auth_123").digest("hex");
@@ -95,17 +95,17 @@ test("host breakout assignment and recall are real isolated UI flows", async (t)
   }
   await until("guest in meeting", async () =>
     (await guest.evaluate(() => (window as any).__meeting?.getState()?.stage)) === "in-meeting");
-  assert.equal(await guest.getByRole("button", { name: /分组讨论/ }).count(), 0, "non-host must not see breakout control");
-
-  await host.getByRole("button", { name: /分组讨论/ }).click();
-  const dialog = host.getByRole("dialog");
-  await dialog.getByRole("button", { name: /开始分组/ }).click();
+  await guest.getByRole("tab", { name: /成员|Members/ }).click();
+  await host.getByRole("tab", { name: /成员|Members/ }).click();
+  const groups = host.getByTestId("meeting-breakout-rooms");
+  const guestGroups = guest.getByTestId("meeting-breakout-rooms");
+  assert.equal(await guestGroups.getByRole("button", { name: /新建房间|New room/ }).count(), 0, "non-host must not create rooms");
+  await groups.getByRole("button", { name: /新建房间|New room/ }).click();
+  await guestGroups.getByRole("button", { name: /加入房间|Join room/ }).click();
   await until("guest enters child breakout", async () =>
     (await guest.evaluate(() => (window as any).__meeting?.getState()?.roomId)) === `${meetingId}B1`);
   assert.equal(await host.evaluate(() => (window as any).__meeting?.getState()?.roomId), meetingId, "host remains in main meeting");
-  await host.getByRole("button", { name: /召集回归|召回/ }).waitFor({ state: "visible" });
-
-  await host.getByRole("button", { name: /召集回归|召回/ }).click();
+  await groups.getByRole("button", { name: /召回所有成员|Bring everyone back/ }).click();
   await until("guest returns to main meeting", async () =>
     (await guest.evaluate(() => (window as any).__meeting?.getState()?.roomId)) === meetingId);
   await until("guest remains connected after recall", async () =>

@@ -1,3 +1,4 @@
+import { MeetingDialog as Dialog } from "./MeetingDialog";
 /**
  * IncomingMeetingInviteDialog — 被邀请方来电式弹窗（全局自挂载）。
  *
@@ -15,7 +16,6 @@ import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   Box,
-  Dialog,
   DialogContent,
   DialogTitle,
   IconButton,

@@ -54,7 +54,7 @@ export function ensureMeetingMinutesSession(roomId: string, title: string): Meet
     current = newSession(roomId, title);
     finalizationPromise = null;
     emit();
-  } else if (title.trim() && current.title === "未命名会议") {
+  } else if (title.trim() && current.title !== title.trim()) {
     current = { ...current, title: title.trim() };
     emit();
   }
