@@ -17,15 +17,11 @@ test("server priority sends through public relay without silently falling back t
   const clickHandlerStart = shareSource.indexOf("const handleClickOtherClients");
   assert.notEqual(clickHandlerStart, -1, "click-to-send handler should exist");
 
-  const serverBranchStart = shareSource.indexOf("if (transferPriority === 'server') {", clickHandlerStart);
-  assert.notEqual(serverBranchStart, -1, "server-priority branch should exist");
-
-  const serverBranchEnd = shareSource.indexOf("} else {", serverBranchStart);
-  assert.notEqual(serverBranchEnd, -1, "server-priority branch should end before the p2p-priority branch");
-
-  const serverBranch = shareSource.slice(serverBranchStart, serverBranchEnd);
-  assert.match(serverBranch, /await realTimeColab\.sendFileAuto\(targetUserId, selectedFile\);/);
-  assert.doesNotMatch(serverBranch, /await realTimeColab\.sendFileToUser\(targetUserId, selectedFile\);/);
+  const clickHandlerEnd = shareSource.indexOf("useEffect(() => {", clickHandlerStart);
+  const clickHandler = shareSource.slice(clickHandlerStart, clickHandlerEnd);
+  assert.match(clickHandler, /await realTimeColab\.sendFileAuto\(targetUserId, payload\);/);
+  assert.doesNotMatch(clickHandler, /await realTimeColab\.sendFileToUser\(/);
+  assert.match(colabLibSource, /const preferServer = settingsStore\.get\('transferPriority'\) === 'server'/);
   assert.match(colabLibSource, /if \(preferServer \|\| !this\.canSendFileToUser\(id\)\)\s*\{\s*await this\.sendFileViaServer\(id, file, undefined, fileKey\)/);
   assert.match(colabLibSource, /startSendIfReady\(id, file, preferServer, v2Context\)/);
 });
@@ -49,7 +45,7 @@ test("p2p priority still advertises explicit server fallback when direct transfe
   assert.match(branch, /getConnectionType\(\) === "custom"/);
 
   const clickHandlerStart = shareSource.indexOf("const handleClickOtherClients");
-  const p2pBranchStart = shareSource.indexOf("sendFileAuto(targetUserId, selectedFile)", clickHandlerStart);
+  const p2pBranchStart = shareSource.indexOf("sendFileAuto(targetUserId, payload)", clickHandlerStart);
   assert.notEqual(p2pBranchStart, -1, "share click path should use the unified send entry");
 });
 

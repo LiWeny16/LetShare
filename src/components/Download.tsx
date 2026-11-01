@@ -35,6 +35,8 @@ import PlayArrowIcon from "@mui/icons-material/PlayArrow";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
 import KeyboardArrowUpIcon from "@mui/icons-material/KeyboardArrowUp";
+import ChevronLeftIcon from "@mui/icons-material/ChevronLeft";
+import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 import { buttonStyleNormal } from "../pages/share";
 import React from "react";
 import ChatIntegration from "@App/libs/chat/ChatIntegration";
@@ -60,7 +62,7 @@ import type { FileTransferV2Snapshot } from "@App/libs/connection/fileTransferV2
 import type { FileTransferV2Task, FileTransferV2TaskStatus } from "@App/libs/connection/fileTransferV2/store";
 import { shouldShowV2TaskInActiveList } from "@App/libs/connection/fileTransferV2/presentation";
 import { shouldStartPersistedFileHydration, type PersistedFileHydrationState } from "@App/libs/connection/fileHydrationPolicy";
-import { createUniqueArchiveEntryNames, receivedFileMapKey } from "@App/libs/chat/receivedFilePresentation";
+import { createUniqueArchiveEntryNames, receivedAlbumKey, receivedFileMapKey } from "@App/libs/chat/receivedFilePresentation";
 import FilePreviewDialog from './FilePreviewDialog';
 
 // 图片扩展名列表（小写）
@@ -304,6 +306,9 @@ export default function DownloadDrawerSlide({
   // 全屏预览状态：存储懒加载的 object URL 和对应的 File
   const [previewUrl, setPreviewUrl] = React.useState<string | null>(null);
   const [previewFile, setPreviewFile] = React.useState<File | null>(null);
+  const [previewGroup, setPreviewGroup] = React.useState<File[]>([]);
+  const touchStart = React.useRef<{ x: number; y: number } | null>(null);
+  const [previewFailed, setPreviewFailed] = React.useState(false);
   const [pendingBrowserDownload, setPendingBrowserDownload] = React.useState<PendingBrowserDownload | null>(null);
   const [browserDownloadNotice, setBrowserDownloadNotice] = React.useState<string | null>(null);
   const [nonImagePreview, setNonImagePreview] = React.useState<{
@@ -1067,15 +1072,16 @@ export default function DownloadDrawerSlide({
       getDeviceType()
     );
     if (!previewGuard.allowed) {
-      alertUseMUI(
-        `${file.name} 较大（${formatSize(file.size)}），为避免浏览器解码原图时崩溃，已跳过预览。当前设备安全预览上限：${formatSize(previewGuard.maxBytes)}，可点下载按钮保存原图。`,
-        6000,
-        { kind: "warning" }
-      );
+      if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
+      previewUrlRef.current = null;
+      setPreviewUrl(null);
+      setPreviewFile(file);
+      setPreviewFailed(true);
       return;
     }
 
     const url = URL.createObjectURL(file);
+    setPreviewFailed(false);
     setPreviewFile(file);
     setPreviewUrl((currentUrl) => {
       const nextUrl = replaceObjectUrl(currentUrl, url);
@@ -1091,6 +1097,24 @@ export default function DownloadDrawerSlide({
     }
     setPreviewUrl(null);
     setPreviewFile(null);
+    setPreviewGroup([]);
+  };
+
+  const openImageGroup = (key: string, file: File) => {
+    // Archive child keys carry the original transfer key; unrelated or legacy
+    // files without that identity remain single-image previews.
+    const prefix = receivedAlbumKey(key);
+    const group = prefix
+      ? receivedList.filter(([candidate, item]) => candidate.startsWith(prefix) && isImageFile(item.name)).map(([, item]) => item)
+      : [file];
+    setPreviewGroup(group);
+    openPreview(file);
+  };
+
+  const previewIndex = previewFile ? previewGroup.indexOf(previewFile) : -1;
+  const movePreview = (delta: number) => {
+    const next = previewGroup[previewIndex + delta];
+    if (next) openPreview(next);
   };
 
   const openNonImagePreview = React.useCallback((file: File) => {
@@ -2317,6 +2341,12 @@ export default function DownloadDrawerSlide({
                         const allSelected = group.files.every(({ key }) => selectedFiles.has(key));
                         const someSelected = group.files.some(({ key }) => selectedFiles.has(key));
                         const totalSize = group.files.reduce((sum, { file }) => sum + file.size, 0);
+                        const imageBatches = new Map<string, Array<{ key: string; file: File }>>();
+                        for (const item of group.files) {
+                          const batch = receivedAlbumKey(item.key);
+                          if (!batch || !isImageFile(item.file.name)) continue;
+                          imageBatches.set(batch, [...(imageBatches.get(batch) ?? []), item]);
+                        }
 
                         return (
                           <Box
@@ -2402,6 +2432,15 @@ export default function DownloadDrawerSlide({
                             {/* 文件列表（可折叠） */}
                             <Collapse in={isExpanded}>
                               <Box sx={{ display: "flex", flexDirection: "column" }}>
+                                {Array.from(imageBatches.entries()).filter(([, images]) => images.length > 1).map(([batch, images]) => (
+                                  <Box key={batch} sx={{ display: "flex", alignItems: "center", gap: 1, p: 1.5, borderBottom: `1px solid ${theme.palette.divider}` }}>
+                                    <Box component="button" type="button" onClick={() => openImageGroup(images[0].key, images[0].file)} aria-label={isChinese ? `预览组图，${images.length} 张图片` : `Preview album, ${images.length} images`} sx={{ display: "flex", gap: 0.5, p: 0, border: 0, bgcolor: "transparent", cursor: "pointer" }}>
+                                      {images.slice(0, 3).map(({ key, file }) => thumbnails.get(key) ? <Box key={key} component="img" src={thumbnails.get(key)} alt="" sx={{ width: 44, height: 44, objectFit: "cover", borderRadius: 1 }} /> : <Box key={key} sx={{ width: 44, height: 44, display: "grid", placeItems: "center", bgcolor: "action.hover", borderRadius: 1 }}><ImageIcon titleAccess={file.name} /></Box>)}
+                                    </Box>
+                                    <Box sx={{ flex: 1, minWidth: 0 }}><Typography variant="body2" fontWeight={600}>{isChinese ? "组图" : "Album"}</Typography><Typography variant="caption" color="text.secondary">{isChinese ? `${images.length} 张图片` : `${images.length} images`}</Typography></Box>
+                                    <Button size="small" onClick={() => void buildZipAndDownload(images.map(({ file }) => file))} startIcon={<DownloadIcon />} sx={{ minHeight: 40, whiteSpace: "nowrap" }}>{isChinese ? "下载" : "Download"}</Button>
+                                  </Box>
+                                ))}
                                 {group.files.map(({ key, file }) => {
                                   const isImg = isImageFile(file.name);
                                   const thumbUrl = thumbnails.get(key);
@@ -2434,7 +2473,7 @@ export default function DownloadDrawerSlide({
                                           return;
                                         }
                                         if (isImg) {
-                                          openPreview(file);
+                                          openImageGroup(key, file);
                                         } else {
                                           const cat = categorizeFile(file.name, file.type);
                                           if (['video', 'pdf', 'document', 'code'].includes(cat)) {
@@ -2542,7 +2581,7 @@ export default function DownloadDrawerSlide({
                       })}
                     </Box>
 
-                    {/* 批量操作条（sticky 悬浮：折叠/滚动时始终可见，主色底随主题变化） */}
+                    {/* Only the actions float; the list remains visible between them. */}
                     {selectedFiles.size > 0 && (
                       <Box
                         sx={{
@@ -2553,15 +2592,12 @@ export default function DownloadDrawerSlide({
                           alignItems: "center",
                           justifyContent: "center",
                           gap: 1,
+                          flexWrap: "wrap",
                           px: 1,
                           py: 0.75,
                           mt: 2,
                           mb: -2.5,
-                          whiteSpace: "nowrap",
-                          overflow: "hidden",
-                          backgroundColor: theme.palette.primary.main,
-                          color: theme.palette.primary.contrastText,
-                          boxShadow: "0 -4px 12px rgba(0,0,0,0.15)",
+                          pointerEvents: "none",
                         }}
                       >
                         <Button
@@ -2571,7 +2607,9 @@ export default function DownloadDrawerSlide({
                           onClick={downloadSelectedAsZip}
                           sx={{
                             flexShrink: 0,
+                            pointerEvents: "auto",
                             minWidth: "auto",
+                            minHeight: 40,
                             whiteSpace: "nowrap",
                             backgroundColor: theme.palette.primary.contrastText,
                             color: theme.palette.primary.main,
@@ -2587,7 +2625,7 @@ export default function DownloadDrawerSlide({
                           color="error"
                           size="small"
                           onClick={deleteSelectedFiles}
-                          sx={{ flexShrink: 0, minWidth: "auto", whiteSpace: "nowrap" }}
+                          sx={{ flexShrink: 0, pointerEvents: "auto", minWidth: "auto", minHeight: 40, whiteSpace: "nowrap" }}
                         >
                           {t('download.deleteSelected')} ({selectedFiles.size})
                         </Button>
@@ -2653,9 +2691,14 @@ export default function DownloadDrawerSlide({
 
       {/* 全屏图片预览 Dialog（懒加载 object URL，关闭时立即 revoke） */}
       <Dialog
-        open={!!previewUrl}
+        open={!!previewFile}
         onClose={closePreview}
         maxWidth={false}
+        sx={{ zIndex: theme.zIndex.modal + 3 }}
+        onKeyDown={(event) => {
+          if (event.key === "ArrowLeft") { event.preventDefault(); movePreview(-1); }
+          if (event.key === "ArrowRight") { event.preventDefault(); movePreview(1); }
+        }}
         PaperProps={{
           sx: {
             backgroundColor: "rgba(0,0,0,0.85)",
@@ -2663,21 +2706,37 @@ export default function DownloadDrawerSlide({
             borderRadius: 2,
             overflow: "hidden",
             m: 1,
+            width: "min(92vw, 1100px)",
           },
         }}
       >
         <DialogContent
+          onTouchStart={(event) => {
+            const touch = event.touches[0];
+            touchStart.current = event.touches.length === 1 && touch ? { x: touch.clientX, y: touch.clientY } : null;
+          }}
+          onTouchEnd={(event) => {
+            const start = touchStart.current;
+            touchStart.current = null;
+            const end = event.changedTouches[0];
+            if (!start || !end) return;
+            const dx = end.clientX - start.x;
+            if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(end.clientY - start.y)) movePreview(dx < 0 ? 1 : -1);
+          }}
           sx={{
             p: 0,
             position: "relative",
             display: "flex",
             flexDirection: "column",
             alignItems: "center",
+            justifyContent: "center",
+            minHeight: 240,
           }}
         >
           {/* 关闭按钮 */}
           <IconButton
             onClick={closePreview}
+            aria-label={isChinese ? "关闭预览" : "Close preview"}
             size="small"
             sx={{
               position: "absolute",
@@ -2693,11 +2752,12 @@ export default function DownloadDrawerSlide({
           </IconButton>
 
           {/* 大图 */}
-          {previewUrl && (
+          {previewUrl && !previewFailed && (
             <Box
               component="img"
               src={previewUrl}
               alt={previewFile?.name ?? "preview"}
+              onError={() => setPreviewFailed(true)}
               sx={{
                 maxWidth: "90vw",
                 maxHeight: "80vh",
@@ -2705,6 +2765,14 @@ export default function DownloadDrawerSlide({
                 display: "block",
               }}
             />
+          )}
+          {previewFailed && <Typography sx={{ color: "white", p: 4 }}>{isChinese ? "无法预览此图片，请下载查看" : "Preview unavailable. Download to view."}</Typography>}
+          {previewGroup.length > 1 && (
+            <>
+              <IconButton aria-label={isChinese ? "上一张" : "Previous image"} disabled={previewIndex <= 0} onClick={() => movePreview(-1)} sx={{ position: "absolute", left: 8, top: "45%", color: "white", bgcolor: "rgba(0,0,0,.5)", width: 44, height: 44, "&.Mui-disabled": { opacity: 0.35, color: "white" } }}><ChevronLeftIcon /></IconButton>
+              <IconButton aria-label={isChinese ? "下一张" : "Next image"} disabled={previewIndex >= previewGroup.length - 1} onClick={() => movePreview(1)} sx={{ position: "absolute", right: 8, top: "45%", color: "white", bgcolor: "rgba(0,0,0,.5)", width: 44, height: 44, "&.Mui-disabled": { opacity: 0.35, color: "white" } }}><ChevronRightIcon /></IconButton>
+              <Typography aria-live="polite" sx={{ color: "white", pt: 1, fontVariantNumeric: "tabular-nums" }}>{previewIndex + 1} / {previewGroup.length}</Typography>
+            </>
           )}
 
           {/* 下载按钮 */}

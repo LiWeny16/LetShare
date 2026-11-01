@@ -36,6 +36,7 @@ import alertUseMUI from '@App/libs/tools/alert';
 import FileBubble from './FileBubble';
 import ImageBubble from './ImageBubble';
 import FilePreviewDialog from '../FilePreviewDialog';
+import { useFilePicker } from '../useFilePicker';
 import { EMOJI_LIST } from './emoji';
 import { ChatEmptyState } from './ChatEmptyState';
 import { chatComposerSendSx, chatComposerSurfaceSx } from './composerStyles';
@@ -177,6 +178,7 @@ class ChatPanelErrorBoundary extends React.Component<
 
 const ChatPanelContent: React.FC<ChatPanelProps> = ({ open, onClose, targetUserId, targetUserName, onVideoCall }) => {
     const { t, i18n } = useTranslation();
+    const filePicker = useFilePicker();
     const theme = useTheme();
     const [visible, setVisible] = useState(open);
     const [inputValue, setInputValue] = useState('');
@@ -994,6 +996,7 @@ const ChatPanelContent: React.FC<ChatPanelProps> = ({ open, onClose, targetUserI
                                         {transferNotice}
                                     </Typography>
                                 )}
+                                {filePicker.opening && <Typography role="status" variant="caption" color="text.secondary">{i18n.language?.startsWith('zh') ? '正在打开文件选择器…' : 'Opening file picker…'}</Typography>}
                                 {plusPanelOpen && (
                                     <Box
                                         sx={{
@@ -1007,9 +1010,9 @@ const ChatPanelContent: React.FC<ChatPanelProps> = ({ open, onClose, targetUserI
                                         }}
                                     >
                                         {[
-                                            { key: 'folder', icon: <FolderIcon sx={{ fontSize: 26 }} />, label: t('chat.menuFolder', '文件夹'), action: () => { blurTrigger2(); setTimeout(() => folderInputRef.current?.click(), 0); } },
-                                            {key: 'file', icon: <AttachFileIcon sx={{ fontSize: 26 }} />, label: t('chat.menuFile', '文件'), action: () => { blurTrigger2(); setTimeout(() => fileInputRef.current?.click(), 0); } },
-                                            { key: 'image', icon: <ImageIcon sx={{ fontSize: 26 }} />, label: t('chat.menuImage', '图片'), action: () => { blurTrigger2(); setTimeout(() => imageInputRef.current?.click(), 0); } },
+                                            { key: 'folder', icon: <FolderIcon sx={{ fontSize: 26 }} />, label: t('chat.menuFolder', '文件夹'), action: () => { blurTrigger2(); filePicker.open(folderInputRef.current); } },
+                                            {key: 'file', icon: <AttachFileIcon sx={{ fontSize: 26 }} />, label: t('chat.menuFile', '文件'), action: () => { blurTrigger2(); filePicker.open(fileInputRef.current); } },
+                                            { key: 'image', icon: <ImageIcon sx={{ fontSize: 26 }} />, label: t('chat.menuImage', '图片'), action: () => { blurTrigger2(); filePicker.open(imageInputRef.current); } },
                                             { key: 'clipboard', icon: <ContentPasteIcon sx={{ fontSize: 26 }} />, label: t('chat.menuClipboard', '剪贴板'), action: () => void handleSendClipboard() },
                                             { key: 'redpacket', icon: <RedeemIcon sx={{ fontSize: 26, color: '#e64340' }} />, label: t('chat.menuRedpacket', '红包'), action: () => setRedPacketDraft({ amount: 8.88, message: t('chat.redpacketDefaultMsg', '恭喜发财，大吉大利') }) },
                                             { key: 'video', icon: <VideocamIcon sx={{ fontSize: 26 }} />, label: t('chat.menuVideo', '视频通话'), action: () => { setPlusPanelOpen(false); onVideoCall?.(); } },
@@ -1018,6 +1021,7 @@ const ChatPanelContent: React.FC<ChatPanelProps> = ({ open, onClose, targetUserI
                                                 component="button"
                                                 type="button"
                                                 key={item.key}
+                                                disabled={filePicker.opening && ['folder', 'file', 'image'].includes(item.key)}
                                                 onClick={item.action}
                                                 sx={{
                                                     display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0.5,

@@ -23,7 +23,7 @@ test("chat panel blurs icon triggers before opening portal UI", () => {
 
   assert.match(
     source,
-    /icon:\s*<AttachFileIcon\b[^>]*\/>,[\s\S]*?action:\s*\(\)\s*=>\s*\{\s*blurTrigger2\(\);\s*setTimeout\(\(\)\s*=>\s*fileInputRef\.current\?\.click\(\)/,
+    /icon:\s*<AttachFileIcon\b[^>]*\/>,[\s\S]*?action:\s*\(\)\s*=>\s*\{\s*blurTrigger2\(\);\s*filePicker\.open\(fileInputRef\.current\)/,
     "file picker trigger should blur before opening follow-up modal flows"
   );
 });

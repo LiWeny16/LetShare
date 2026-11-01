@@ -200,6 +200,7 @@ const FilePreviewDialog: React.FC<FilePreviewDialogProps> = ({
       open={open}
       onClose={handleClose}
       maxWidth={false}
+      sx={{ zIndex: (theme) => theme.zIndex.modal + 3 }}
       PaperProps={{
         sx: {
           bgcolor: 'background.paper',

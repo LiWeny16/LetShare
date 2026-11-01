@@ -94,6 +94,8 @@ const sharedMalayTranslation = {
         },
         // download
         transfer: {
+            preparingSelection: "Menyediakan fail",
+            preparingFiles: "Menyediakan fail untuk dihantar",
             sending: "Menghantar fail kepada <strong>{{name}}</strong>",
             receiving: "Menerima fail dari <strong>{{name}}</strong>: {{filename}}",
             byte: "bait",
@@ -450,6 +452,8 @@ export const resources = {
             },
             // Download.tsx
             transfer: {
+                preparingSelection: "Preparing files",
+                preparingFiles: "Preparing files to send",
                 sending: "Sending file to <strong>{{name}}</strong>",
                 receiving: "Receiving file from <strong>{{name}}</strong>: {{filename}}",
                 byte: "byte",
@@ -868,6 +872,8 @@ export const resources = {
             },
             // Download
             transfer: {
+                preparingSelection: "正在准备文件",
+                preparingFiles: "正在准备文件，即将发送",
                 sending: "正在发送文件给 <strong>{{name}}</strong>",
                 receiving: "正在接收来自 <strong>{{name}}</strong> 的文件：{{filename}}",
                 byte: "字节",

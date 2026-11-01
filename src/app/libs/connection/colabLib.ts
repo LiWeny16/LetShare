@@ -4455,13 +4455,6 @@ export class RealTimeColab {
       user.lastSeen = Date.now();
       this.userList.set(id, user);
       console.debug(` User ${id} switched to text-only due to timeout`);
-      if (!this.isMeetingPage()) {
-       alertUseMUI(t("alert.p2pTimeout", { name: id.split(":")[0] }), 2000, { kind: "warning" });
-       // 海外后端额外提示：Ably 不支持服务器中转大文件，需 P2P 直连
-       if (this.connectionManager.getConnectionType() === "ably") {
-        alertUseMUI(t("alert.p2pOnlyOverseas"), 4000, { kind: "warning" });
-       }
-      }
      }
 
      this.updateUI();

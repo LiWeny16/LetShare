@@ -8,6 +8,14 @@ export function receivedFileChildMapKey(parentKey: string, entryName: string): s
   return `${parentKey}::${entryName}`;
 }
 
+/** An extracted archive entry has an additional path component; plain files do not. */
+export function receivedAlbumKey(key: string): string | null {
+  const first = key.indexOf("::");
+  if (first < 0) return null;
+  const second = key.indexOf("::", first + 2);
+  return second < 0 ? null : key.slice(0, second + 2);
+}
+
 /** Keeps every selected file when an archive contains duplicate filenames. */
 export function createUniqueArchiveEntryNames(fileNames: string[]): string[] {
   const used = new Set<string>();

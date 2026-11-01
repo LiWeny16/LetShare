@@ -24,6 +24,8 @@ import {
   Divider,
   Badge,
   CircularProgress,
+  Snackbar,
+  Alert,
   TextField,
   Fab,
   Fade,
@@ -47,6 +49,7 @@ import AlertPortal from "../components/Alert";
 import { Footer } from "../components/Footer";
 import EditableUserId from "../components/UserId";
 import DownloadDrawer from "../components/Download";
+import { useFilePicker } from "../components/useFilePicker";
 import MeetingPrejoinPreview from "../components/meeting/components/MeetingPrejoinPreview";
 import MeetingCreateDialog from "../components/meeting/components/MeetingCreateDialog";
 import MeetingMinutesHistoryDialog from "../components/meeting/components/MeetingMinutesHistoryDialog";
@@ -239,7 +242,8 @@ export const buttonStyleNormal = {
 
 
 const Share = observer(() => {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const filePicker = useFilePicker();
   const theme = useTheme();
   // 父组件
   const [msgFromSharing, setMsgFromSharing] = useState<string | null>(null);
@@ -255,11 +259,16 @@ const Share = observer(() => {
   const [isPreparingSelectedFile, setIsPreparingSelectedFile] = useState(false);
   const selectedFileBuildIdRef = useRef(0);
   const isPreparingSelectedFileRef = useRef(false);
+  const selectedFileBuildRef = useRef<Promise<TransferBundleResult | null> | null>(null);
+  const pendingSendIdRef = useRef(0);
+  const pendingSendRef = useRef(false);
+  const [pendingSendTarget, setPendingSendTarget] = useState<string | null>(null);
   const [selectedText, setSelectedText] = useState<string | null>(null);
   const [textInputDialogOpen, setTextInputDialogOpen] = useState(false);
   const [textInput, setTextInput] = useState("");
   const [fileTransferProgress, setFileTransferProgress] = useState<number | null>(null);
   const [downloadPageState, setDwnloadPageState] = useState(false);
+  const [receivedNotice, setReceivedNotice] = useState<{ from: string; fileName: string; storageMode?: "direct-to-disk" } | null>(null);
   const [isDraggingOver, setIsDraggingOver] = React.useState(false);
   const [fileSendingTargetUser, setFileSendingTargetUser] = React.useState("");
   // 右键“发送文件”后，文件选择器完成选择即发送给这个用户。
@@ -267,6 +276,12 @@ const Share = observer(() => {
   // 拖拽即传：悬停的用户卡片 + 待发区 chip 拖拽的原始文件
   const [dragOverUserId, setDragOverUserId] = React.useState<string | null>(null);
   const chipDragPayloadRef = React.useRef<File[] | null>(null);
+
+  useEffect(() => {
+    const onReceived = (event: { from: string; fileName: string; storageMode?: "direct-to-disk" }) => setReceivedNotice(event);
+    realTimeColab.emitter.on("file-received", onReceived);
+    return () => { realTimeColab.emitter.off("file-received", onReceived); };
+  }, []);
 
   // ── 通话（语音/视频）状态与 CallManager 集成 — 纯增量，不影响现有功能 ──
   const [incomingCall, setIncomingCall] = React.useState<IncomingCallInfo | null>(null);
@@ -300,6 +315,10 @@ const Share = observer(() => {
 
   const clearSelectedFiles = () => {
     selectedFileBuildIdRef.current += 1;
+    pendingSendIdRef.current += 1;
+    pendingSendRef.current = false;
+    selectedFileBuildRef.current = null;
+    setPendingSendTarget(null);
     isPreparingSelectedFileRef.current = false;
     setSelectedFiles([]);
     setSelectedFile(null);
@@ -1334,9 +1353,7 @@ const Share = observer(() => {
     setFilePickerTargetUser(targetUserId);
     const input = document.getElementById("multi-file-input") as HTMLInputElement | null;
     if (!input) return;
-    input.value = "";
-    // 让右键菜单先完成关闭，避免浏览器把文件选择器视为菜单的副作用。
-    window.setTimeout(() => input.click(), 0);
+    filePicker.open(input);
   };
 
   const copyUserId = async (user: ConnectedUser) => {
@@ -1410,6 +1427,9 @@ const Share = observer(() => {
   }
   const applyFileSelection = async (fileList: File[], isImg?: boolean) => {
     if (!fileList || fileList.length === 0) return;
+    pendingSendIdRef.current += 1;
+    pendingSendRef.current = false;
+    setPendingSendTarget(null);
     // 不允许空文件传输：过滤 0 字节文件
     const files = fileList.filter(f => f.size > 0);
     if (files.length === 0) {
@@ -1427,7 +1447,9 @@ const Share = observer(() => {
     }
     // Always keep original file list for display
     setSelectedFiles(files);
-    const bundle = await prepareSelectedFilePayload(files);
+    const build = prepareSelectedFilePayload(files);
+    selectedFileBuildRef.current = build;
+    const bundle = await build;
     if (files.length > 1 && bundle) {
       realTimeColab.addTransferRecord("pasted-files", `${bundle.includedFileCount} files`, files.map(f => f.name).join(", "));
     }
@@ -1461,29 +1483,25 @@ const Share = observer(() => {
         return;
       }
 
-      if ((selectedButton === "file" || selectedButton === "image")
-        && (isPreparingSelectedFile || isPreparingSelectedFileRef.current)) {
-        alertUseMUI("文件正在准备，请稍候", 2000, { kind: "info" });
-        return;
-      }
-
-      if ((selectedButton === "file" || selectedButton === "image") && selectedFile) {
+      if ((selectedButton === "file" || selectedButton === "image") && selectedFiles.length > 0) {
+        if (pendingSendRef.current) return;
         if (realTimeColab.isSendingFile) {
           alertUseMUI(t('toast.taskInProgress'), 2000, { kind: "info" });
           setDwnloadPageState(true);
           return;
         }
 
-        const transferPriority = settingsStore.get('transferPriority') as 'p2p' | 'server';
-
-        if (transferPriority === 'server') {
-          // 用户偏好：优先公网传输
-          console.log(" 用户偏好公网传输，使用服务器转发文件");
-          await realTimeColab.sendFileAuto(targetUserId, selectedFile);
-        } else {
-          // 3.8.2 统一发送入口：probe 验证后走 P2P；探针失败/ACK 卡死自动切公网 relay
-          await realTimeColab.sendFileAuto(targetUserId, selectedFile);
-        }
+        const sendId = ++pendingSendIdRef.current;
+        pendingSendRef.current = true;
+        setPendingSendTarget(targetUserId);
+        const build = selectedFileBuildRef.current;
+        const bundle = build ? await build : null;
+        if (pendingSendIdRef.current !== sendId) return;
+        pendingSendRef.current = false;
+        setPendingSendTarget(null);
+        const payload = build ? bundle?.file : selectedFile;
+        if (!payload) return;
+        await realTimeColab.sendFileAuto(targetUserId, payload);
       } else if (selectedButton === "text" && selectedText) {
         await realTimeColab.sendMessageToUser(targetUserId, selectedText);
       } else if (selectedButton === "clip") {
@@ -1735,15 +1753,11 @@ const Share = observer(() => {
                 variant="outlined"
                 sx={buttonStyleNormal}
                 startIcon={<FileIcon />}
-                disabled={!canSendFile}
+                disabled={!canSendFile || filePicker.opening}
                 onClick={() => {
                   setFilePickerTargetUser(null);
                   const input = document.getElementById("multi-file-input") as HTMLInputElement;
-                  if (input) {
-                    input.value = "";
-                    // setTimeout 避免 MUI 内部事件链阻塞 Chrome 弹出文件对话框
-                    setTimeout(() => input.click(), 0);
-                  }
+                  filePicker.open(input);
                 }}
               >
                 {t('button.file')}
@@ -1768,15 +1782,11 @@ const Share = observer(() => {
                 variant="outlined"
                 sx={buttonStyleNormal}
                 startIcon={<ImageIcon />}
-                disabled={!canSendFile}
+                disabled={!canSendFile || filePicker.opening}
                 onClick={() => {
                   setFilePickerTargetUser(null);
                   const input = document.getElementById("image-input") as HTMLInputElement;
-                  if (input) {
-                    input.value = "";
-                    // setTimeout 避免 MUI 内部事件链阻塞 Chrome 弹出文件对话框
-                    setTimeout(() => input.click(), 0);
-                  }
+                  filePicker.open(input);
                 }}
               >
                 {t('button.image')}
@@ -1843,6 +1853,8 @@ const Share = observer(() => {
             </Badge>
           </Box>
 
+          {filePicker.opening && <Typography role="status" variant="caption" color="text.secondary">{i18n.language?.startsWith("zh") ? "正在打开文件选择器…" : "Opening file picker…"}</Typography>}
+
           {/* 选中文件紧凑单行展示（所有类型统一 chip/icon/name，超出 +N） */}
           {selectedFiles.length > 0 && (
             <Box
@@ -1855,26 +1867,26 @@ const Share = observer(() => {
               <SelectedFileStrip
                 files={selectedFiles}
                 onRemove={(index) => {
+                  pendingSendIdRef.current += 1;
+                  pendingSendRef.current = false;
+                  setPendingSendTarget(null);
                   const next = selectedFiles.filter((_, i) => i !== index);
                   if (next.length === 0) {
                     clearSelectedFiles();
                   } else {
                     setSelectedFiles(next);
-                    // If the removed file was the single-file payload, rebuild zip
-                    if (next.length > 1) {
-                      import('jszip').then(({ default: JSZip }) => {
-                        const zip = new JSZip();
-                        next.forEach(f => zip.file(f.name, f));
-                        zip.generateAsync({ type: 'blob' }).then(content => {
-                          setSelectedFile(new File([content], `LetShare_${Date.now()}.zip`, { type: 'application/zip' }));
-                        });
-                      });
-                    } else {
-                      setSelectedFile(next[0]);
-                    }
+                    selectedFileBuildRef.current = prepareSelectedFilePayload(next);
                   }
                 }}
               />
+              {isPreparingSelectedFile && !pendingSendTarget && <Typography variant="caption" color="text.secondary">{t('transfer.preparingSelection', '正在准备文件')}</Typography>}
+              {pendingSendTarget && (
+                <Box role="status" sx={{ mt: 1, display: "flex", alignItems: "center", gap: 1 }}>
+                  <CircularProgress size={16} />
+                  <Typography variant="body2">{t('transfer.preparingFiles', '正在准备文件，即将发送')}</Typography>
+                  <Button size="small" onClick={() => { pendingSendIdRef.current += 1; pendingSendRef.current = false; setPendingSendTarget(null); }}>{t('button.cancel', '取消')}</Button>
+                </Box>
+              )}
             </Box>
           )}
 
@@ -2745,6 +2757,12 @@ const Share = observer(() => {
         onClose={() => { setDwnloadPageState(false) }}
         open={downloadPageState} progress={fileTransferProgress}
         setProgress={setFileTransferProgress} />
+
+      <Snackbar open={!!receivedNotice} autoHideDuration={8000} onClose={() => setReceivedNotice(null)}>
+        <Alert severity="success" onClose={() => setReceivedNotice(null)} action={receivedNotice?.storageMode === "direct-to-disk" ? undefined : <Button color="inherit" size="small" onClick={() => { setReceivedNotice(null); setDwnloadPageState(true); }}>{i18n.language?.startsWith("zh") ? "查看" : "View"}</Button>}>
+          {receivedNotice && `${receivedNotice.from.split(":")[0]} · ${receivedNotice.fileName} · ${receivedNotice.storageMode === "direct-to-disk" ? (i18n.language?.startsWith("zh") ? "已保存到磁盘" : "Saved to disk") : (i18n.language?.startsWith("zh") ? "接收完成" : "Received")}`}
+        </Alert>
+      </Snackbar>
 
       <MeetingMinutesHistoryDialog open={meetingHistoryOpen} onClose={() => setMeetingHistoryOpen(false)} />
 

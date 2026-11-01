@@ -8,6 +8,7 @@ import {
   createUniqueArchiveEntryNames,
   receivedFileChildMapKey,
   receivedFileMapKey,
+  receivedAlbumKey,
 } from "../src/app/libs/chat/receivedFilePresentation";
 import { findUploadingFileMessage } from "../src/app/libs/chat/fileMessageCorrelation";
 
@@ -63,6 +64,9 @@ describe("File Transfer V2 transfer UI (AC-001, AC-002, AC-003)", () => {
     const second = receivedFileChildMapKey("peer-1::filev2:second-transfer", "photo.jpg");
 
     assert.notEqual(first, second);
+    assert.notEqual(receivedAlbumKey(first), receivedAlbumKey(second));
+    assert.equal(receivedAlbumKey(first), receivedAlbumKey(receivedFileChildMapKey("peer-1::filev2:first-transfer", "other.jpg")));
+    assert.equal(receivedAlbumKey(receivedFileMapKey("peer-1", "legacy.jpg")), null);
   });
 
   it("gives duplicate filenames unique names in bulk-download archives", () => {
