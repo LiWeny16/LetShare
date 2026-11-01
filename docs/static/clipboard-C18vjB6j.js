@@ -1,0 +1,1 @@
+import{t as e}from"./share-DLxtmPES.js";export{e as readClipboard};

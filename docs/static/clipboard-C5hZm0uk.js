@@ -1,0 +1,1 @@
+import{t as e}from"./share-CuUspSyd.js";export{e as readClipboard};

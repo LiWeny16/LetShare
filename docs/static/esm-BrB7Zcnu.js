@@ -1,2 +1,0 @@
-const __vite__mapDeps=(i,m=__vite__mapDeps,d=(m.f||(m.f=["./web-CW20r6g-.js","./dist-xB0yPMaU.js"])))=>i.map(i=>d[i]);
-import{t as e}from"./index-B8HoFgo1.js";import{r as t}from"./dist-xB0yPMaU.js";var n;(function(e){e.SHOW=`onShow`,e.HIDE=`onHide`,e.COLOR_CHANGE=`onColorChange`})(n||(n={}));var r=t(`NavigationBar`,{web:()=>e(()=>import(`./web-CW20r6g-.js`).then(e=>new e.NavigationBarWeb),__vite__mapDeps([0,1]),import.meta.url)});export{r as NavigationBar};
