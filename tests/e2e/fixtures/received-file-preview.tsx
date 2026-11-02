@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { Button, CssBaseline, ThemeProvider, createTheme } from '@mui/material';
+import { Button, CssBaseline, ThemeProvider } from '@mui/material';
 import Download from '../../../src/components/Download';
 import FilePreviewDialog from '../../../src/components/FilePreviewDialog';
 import colab from '../../../src/app/libs/connection/colabLib';
@@ -8,6 +8,7 @@ import i18n from '../../../src/app/libs/i18n/i18n';
 import history from '../../../src/app/libs/chat/ChatHistoryManager';
 import blobs from '../../../src/app/libs/chat/FileBlobStore';
 import integration from '../../../src/app/libs/chat/ChatIntegration';
+import { themes } from '../../../src/components/Theme/themes';
 
 await i18n.changeLanguage('zh');
 const ids: Record<string, string> = {};
@@ -21,6 +22,7 @@ const entries = [
   ['same.svg', 'one/same.svg', 'image/svg+xml'],
   ['same.svg', 'two/same.svg', 'image/svg+xml'],
 ];
+if (new URLSearchParams(location.search).has('twoFiles')) entries.splice(2);
 for (let i = 0; i < entries.length; i++) {
   const [name, path, type] = entries[i];
   const contents = type === 'image/svg+xml'
@@ -36,9 +38,18 @@ for (let i = 0; i < entries.length; i++) {
   ids[path] = result.messageId!;
 }
 Date.now = oldNow;
-(window as any).__fixture = { colab, blobs, integration, ids };
+const fixture: Record<string, any> = { colab, blobs, integration, ids };
+if (new URLSearchParams(location.search).has('slowHydration')) {
+  let resume: () => void = () => {};
+  const ready = new Promise<void>(resolve => { resume = resolve; });
+  const original = integration.getAllFileMessages.bind(integration);
+  integration.getAllFileMessages = async () => { await ready; return original(); };
+  fixture.resumeHydration = resume;
+}
+(window as any).__fixture = fixture;
 document.body.innerHTML = '<div id="fixture"></div>';
-const mode = new URLSearchParams(location.search).get('theme') === 'dark' ? 'dark' : 'light';
+const requestedTheme = new URLSearchParams(location.search).get('theme');
+const mode = requestedTheme === 'dark' || requestedTheme === 'green' ? requestedTheme : 'light';
 function ChatPreviewFixture() {
   const [file, setFile] = useState<File | null>(null);
   const [open, setOpen] = useState(false);
@@ -50,7 +61,7 @@ function ChatPreviewFixture() {
   </>;
 }
 createRoot(document.getElementById('fixture')!).render(
-  <ThemeProvider theme={createTheme({ palette: { mode } })}>
+  <ThemeProvider theme={themes[mode]}>
     <CssBaseline />
     {new URLSearchParams(location.search).has('chat') ? <ChatPreviewFixture /> : <Download open progress={null} setProgress={() => {}} onClose={() => {}} />}
   </ThemeProvider>,

@@ -195,6 +195,7 @@ const sharedMalayTranslation = {
             startChat: "Mula bersembang",
         },
         download: {
+            restoringFiles: "Memulihkan fail yang diterima…", zoomIn: "Besarkan imej", zoomOut: "Kecilkan imej", resetZoom: "Muatkan imej",
             selectFile: "Pilih fail", previewFileGroup: "Pratonton kumpulan fail", previewSelectedCount: "{{total}} dipilih", previewWorking: "Sedang memproses", savePreparedFile: "Simpan fail", imagePreviewUnavailable: "Pratonton gambar tidak tersedia. Muat turun untuk melihatnya.", historyPagination: "Halaman fail daripada {{name}}", goToPage: "Pergi ke halaman {{page}}", previousPage: "Halaman sebelumnya", nextPage: "Halaman seterusnya",
             fileGroup: "Kumpulan fail", fileCount: "{{total}} fail", selectFileGroup: "Pilih kumpulan fail", downloadFileGroup: "Muat turun kumpulan fail", fileActions: "Tindakan untuk {{name}}", previewUnavailable: "Pratonton tidak tersedia", previousFile: "Sebelumnya", nextFile: "Seterusnya",
             deleteSelected: "Padam Dipilih",
@@ -562,6 +563,7 @@ export const resources = {
                 startChat: "Start chatting",
             },
             download: {
+                restoringFiles: "Restoring received files…", zoomIn: "Zoom in", zoomOut: "Zoom out", resetZoom: "Fit image",
                 selectFile: "Select file", previewFileGroup: "Preview file group", previewSelectedCount: "{{total}} selected", previewWorking: "Processing", savePreparedFile: "Save file", imagePreviewUnavailable: "Image preview unavailable. Download to view.", historyPagination: "File pages from {{name}}", goToPage: "Go to page {{page}}", previousPage: "Previous page", nextPage: "Next page",
                 fileGroup: "File group", fileCount: "{{total}} files", selectFileGroup: "Select file group", downloadFileGroup: "Download file group", fileActions: "Actions for {{name}}", previewUnavailable: "Preview not available", previousFile: "Previous", nextFile: "Next",
                 deleteSelected: "Delete Selected",
@@ -985,6 +987,7 @@ export const resources = {
                 startChat: "开始聊天",
             },
             download: {
+                restoringFiles: "正在恢复已接收文件…", zoomIn: "放大图片", zoomOut: "缩小图片", resetZoom: "适应窗口",
                 selectFile: "选择文件", previewFileGroup: "预览文件组", previewSelectedCount: "已选择 {{total}} 项", previewWorking: "处理中", savePreparedFile: "保存文件", imagePreviewUnavailable: "无法预览此图片，请下载查看。", historyPagination: "{{name}} 的文件分页", goToPage: "前往第 {{page}} 页", previousPage: "上一页", nextPage: "下一页",
                 fileGroup: "文件组", fileCount: "{{total}} 个文件", selectFileGroup: "选择文件组", downloadFileGroup: "下载文件组", fileActions: "{{name}} 的操作",
                 previewUnavailable: "暂不支持预览此文件",

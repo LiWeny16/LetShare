@@ -3,6 +3,7 @@ import {
   Box,
   Typography,
   LinearProgress,
+  CircularProgress,
   Slide,
   useTheme,
   Backdrop,
@@ -43,6 +44,7 @@ import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
 import KeyboardArrowUpIcon from "@mui/icons-material/KeyboardArrowUp";
 import { buttonStyleNormal } from "../pages/share";
 import React from "react";
+import { motion, useReducedMotion } from "motion/react";
 import ChatIntegration from "@App/libs/chat/ChatIntegration";
 import type { HistoryDeletionGeneration } from "@App/libs/chat/ChatIntegration";
 import FileBlobStore from "@App/libs/chat/FileBlobStore";
@@ -304,12 +306,13 @@ export default function DownloadDrawerSlide({
 }) {
   const { t, i18n } = useTranslation();
   const theme = useTheme();
+  const reduceMotion = useReducedMotion();
   const isChinese = (i18n.resolvedLanguage || i18n.language)?.toLowerCase().startsWith("zh") ?? true;
   const [visible, setVisible] = React.useState(open);
   const [drawerExpanded, setDrawerExpanded] = React.useState(false);
   const [, forceUpdate] = React.useReducer((x) => x + 1, 0);
   const [persistentFileCount, setPersistentFileCount] = React.useState(0);
-  const [isHydratingPersistedFiles, setIsHydratingPersistedFiles] = React.useState(false);
+  const [isHydratingPersistedFiles, setIsHydratingPersistedFiles] = React.useState(open);
   const [isClearingReceivedFiles, setIsClearingReceivedFiles] = React.useState(false);
   const clearReceivedFilesInFlightRef = React.useRef(false);
   const [fileTransferV2Snapshots, setFileTransferV2Snapshots] = React.useState<FileTransferV2Snapshot[]>([]);
@@ -2388,8 +2391,8 @@ export default function DownloadDrawerSlide({
                 )}
 
                 {/* 已接收文件展示 - 按用户分组 */}
-                {receivedList.length > 0 && (
-                  <Box>
+                {!isHydratingPersistedFiles && receivedList.length > 0 && (
+                  <motion.div data-testid="received-files-content" initial={reduceMotion ? false : { opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.2, ease: "easeOut" }}>
                     <Box
                       sx={{
                         display: "flex",
@@ -2824,16 +2827,14 @@ export default function DownloadDrawerSlide({
                         </Button>
                       </Box>
                     )}
-                  </Box>
+                  </motion.div>
                 )}
               </>
             )}
             {visible && isHydratingPersistedFiles && (
-              <Box sx={{ display: "flex", alignItems: "center", gap: 1, color: "text.secondary", py: 2 }}>
-                <LinearProgress sx={{ width: 64, flexShrink: 0 }} />
-                <Typography variant="body2">
-                  {isChinese ? "正在恢复已接收文件…" : "Restoring received files…"}
-                </Typography>
+              <Box role="status" data-testid="received-files-loading" sx={{ minHeight: 160, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 1.5, borderRadius: 2, bgcolor: "background.default", color: "text.secondary", px: 2 }}>
+                <CircularProgress size={28} thickness={4} aria-hidden="true" sx={{ "@media (prefers-reduced-motion: reduce)": { animation: "none", "& .MuiCircularProgress-circle": { animation: "none" } } }} />
+                <Typography variant="body2">{t('download.restoringFiles')}</Typography>
               </Box>
             )}
             {visible && !hasContent && !isHydratingPersistedFiles && (
