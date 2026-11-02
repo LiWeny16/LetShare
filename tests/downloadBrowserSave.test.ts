@@ -55,7 +55,7 @@ test("download drawer has a centered floating height toggle", () => {
   assert.match(downloadSource, /const \[drawerExpanded, setDrawerExpanded\] = React\.useState\(false\);/);
   assert.doesNotMatch(downloadSource, /height:\s*drawerExpanded \? "90vh" : "auto"/);
   assert.match(downloadSource, /minHeight:\s*drawerExpanded \? \{ xs: "calc\(100dvh - 56px\)", sm: "90vh" \} : 0/);
-  assert.match(downloadSource, /maxHeight:\s*drawerExpanded \? \{ xs: "calc\(100dvh - 56px\)", sm: "90vh" \} : 400/);
+  assert.match(downloadSource, /maxHeight:\s*drawerExpanded \? \{ xs: "calc\(100dvh - 56px\)", sm: "90vh" \} : 'min\(560px, calc\(100dvh - 56px\)\)'/);
   assert.match(downloadSource, /minHeight/);
   assert.match(downloadSource, /maxHeight/);
   assert.match(downloadSource, /left:\s*"50%"/);
@@ -84,8 +84,7 @@ test("download drawer closes when the dimmed backdrop is clicked", () => {
 test("download drawer keeps preview lifecycle independent from drawer backdrop", () => {
   assert.doesNotMatch(downloadSource, /isPreviewOpen/);
   assert.doesNotMatch(downloadSource, /onMouseDown=\{handleDrawerBackdropClick\}/);
-  assert.match(downloadSource, /setNonImagePreview\(null\)/);
-  assert.match(downloadSource, /setPreviewUrl\(null\)/);
+  assert.match(downloadSource, /onExited=\{\(\) => \{\s*if \(imagePreviewOpenRef\.current\) return;[\s\S]*?setPreviewUrl\(null\);[\s\S]*?setPreviewFile\(null\);/);
 });
 
 test("closing the drawer does not unmount the preview layer", () => {

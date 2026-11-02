@@ -121,7 +121,7 @@ test("server relay direct-to-disk writes chunks to the disk sink and avoids brow
     directBranch,
     /await completeAfterReceivePersistence\(\s*\(\) => session\.directSink!\.close\(\)/
   );
-  assert.match(directBranch, /this\.onFileSavedToDiskCallback\?\.\(session\.fileName,\s*session\.fileSize,\s*session\.fromUserId\)/);
+  assert.match(directBranch, /this\.onFileSavedToDiskCallback\?\.\(session\.fileName,\s*session\.fileSize,\s*session\.fromUserId,\s*session\.transferId\)/);
   assert.doesNotMatch(directBranch, /this\.onFileReceivedCallback/);
   assert.doesNotMatch(directBranch, /createCompletedTransferFile/);
   assert.doesNotMatch(directBranch, /new File/);

@@ -7,6 +7,8 @@ const filePreviewSource = readFileSync(
   join(process.cwd(), "src", "components", "FilePreviewDialog.tsx"),
   "utf8"
 );
+const previewContentSource = readFileSync(join(process.cwd(), "src", "components", "FilePreviewContent.tsx"), "utf8");
+const gallerySource = readFileSync(join(process.cwd(), "src", "components", "ImageGalleryDialog.tsx"), "utf8");
 
 const selectedFileStripSource = readFileSync(
   join(process.cwd(), "src", "components", "SelectedFileStrip.tsx"),
@@ -36,26 +38,26 @@ const shareSource = readFileSync(
 /* ── AC1: Chat file preview support ── */
 
 test("FilePreviewDialog renders video using native <video> element", () => {
-  assert.match(filePreviewSource, /<video\b/);
-  assert.match(filePreviewSource, /preload="metadata"/);
+  assert.match(previewContentSource, /<video\b/);
+  assert.match(previewContentSource, /preload="metadata"/);
 });
 
 test("FilePreviewDialog renders PDF using iframe with blob URL", () => {
-  assert.match(filePreviewSource, /<iframe\b/);
-  assert.match(filePreviewSource, /PDF preview/);
+  assert.match(previewContentSource, /<iframe\b/);
+  assert.match(previewContentSource, /PDF preview/);
 });
 
 test("FilePreviewDialog uses bounded text read for document and code previews", () => {
   // Must use slice with a bound before text()
-  assert.match(filePreviewSource, /slice\(\s*0\s*,\s*65536\s*\)/);
+  assert.match(previewContentSource, /slice\(\s*0\s*,\s*65536\s*\)/);
 });
 
 test("FilePreviewDialog does NOT use dangerouslySetInnerHTML for text preview", () => {
-  assert.doesNotMatch(filePreviewSource, /dangerouslySetInnerHTML/);
+  assert.doesNotMatch(previewContentSource, /dangerouslySetInnerHTML/);
 });
 
 test("FilePreviewDialog renders <pre> element for text content", () => {
-  assert.match(filePreviewSource, /component="pre"/);
+  assert.match(previewContentSource, /component="pre"/);
 });
 
 /* ── AC2: Object URL cleanup ── */
@@ -148,13 +150,14 @@ test("ChatPanel does not call useCallback inside renderMessage", () => {
 
 /* ── AC5: Download drawer adds non-image preview support ── */
 
-test("Download drawer imports categorizeFile for preview routing", () => {
+test("Received-file viewer uses file categories for preview routing", () => {
   // Check for import of categorizeFile
-  assert.match(downloadSource, /\bcategorizeFile\b/);
+  assert.match(gallerySource, /\bcategorizeFile\b/);
 });
 
-test("Download drawer imports FilePreviewDialog", () => {
-  assert.match(downloadSource, /\bFilePreviewDialog\b/);
+test("Received-file viewer shares the file preview content", () => {
+  assert.match(downloadSource, /\bImageGalleryDialog\b/);
+  assert.match(gallerySource, /\bFilePreviewContent\b/);
 });
 
 test("Download drawer opens received files for preview instead of downloading on row click", () => {

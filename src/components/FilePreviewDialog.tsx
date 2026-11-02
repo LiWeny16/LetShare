@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Dialog, DialogContent, IconButton, Typography, Box,
-  CircularProgress, Button,
+  Button,
 } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
 import DownloadIcon from '@mui/icons-material/Download';
-import InsertDriveFileIcon from '@mui/icons-material/InsertDriveFile';
 import { useTranslation } from 'react-i18next';
+import FilePreviewContent from './FilePreviewContent';
 
 interface FilePreviewDialogProps {
   file: File | null;
@@ -43,12 +43,7 @@ const FilePreviewDialog: React.FC<FilePreviewDialogProps> = ({
   onDownload,
 }) => {
   const { t } = useTranslation();
-  const isWordFile = /\.docx?$/i.test(fileName) || /^(application\/msword|application\/vnd\.openxmlformats-officedocument\.wordprocessingml\.document)$/i.test(mimeType);
-  const canReadText = !isWordFile && (fileCategory === 'code' || (fileCategory === 'document' && (/\.(txt|md|csv)$/i.test(fileName) || mimeType.startsWith('text/'))));
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
-  const [textContent, setTextContent] = useState<string | null>(null);
-  const [textLoading, setTextLoading] = useState(false);
-  const [textError, setTextError] = useState<string | null>(null);
   const objectUrlRef = useRef<string | null>(null);
 
   // Create object URL when open + file is provided
@@ -64,8 +59,6 @@ const FilePreviewDialog: React.FC<FilePreviewDialogProps> = ({
         objectUrlRef.current = null;
       }
       setBlobUrl(null);
-      setTextContent(null);
-      setTextError(null);
     }
 
     return () => {
@@ -76,34 +69,6 @@ const FilePreviewDialog: React.FC<FilePreviewDialogProps> = ({
     };
   }, [file]);
 
-  // Read text content for document/code categories
-  useEffect(() => {
-    if (!file || !blobUrl) return;
-
-    let cancelled = false;
-
-    if (canReadText) {
-      setTextLoading(true);
-      setTextError(null);
-      file.slice(0, 65536).text()
-        .then((text) => {
-          if (cancelled) return;
-          setTextContent(text);
-          setTextLoading(false);
-        })
-        .catch((err) => {
-          if (cancelled) return;
-          setTextError(err instanceof Error ? err.message : 'Failed to read file');
-          setTextLoading(false);
-        });
-    } else {
-      setTextContent(null);
-      setTextError(null);
-    }
-
-    return () => { cancelled = true; };
-  }, [file, blobUrl, canReadText]);
-
   const handleClose = useCallback(() => {
     onClose();
   }, [onClose]);
@@ -112,85 +77,6 @@ const FilePreviewDialog: React.FC<FilePreviewDialogProps> = ({
     if (onDownload) onDownload();
     else if (file) downloadBlob(file);
   }, [file, onDownload]);
-
-  const unavailablePreview = () => (
-    <Box sx={{ textAlign: 'center', py: 4, px: 2 }}>
-      <InsertDriveFileIcon sx={{ fontSize: 48, color: 'text.secondary' }} />
-      <Typography variant="body1" color="text.secondary">{t('download.previewUnavailable', { defaultValue: 'Preview not available' })}</Typography>
-      <Typography variant="caption" color="text.secondary">{fileName} · {file ? `${(file.size / 1024).toFixed(1)} KB` : ''}</Typography>
-    </Box>
-  );
-
-  const renderPreview = () => {
-    if (!file || !blobUrl) return null;
-
-    if (isWordFile || ((fileCategory === 'document' || fileCategory === 'code') && !canReadText)) return unavailablePreview();
-    switch (fileCategory) {
-      case 'video':
-        return (
-          <video controls playsInline preload="metadata" style={{ maxWidth: '100%', maxHeight: '70vh' }}>
-            <source src={blobUrl} type={mimeType} />
-          </video>
-        );
-
-      case 'pdf':
-        return (
-          <iframe
-            src={blobUrl}
-            style={{ width: '100%', height: '70vh', border: 'none' }}
-            title="PDF preview"
-          />
-        );
-
-      case 'document':
-      case 'code':
-        if (textLoading) {
-          return (
-            <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: 200 }}>
-              <CircularProgress />
-            </Box>
-          );
-        }
-        if (textError) {
-          return (
-            <Box sx={{ p: 2 }}>
-              <Typography color="error" variant="body2" sx={{ mb: 1 }}>
-                {textError}
-              </Typography>
-              <Button
-                variant="contained"
-                size="small"
-                startIcon={<DownloadIcon />}
-                onClick={handleDownload}
-              >
-                {fileName}
-              </Button>
-            </Box>
-          );
-        }
-        return (
-          <Box
-            component="pre"
-            sx={{
-              whiteSpace: 'pre-wrap',
-              overflow: 'auto',
-              maxHeight: '70vh',
-              p: 2,
-              fontFamily: 'monospace',
-              fontSize: '0.85rem',
-              m: 0,
-            }}
-          >
-            {textContent}
-          </Box>
-        );
-
-      case 'archive':
-      case 'other':
-      default:
-        return unavailablePreview();
-    }
-  };
 
   return (
     <Dialog
@@ -242,7 +128,7 @@ const FilePreviewDialog: React.FC<FilePreviewDialogProps> = ({
 
         {/* Preview content */}
         <Box sx={{ width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-          {renderPreview()}
+          <FilePreviewContent file={file} fileName={fileName} mimeType={mimeType} fileCategory={fileCategory} blobUrl={blobUrl} onDownload={handleDownload} />
         </Box>
 
         {(onPrevious || onNext) && <Box sx={{ display: 'flex', gap: 1 }}>
