@@ -1,0 +1,1 @@
+import{t as e}from"./share-Dax8G84l.js";export{e as readClipboard};
