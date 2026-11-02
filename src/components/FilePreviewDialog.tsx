@@ -5,6 +5,8 @@ import {
 } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
 import DownloadIcon from '@mui/icons-material/Download';
+import InsertDriveFileIcon from '@mui/icons-material/InsertDriveFile';
+import { useTranslation } from 'react-i18next';
 
 interface FilePreviewDialogProps {
   file: File | null;
@@ -13,6 +15,10 @@ interface FilePreviewDialogProps {
   fileCategory: string; // 'video' | 'pdf' | 'document' | 'code' | 'image' | 'archive' | 'other'
   open: boolean;
   onClose: () => void;
+  onExited?: () => void;
+  onPrevious?: () => void;
+  onNext?: () => void;
+  onDownload?: () => void;
 }
 
 function downloadBlob(file: File) {
@@ -31,7 +37,14 @@ const FilePreviewDialog: React.FC<FilePreviewDialogProps> = ({
   fileCategory,
   open,
   onClose,
+  onExited,
+  onPrevious,
+  onNext,
+  onDownload,
 }) => {
+  const { t } = useTranslation();
+  const isWordFile = /\.docx?$/i.test(fileName) || /^(application\/msword|application\/vnd\.openxmlformats-officedocument\.wordprocessingml\.document)$/i.test(mimeType);
+  const canReadText = !isWordFile && (fileCategory === 'code' || (fileCategory === 'document' && (/\.(txt|md|csv)$/i.test(fileName) || mimeType.startsWith('text/'))));
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
   const [textContent, setTextContent] = useState<string | null>(null);
   const [textLoading, setTextLoading] = useState(false);
@@ -40,7 +53,7 @@ const FilePreviewDialog: React.FC<FilePreviewDialogProps> = ({
 
   // Create object URL when open + file is provided
   useEffect(() => {
-    if (open && file) {
+    if (file) {
       const url = URL.createObjectURL(file);
       objectUrlRef.current = url;
       setBlobUrl(url);
@@ -61,15 +74,15 @@ const FilePreviewDialog: React.FC<FilePreviewDialogProps> = ({
         objectUrlRef.current = null;
       }
     };
-  }, [open, file]);
+  }, [file]);
 
   // Read text content for document/code categories
   useEffect(() => {
-    if (!open || !file || !blobUrl) return;
+    if (!file || !blobUrl) return;
 
     let cancelled = false;
 
-    if (fileCategory === 'document' || fileCategory === 'code') {
+    if (canReadText) {
       setTextLoading(true);
       setTextError(null);
       file.slice(0, 65536).text()
@@ -89,28 +102,29 @@ const FilePreviewDialog: React.FC<FilePreviewDialogProps> = ({
     }
 
     return () => { cancelled = true; };
-  }, [open, file, blobUrl, fileCategory]);
+  }, [file, blobUrl, canReadText]);
 
   const handleClose = useCallback(() => {
-    if (objectUrlRef.current) {
-      URL.revokeObjectURL(objectUrlRef.current);
-      objectUrlRef.current = null;
-    }
-    setBlobUrl(null);
-    setTextContent(null);
-    setTextError(null);
     onClose();
   }, [onClose]);
 
   const handleDownload = useCallback(() => {
-    if (file) {
-      downloadBlob(file);
-    }
-  }, [file]);
+    if (onDownload) onDownload();
+    else if (file) downloadBlob(file);
+  }, [file, onDownload]);
+
+  const unavailablePreview = () => (
+    <Box sx={{ textAlign: 'center', py: 4, px: 2 }}>
+      <InsertDriveFileIcon sx={{ fontSize: 48, color: 'text.secondary' }} />
+      <Typography variant="body1" color="text.secondary">{t('download.previewUnavailable', { defaultValue: 'Preview not available' })}</Typography>
+      <Typography variant="caption" color="text.secondary">{fileName} · {file ? `${(file.size / 1024).toFixed(1)} KB` : ''}</Typography>
+    </Box>
+  );
 
   const renderPreview = () => {
     if (!file || !blobUrl) return null;
 
+    if (isWordFile || ((fileCategory === 'document' || fileCategory === 'code') && !canReadText)) return unavailablePreview();
     switch (fileCategory) {
       case 'video':
         return (
@@ -174,24 +188,7 @@ const FilePreviewDialog: React.FC<FilePreviewDialogProps> = ({
       case 'archive':
       case 'other':
       default:
-        return (
-          <Box sx={{ textAlign: 'center', py: 4, px: 2 }}>
-            <Typography variant="body1" color="text.secondary" sx={{ mb: 1 }}>
-              Preview not available
-            </Typography>
-            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 2 }}>
-              {fileName} ({(file.size / 1024).toFixed(1)} KB)
-            </Typography>
-            <Button
-              variant="contained"
-              size="small"
-              startIcon={<DownloadIcon />}
-              onClick={handleDownload}
-            >
-              {fileName}
-            </Button>
-          </Box>
-        );
+        return unavailablePreview();
     }
   };
 
@@ -199,6 +196,7 @@ const FilePreviewDialog: React.FC<FilePreviewDialogProps> = ({
     <Dialog
       open={open}
       onClose={handleClose}
+      TransitionProps={{ onExited }}
       maxWidth={false}
       sx={{ zIndex: (theme) => theme.zIndex.modal + 3 }}
       PaperProps={{
@@ -247,6 +245,10 @@ const FilePreviewDialog: React.FC<FilePreviewDialogProps> = ({
           {renderPreview()}
         </Box>
 
+        {(onPrevious || onNext) && <Box sx={{ display: 'flex', gap: 1 }}>
+          <Button onClick={onPrevious} disabled={!onPrevious}>{t('download.previousFile', { defaultValue: 'Previous' })}</Button>
+          <Button onClick={onNext} disabled={!onNext}>{t('download.nextFile', { defaultValue: 'Next' })}</Button>
+        </Box>}
         {/* Download button below preview content for all file types */}
         {file && (
           <Button
@@ -256,7 +258,7 @@ const FilePreviewDialog: React.FC<FilePreviewDialogProps> = ({
             onClick={handleDownload}
             sx={{ mt: 1, mb: 1.5 }}
           >
-            {fileName}
+            {t('chat.fileDownload')}
           </Button>
         )}
       </DialogContent>

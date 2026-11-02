@@ -10,9 +10,9 @@ import {
   Checkbox,
   Chip,
   Collapse,
-  Dialog,
-  DialogContent,
   IconButton,
+  Menu,
+  MenuItem,
   Tooltip,
   alpha,
 } from "@mui/material";
@@ -27,6 +27,7 @@ import TableChart from "@mui/icons-material/TableChart";
 import Slideshow from "@mui/icons-material/Slideshow";
 import Subject from "@mui/icons-material/Subject";
 import CloseIcon from "@mui/icons-material/Close";
+import MoreVertIcon from "@mui/icons-material/MoreVert";
 import DownloadIcon from "@mui/icons-material/Download"; // 确保导入这个
 import UploadFileIcon from "@mui/icons-material/UploadFile";
 import FolderIcon from "@mui/icons-material/Folder";
@@ -35,8 +36,6 @@ import PlayArrowIcon from "@mui/icons-material/PlayArrow";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
 import KeyboardArrowUpIcon from "@mui/icons-material/KeyboardArrowUp";
-import ChevronLeftIcon from "@mui/icons-material/ChevronLeft";
-import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 import { buttonStyleNormal } from "../pages/share";
 import React from "react";
 import ChatIntegration from "@App/libs/chat/ChatIntegration";
@@ -64,6 +63,8 @@ import { shouldShowV2TaskInActiveList } from "@App/libs/connection/fileTransferV
 import { shouldStartPersistedFileHydration, type PersistedFileHydrationState } from "@App/libs/connection/fileHydrationPolicy";
 import { createUniqueArchiveEntryNames, receivedAlbumKey, receivedFileMapKey } from "@App/libs/chat/receivedFilePresentation";
 import FilePreviewDialog from './FilePreviewDialog';
+import ImageGalleryDialog from './ImageGalleryDialog';
+import type { FileTransferUiUpdate } from '@App/libs/connection/ServerFileTransfer';
 
 // 图片扩展名列表（小写）
 const IMAGE_EXTS = ["png", "jpg", "jpeg", "gif", "bmp", "webp", "svg"];
@@ -122,6 +123,26 @@ function formatSize(bytes: number): string {
   if (bytes >= 1024) return `${(bytes / 1024).toFixed(0)} KB`;
   return `${bytes} B`;
 }
+
+function formatTransferDuration(ms: number, chinese: boolean): string {
+  if (ms < 1000) return chinese ? '不足 1 秒' : 'Less than 1 sec';
+  const seconds = Math.floor(ms / 1000);
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const rest = seconds % 60;
+  return chinese
+    ? `${hours ? `${hours} 小时 ` : ''}${minutes ? `${minutes} 分 ` : ''}${rest} 秒`
+    : `${hours ? `${hours} hr ` : ''}${minutes ? `${minutes} min ` : ''}${rest} sec`;
+}
+
+type SessionReceiveNotice = {
+  id: number;
+  from: string;
+  fileName: string;
+  fileSize: number;
+  file?: File;
+  durationMs?: number;
+};
 
 function formatTransferSpeed(bytesPerSecond: number): string {
   if (!Number.isFinite(bytesPerSecond) || bytesPerSecond <= 0) {
@@ -276,7 +297,7 @@ export default function DownloadDrawerSlide({
 }) {
   const { t, i18n } = useTranslation();
   const theme = useTheme();
-  const isChinese = i18n.language?.toLowerCase().startsWith("zh") ?? true;
+  const isChinese = (i18n.resolvedLanguage || i18n.language)?.toLowerCase().startsWith("zh") ?? true;
   const [visible, setVisible] = React.useState(open);
   const [drawerExpanded, setDrawerExpanded] = React.useState(false);
   const [, forceUpdate] = React.useReducer((x) => x + 1, 0);
@@ -302,12 +323,23 @@ export default function DownloadDrawerSlide({
   // 批量选择与用户分组
   const [selectedFiles, setSelectedFiles] = React.useState<Set<string>>(new Set());
   const [expandedUsers, setExpandedUsers] = React.useState<Set<string>>(new Set());
+  const [expandedBatches, setExpandedBatches] = React.useState<Set<string>>(new Set());
+  const [userPages, setUserPages] = React.useState<Map<string, number>>(new Map());
+  const receivedTimesRef = React.useRef(new Map<string, number>());
+  const [fileMenu, setFileMenu] = React.useState<{ key: string; file: File; top: number; left: number } | null>(null);
+  const [sessionReceives, setSessionReceives] = React.useState<SessionReceiveNotice[]>([]);
+  const receiveNoticeSequence = React.useRef(0);
 
   // 全屏预览状态：存储懒加载的 object URL 和对应的 File
   const [previewUrl, setPreviewUrl] = React.useState<string | null>(null);
   const [previewFile, setPreviewFile] = React.useState<File | null>(null);
   const [previewGroup, setPreviewGroup] = React.useState<File[]>([]);
-  const touchStart = React.useRef<{ x: number; y: number } | null>(null);
+  const [imagePreviewOpen, setImagePreviewOpen] = React.useState(false);
+  const imagePreviewOpenRef = React.useRef(false);
+  imagePreviewOpenRef.current = imagePreviewOpen;
+  const [nonImagePreviewOpen, setNonImagePreviewOpen] = React.useState(false);
+  const nonImagePreviewOpenRef = React.useRef(false);
+  nonImagePreviewOpenRef.current = nonImagePreviewOpen;
   const [previewFailed, setPreviewFailed] = React.useState(false);
   const [pendingBrowserDownload, setPendingBrowserDownload] = React.useState<PendingBrowserDownload | null>(null);
   const [browserDownloadNotice, setBrowserDownloadNotice] = React.useState<string | null>(null);
@@ -340,10 +372,53 @@ export default function DownloadDrawerSlide({
   const receivedList = Array.from(receivedMap.entries());
   const directSavedList = Array.from(directSavedMap.entries());
 
+  React.useEffect(() => {
+    const starts = new Map<string, number>();
+    const onV2Update = (snapshot: FileTransferV2Snapshot) => {
+      if (snapshot.direction !== 'receive') return;
+      if ((snapshot.status === 'receiving' || snapshot.status === 'transferring') && !starts.has(snapshot.transferId)) starts.set(snapshot.transferId, Date.now());
+      if (snapshot.status === 'cancelled' || snapshot.status === 'failed') starts.delete(snapshot.transferId);
+    };
+    const onRelayUpdate = (update: FileTransferUiUpdate) => {
+      if (update.direction !== 'receive') return;
+      if (update.status === 'transferring' && !starts.has(update.transferId)) starts.set(update.transferId, Date.now());
+      if (update.status === 'cancelled' || update.status === 'error') starts.delete(update.transferId);
+    };
+    const onReceived = (event: { from: string; fileName: string; fileSize: number; file?: File; fileKey?: string; transferId?: string; durationMs?: number }) => {
+      const started = event.transferId ? starts.get(event.transferId) : undefined;
+      if (event.transferId) starts.delete(event.transferId);
+      const durationMs = Number.isFinite(event.durationMs) ? event.durationMs : started === undefined ? undefined : Math.max(0, Date.now() - started);
+      const id = ++receiveNoticeSequence.current;
+      if (event.file) {
+        const mapKey = receivedFileMapKey(event.from, event.fileName, event.fileKey);
+        receivedTimesRef.current.set(mapKey, Date.now());
+        setUserPages(previous => { const next = new Map(previous); next.set(event.from, 0); return next; });
+      }
+      setSessionReceives(previous => [...previous, { id, from: event.from, fileName: event.fileName, fileSize: event.fileSize, file: event.file, durationMs }]);
+    };
+    realTimeColab.emitter.on('file-transfer-v2-update', onV2Update);
+    realTimeColab.emitter.on('file-transfer-ui', onRelayUpdate);
+    realTimeColab.emitter.on('file-received', onReceived);
+    realTimeColab.emitter.on('file-saved-to-disk', onReceived);
+    return () => {
+      realTimeColab.emitter.off('file-transfer-v2-update', onV2Update);
+      realTimeColab.emitter.off('file-transfer-ui', onRelayUpdate);
+      realTimeColab.emitter.off('file-received', onReceived);
+      realTimeColab.emitter.off('file-saved-to-disk', onReceived);
+    };
+  }, []);
+
+  // Persisted message times describe receipt order; source-archive times cover
+  // entries that are being restored or expanded from a just-received bundle.
+  const orderedReceivedList = receivedList.map((entry, index) => {
+    const batch = receivedAlbumKey(entry[0]);
+    return { entry, index, time: receivedTimesRef.current.get(entry[0]) ?? (batch ? receivedTimesRef.current.get(batch.slice(0, -2)) : undefined) ?? 0 };
+  }).sort((a, b) => b.time - a.time || b.index - a.index).map(({ entry }) => entry);
+
   // 按用户分组接收到的文件
   const groupedByUser = React.useMemo(() => {
     const groups: Map<string, { userName: string; files: Array<{ key: string; file: File }> }> = new Map();
-    for (const [key, file] of receivedList) {
+    for (const [key, file] of orderedReceivedList) {
       const userId = key.split('::')[0] || 'Unknown';
       const userName = userId.split(':')[0] || 'Unknown';
       if (!groups.has(userId)) groups.set(userId, { userName, files: [] });
@@ -351,7 +426,7 @@ export default function DownloadDrawerSlide({
     }
     return groups;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [receivedList]);
+  }, [orderedReceivedList]);
 
   const replacePendingBrowserDownload = React.useCallback((next: PendingBrowserDownload | null) => {
     setPendingBrowserDownload((current) => {
@@ -518,6 +593,9 @@ export default function DownloadDrawerSlide({
         const persistedEntriesByArchive = new Map<string, Set<string>>();
         for (const { message, userId } of fileMessages) {
           if (!isCurrent(userId)) continue;
+          const messageMapKey = getReceivedFileMessageMapKey(userId, message.fileMetadata);
+          const existingTime = receivedTimesRef.current.get(messageMapKey) ?? 0;
+          receivedTimesRef.current.set(messageMapKey, Math.max(existingTime, message.timestamp));
           const sourceArchiveFileKey = message.fileMetadata.sourceArchiveFileKey;
           const sourceArchiveEntryPath = message.fileMetadata.sourceArchiveEntryPath;
           const entryFileKey = message.fileMetadata.fileKey;
@@ -566,8 +644,8 @@ export default function DownloadDrawerSlide({
           if (isCurrent(userId)) loadedCount++;
         }
 
-        if (isMountedRef.current && loadedCount > 0) {
-          setPersistentFileCount(loadedCount);
+        if (isMountedRef.current) {
+          if (loadedCount > 0) setPersistentFileCount(loadedCount);
           forceUpdate();
         }
         completed = true;
@@ -1090,42 +1168,35 @@ export default function DownloadDrawerSlide({
     });
   };
 
-  /** 关闭全屏预览并释放 object URL */
+  /** Keep the preview content until the dialog has finished closing. */
   const closePreview = () => {
-    if (previewUrl) {
-      URL.revokeObjectURL(previewUrl);
+    setImagePreviewOpen(false);
+    setNonImagePreviewOpen(false);
+  };
+
+  const showReceivedPreview = (file: File) => {
+    if (isImageFile(file.name)) {
+      setNonImagePreviewOpen(false);
+      openPreview(file);
+      setImagePreviewOpen(true);
+    } else {
+      setImagePreviewOpen(false);
+      setNonImagePreview({ file, fileName: file.name, mimeType: file.type, fileCategory: categorizeFile(file.name, file.type) });
+      setNonImagePreviewOpen(true);
     }
-    setPreviewUrl(null);
-    setPreviewFile(null);
-    setPreviewGroup([]);
   };
 
-  const openImageGroup = (key: string, file: File) => {
-    // Archive child keys carry the original transfer key; unrelated or legacy
-    // files without that identity remain single-image previews.
+  const openReceivedPreview = (key: string, file: File) => {
     const prefix = receivedAlbumKey(key);
-    const group = prefix
-      ? receivedList.filter(([candidate, item]) => candidate.startsWith(prefix) && isImageFile(item.name)).map(([, item]) => item)
-      : [file];
-    setPreviewGroup(group);
-    openPreview(file);
+    setPreviewGroup(prefix ? orderedReceivedList.filter(([candidate]) => candidate.startsWith(prefix)).map(([, item]) => item) : [file]);
+    showReceivedPreview(file);
   };
 
-  const previewIndex = previewFile ? previewGroup.indexOf(previewFile) : -1;
+  const previewIndex = previewGroup.findIndex(file => file === (imagePreviewOpen ? previewFile : nonImagePreview?.file));
   const movePreview = (delta: number) => {
     const next = previewGroup[previewIndex + delta];
-    if (next) openPreview(next);
+    if (next) showReceivedPreview(next);
   };
-
-  const openNonImagePreview = React.useCallback((file: File) => {
-    const category = categorizeFile(file.name, file.type);
-    setNonImagePreview({
-      file,
-      fileName: file.name,
-      mimeType: file.type,
-      fileCategory: category,
-    });
-  }, []);
 
   const clearReceivedFiles = async () => {
     if (clearReceivedFilesInFlightRef.current) return;
@@ -1323,11 +1394,11 @@ export default function DownloadDrawerSlide({
     });
   };
 
-  const deleteSelectedFiles = async () => {
-    if (selectedFiles.size === 0) return;
-    if (!window.confirm(`确定要删除选中的 ${selectedFiles.size} 个文件吗？`)) return;
+  const deleteSelectedFiles = async (requestedKeys?: Set<string>) => {
+    const keysToDelete = new Set(requestedKeys ?? selectedFiles);
+    if (keysToDelete.size === 0) return;
+    if (!window.confirm(t('download.confirmDeleteFiles', { count: keysToDelete.size }))) return;
 
-    const keysToDelete = new Set(selectedFiles);
     if (persistedFileHydrationPendingRef.current) {
       keysToDelete.forEach((key) => deletedReceivedMapKeysRef.current.add(key));
     }
@@ -1478,6 +1549,7 @@ export default function DownloadDrawerSlide({
     !!pendingDirectSaveRequest ||
     receivingList.length > 0 ||
     receivedList.length > 0 ||
+    sessionReceives.length > 0 ||
     directSavedList.length > 0 ||
     sentCount > 0 ||
     !!pendingBrowserDownload ||
@@ -1559,6 +1631,26 @@ export default function DownloadDrawerSlide({
                 gap: 2,
               }}
             >
+            {sessionReceives.length > 0 && (
+              <Box role="region" aria-label={isChinese ? '本次接收' : 'Received this session'}>
+                <Typography variant="subtitle2" sx={{ mb: 0.75 }}>{isChinese ? '本次接收' : 'Received this session'}</Typography>
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
+                  {sessionReceives.map(notice => (
+                    <Box key={notice.id} sx={{ display: 'flex', alignItems: 'center', gap: 0.75, p: 1, borderRadius: 1.5, bgcolor: 'action.hover' }}>
+                      <Box sx={{ color: 'text.secondary', display: 'flex', flexShrink: 0 }}>{getFileIcon(notice.fileName)}</Box>
+                      <Box sx={{ flex: 1, minWidth: 0 }}>
+                        <Typography variant="body2" noWrap>{notice.fileName}</Typography>
+                        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', overflowWrap: 'anywhere' }}>
+                          {isChinese ? '来自' : 'From'} {notice.from.split(':')[0]} · {formatSize(notice.fileSize)} · {isChinese ? '耗时' : 'Duration'} {notice.durationMs === undefined ? '—' : formatTransferDuration(notice.durationMs, isChinese)}
+                        </Typography>
+                      </Box>
+                      <Tooltip title={notice.file ? t('chat.fileDownload') : (isChinese ? '文件已直接保存到磁盘' : 'File was saved directly to disk')}><span><IconButton disabled={!notice.file} aria-label={t('chat.fileDownload')} onClick={() => { if (notice.file) void downloadFile(notice.file); }} sx={{ minWidth: 40, minHeight: 40 }}><DownloadIcon /></IconButton></span></Tooltip>
+                      <Tooltip title={isChinese ? '移除通知' : 'Remove notification'}><IconButton aria-label={isChinese ? '移除通知' : 'Remove notification'} onClick={() => setSessionReceives(previous => previous.filter(item => item.id !== notice.id))} sx={{ minWidth: 40, minHeight: 40 }}><DeleteOutlineIcon /></IconButton></Tooltip>
+                    </Box>
+                  ))}
+                </Box>
+              </Box>
+            )}
             {fileTransferV2Rows.length > 0 && (
             <Box
               data-testid="file-v2-task-list"
@@ -2341,12 +2433,24 @@ export default function DownloadDrawerSlide({
                         const allSelected = group.files.every(({ key }) => selectedFiles.has(key));
                         const someSelected = group.files.some(({ key }) => selectedFiles.has(key));
                         const totalSize = group.files.reduce((sum, { file }) => sum + file.size, 0);
-                        const imageBatches = new Map<string, Array<{ key: string; file: File }>>();
+                        const fileBatches = new Map<string, Array<{ key: string; file: File }>>();
                         for (const item of group.files) {
                           const batch = receivedAlbumKey(item.key);
-                          if (!batch || !isImageFile(item.file.name)) continue;
-                          imageBatches.set(batch, [...(imageBatches.get(batch) ?? []), item]);
+                          if (!batch) continue;
+                          fileBatches.set(batch, [...(fileBatches.get(batch) ?? []), item]);
                         }
+                        const seenBatches = new Set<string>();
+                        const orderedFiles = group.files.flatMap(item => {
+                          const batch = receivedAlbumKey(item.key);
+                          const files = batch ? fileBatches.get(batch) : undefined;
+                          if (!batch || !files || files.length < 2) return [item];
+                          if (seenBatches.has(batch)) return [];
+                          seenBatches.add(batch);
+                          return files;
+                        });
+                        const pageCount = Math.max(1, Math.ceil(orderedFiles.length / 6));
+                        const page = Math.min(userPages.get(userId) ?? 0, pageCount - 1);
+                        const pageFiles = orderedFiles.slice(page * 6, (page + 1) * 6);
 
                         return (
                           <Box
@@ -2432,22 +2536,30 @@ export default function DownloadDrawerSlide({
                             {/* 文件列表（可折叠） */}
                             <Collapse in={isExpanded}>
                               <Box sx={{ display: "flex", flexDirection: "column" }}>
-                                {Array.from(imageBatches.entries()).filter(([, images]) => images.length > 1).map(([batch, images]) => (
-                                  <Box key={batch} sx={{ display: "flex", alignItems: "center", gap: 1, p: 1.5, borderBottom: `1px solid ${theme.palette.divider}` }}>
-                                    <Box component="button" type="button" onClick={() => openImageGroup(images[0].key, images[0].file)} aria-label={isChinese ? `预览组图，${images.length} 张图片` : `Preview album, ${images.length} images`} sx={{ display: "flex", gap: 0.5, p: 0, border: 0, bgcolor: "transparent", cursor: "pointer" }}>
-                                      {images.slice(0, 3).map(({ key, file }) => thumbnails.get(key) ? <Box key={key} component="img" src={thumbnails.get(key)} alt="" sx={{ width: 44, height: 44, objectFit: "cover", borderRadius: 1 }} /> : <Box key={key} sx={{ width: 44, height: 44, display: "grid", placeItems: "center", bgcolor: "action.hover", borderRadius: 1 }}><ImageIcon titleAccess={file.name} /></Box>)}
-                                    </Box>
-                                    <Box sx={{ flex: 1, minWidth: 0 }}><Typography variant="body2" fontWeight={600}>{isChinese ? "组图" : "Album"}</Typography><Typography variant="caption" color="text.secondary">{isChinese ? `${images.length} 张图片` : `${images.length} images`}</Typography></Box>
-                                    <Button size="small" onClick={() => void buildZipAndDownload(images.map(({ file }) => file))} startIcon={<DownloadIcon />} sx={{ minHeight: 40, whiteSpace: "nowrap" }}>{isChinese ? "下载" : "Download"}</Button>
-                                  </Box>
-                                ))}
-                                {group.files.map(({ key, file }) => {
+                                {pageFiles.map(({ key, file }) => {
                                   const isImg = isImageFile(file.name);
                                   const thumbUrl = thumbnails.get(key);
                                   const isSelected = selectedFiles.has(key);
+                                  const batch = receivedAlbumKey(key);
+                                  const batchFiles = batch ? fileBatches.get(batch) : undefined;
+                                  const isBatch = !!batch && !!batchFiles && batchFiles.length > 1;
+                                  const firstInBatch = isBatch && pageFiles.find(item => receivedAlbumKey(item.key) === batch)?.key === key;
                                   return (
+                                    <React.Fragment key={key}>
+                                    {firstInBatch && <Box sx={{ display: "flex", alignItems: "center", gap: 1, p: 1, borderTop: `1px solid ${theme.palette.divider}` }}>
+                                      <Checkbox size="small" checked={batchFiles.every(item => selectedFiles.has(item.key))} indeterminate={batchFiles.some(item => selectedFiles.has(item.key)) && !batchFiles.every(item => selectedFiles.has(item.key))} onChange={(event) => setSelectedFiles(previous => { const next = new Set(previous); batchFiles.forEach(item => event.target.checked ? next.add(item.key) : next.delete(item.key)); return next; })} inputProps={{ 'aria-label': t('download.selectFileGroup') }} />
+                                      <Box sx={{ display: 'flex', gap: 0.5, flexShrink: 0 }}>
+                                        {batchFiles.slice(0, 3).map(({ key: itemKey, file: itemFile }) => thumbnails.get(itemKey)
+                                          ? <Box key={itemKey} component="img" src={thumbnails.get(itemKey)} alt="" sx={{ width: 32, height: 32, objectFit: 'cover', borderRadius: 1 }} />
+                                          : <Box key={itemKey} sx={{ width: 32, height: 32, display: 'grid', placeItems: 'center', color: 'text.secondary' }}>{getFileIcon(itemFile.name)}</Box>)}
+                                      </Box>
+                                      <Button onClick={() => setExpandedBatches(previous => { const next = new Set(previous); next.has(batch) ? next.delete(batch) : next.add(batch); return next; })} aria-expanded={expandedBatches.has(batch)} startIcon={expandedBatches.has(batch) ? <KeyboardArrowUpIcon /> : <KeyboardArrowDownIcon />} sx={{ flex: 1, justifyContent: 'flex-start', textTransform: 'none' }}>
+                                        {t('download.fileGroup')} · {t('download.fileCount', { total: batchFiles.length })} · {formatSize(batchFiles.reduce((sum, item) => sum + item.file.size, 0))}
+                                      </Button>
+                                      <IconButton aria-label={t('download.downloadFileGroup')} onClick={() => void buildZipAndDownload(batchFiles.map(item => item.file))}><DownloadIcon /></IconButton>
+                                    </Box>}
+                                    <Collapse in={!isBatch || expandedBatches.has(batch!)}>
                                     <Box
-                                      key={key}
                                       sx={{
                                         display: "grid",
                                         gridTemplateColumns: {
@@ -2472,17 +2584,9 @@ export default function DownloadDrawerSlide({
                                           lastDragDraggedRef.current = false;
                                           return;
                                         }
-                                        if (isImg) {
-                                          openImageGroup(key, file);
-                                        } else {
-                                          const cat = categorizeFile(file.name, file.type);
-                                          if (['video', 'pdf', 'document', 'code'].includes(cat)) {
-                                            openNonImagePreview(file);
-                                          } else {
-                                            downloadFile(file);
-                                          }
-                                        }
+                                        openReceivedPreview(key, file);
                                       }}
+                                      onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); setFileMenu({ key, file, top: event.clientY, left: event.clientX }); }}
                                       onPointerEnter={() => handleDragEnterRow(key)}
                                       onPointerDown={() => {
                                         // 新手势开始，复位上一次拖拽的抑制标记（避免误吞本次点击）
@@ -2560,20 +2664,21 @@ export default function DownloadDrawerSlide({
                                       >
                                         {formatSize(file.size)}
                                       </Typography>
-                                      <IconButton
-                                        size="small"
-                                        onClick={(event) => {
-                                          event.stopPropagation();
-                                          downloadFile(file);
-                                        }}
-                                        aria-label={`download ${file.name}`}
-                                        sx={{ color: "text.secondary", flexShrink: 0, justifySelf: "end" }}
-                                      >
-                                        <DownloadIcon fontSize="small" />
+                                      <IconButton size="small" onClick={(event) => { event.stopPropagation(); const rect = event.currentTarget.getBoundingClientRect(); setFileMenu({ key, file, top: rect.bottom, left: rect.left }); }} aria-label={t('download.fileActions', { name: file.name })} sx={{ color: "text.secondary", minWidth: 40, minHeight: 40 }}>
+                                        <MoreVertIcon fontSize="small" />
                                       </IconButton>
                                     </Box>
+                                    </Collapse>
+                                    </React.Fragment>
                                   );
                                 })}
+                                {pageCount > 1 && (
+                                  <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1, py: 0.75 }}>
+                                    <Button size="small" disabled={page === 0} onClick={() => setUserPages(previous => { const next = new Map(previous); next.set(userId, page - 1); return next; })} sx={{ minHeight: 40 }}>{t('download.previousPage', { defaultValue: isChinese ? '上一页' : 'Previous' })}</Button>
+                                    <Typography variant="caption" color="text.secondary" aria-live="polite" sx={{ fontVariantNumeric: 'tabular-nums' }}>{page + 1} / {pageCount}</Typography>
+                                    <Button size="small" disabled={page >= pageCount - 1} onClick={() => setUserPages(previous => { const next = new Map(previous); next.set(userId, page + 1); return next; })} sx={{ minHeight: 40 }}>{t('download.nextPage', { defaultValue: isChinese ? '下一页' : 'Next' })}</Button>
+                                  </Box>
+                                )}
                               </Box>
                             </Collapse>
                           </Box>
@@ -2624,7 +2729,7 @@ export default function DownloadDrawerSlide({
                           variant="contained"
                           color="error"
                           size="small"
-                          onClick={deleteSelectedFiles}
+                          onClick={() => void deleteSelectedFiles()}
                           sx={{ flexShrink: 0, pointerEvents: "auto", minWidth: "auto", minHeight: 40, whiteSpace: "nowrap" }}
                         >
                           {t('download.deleteSelected')} ({selectedFiles.size})
@@ -2689,120 +2794,47 @@ export default function DownloadDrawerSlide({
         </Box>
       </Slide>
 
-      {/* 全屏图片预览 Dialog（懒加载 object URL，关闭时立即 revoke） */}
-      <Dialog
-        open={!!previewFile}
+      <ImageGalleryDialog
+        open={imagePreviewOpen}
+        file={previewFile}
+        url={previewUrl}
+        failed={previewFailed}
+        files={previewGroup}
+        thumbnails={new Map(receivedList.flatMap(([key, file]) => {
+          const thumbnail = thumbnails.get(key);
+          return thumbnail ? [[file, thumbnail] as [File, string]] : [];
+        }))}
+        isImage={isImageFile}
+        onSelect={showReceivedPreview}
         onClose={closePreview}
-        maxWidth={false}
-        sx={{ zIndex: theme.zIndex.modal + 3 }}
-        onKeyDown={(event) => {
-          if (event.key === "ArrowLeft") { event.preventDefault(); movePreview(-1); }
-          if (event.key === "ArrowRight") { event.preventDefault(); movePreview(1); }
+        onImageError={() => setPreviewFailed(true)}
+        onExited={() => {
+          if (imagePreviewOpenRef.current) return;
+          if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
+          previewUrlRef.current = null;
+          setPreviewUrl(null);
+          setPreviewFile(null);
         }}
-        PaperProps={{
-          sx: {
-            backgroundColor: "rgba(0,0,0,0.85)",
-            boxShadow: "none",
-            borderRadius: 2,
-            overflow: "hidden",
-            m: 1,
-            width: "min(92vw, 1100px)",
-          },
-        }}
-      >
-        <DialogContent
-          onTouchStart={(event) => {
-            const touch = event.touches[0];
-            touchStart.current = event.touches.length === 1 && touch ? { x: touch.clientX, y: touch.clientY } : null;
-          }}
-          onTouchEnd={(event) => {
-            const start = touchStart.current;
-            touchStart.current = null;
-            const end = event.changedTouches[0];
-            if (!start || !end) return;
-            const dx = end.clientX - start.x;
-            if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(end.clientY - start.y)) movePreview(dx < 0 ? 1 : -1);
-          }}
-          sx={{
-            p: 0,
-            position: "relative",
-            display: "flex",
-            flexDirection: "column",
-            alignItems: "center",
-            justifyContent: "center",
-            minHeight: 240,
-          }}
-        >
-          {/* 关闭按钮 */}
-          <IconButton
-            onClick={closePreview}
-            aria-label={isChinese ? "关闭预览" : "Close preview"}
-            size="small"
-            sx={{
-              position: "absolute",
-              top: 8,
-              right: 8,
-              zIndex: 1,
-              color: "white",
-              backgroundColor: "rgba(0,0,0,0.4)",
-              "&:hover": { backgroundColor: "rgba(0,0,0,0.6)" },
-            }}
-          >
-            <CloseIcon fontSize="small" />
-          </IconButton>
+        onDownload={file => void downloadFile(file)}
+      />
 
-          {/* 大图 */}
-          {previewUrl && !previewFailed && (
-            <Box
-              component="img"
-              src={previewUrl}
-              alt={previewFile?.name ?? "preview"}
-              onError={() => setPreviewFailed(true)}
-              sx={{
-                maxWidth: "90vw",
-                maxHeight: "80vh",
-                objectFit: "contain",
-                display: "block",
-              }}
-            />
-          )}
-          {previewFailed && <Typography sx={{ color: "white", p: 4 }}>{isChinese ? "无法预览此图片，请下载查看" : "Preview unavailable. Download to view."}</Typography>}
-          {previewGroup.length > 1 && (
-            <>
-              <IconButton aria-label={isChinese ? "上一张" : "Previous image"} disabled={previewIndex <= 0} onClick={() => movePreview(-1)} sx={{ position: "absolute", left: 8, top: "45%", color: "white", bgcolor: "rgba(0,0,0,.5)", width: 44, height: 44, "&.Mui-disabled": { opacity: 0.35, color: "white" } }}><ChevronLeftIcon /></IconButton>
-              <IconButton aria-label={isChinese ? "下一张" : "Next image"} disabled={previewIndex >= previewGroup.length - 1} onClick={() => movePreview(1)} sx={{ position: "absolute", right: 8, top: "45%", color: "white", bgcolor: "rgba(0,0,0,.5)", width: 44, height: 44, "&.Mui-disabled": { opacity: 0.35, color: "white" } }}><ChevronRightIcon /></IconButton>
-              <Typography aria-live="polite" sx={{ color: "white", pt: 1, fontVariantNumeric: "tabular-nums" }}>{previewIndex + 1} / {previewGroup.length}</Typography>
-            </>
-          )}
-
-          {/* 下载按钮 */}
-          {previewFile && (
-            <Button
-              variant="contained"
-              startIcon={<DownloadIcon />}
-              onClick={() => {
-                downloadFile(previewFile);
-              }}
-              sx={{
-                mt: 1,
-                mb: 1,
-                ...buttonStyleNormal,
-              }}
-            >
-              {previewFile.name}
-            </Button>
-          )}
-        </DialogContent>
-      </Dialog>
-
+      <Menu open={!!fileMenu} onClose={() => setFileMenu(null)} anchorReference="anchorPosition" anchorPosition={fileMenu ? { top: fileMenu.top, left: fileMenu.left } : undefined} sx={{ zIndex: theme.zIndex.modal + 4 }}>
+        <MenuItem onClick={() => { if (fileMenu) openReceivedPreview(fileMenu.key, fileMenu.file); setFileMenu(null); }}>{t('chat.filePreview')}</MenuItem>
+        <MenuItem onClick={() => { if (fileMenu) void downloadFile(fileMenu.file); setFileMenu(null); }}>{t('chat.fileDownload')}</MenuItem>
+        <MenuItem onClick={() => { if (fileMenu) void deleteSelectedFiles(new Set([fileMenu.key])); setFileMenu(null); }}>{t('download.deleteFile')}</MenuItem>
+      </Menu>
       {nonImagePreview && (
         <FilePreviewDialog
           file={nonImagePreview.file}
           fileName={nonImagePreview.fileName}
           mimeType={nonImagePreview.mimeType}
           fileCategory={nonImagePreview.fileCategory}
-          open={!!nonImagePreview}
-          onClose={() => setNonImagePreview(null)}
+          open={nonImagePreviewOpen}
+          onClose={() => setNonImagePreviewOpen(false)}
+          onExited={() => { if (!nonImagePreviewOpenRef.current) setNonImagePreview(null); }}
+          onPrevious={previewIndex > 0 ? () => movePreview(-1) : undefined}
+          onNext={previewIndex >= 0 && previewIndex < previewGroup.length - 1 ? () => movePreview(1) : undefined}
+          onDownload={() => void downloadFile(nonImagePreview.file)}
         />
       )}
     </>

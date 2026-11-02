@@ -157,10 +157,10 @@ test("Download drawer imports FilePreviewDialog", () => {
   assert.match(downloadSource, /\bFilePreviewDialog\b/);
 });
 
-test("Download drawer routes previewable non-image types to preview instead of download", () => {
-  // The click handler should check for video/pdf/document/code before downloadFile
-  // Look for the array pattern
-  assert.match(downloadSource, /\bvideo\b.*\bpdf\b.*\bdocument\b.*\bcode\b/);
+test("Download drawer opens received files for preview instead of downloading on row click", () => {
+  const rowClick = downloadSource.slice(downloadSource.indexOf("onClick={() => {", downloadSource.indexOf("{pageFiles.map")), downloadSource.indexOf("onContextMenu=", downloadSource.indexOf("{pageFiles.map")));
+  assert.match(rowClick, /openReceivedPreview\(key, file\)/);
+  assert.doesNotMatch(rowClick, /downloadFile\(/);
 });
 
 /* ── AC6: SelectedFileStrip compact chip display ── */

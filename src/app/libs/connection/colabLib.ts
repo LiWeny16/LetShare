@@ -202,8 +202,8 @@ type ColabEvents = {
  'message-sent': { to: string; message: string };
  'message-received': { from: string; message: string };
  'file-sent': { to: string; fileName: string; fileSize: number; transferId?: string; fileKey?: string };
- 'file-received': { from: string; fileName: string; fileSize: number; file?: File; fileKey?: string; storageMode?: "direct-to-disk" };
- 'file-saved-to-disk': { from: string; fileName: string; fileSize: number };
+ 'file-received': { from: string; fileName: string; fileSize: number; file?: File; fileKey?: string; transferId?: string; durationMs?: number; storageMode?: "direct-to-disk" };
+ 'file-saved-to-disk': { from: string; fileName: string; fileSize: number; transferId?: string; durationMs?: number };
  'file-progress': { to: string; progress: number };
  'file-transfer-ui': FileTransferUiUpdate;
  'file-transfer-v2-update': FileTransferV2Snapshot;
@@ -247,6 +247,7 @@ export interface UserInfo {
 }
 
 interface P2PReceivingFile {
+  startedAt: number;
   name: string;
   size: number;
   totalChunks: number;
@@ -488,7 +489,7 @@ export class RealTimeColab {
          const postProcessVersion = this.receivedFilesVersion;
          this.addTransferRecord("received-file", file.name, `? ${task.peerParticipantId.split(":")[0]}`);
          this.emitter.emit("file-received", {
-          from: task.peerParticipantId, fileName: file.name, fileSize: file.size, file,
+          from: task.peerParticipantId, fileName: file.name, fileSize: file.size, file, fileKey: pending.sourceArchiveFileKey, transferId: task.transferId,
          });
          void this.maybeAutoUnzipReceivedFile(
           file,
@@ -503,7 +504,7 @@ export class RealTimeColab {
          this.addTransferRecord("saved-disk", fileName, `? ${task.peerParticipantId.split(":")[0]}`);
          this.emitter.emit("file-received", {
           from: task.peerParticipantId, fileName, fileSize: task.manifest.size,
-          fileKey, storageMode: "direct-to-disk",
+          fileKey, transferId: task.transferId, storageMode: "direct-to-disk",
          });
         }
         const completedClearProtection = this.receivedFilesClearProtectedV2Files.get(snapshot.transferId);
@@ -985,12 +986,12 @@ export class RealTimeColab {
     this.emitter.emit('file-transfer-ui', update);
    });
    
-   this.serverFileTransfer.setFileReceivedCallback(async (file, fromUserId) => {
+   this.serverFileTransfer.setFileReceivedCallback(async (file, fromUserId, transferId) => {
     console.debug(`[ColabLib] File received from ${fromUserId}:`, file.name);
-    await this.handleReceivedFile(file, fromUserId);
+    await this.handleReceivedFile(file, fromUserId, transferId);
    });
 
-   this.serverFileTransfer.setFileSavedToDiskCallback((fileName, fileSize, fromUserId) => {
+   this.serverFileTransfer.setFileSavedToDiskCallback((fileName, fileSize, fromUserId, transferId) => {
     const fullKey = `${fromUserId}::${fileName}::${Date.now()}`;
     this.directSavedFiles.set(fullKey, {
      name: fileName,
@@ -1002,6 +1003,7 @@ export class RealTimeColab {
      from: fromUserId,
      fileName,
      fileSize,
+     transferId,
     });
     this.addTransferRecord("saved-disk", fileName, `← ${fromUserId.split(":")[0]}`);
    });
@@ -2771,6 +2773,7 @@ export class RealTimeColab {
        break;
       }
       this.receivingFiles.set(id, {
+       startedAt: Date.now(),
        name: normalizedMeta.fileName,
        size: normalizedMeta.fileSize,
        totalChunks,
@@ -3916,6 +3919,8 @@ export class RealTimeColab {
     from: id,
     fileName: fileInfo.name,
     fileSize: fileInfo.size,
+    transferId: fileInfo.transferId,
+    durationMs: Math.max(0, Date.now() - fileInfo.startedAt),
    });
    this.receivingFiles.delete(id);
    this.releaseP2PReceiveReservation(id);
@@ -3991,6 +3996,9 @@ export class RealTimeColab {
     fileName: file.name,
     fileSize: file.size,
     file,
+    fileKey: persistedFileKey,
+    transferId: completedTransferId,
+    durationMs: Math.max(0, Date.now() - fileInfo.startedAt),
    });
   }
   void confirmCompletionBeforePostProcessing({
@@ -4086,6 +4094,7 @@ export class RealTimeColab {
    });
 
    this.receivingFiles.set(request.peerId, {
+    startedAt: Date.now(),
     name: request.fileName,
     size: request.fileSize,
     totalChunks: request.totalChunks,
@@ -5125,7 +5134,7 @@ private isLetShareZip(file: File): boolean {
  /**
   * 处理接收到的文件（支持ZIP解压）
   */
- private async handleReceivedFile(file: File, id: string): Promise<void> {
+ private async handleReceivedFile(file: File, id: string, transferId?: string): Promise<void> {
   const integration = await import("../chat/ChatIntegration");
   const { fileKey: persistedFileKey, generation: receiveGeneration } = await this.commitReceivedFileAfterClear(
    id,
@@ -5137,7 +5146,7 @@ private isLetShareZip(file: File): boolean {
   const postProcessVersion = this.receivedFilesVersion;
   this.addTransferRecord("received-file", file.name, `← ${id.split(":")[0]}`);
   this.setFileTransferProgress(null);
-  this.emitter.emit('file-received', { from: id, fileName: file.name, fileSize: file.size, file });
+  this.emitter.emit('file-received', { from: id, fileName: file.name, fileSize: file.size, file, fileKey: persistedFileKey, transferId });
   void this.maybeAutoUnzipReceivedFile(file, id, fullKey, postProcessVersion, persistedFileKey).catch(error => {
    console.warn("Received file post-processing failed:", error);
   });

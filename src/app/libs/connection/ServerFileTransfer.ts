@@ -262,14 +262,14 @@ export class ServerFileTransfer {
  private readonly RELAY_ACK_STALL_TIMEOUT_MS = 120_000;
  private onProgressCallback: ((progress: number | null) => void) | null = null;
  private onAcknowledgedProgressCallback: ((progress: ServerTransferAckProgress) => void) | null = null;
- private onFileReceivedCallback: ((file: File, fromUserId: string) => void | Promise<void>) | null = null;
+ private onFileReceivedCallback: ((file: File, fromUserId: string, transferId: string) => void | Promise<void>) | null = null;
  private currentSendingTransferId: string | null = null;
  private onDownloadPageStateChange: ((show: boolean) => void) | null = null;
  private onFileMetaInfoChange: ((name: string) => void) | null = null;
  private onTransferStatusChange: ((message: string | null, kind: TransferStatusKind) => void) | null = null;
  private receivedFileCacheCandidatesCallback: (() => Array<{ size: number }>) | null = null;
  private p2pReceiveMemoryReservationsCallback: (() => number[]) | null = null;
- private onFileSavedToDiskCallback: ((fileName: string, fileSize: number, fromUserId: string) => void) | null = null;
+ private onFileSavedToDiskCallback: ((fileName: string, fileSize: number, fromUserId: string, transferId: string) => void) | null = null;
  private onTransferUiUpdateCallback: ((update: FileTransferUiUpdate) => void) | null = null;
  private pendingDirectSaveRequests = new Map<string, ServerDirectSaveRequest>();
  private pendingDirectSaveRequest: ServerDirectSaveRequest | null = null;
@@ -304,7 +304,7 @@ export class ServerFileTransfer {
  /**
   * 设置文件接收回调
   */
- public setFileReceivedCallback(callback: (file: File, fromUserId: string) => void | Promise<void>) {
+ public setFileReceivedCallback(callback: (file: File, fromUserId: string, transferId: string) => void | Promise<void>) {
   this.onFileReceivedCallback = callback;
  }
 
@@ -399,7 +399,7 @@ export class ServerFileTransfer {
   return this.getAvailableLegacyRelayReceiveMemoryBytes();
  }
 
- public setFileSavedToDiskCallback(callback: (fileName: string, fileSize: number, fromUserId: string) => void) {
+ public setFileSavedToDiskCallback(callback: (fileName: string, fileSize: number, fromUserId: string, transferId: string) => void) {
   this.onFileSavedToDiskCallback = callback;
  }
 
@@ -2297,7 +2297,7 @@ export class ServerFileTransfer {
     await completeAfterReceivePersistence(
      () => session.directSink!.close(),
      () => {
-      this.onFileSavedToDiskCallback?.(session.fileName, session.fileSize, session.fromUserId);
+      this.onFileSavedToDiskCallback?.(session.fileName, session.fileSize, session.fromUserId, session.transferId);
       this.emitReceivingUpdate(session, "completed", 100);
       this.sendTransferCompleteMessage(session.transferId, session.roomName);
      },
@@ -2328,7 +2328,7 @@ export class ServerFileTransfer {
      await completeAfterReceivePersistence(
       async () => {
        if (!this.onFileReceivedCallback) throw new Error("Received file persistence handler is unavailable");
-       await this.onFileReceivedCallback(file, session.fromUserId);
+       await this.onFileReceivedCallback(file, session.fromUserId, session.transferId);
       },
       () => {
        this.emitReceivingUpdate(session, "completed", 100, file);

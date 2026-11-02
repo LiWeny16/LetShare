@@ -287,7 +287,7 @@ const FileBubble: React.FC<FileBubbleProps> = ({ message, isMyMessage, onDownloa
                             </Box>
                         )}
 
-                        {isCompleted && !isDirectDiskFile && directFileLookup !== 'checking' && fileKey && isPreviewable(fileCategory) && (
+                        {isCompleted && !isDirectDiskFile && directFileLookup !== 'checking' && fileKey && isPreviewable(fileCategory) && !/\.docx?$/i.test(fileName) && (
                             <Button
                                 size="small"
                                 variant="outlined"

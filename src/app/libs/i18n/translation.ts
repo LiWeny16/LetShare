@@ -195,6 +195,7 @@ const sharedMalayTranslation = {
             startChat: "Mula bersembang",
         },
         download: {
+            fileGroup: "Kumpulan fail", fileCount: "{{total}} fail", selectFileGroup: "Pilih kumpulan fail", downloadFileGroup: "Muat turun kumpulan fail", fileActions: "Tindakan untuk {{name}}", previewUnavailable: "Pratonton tidak tersedia", previousFile: "Sebelumnya", nextFile: "Seterusnya",
             deleteSelected: "Padam Dipilih",
             downloadSelected: "Muat Turun Dipilih",
             selectAll: "Pilih Semua",
@@ -560,6 +561,7 @@ export const resources = {
                 startChat: "Start chatting",
             },
             download: {
+                fileGroup: "File group", fileCount: "{{total}} files", selectFileGroup: "Select file group", downloadFileGroup: "Download file group", fileActions: "Actions for {{name}}", previewUnavailable: "Preview not available", previousFile: "Previous", nextFile: "Next",
                 deleteSelected: "Delete Selected",
                 downloadSelected: "Download Selected",
                 selectAll: "Select All",
@@ -981,6 +983,10 @@ export const resources = {
                 startChat: "开始聊天",
             },
             download: {
+                fileGroup: "文件组", fileCount: "{{total}} 个文件", selectFileGroup: "选择文件组", downloadFileGroup: "下载文件组", fileActions: "{{name}} 的操作",
+                previewUnavailable: "暂不支持预览此文件",
+                previousFile: "上一个",
+                nextFile: "下一个",
                 deleteSelected: "删除选中",
                 downloadSelected: "下载已选",
                 selectAll: "全选",

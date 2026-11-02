@@ -1232,8 +1232,8 @@ const ChatPanelContent: React.FC<ChatPanelProps> = ({ open, onClose, targetUserI
                     open={previewOpen}
                     onClose={() => {
                         setPreviewOpen(false);
-                        setPreviewState(null);
                     }}
+                    onExited={() => setPreviewState(null)}
                 />
             )}
 
