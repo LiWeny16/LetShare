@@ -16,6 +16,36 @@ export function receivedAlbumKey(key: string): string | null {
   return second < 0 ? null : key.slice(0, second + 2);
 }
 
+export type ReceivedFileRow<T> =
+  | { kind: "file"; key: string; file: T }
+  | { kind: "group"; key: string; files: Array<{ key: string; file: T }> };
+
+/** Group before paginating so a transfer never gets split across pages. */
+export function buildReceivedFileRows<T>(files: ReadonlyArray<{ key: string; file: T }>): ReceivedFileRow<T>[] {
+  const batches = new Map<string, Array<{ key: string; file: T }>>();
+  for (const item of files) {
+    const batch = receivedAlbumKey(item.key);
+    if (!batch) continue;
+    const members = batches.get(batch) ?? [];
+    members.push(item);
+    batches.set(batch, members);
+  }
+
+  const seen = new Set<string>();
+  const rows: ReceivedFileRow<T>[] = [];
+  for (const item of files) {
+    const batch = receivedAlbumKey(item.key);
+    const members = batch ? batches.get(batch) : undefined;
+    if (!batch || !members || members.length < 2) {
+      rows.push({ kind: "file", ...item });
+    } else if (!seen.has(batch)) {
+      seen.add(batch);
+      rows.push({ kind: "group", key: batch, files: members });
+    }
+  }
+  return rows;
+}
+
 /** Keeps every selected file when an archive contains duplicate filenames. */
 export function createUniqueArchiveEntryNames(fileNames: string[]): string[] {
   const used = new Set<string>();

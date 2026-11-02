@@ -158,7 +158,7 @@ test("Download drawer imports FilePreviewDialog", () => {
 });
 
 test("Download drawer opens received files for preview instead of downloading on row click", () => {
-  const rowClick = downloadSource.slice(downloadSource.indexOf("onClick={() => {", downloadSource.indexOf("{pageFiles.map")), downloadSource.indexOf("onContextMenu=", downloadSource.indexOf("{pageFiles.map")));
+  const rowClick = downloadSource.slice(downloadSource.indexOf("const showFilePreview ="), downloadSource.indexOf("return (", downloadSource.indexOf("const showFilePreview =")));
   assert.match(rowClick, /openReceivedPreview\(key, file\)/);
   assert.doesNotMatch(rowClick, /downloadFile\(/);
 });
