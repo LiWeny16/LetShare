@@ -1,6 +1,10 @@
 /** Labels shared by the meeting entry, device settings, controls and errors. */
 export const meetingAdditionalEnglish: Record<string, string> = {
   savedDeviceNotListed: 'Saved device (not currently listed)',
+  connectionOffline: 'Network connection lost. The meeting will reconnect when it returns.', connectionReconnecting: 'Meeting connection interrupted. Reconnecting…',
+  connectionUnavailable: 'Meeting server connection unavailable. Retrying…', connectionRestored: 'Meeting connection restored.',
+  inviteEnableSound: 'Enable invitation sound', inviteSoundUnavailable: 'Invitation sounds are not supported by this browser.',
+  memberSoundEnable: 'Enable member sounds', memberSoundBlocked: 'Interact once to allow the browser to play member sounds.',
   screenShareFailed: 'Could not start screen sharing', invBusyInCall: 'You cannot join a meeting during a call',
   applyApprovedToast: 'Your request was approved. Joining the meeting…', applyRejectedToast: 'The host declined your request',
   applyApprovedHostToast: 'Join request approved', applyFailedToast: 'Could not process the request. Please try again.', applyExpiredToast: 'The join request expired',

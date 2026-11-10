@@ -7,11 +7,18 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 .tmp/
+/.e2e-*.cjs
+/.e2e-*.png
+/.prod-smoke-*.png
+/.prod2-*.png
 
 node_modules
 dist
 dist-ssr
 *.local
+
+# Local Somni reference archive contains environment credentials.
+/somni-intent-router-beta-v2-main.zip
 
 # Editor directories and files
 .vscode/*

@@ -2,7 +2,7 @@
  * DOM 侧极小适配（元素工厂 + 扬声器路由 + 快照辅助）。顶层零浏览器 API（函数内判 typeof document），
  * Node 单测可 import；单测一般直接注入假元素，不需要本模块。
  */
-import type { RemoteAudioMediaElement } from "./remoteAudioHostTypes";
+import type { RemoteAudioMediaElement, SinkRouteResult } from "./remoteAudioHostTypes";
 
 /**
  * 解码 sink / 兜底发声元素的默认工厂：隐藏 <audio> 挂 body 尾部。
@@ -32,24 +32,44 @@ export function audioTrackCount(srcObject: MediaProvider | null): number | null 
  * 失败必须可见（warn），禁止静默吞（X4）。
  */
 export function applySinkRouting(
-  pipeline: { setSinkId(deviceId: string): Promise<boolean> },
+  pipeline: { setSinkId(deviceId: string): Promise<SinkRouteResult> },
   output: RemoteAudioMediaElement | null,
   viaPipeline: boolean,
   sinkId: string,
-): void {
+  isCurrent: () => boolean = () => true,
+): Promise<"pipeline" | "element" | "failed"> {
   if (viaPipeline) {
-    void pipeline.setSinkId(sinkId).then((ok) => {
-      if (!ok) applyElementSinkId(output, sinkId);
-    });
-    return;
+    const fallback = async (result: SinkRouteResult | unknown) => {
+      if (!isCurrent()) return "failed";
+      if (result instanceof Error) console.warn("[RemoteAudioHost] AudioContext setSinkId failed:", result);
+      else console.warn(`[RemoteAudioHost] AudioContext setSinkId ${String(result)}; trying the output element`);
+      return (await applyElementSinkId(output, sinkId)) ? "element" : "failed";
+    };
+    try {
+      return pipeline.setSinkId(sinkId).then((result) => {
+        if (!isCurrent()) return "failed";
+        if (result === "applied" || (result === "unsupported" && sinkId === "")) return "pipeline";
+        return fallback(result);
+      }).catch((err: unknown) => fallback(err));
+    } catch (err: unknown) {
+      return fallback(err);
+    }
   }
-  applyElementSinkId(output, sinkId);
+  return applyElementSinkId(output, sinkId).then((ok) => ok ? "element" : "failed");
 }
 
-function applyElementSinkId(output: RemoteAudioMediaElement | null, sinkId: string): void {
+async function applyElementSinkId(output: RemoteAudioMediaElement | null, sinkId: string): Promise<boolean> {
   const setSinkId = output?.setSinkId;
-  if (!setSinkId) return;
-  void setSinkId.call(output, sinkId).catch((err: unknown) => {
+  if (!setSinkId) {
+    if (sinkId === "") return true;
+    console.warn("[RemoteAudioHost] Output element does not support setSinkId");
+    return false;
+  }
+  try {
+    await setSinkId.call(output, sinkId);
+    return true;
+  } catch (err: unknown) {
     console.warn("[RemoteAudioHost] 元素 setSinkId 失败:", err);
-  });
+    return false;
+  }
 }

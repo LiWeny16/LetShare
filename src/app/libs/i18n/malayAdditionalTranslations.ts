@@ -21,6 +21,12 @@ export const malayAdditionalTranslations = {
   },
   meeting: {
     savedDeviceNotListed: 'Peranti tersimpan (tidak disenaraikan sekarang)',
+    connectionOffline: 'Sambungan rangkaian terputus. Mesyuarat akan menyambung semula apabila rangkaian pulih.',
+    connectionReconnecting: 'Sambungan mesyuarat terputus, sedang menyambung semula…',
+    connectionUnavailable: 'Sambungan ke pelayan mesyuarat tidak tersedia. Mencuba semula…',
+    connectionRestored: 'Sambungan mesyuarat telah pulih.',
+    inviteEnableSound: 'Hidupkan bunyi jemputan', inviteSoundUnavailable: 'Pelayar ini tidak menyokong bunyi jemputan.',
+    memberSoundEnable: 'Hidupkan bunyi ahli', memberSoundBlocked: 'Berinteraksi sekali untuk membenarkan pelayar memainkan bunyi ahli.',
     panelNavigation: "Panel mesyuarat",
     ...regionalCommonTranslations.ms.meeting,
     ...meetingAiMoreMalayTranslations,

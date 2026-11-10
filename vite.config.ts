@@ -83,7 +83,9 @@ export default defineConfig({
         // Don't precache index.html — stale HTML from SW cache is the #1 source
         // of "loading failed" errors. Use NetworkFirst runtime route instead.
         navigateFallback: undefined,
+        // Local Whisper's ~27MB ONNX runtime wasm is fetched on demand only.
         globIgnores: [
+          '**/*.wasm',
           '**/index.html',
           '**/landing.html',
           '**/*gsap*.js',
@@ -125,7 +127,7 @@ export default defineConfig({
             urlPattern: /^https:\/\/.*/i,
             handler: 'StaleWhileRevalidate',
             options: {
-              cacheName: 'external-cache-v24',
+              cacheName: 'external-cache-v25',
               expiration: {
                 maxEntries: 200,
                 maxAgeSeconds: 60 * 60 * 24 * 365 // 365天

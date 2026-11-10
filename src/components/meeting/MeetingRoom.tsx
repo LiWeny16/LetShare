@@ -6,6 +6,7 @@ import { MeetingDialog as Dialog } from "./components/MeetingDialog";
  * conversation rail, and a labelled control dock.
  */
 import { isValidElement, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { reaction } from "mobx";
 import { LayoutGroup, MotionConfig, motion } from "motion/react";
 import {
   alpha,
@@ -51,6 +52,7 @@ import CheckIcon from "@mui/icons-material/Check";
 import SettingsIcon from "@mui/icons-material/Settings";
 import LanguageIcon from "@mui/icons-material/Language";
 import AutoAwesomeIcon from "@mui/icons-material/AutoAwesome";
+import ClosedCaptionOutlinedIcon from "@mui/icons-material/ClosedCaptionOutlined";
 import NotesOutlinedIcon from "@mui/icons-material/NotesOutlined";
 import DragIndicatorIcon from "@mui/icons-material/DragIndicator";
 import FullscreenIcon from "@mui/icons-material/Fullscreen";
@@ -59,6 +61,7 @@ import CenterFocusStrongIcon from "@mui/icons-material/CenterFocusStrong";
 import PictureInPictureAltIcon from "@mui/icons-material/PictureInPictureAlt";
 import realTimeColab from "@App/libs/connection/colabLib";
 import settingsStore from "@App/libs/mobx/mobx";
+import { getMeetingConnectionNotice, meetingSoundPlayer, MeetingConnectionRecoveryConfirmation, transitionMeetingConnectionBanner, type MeetingConnectionNotice, type MeetingServerConnectionState } from "@App/libs/meeting/meetingFeedback";
 import { setAppLanguage } from "@App/libs/i18n/i18n";
 import {
   MeetingRemoteAudio,
@@ -68,9 +71,10 @@ import { buildPlaybackDump, registerDiagnosticsProvider } from "../../diagnostic
 import { useTranslation } from "react-i18next";
 import alertUseMUI from "@App/libs/tools/alert";
 import { meetingManager, type MeetingStage, type PresentationFocusTarget } from "@App/libs/meeting/meetingManager";
-import { getMeetingAiSecret, getMemberMeetingAiPreferences } from "@App/libs/meeting/meetingAi";
+import { getMemberMeetingAiPreferences, getMeetingMinutesNoticeKey, setMemberMeetingAiPreferences, shouldShowMeetingMinutesNotice, MEETING_AI_ASSISTANT_ID, type MeetingTranscriptSegment } from "@App/libs/meeting/meetingAi";
 import { finalizeMeetingMinutes, getMeetingMinutesSession, ensureMeetingMinutesSession, subscribeMeetingMinutesSession } from "@App/libs/meeting/meetingMinutesSession";
 import { saveMeetingMinutesHistory, toMeetingMinutesHistoryRecord } from "@App/libs/meeting/meetingMinutesHistory";
+import { startMeetingMinutesAutoSave, type MeetingMinutesAutoSaveHandle, type MeetingMinutesAutoSaveStatus } from "@App/libs/meeting/meetingMinutesAutoSave";
 import { VideoWall } from "./components/VideoWall";
 import { MemberTile } from "./components/MemberTile";
 import { MeetingMenu } from "./components/MeetingMenu";
@@ -83,10 +87,18 @@ import { ExcalidrawBoard } from "./components/ExcalidrawBoard";
 import MeetingInviteDialog from "./components/MeetingInviteDialog";
 import MeetingMediaSettingsDialog from "./components/MeetingMediaSettingsDialog";
 import MeetingAiMinutesDialog from "./components/MeetingAiMinutesDialog";
+import MeetingLiveCaptionsPanel, { MeetingCaptionOverlay, type CaptionEntry, type CaptionLanguage } from "./components/MeetingLiveCaptionsPanel";
 import MeetingMinutesConsentDialog from "./components/MeetingMinutesConsentDialog";
 import MeetingMinutesEndScreen from "./components/MeetingMinutesEndScreen";
 import { useLocalStream } from "./hooks/useLocalStream";
 import { useMeetingTimer, formatDuration } from "./hooks/useMeetingTimer";
+import { useMeetingCaptionTranslations } from "./hooks/useMeetingCaptionTranslations";
+import { captionSourceLanguage, captionTranslationKey, resolveCaptionEngine, type CaptionEngineNote } from "@App/libs/meeting/meetingCaptions";
+
+// Subtitle mode is temporarily parked while the server-mixed AI minutes
+// pipeline ships. Flip this flag back on to restore the caption surfaces;
+// no caption code has been deleted.
+const LIVE_CAPTIONS_ENABLED = false;
 import { useMeetingFloatingDrag } from "./hooks/useMeetingFloatingDrag";
 import { useMeetingPanelResize } from "./hooks/useMeetingPanelResize";
 import { useSpeakingUsers, type SpeakingSource } from "./hooks/useSpeakingUsers";
@@ -133,6 +145,56 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
   const [, force] = useState(0);
   const [focused, setFocused] = useState("");
   useEffect(() => meetingManager.subscribe(() => force((x) => x + 1)), []);
+  const [browserOnline, setBrowserOnline] = useState(() => typeof navigator === "undefined" || navigator.onLine);
+  const [serverConnectionState, setServerConnectionState] = useState<MeetingServerConnectionState>(
+    () => settingsStore.getUnrmb("serverConnState") ?? "disconnected",
+  );
+  const [awaitingServerConfirmation, setAwaitingServerConfirmation] = useState(false);
+  const [connectionNotice, setConnectionNotice] = useState<MeetingConnectionNotice | "recovered">(null);
+  const [memberSoundPrompt, setMemberSoundPrompt] = useState<"enable" | "unsupported" | null>(null);
+  const pendingMemberChimeRef = useRef(false);
+  const previousNetworkIssueRef = useRef(false);
+  const networkIssue = getMeetingConnectionNotice(browserOnline, serverConnectionState, awaitingServerConfirmation);
+
+  useEffect(() => {
+    const recovery = new MeetingConnectionRecoveryConfirmation(
+      (listener) => realTimeColab.onServerTraffic(listener),
+      () => setAwaitingServerConfirmation(false),
+    );
+    if (!navigator.onLine) recovery.markOffline();
+    const onOnline = () => {
+      setBrowserOnline(true);
+      setAwaitingServerConfirmation(recovery.waitForServerConfirmation());
+    };
+    const onOffline = () => {
+      recovery.markOffline();
+      setAwaitingServerConfirmation(false);
+      setBrowserOnline(false);
+    };
+    const disposeConnectionReaction = reaction(
+      () => settingsStore.getUnrmb("serverConnState"),
+      (next) => setServerConnectionState(next ?? "disconnected"),
+    );
+    window.addEventListener("online", onOnline);
+    window.addEventListener("offline", onOffline);
+    return () => {
+      disposeConnectionReaction();
+      recovery.dispose();
+      window.removeEventListener("online", onOnline);
+      window.removeEventListener("offline", onOffline);
+    };
+  }, []);
+
+  useEffect(() => {
+    const transition = transitionMeetingConnectionBanner(networkIssue, previousNetworkIssueRef.current);
+    previousNetworkIssueRef.current = transition.hasIssue;
+    setConnectionNotice(transition.banner);
+    if (transition.banner === "recovered") {
+      const timer = window.setTimeout(() => setConnectionNotice(null), 2400);
+      return () => window.clearTimeout(timer);
+    }
+    return;
+  }, [networkIssue]);
 
   const selfId = realTimeColab.getUniqId() ?? "";
   const amHost = !!state.hostId && state.hostId === selfId;
@@ -142,13 +204,19 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
       setMemberMinutesPreferences(next);
       setMinutesConsentDecision("pending");
       const current = meetingManager.getState();
-      if (!next.enabled && current.minutes.running && current.hostId !== selfId) meetingManager.consentMinutes(false);
+      if (!next.enabled && !current.minutes.running && current.minutes.captionActive) meetingManager.consentMinutes(false);
     };
     window.addEventListener("meeting-minutes-member-preferences", onMemberMinutesPreferences);
     return () => window.removeEventListener("meeting-minutes-member-preferences", onMemberMinutesPreferences);
   }, [selfId]);
   const inBreakout = /\d{4}B\d+$/.test(state.roomId ?? "");
   const meetingId = state.roomId || "";
+  const [acknowledgedMinutesNoticeKey, setAcknowledgedMinutesNoticeKey] = useState("");
+  const activeMinutesNoticeKey = getMeetingMinutesNoticeKey(state.minutes, meetingId);
+  const captionOnly = LIVE_CAPTIONS_ENABLED && !!state.minutes.captionActive && !state.minutes.running;
+  useEffect(() => {
+    if (!state.minutes.running) setAcknowledgedMinutesNoticeKey("");
+  }, [meetingId, state.minutes.running]);
   const title = state.title || t("meeting.untitled", "未命名会议");
 
   useEffect(() => {
@@ -173,6 +241,25 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
   const [mediaSettingsOpen, setMediaSettingsOpen] = useState(false);
   const [languageAnchor, setLanguageAnchor] = useState<HTMLElement | null>(null);
   const [minutesExpanded, setMinutesExpanded] = useState(false);
+  const [focusTranscript, setFocusTranscript] = useState<{ segmentId: string; requestId: number }>();
+  const focusTranscriptSequence = useRef(0);
+  const [captionsOpen, setCaptionsOpen] = useState(false);
+  const [captionCaptureError, setCaptionCaptureError] = useState("");
+  const [captionCaptureStatus, setCaptionCaptureStatus] = useState("");
+  const [captionInterim, setCaptionInterim] = useState<{ speakerName: string; text: string } | null>(null);
+  const [captionCaptureRunning, setCaptionCaptureRunning] = useState(false);
+  const [captionsActive, setCaptionsActive] = useState(false);
+  const captionsActiveRef = useRef(false);
+  const previousCaptionStageRef = useRef(state.stage);
+  const [captionSegments, setCaptionSegments] = useState<MeetingTranscriptSegment[]>([]);
+  const [captionTargetLanguage, setCaptionTargetLanguage] = useState<CaptionLanguage>(() => t("meeting.captionDefaultTarget", "zh-CN") === "en-US" ? "en-US" : "zh-CN");
+  const [captionServiceTimeout, setCaptionServiceTimeout] = useState(false);
+  // Auto-switching away from a server engine the operator never configured is
+  // informational; it must not look like a failure of the member's device.
+  const [captionEngineNote, setCaptionEngineNote] = useState<CaptionEngineNote>("");
+  const [captionStallHint, setCaptionStallHint] = useState("");
+  const [minutesWorkspaceContainer, setMinutesWorkspaceContainer] = useState<HTMLDivElement | null>(null);
+  const [minutesBriefContainer, setMinutesBriefContainer] = useState<HTMLDivElement | null>(null);
   const [minutesConsentDecision, setMinutesConsentDecision] = useState<"pending" | "accepted" | "rejected">("pending");
   const [memberMinutesPreferences, setMemberMinutesPreferences] = useState(() => getMemberMeetingAiPreferences());
   const [mediaSettingsVersion, setMediaSettingsVersion] = useState(0);
@@ -180,6 +267,127 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
   const [stageFocusMode, setStageFocusMode] = useState(false);
   const [nativeFullscreen, setNativeFullscreen] = useState<"stage" | "room" | null>(null);
   const [minutesSession, setMinutesSession] = useState(() => getMeetingMinutesSession());
+  const [minutesSaveStatus, setMinutesSaveStatus] = useState<MeetingMinutesAutoSaveStatus | "idle">("idle");
+  const minutesAutoSaveRef = useRef<MeetingMinutesAutoSaveHandle | null>(null);
+  useEffect(() => {
+    if (!meetingId) return;
+    let mounted = true;
+    setMinutesSaveStatus("idle");
+    const saver = startMeetingMinutesAutoSave({
+      subscribe: subscribeMeetingMinutesSession,
+      getSnapshot: () => {
+        const snapshot = getMeetingMinutesSession();
+        return snapshot?.roomId === meetingId ? snapshot : null;
+      },
+      onStatus: (status) => { if (mounted) setMinutesSaveStatus(status); },
+    });
+    minutesAutoSaveRef.current = saver;
+    return () => {
+      mounted = false;
+      if (minutesAutoSaveRef.current === saver) minutesAutoSaveRef.current = null;
+      // Drain the latest local snapshot before unsubscribing; failure has
+      // already been surfaced while the meeting was open.
+      void saver.flush().catch(() => undefined).finally(() => saver.stop());
+    };
+  }, [meetingId]);
+  useEffect(() => {
+    captionsActiveRef.current = false;
+    setCaptionsActive(false);
+    setCaptionsOpen(false);
+    setCaptionSegments([]);
+  }, [meetingId]);
+  useEffect(() => meetingManager.onEvent((event) => {
+    if (!captionsActiveRef.current || event.type !== "meeting:minutes") return;
+    if (event.data.kind === "asr-capabilities") {
+      // A deployment that never configured the server streaming recognizer
+      // would otherwise wait forever with no text and no error, so say so.
+      const caps = event.data as typeof event.data & { stream?: boolean };
+      const decision = resolveCaptionEngine(getMemberMeetingAiPreferences().asrSource, { stream: caps.stream === true, chunk: false, ai: false });
+      setCaptionEngineNote(decision.note);
+      if (!decision.note) setCaptionCaptureError("");
+      return;
+    }
+    if (event.data.kind === "asr-error" || event.data.kind === "asr-stream-error") {
+      const data = event.data as typeof event.data & { message?: string };
+      setCaptionCaptureError(String(data.message || "识别服务暂不可用"));
+      setCaptionCaptureStatus("");
+      return;
+    }
+    if (event.data.kind === "asr-interim") {
+      const data = event.data as typeof event.data & { text?: string; speakerName?: string };
+      const text = String(data.text || "").trim();
+      if (text) setCaptionInterim({ speakerName: String(data.speakerName || ""), text });
+      return;
+    }
+    const incoming = event.data.kind === "segments" ? event.data.segments : event.data.kind === "segment" && event.data.segment ? [event.data.segment] : undefined;
+    if (!incoming?.length) return;
+    setCaptionInterim(null);
+    setCaptionSegments((previous) => {
+      const known = new Set(previous.map((item) => item.id));
+      const next = incoming.filter((item) => item.final && !known.has(item.id) && (known.add(item.id), true));
+      return next.length ? [...previous, ...next].slice(-300) : previous;
+    });
+  }), []);
+  useEffect(() => {
+    const wasInMeeting = previousCaptionStageRef.current === "in-meeting";
+    previousCaptionStageRef.current = state.stage;
+    if (!wasInMeeting && state.stage === "in-meeting" && captionsActiveRef.current) meetingManager.setCaptionsSubscribed(true);
+  }, [state.stage]);
+  useEffect(() => {
+    setCaptionServiceTimeout(false);
+    if (!captionsActive || state.minutes.captionActive) return;
+    const timer = window.setTimeout(() => setCaptionServiceTimeout(true), 5000);
+    return () => window.clearTimeout(timer);
+  }, [captionsActive, state.minutes.captionActive]);
+  // Local capture can look healthy while no recognizer answers at all. Waiting
+  // forever without a word is what made captions look "broken, no reaction".
+  useEffect(() => {
+    const quiet = !captionSegments.length && !captionInterim && !captionCaptureStatus;
+    if (!captionsActive || !captionCaptureRunning || !quiet) { setCaptionStallHint(""); return; }
+    const timer = window.setTimeout(
+      () => setCaptionStallHint(t("meeting.captionsNoRecognition", "识别服务超过 15 秒没有返回文字：可能是服务端未配置识别或网络不通。")),
+      15_000,
+    );
+    return () => window.clearTimeout(timer);
+  }, [captionsActive, captionCaptureRunning, captionSegments.length, captionInterim, captionCaptureStatus, t]);
+  const captionTranscriptIds = useMemo(() => new Set((minutesSession?.transcript || []).map((item) => item.id)), [minutesSession?.transcript]);
+  const captionTranslations = useMeetingCaptionTranslations(meetingId, captionsActive && !!state.minutes.captionActive, captionSegments, captionTargetLanguage);
+  const captionEntries = useMemo<CaptionEntry[]>(() => captionSegments.map((segment) => {
+    const translation = captionTranslations.get(captionTranslationKey(segment.id, captionTargetLanguage));
+    return {
+      id: segment.id, speakerName: segment.speakerName, text: segment.text, startMs: segment.startMs,
+      language: captionSourceLanguage(segment),
+      transcriptAvailable: captionTranscriptIds.has(segment.id),
+      translatedText: translation?.text,
+      translationState: translation?.state,
+    };
+  }), [captionSegments, captionTranscriptIds, captionTargetLanguage, captionTranslations]);
+  useEffect(() => {
+    // Starting a fresh caption/minute session asks for consent again.
+    if (!state.minutes.captionActive && !state.minutes.running) setMinutesConsentDecision("pending");
+  }, [state.minutes.captionActive, state.minutes.running]);
+  const setPersonalCaptions = (enabled: boolean) => {
+    if (!LIVE_CAPTIONS_ENABLED) return;
+    if (enabled && !captionsActiveRef.current) {
+      // A previous rejection must not silently suppress the consent prompt.
+      setMinutesConsentDecision("pending");
+      setCaptionCaptureError("");
+    }
+    setCaptionEngineNote("");
+    setCaptionStallHint("");
+    if (!enabled) { setCaptionCaptureError(""); setCaptionCaptureStatus(""); setCaptionCaptureRunning(false); setCaptionInterim(null); }
+    captionsActiveRef.current = enabled;
+    setCaptionsActive(enabled);
+    if (enabled && minutesSession?.transcript.length) setCaptionSegments((previous) => {
+      const known = new Set(previous.map((item) => item.id));
+      return [...previous, ...minutesSession.transcript.filter((item) => !known.has(item.id))].slice(-300);
+    });
+    meetingManager.setCaptionsSubscribed(enabled);
+  };
+  const captionEngineNotice = captionEngineNote === "captionsEngineUnsupported"
+    ? t("meeting.captionsEngineUnsupported", "服务端未配置识别服务，实时字幕暂不可用。")
+    : "";
+  const captionHint = captionStallHint || captionEngineNotice || captionCaptureStatus;
   const meetingShellRef = useRef<HTMLDivElement | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const [sharingView, setSharingView] = useState<"screen" | "whiteboard">("screen");
@@ -284,7 +492,7 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
 
   useEffect(() => {
     setMinutesConsentDecision("pending");
-  }, [meetingId, state.minutes.configured, state.minutes.running]);
+  }, [meetingId, state.minutes.configured, state.minutes.running, state.minutes.captionActive]);
 
   useEffect(() => {
     if (state.applicants.size > 0) setApplicantsOpen(true);
@@ -320,7 +528,17 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
       if (ev.type === "meeting:ended") {
         alertUseMUI(t("meeting.endedToast", "会议已结束"), 2500, { kind: "info" });
         if (endingRef.current) setMeetingEnded(true);
-        else onExit();
+        else {
+          const snapshot = getMeetingMinutesSession();
+          if (snapshot && (snapshot.transcript.length > 0 || snapshot.summary)) {
+            void (async () => {
+              try { await finalizeMeetingMinutes(); await minutesAutoSaveRef.current?.flush(); }
+              catch { setMinutesSaveStatus("error"); }
+              setMinutesSession(getMeetingMinutesSession());
+              setMeetingEnded(true);
+            })();
+          } else onExit();
+        }
       } else if (ev.type === "meeting:kicked") {
         alertUseMUI(t("meeting.kickedToast", "你已被移出会议"), 2500, { kind: "warning" });
         onExit();
@@ -343,6 +561,11 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
           alertUseMUI(t("meeting.inviteAcceptedToast", "{{name}} 已接受邀请", { name: who }), 2500, { kind: "success" });
         } else if (ev.data.action === "reject") {
           alertUseMUI(t("meeting.inviteRejectedToast", "{{name}} 已拒绝邀请", { name: who }), 2500, { kind: "info" });
+        }
+      } else if (ev.type === "meeting:member-joined") {
+        if (!meetingSoundPlayer.playMemberJoined()) {
+          setMemberSoundPrompt(meetingSoundPlayer.supported ? "enable" : "unsupported");
+          pendingMemberChimeRef.current = meetingSoundPlayer.supported;
         }
       } else if (ev.type === "meeting:sharing-request") {
         if (ev.data.action === "focus-request" && ev.data.requestId && ev.data.from) {
@@ -648,13 +871,34 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
     );
   };
 
+  const handleLeaveMeeting = async () => {
+    try {
+      // Flush queued final speech first so the sender's own last lines reach
+      // the server and the local snapshot before the channel closes.
+      meetingManager.flushMinutesSegments();
+      await minutesAutoSaveRef.current?.flush();
+    } catch {
+      setMinutesSaveStatus("error");
+      if (!window.confirm(t("meeting.minutesLeaveWithoutSave", "会议纪要未能保存到本机。建议先导出；仍要离开吗？"))) return;
+    }
+    await meetingManager.leaveMeeting();
+    onExit();
+  };
+
   const handleEndMeeting = async () => {
     if (endingMinutes) return;
     setEndingMinutes(true);
     setEndMinutesError("");
     try {
       const finalized = await finalizeMeetingMinutes();
-      if (finalized) await saveMeetingMinutesHistory(toMeetingMinutesHistoryRecord(finalized));
+      try {
+        if (minutesAutoSaveRef.current) await minutesAutoSaveRef.current.flush();
+        else if (finalized && (finalized.transcript.length || finalized.summary)) await saveMeetingMinutesHistory(toMeetingMinutesHistoryRecord(finalized));
+      } catch {
+        // A local storage failure must not prevent ending the meeting; the
+        // end screen remains available so the participant can export.
+        setMinutesSaveStatus("error");
+      }
       endingRef.current = true;
       setMinutesSession(getMeetingMinutesSession());
       setEndDialogOpen(false);
@@ -667,8 +911,21 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
     }
   };
 
+  const enableMemberSounds = async () => {
+    const unlocked = await meetingSoundPlayer.unlockFromGesture();
+    if (!unlocked) {
+      setMemberSoundPrompt(meetingSoundPlayer.supported ? "enable" : "unsupported");
+      return;
+    }
+    if (pendingMemberChimeRef.current) {
+      pendingMemberChimeRef.current = false;
+      meetingSoundPlayer.playMemberJoined();
+    }
+    setMemberSoundPrompt(null);
+  };
+
   if (meetingEnded && minutesSession) {
-    return <MeetingMinutesEndScreen record={toMeetingMinutesHistoryRecord(minutesSession)} onExit={onExit} />;
+    return <MeetingMinutesEndScreen record={toMeetingMinutesHistoryRecord(minutesSession)} saved={minutesSaveStatus === "saved"} onExit={onExit} />;
   }
 
   return (
@@ -688,6 +945,7 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
         "&:fullscreen": { bgcolor: pageBackground },
       }}
     >
+      {minutesSaveStatus === "error" && <Alert severity="warning" data-testid="meeting-minutes-save-error" action={<Button color="inherit" onClick={() => { void minutesAutoSaveRef.current?.flush().catch(() => undefined); }}>{t("meeting.minutesRetrySave", "重试保存")}</Button>} sx={{ position: "absolute", zIndex: 1401, top: 64, left: "50%", transform: "translateX(-50%)", maxWidth: "calc(100% - 32px)" }}>{t("meeting.minutesSaveFailed", "会议纪要未能保存到本机，请重试或导出原文。")}</Alert>}
       {/* D5 可见降级：自动播放被拒 → 常驻琥珀 chip（非阻断式，不挡会议操作）；
           点击 = 手势上下文内 resume()+play() 并按当前裁决复原 muted/volume。 */}
       {audioBlocked && (
@@ -846,6 +1104,41 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
         </Stack>
       </Box>
 
+      {connectionNotice && (
+        <Alert
+          role="status"
+          data-testid="meeting-network-status"
+          data-status={connectionNotice}
+          severity={connectionNotice === "recovered" ? "success" : "warning"}
+          sx={{ flexShrink: 0, borderRadius: 0, alignItems: "center", "& .MuiAlert-message": { minWidth: 0, fontSize: "0.78rem" } }}
+        >
+          {connectionNotice === "offline"
+            ? t("meeting.connectionOffline", "网络暂时断开，会议连接将在网络恢复后重试。")
+            : connectionNotice === "reconnecting"
+              ? t("meeting.connectionReconnecting", "会议连接中断，正在重连…")
+              : connectionNotice === "disconnected"
+                ? t("meeting.connectionUnavailable", "会议服务器连接不可用，正在重试…")
+                : t("meeting.connectionRestored", "会议连接已恢复")}
+        </Alert>
+      )}
+      {memberSoundPrompt && (
+        <Alert
+          role="status"
+          data-testid="meeting-member-sound-status"
+          severity={memberSoundPrompt === "enable" ? "info" : "warning"}
+          action={memberSoundPrompt === "enable" ? (
+            <Button color="inherit" size="small" onClick={() => void enableMemberSounds()} sx={{ minHeight: 40, whiteSpace: "nowrap" }}>
+              {t("meeting.memberSoundEnable", "启用成员提示音")}
+            </Button>
+          ) : undefined}
+          sx={{ flexShrink: 0, borderRadius: 0, alignItems: "center", "& .MuiAlert-message": { minWidth: 0, fontSize: "0.78rem" } }}
+        >
+          {memberSoundPrompt === "enable"
+            ? t("meeting.memberSoundBlocked", "浏览器需要一次交互才能播放成员提示音。")
+            : t("meeting.inviteSoundUnavailable", "当前浏览器不支持邀请提示音")}
+        </Alert>
+      )}
+
       {state.microphoneError && !state.microphonePending && (
         <Alert
           severity="warning"
@@ -868,6 +1161,23 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
         </Alert>
       )}
 
+            {LIVE_CAPTIONS_ENABLED && <MeetingLiveCaptionsPanel
+              open={captionsOpen}
+              active={captionsActive}
+              entries={captionEntries}
+              sourceLanguage={memberMinutesPreferences.language === "en-US" ? "en-US" : "zh-CN"}
+              targetLanguage={captionTargetLanguage}
+              error={captionCaptureError || (captionEngineNote === "captionsEngineUnsupported" ? captionEngineNotice : "") || (captionServiceTimeout ? t("meeting.captionsServerUnavailable", "会议服务暂不支持字幕，无法开始转写。") : captionEntries.some((entry) => entry.translationState === "error") ? t("meeting.captionsTranslationUnavailable", "部分翻译暂不可用，仍可查看原文字幕。") : "")}
+              transcriptAvailable={captionTranscriptIds.size > 0}
+              centerOffset={panelOpen && !isMobileBp ? -Math.round(panelWidth / 2) : 0}
+              busyHint={captionHint}
+              captureActive={captionCaptureRunning}
+              onToggleActive={() => setPersonalCaptions(!captionsActive)}
+              onClose={() => setCaptionsOpen(false)}
+              onSourceLanguageChange={(language) => setMemberMeetingAiPreferences({ language })}
+              onTargetLanguageChange={setCaptionTargetLanguage}
+              onViewTranscript={(segmentId) => { setFocusTranscript({ segmentId, requestId: ++focusTranscriptSequence.current }); setMinutesExpanded(true); setCaptionsOpen(false); }}
+            />}
       <Box
         component="main"
         sx={{
@@ -900,6 +1210,17 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
               boxShadow: "0 12px 30px rgba(44, 57, 78, 0.12), 0 2px 8px rgba(44, 57, 78, 0.06)",
             }}
           >
+            {LIVE_CAPTIONS_ENABLED && <MeetingCaptionOverlay
+              active={captionsActive}
+              busyHint={captionCaptureError || captionHint}
+              captureActive={captionCaptureRunning}
+              interim={captionInterim ?? undefined}
+              entries={captionEntries}
+              sourceLanguage={memberMinutesPreferences.language === "en-US" ? "en-US" : "zh-CN"}
+              targetLanguage={captionTargetLanguage}
+              transcriptAvailable={captionTranscriptIds.size > 0}
+              onViewTranscript={(segmentId) => { setFocusTranscript({ segmentId, requestId: ++focusTranscriptSequence.current }); setMinutesExpanded(true); }}
+            />}
             {!minutesExpanded && <Stack direction="row" alignItems="center" spacing={1} sx={{ px: { xs: 1, sm: 1.5 }, pt: 0.5, minHeight: 44, flexShrink: 0, minWidth: 0 }}>
               <Typography sx={{ color: "text.primary", fontSize: "0.75rem", fontWeight: 750, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                 {activeSharingMode === "screen" ? t("meeting.screenSharing", "正在共享屏幕") : activeSharingMode === "whiteboard" ? t("meeting.whiteboard", "白板") : t("meeting.stage", "会议舞台")}
@@ -912,6 +1233,7 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
                 size="small"
                 sx={{ height: 23, flexShrink: 0, color: "text.secondary", bgcolor: alpha(BLUE, 0.08), border: `1px solid ${alpha(BLUE, 0.12)}`, fontSize: "0.68rem", fontWeight: 700 }}
               />
+              {LIVE_CAPTIONS_ENABLED && state.minutes.captionActive && <Tooltip title={t("meeting.captionsPartialHint", "只有同意且成功识别的发言才会显示，部分内容可能缺失。") }><Chip size="small" data-testid="meeting-captions-recording-indicator" label={t("meeting.captionsProcessing", "字幕转写进行中")} sx={{ height: 23, maxWidth: "45%", bgcolor: alpha(BLUE, 0.08), color: "text.secondary", fontSize: "0.68rem" }} /></Tooltip>}
               <Box sx={{ flex: 1, minWidth: 0 }} />
               <Tooltip title={stageFocusMode ? t("meeting.stageRestore", "还原布局") : t("meeting.stageFocus", "专注舞台")}>
                 <IconButton
@@ -950,16 +1272,7 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
               </Tooltip>
             </Stack>}
             <Box data-testid="meeting-stage-content" sx={{ flex: 1, p: minutesExpanded ? 0 : activeSharingMode === "whiteboard" ? 0.5 : { xs: 1, sm: 1.5 }, pt: 0, minHeight: 0, display: "flex", flexDirection: "column" }}>
-              <Box sx={{ display: minutesExpanded ? "flex" : "none", flex: 1, minHeight: 0, flexDirection: "column" }}>
-                <MeetingAiMinutesDialog
-                  open={minutesExpanded}
-                  mode="workspace"
-                  embedded
-                  onClose={() => {
-                    setMinutesExpanded(false);
-                  }}
-                />
-              </Box>
+              <Box ref={setMinutesWorkspaceContainer} sx={{ display: minutesExpanded ? "flex" : "none", flex: 1, minHeight: 0, flexDirection: "column" }} />
               <Box sx={{ display: minutesExpanded ? "none" : "flex", flex: 1, minHeight: 0, flexDirection: "column" }}>
               {focusedTile ? (
                 <Stack spacing={1} sx={{ height: "100%", minHeight: 0 }}>
@@ -1158,15 +1471,7 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
             </Box>
             <Box id="meeting-panel-content-notes" role="tabpanel" aria-labelledby="meeting-panel-tab-notes" sx={{ display: panelTab === 2 ? "flex" : "none", flex: 1, minHeight: 0, flexDirection: "column" }}>
               <Box sx={{ display: minutesExpanded ? "flex" : "none", flex: 1, minHeight: 0, flexDirection: "column" }}><Stack alignItems="center" justifyContent="center" spacing={1} sx={{ flex: 1, px: 2, textAlign: "center", color: "text.secondary" }}><NotesOutlinedIcon sx={{ color: BLUE, fontSize: 28 }} /><Typography sx={{ fontSize: "0.84rem", fontWeight: 800, color: "text.primary" }}>{t("meeting.presentationMinutesOnLeft", "AI 会议纪要详情见左边")}</Typography><Typography sx={{ fontSize: "0.7rem", lineHeight: 1.5 }}>{t("meeting.presentationMinutesPanelHint", "右侧保留聊天和成员，会议纪要正在左侧工作区展示。")}</Typography></Stack></Box>
-              <Box sx={{ display: minutesExpanded ? "none" : "flex", flex: 1, minHeight: 0, flexDirection: "column" }}><MeetingAiMinutesDialog
-                open={panelTab === 2 && !minutesExpanded}
-                mode="panel"
-                onClose={() => {
-                  setPanelTab(2);
-                  setPanelOpen(true);
-                }}
-                onExpand={() => setMinutesExpanded(true)}
-              /></Box>
+              <Box ref={setMinutesBriefContainer} sx={{ display: minutesExpanded ? "none" : "flex", flex: 1, minHeight: 0, flexDirection: "column" }} />
             </Box>
           </Box>
         </Paper>
@@ -1219,11 +1524,12 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
         }, whiteboardOn, false, state.stage !== "in-meeting", "meeting-whiteboard-toggle")}
         {meetingId && control(<LinkIcon />, t("meeting.inviteAction", "邀请"), () => setInviteOpen(true), false, false, false, "meeting-invite-open")}
         {control(panelOpen ? <CloseIcon /> : <ChatIcon />, panelOpen ? t("meeting.panelClose", "收起面板") : t("meeting.panelOpen", "打开面板"), () => setPanelOpen((value) => !value), panelOpen)}
+        {LIVE_CAPTIONS_ENABLED && control(<ClosedCaptionOutlinedIcon />, t("meeting.liveCaptionsToolbar", "字幕与翻译"), () => { if (!captionsOpen && !captionsActive) setPersonalCaptions(true); setCaptionsOpen(!captionsOpen); }, captionsActive, false, state.stage !== "in-meeting", "meeting-live-captions-toolbar")}
          {control(<AutoAwesomeIcon />, t("meeting.aiMinutes", "AI 会议纪要"), () => setMinutesExpanded((value) => !value), minutesExpanded, false, state.stage !== "in-meeting", "meeting-ai-minutes-open")}
         </Box>
         <Stack direction="row" alignItems="center" sx={{ flexShrink: 0, borderRadius: 2, bgcolor: (th) => alpha(th.palette.error.main, 0.08) }}>
           <Tooltip title={t("meeting.leave", "离开")} arrow>
-            <IconButton aria-label={t("meeting.leave", "离开")} onClick={() => { void meetingManager.leaveMeeting(); onExit(); }} sx={{ width: 48, height: 48, color: "error.main", borderRadius: 2 }}>
+            <IconButton aria-label={t("meeting.leave", "离开")} onClick={() => { void handleLeaveMeeting(); }} sx={{ width: 48, height: 48, color: "error.main", borderRadius: 2 }}>
               <CallEndIcon sx={{ fontSize: 21 }} />
             </IconButton>
           </Tooltip>
@@ -1252,15 +1558,43 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
         onSettingsChanged={() => setMediaSettingsVersion((value) => value + 1)}
       />
 
+      {/* Keep one capture/summary controller mounted when switching surfaces.
+          A second instance would stop a live recording or overwrite its finalizer. */}
+      <MeetingAiMinutesDialog
+        open={minutesExpanded || (panelOpen && panelTab === 2)}
+        mode={minutesExpanded ? "workspace" : "panel"}
+        embedded={minutesExpanded}
+        portalTarget={minutesExpanded ? minutesWorkspaceContainer : minutesBriefContainer}
+        focusTranscript={focusTranscript}
+        onViewTranscript={(segmentId) => { setFocusTranscript({ segmentId, requestId: ++focusTranscriptSequence.current }); setMinutesExpanded(true); }}
+        onClose={() => minutesExpanded ? setMinutesExpanded(false) : setPanelOpen(false)}
+        onExpand={() => setMinutesExpanded(true)}
+        onAskAssistant={() => {
+          setMinutesExpanded(false);
+          setPanelOpen(true);
+          setPanelTab(0);
+          setPrivateChatTarget(MEETING_AI_ASSISTANT_ID);
+        }}
+      />
+
       <MeetingMinutesConsentDialog
-        open={!amHost && memberMinutesPreferences.enabled && state.minutes.running && state.minutes.requireConsent && !state.minutes.consented && minutesConsentDecision === "pending"}
-        running={state.minutes.running}
-        autoStart={!amHost && memberMinutesPreferences.enabled && state.minutes.running && !state.minutes.requireConsent && !state.minutes.consented && minutesConsentDecision === "pending"}
+        open={shouldShowMeetingMinutesNotice(activeMinutesNoticeKey, acknowledgedMinutesNoticeKey) || (captionOnly && memberMinutesPreferences.enabled && !state.minutes.consented && minutesConsentDecision === "pending")}
+        running={state.minutes.running || captionOnly}
+        enabled={captionOnly && memberMinutesPreferences.enabled}
+        resumeConsented={captionOnly && state.minutes.consented && minutesConsentDecision !== "rejected"}
+        captionOnly={captionOnly}
         language={memberMinutesPreferences.language}
-        asrSource={memberMinutesPreferences.asrSource}
-        asrModel={memberMinutesPreferences.asrModel}
-        apiKey={getMeetingAiSecret("asr")}
-        onResolved={(accepted) => setMinutesConsentDecision(accepted ? "accepted" : "rejected")}
+        onResolved={(accepted) => {
+          if (state.minutes.running) {
+            if (accepted) setAcknowledgedMinutesNoticeKey(activeMinutesNoticeKey);
+            return;
+          }
+          setMinutesConsentDecision(accepted ? "accepted" : "rejected");
+          if (!accepted) setCaptionCaptureError("");
+        }}
+        onSpeechError={(message) => { setCaptionCaptureError(message); setCaptionCaptureStatus(""); }}
+        onSpeechStatus={(message) => setCaptionCaptureStatus(message)}
+        onSpeechState={(next) => setCaptionCaptureRunning(next === "running")}
       />
 
       <Dialog open={focusRequest !== null} onClose={() => setFocusRequest(null)} maxWidth="xs" fullWidth data-testid="meeting-focus-request-dialog">

@@ -72,7 +72,7 @@ function requestAsPromise<T>(request: IDBRequest<T>): Promise<T> {
 
 export async function saveMeetingMinutesHistory(record: MeetingMinutesHistoryRecord): Promise<void> {
   const db = await openDatabase();
-  if (!db) return;
+  if (!db) throw new Error("当前环境不支持 IndexedDB，无法保存会议纪要历史");
   const tx = db.transaction(STORE_NAME, "readwrite");
   tx.objectStore(STORE_NAME).put(cloneRecord(record));
   await new Promise<void>((resolve, reject) => {

@@ -10,6 +10,7 @@ import {
   Box,
   Avatar,
   Button,
+  Chip,
   IconButton,
   InputBase,
   LinearProgress,
@@ -27,12 +28,14 @@ import AttachFileIcon from "@mui/icons-material/AttachFile";
 import LockIcon from "@mui/icons-material/Lock";
 import GroupsIcon from "@mui/icons-material/Groups";
 import PersonIcon from "@mui/icons-material/Person";
+import SmartToyOutlinedIcon from "@mui/icons-material/SmartToyOutlined";
 import CancelIcon from "@mui/icons-material/Cancel";
 import DownloadIcon from "@mui/icons-material/Download";
 import InsertDriveFileIcon from "@mui/icons-material/InsertDriveFile";
 import EmojiEmotionsOutlinedIcon from "@mui/icons-material/EmojiEmotionsOutlined";
 import { useTranslation } from "react-i18next";
 import { meetingManager } from "@App/libs/meeting/meetingManager";
+import { MEETING_AI_ASSISTANT_ID, MEETING_AI_ASSISTANT_NAME } from "@App/libs/meeting/meetingAi";
 import {
   appendMeetingChatHistory,
   clearMeetingChatHistory,
@@ -65,10 +68,31 @@ type ChatMsg = {
     status: "pending" | "transferring" | "completed" | "cancelled" | "error";
     url?: string;
   };
+  streaming?: boolean;
+  requestId?: string;
+  error?: boolean;
 };
 
 const MAX_MSGS = 200;
 const PRIVATE_ALL = "__all__";
+
+function trimMessages(messages: ChatMsg[]): ChatMsg[] {
+  return messages.length > MAX_MSGS ? messages.slice(messages.length - MAX_MSGS) : messages;
+}
+
+function ThinkingDots() {
+  return <Box component="span" sx={{ display: "inline-flex", alignItems: "center", gap: "4px", py: 0.6 }}>
+    {[0, 1, 2].map((index) => <Box key={index} component="span" sx={{
+      width: 5, height: 5, borderRadius: "50%", bgcolor: "text.secondary",
+      animation: "meetingAssistantTyping 1.2s infinite ease-in-out",
+      animationDelay: `${index * 0.15}s`,
+      "@keyframes meetingAssistantTyping": {
+        "0%, 80%, 100%": { opacity: 0.25, transform: "translateY(0)" },
+        "40%": { opacity: 1, transform: "translateY(-2px)" },
+      },
+    }} />)}
+  </Box>;
+}
 
 function formatSize(bytes: number): string {
   if (bytes >= 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
@@ -86,6 +110,10 @@ export const MeetingChat = memo(function MeetingChat({ initialTarget }: { initia
   const [sending, setSending] = useState(false);
   const [emojiAnchor, setEmojiAnchor] = useState<HTMLElement | null>(null);
   const [members, setMembers] = useState<{ uniqId: string; name?: string }[]>([]);
+  const chatMembers = useMemo(
+    () => [{ uniqId: MEETING_AI_ASSISTANT_ID, name: MEETING_AI_ASSISTANT_NAME }, ...members],
+    [members],
+  );
   const [selfName, setSelfName] = useState(() => realTimeColab.getUserName() ?? "");
   const membersRef = useRef<Array<{ uniqId: string; name?: string }>>([]);
   const selfNameRef = useRef(selfName);
@@ -131,7 +159,41 @@ export const MeetingChat = memo(function MeetingChat({ initialTarget }: { initia
   useEffect(() => {
     const unsubscribe = meetingManager.onEvent((ev) => {
       if (ev.type === "meeting:chat") {
-        const { from, text, ts, to } = ev.data;
+        const { from, text, ts, to, kind, requestId } = ev.data;
+        if (kind === "ai-delta") {
+          if (!from || !text) return;
+          if (to && to !== clientIdRef.current) return;
+          setMsgs((prev) => {
+            const index = prev.findIndex((message) => message.requestId === requestId && message.from === MEETING_AI_ASSISTANT_ID);
+            if (index < 0) {
+              return trimMessages([...prev, {
+                from: MEETING_AI_ASSISTANT_ID, text, ts: ts || Date.now(), self: false,
+                to: to || clientIdRef.current, streaming: true, requestId,
+              }]);
+            }
+            return prev.map((message, messageIndex) => messageIndex === index ? { ...message, text: message.text + text, streaming: true } : message);
+          });
+          return;
+        }
+        if (kind === "ai-done") {
+          if (!from || !text) return;
+          if (to && to !== clientIdRef.current) return;
+          const finalTs = ts || Date.now();
+          setMsgs((prev) => {
+            const index = prev.findIndex((message) => message.requestId === requestId && message.from === MEETING_AI_ASSISTANT_ID);
+            const next = index >= 0
+              ? prev.map((message, messageIndex) => messageIndex === index ? { ...message, text, ts: finalTs, streaming: false, error: false } : message)
+              : [...prev, { from: MEETING_AI_ASSISTANT_ID, text, ts: finalTs, self: false, to: to || clientIdRef.current, requestId }];
+            return trimMessages(next);
+          });
+          appendMeetingChatHistory(roomIdRef.current, { from: MEETING_AI_ASSISTANT_ID, text, ts: finalTs, to: clientIdRef.current });
+          return;
+        }
+        if (kind === "ai-error") {
+          const message = text || "会议助手暂时不可用，请稍后再试。";
+          setMsgs((prev) => prev.map((item) => item.requestId === requestId && item.from === MEETING_AI_ASSISTANT_ID ? { ...item, text: message, streaming: false, error: true } : item));
+          return;
+        }
         if (!from || !text) return;
         // 私聊只显示收发双方可见的副本（服务器已定向投递，双保险）
         if (to && to !== clientIdRef.current && from !== clientIdRef.current) return;
@@ -211,10 +273,10 @@ export const MeetingChat = memo(function MeetingChat({ initialTarget }: { initia
 
   useEffect(() => {
     // 目标成员离开后自动回到公聊，避免向已离开成员发送
-    if (target !== PRIVATE_ALL && !members.some((m) => m.uniqId === target)) {
+    if (target !== PRIVATE_ALL && !chatMembers.some((m) => m.uniqId === target)) {
       setTarget(PRIVATE_ALL);
     }
-  }, [members, target]);
+  }, [chatMembers, target]);
 
   useEffect(() => {
     // 新消息自动滚到底部（用户未上滚时）
@@ -223,21 +285,26 @@ export const MeetingChat = memo(function MeetingChat({ initialTarget }: { initia
   }, [msgs]);
 
   useEffect(() => {
-    if (initialTarget && members.some((member) => member.uniqId === initialTarget)) {
+    if (initialTarget && chatMembers.some((member) => member.uniqId === initialTarget)) {
       setTarget(initialTarget);
     }
-  }, [initialTarget, members]);
+  }, [initialTarget, chatMembers]);
 
   const send = () => {
     const text = input.trim();
     if (!text || sending) return;
     const to = target !== PRIVATE_ALL ? target : undefined;
     const ts = Date.now();
-    meetingManager.sendChat(text, to);
+    const isAssistant = to === MEETING_AI_ASSISTANT_ID;
+    const requestId = isAssistant
+      ? (typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `ai-${ts}-${Math.random().toString(36).slice(2)}`)
+      : undefined;
+    meetingManager.sendChat(text, to, requestId);
     appendMeetingChatHistory(roomIdRef.current, { from: clientIdRef.current, text, ts, ...(to ? { to } : {}) });
     setMsgs((prev) => {
-      const next = [...prev, { from: clientIdRef.current, text, ts, self: true, to }];
-      return next.length > MAX_MSGS ? next.slice(next.length - MAX_MSGS) : next;
+      const next: ChatMsg[] = [...prev, { from: clientIdRef.current, text, ts, self: true, to }];
+      if (isAssistant) next.push({ from: MEETING_AI_ASSISTANT_ID, text: "", ts: ts + 1, self: false, to: clientIdRef.current, streaming: true, requestId });
+      return trimMessages(next);
     });
     setInput("");
   };
@@ -254,7 +321,7 @@ export const MeetingChat = memo(function MeetingChat({ initialTarget }: { initia
   };
 
   const pickFile = () => {
-    if (target === PRIVATE_ALL) return;
+    if (target === PRIVATE_ALL || target === MEETING_AI_ASSISTANT_ID) return;
     fileInputRef.current?.click();
   };
 
@@ -278,19 +345,23 @@ export const MeetingChat = memo(function MeetingChat({ initialTarget }: { initia
   };
 
   const privateTarget = useMemo(
-    () => (target !== PRIVATE_ALL ? members.find((m) => m.uniqId === target) : null),
-    [target, members]
+    () => (target !== PRIVATE_ALL ? chatMembers.find((m) => m.uniqId === target) : null),
+    [target, chatMembers]
   );
 
   const messageRows = useMemo(() => msgs.map((m, i) => {
-    const name = m.self ? (selfName || t("meeting.you", "我")) : (members.find((member) => member.uniqId === m.from)?.name || displayNameOf(m.from));
-    return <Stack key={i} direction={m.self ? "row-reverse" : "row"} spacing={1} sx={{ mb: 2, alignItems: "flex-start" }}>
-      <Avatar sx={{ width: 32, height: 32, flexShrink: 0, bgcolor: m.self ? alpha(theme.palette.primary.main, 0.12) : alpha(theme.palette.primary.main, 0.065), color: m.self ? "primary.main" : "text.secondary", fontSize: "0.75rem", fontWeight: 750 }}>{name.slice(0, 1).toUpperCase()}</Avatar>
+    const isAssistant = m.from === MEETING_AI_ASSISTANT_ID;
+    const name = m.self ? (selfName || t("meeting.you", "我")) : (chatMembers.find((member) => member.uniqId === m.from)?.name || displayNameOf(m.from));
+    return <Stack key={m.requestId || i} direction={m.self ? "row-reverse" : "row"} spacing={1} sx={{ mb: 2, alignItems: "flex-start" }}>
+      <Avatar sx={{ width: 32, height: 32, flexShrink: 0, bgcolor: isAssistant ? alpha("#1677ff", 0.12) : m.self ? alpha(theme.palette.primary.main, 0.12) : alpha(theme.palette.primary.main, 0.065), color: isAssistant ? "#1677ff" : m.self ? "primary.main" : "text.secondary", fontSize: "0.75rem", fontWeight: 750 }}>
+        {isAssistant ? <SmartToyOutlinedIcon sx={{ fontSize: 18 }} /> : name.slice(0, 1).toUpperCase()}
+      </Avatar>
       <Box sx={{ minWidth: 0, maxWidth: "calc(100% - 40px)", display: "flex", flexDirection: "column", alignItems: m.self ? "flex-end" : "flex-start" }}>
-      <Typography sx={{ fontSize: "0.75rem", color: "text.secondary", mb: 0.25, px: 0.5, fontVariantNumeric: "tabular-nums", display: "flex", alignItems: "center", gap: 0.5 }}>
+      <Typography component="div" sx={{ fontSize: "0.75rem", color: "text.secondary", mb: 0.25, px: 0.5, fontVariantNumeric: "tabular-nums", display: "flex", alignItems: "center", gap: 0.5 }}>
         {m.to && <LockIcon sx={{ fontSize: "0.75rem", opacity: 0.7 }} aria-label={t("meeting.chatPrivateTag", "私聊")} />}
         {m.self ? t("meeting.you", "我") : name}
-        {m.to && !m.self && ` → ${displayNameOf(m.to)}`}
+        {isAssistant && <Chip label="AI" size="small" sx={{ height: 17, fontSize: "0.58rem", "& .MuiChip-label": { px: 0.6 } }} />}
+        {m.to && !m.self && !isAssistant && ` → ${displayNameOf(m.to)}`}
         {" · "}
         {new Date(m.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
       </Typography>
@@ -305,20 +376,22 @@ export const MeetingChat = memo(function MeetingChat({ initialTarget }: { initia
       ) : (
         <Paper
           elevation={0}
+          data-testid={isAssistant ? "meeting-chat-ai-message" : undefined}
+          data-streaming={isAssistant ? (m.streaming ? "true" : "false") : undefined}
           sx={{
             px: 1.5, py: 1, borderRadius: 2, maxWidth: "100%",
             borderTopRightRadius: m.self ? 0.5 : 2, borderTopLeftRadius: m.self ? 2 : 0.5,
-            bgcolor: m.self ? alpha(theme.palette.primary.main, theme.palette.mode === "dark" ? 0.2 : 0.09) : "action.hover",
-            color: "text.primary",
+            bgcolor: m.self ? alpha(theme.palette.primary.main, theme.palette.mode === "dark" ? 0.2 : 0.09) : isAssistant ? alpha("#1677ff", theme.palette.mode === "dark" ? 0.18 : 0.06) : "action.hover",
+            color: m.error ? "error.main" : "text.primary",
             fontSize: "0.875rem", lineHeight: 1.55, wordBreak: "break-word", whiteSpace: "pre-wrap",
           }}
         >
-          {m.text}
+          {m.streaming && !m.text ? <ThinkingDots /> : m.text}
         </Paper>
       )}
       </Box>
     </Stack>;
-  }), [msgs, members, selfName, t, theme]);
+  }), [chatMembers, msgs, selfName, t, theme]);
 
   return (
     <Stack sx={{ height: "100%", minHeight: 0 }}>
@@ -336,7 +409,9 @@ export const MeetingChat = memo(function MeetingChat({ initialTarget }: { initia
         {/* 成员选择：所有人（公聊）或具体成员（私聊 + 定向文件） */}
         <Box sx={{ display: "flex", alignItems: "center", flexWrap: "wrap", minWidth: 0, gap: 0.5, px: MEETING_FIELD_INSET }}>
           <Typography sx={{ color: "text.secondary", fontSize: "0.75rem", flexShrink: 0 }}>{t("meeting.sendTo", "发送给")}</Typography>
-          {privateTarget ? (
+          {target === MEETING_AI_ASSISTANT_ID ? (
+            <SmartToyOutlinedIcon sx={{ fontSize: "1rem", color: "#1677ff" }} />
+          ) : privateTarget ? (
             <PersonIcon sx={{ fontSize: "1rem", color: "text.secondary" }} />
           ) : (
             <GroupsIcon sx={{ fontSize: "1rem", color: "text.secondary" }} />
@@ -351,14 +426,18 @@ export const MeetingChat = memo(function MeetingChat({ initialTarget }: { initia
               "& .MuiOutlinedInput-notchedOutline": { border: 0 },
               "& .MuiSelect-select": { py: 0.5, pl: 0.5 },
             }}
-            disabled={members.length === 0 && target === PRIVATE_ALL}
+            disabled={false}
           >
             <MenuItem value={PRIVATE_ALL} sx={{ fontSize: "0.875rem" }}>
               {t("meeting.chatToAll", "所有人（公聊）")}
             </MenuItem>
-            {members.map((m) => (
+            {chatMembers.map((m) => (
               <MenuItem key={m.uniqId} value={m.uniqId} sx={{ fontSize: "0.875rem" }}>
-                {m.name || displayNameOf(m.uniqId)}
+                <Stack direction="row" spacing={0.6} alignItems="center">
+                  {m.uniqId === MEETING_AI_ASSISTANT_ID && <SmartToyOutlinedIcon sx={{ fontSize: 16, color: "#1677ff" }} />}
+                  <Box component="span">{m.name || displayNameOf(m.uniqId)}</Box>
+                  {m.uniqId === MEETING_AI_ASSISTANT_ID && <Chip label="AI" size="small" sx={{ height: 17, fontSize: "0.56rem", "& .MuiChip-label": { px: 0.55 } }} />}
+                </Stack>
               </MenuItem>
             ))}
           </Select>
@@ -378,16 +457,18 @@ export const MeetingChat = memo(function MeetingChat({ initialTarget }: { initia
           />
           <Tooltip
             title={
-              target === PRIVATE_ALL
-                ? t("meeting.chatPickMemberFirst", "先选择成员，再发送定向文件")
-                : t("meeting.chatSendFile", "发送文件给该成员")
+              target === MEETING_AI_ASSISTANT_ID
+                ? t("meeting.chatAssistantNoFiles", "AI 助手不支持接收文件")
+                : target === PRIVATE_ALL
+                  ? t("meeting.chatPickMemberFirst", "先选择成员，再发送定向文件")
+                  : t("meeting.chatSendFile", "发送文件给该成员")
             }
           >
             <span>
               <IconButton
                 size="small"
                 onClick={pickFile}
-                disabled={target === PRIVATE_ALL || sending}
+                disabled={target === PRIVATE_ALL || target === MEETING_AI_ASSISTANT_ID || sending}
                 color="primary"
                 aria-label={t("meeting.chatSendFile", "发送文件给该成员")}
                 sx={{ width: 40, height: 40 }}
@@ -401,7 +482,11 @@ export const MeetingChat = memo(function MeetingChat({ initialTarget }: { initia
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send(); } }}
-            placeholder={privateTarget ? t("meeting.chatPrivatePlaceholder", "私聊 {{name}}…", { name: privateTarget.name || displayNameOf(privateTarget.uniqId) }) : t("meeting.chatPlaceholder", "说点什么…")}
+            placeholder={target === MEETING_AI_ASSISTANT_ID
+              ? t("meeting.chatAssistantPlaceholder", "问会议助手，例如：刚才谁说了什么？")
+              : privateTarget
+                ? t("meeting.chatPrivatePlaceholder", "私聊 {{name}}…", { name: privateTarget.name || displayNameOf(privateTarget.uniqId) })
+                : t("meeting.chatPlaceholder", "说点什么…")}
             multiline
             maxRows={4}
             sx={{ flex: 1, minWidth: 0, minHeight: 40, fontSize: "0.875rem", px: 0.5, py: 1 }}

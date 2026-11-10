@@ -1,5 +1,6 @@
 import { MeetingDialog as Dialog } from "./MeetingDialog";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { reaction } from "mobx";
 import {
   Avatar,
   Box,
@@ -22,11 +23,13 @@ import CloseIcon from "@mui/icons-material/Close";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import LinkIcon from "@mui/icons-material/Link";
 import GroupsOutlinedIcon from "@mui/icons-material/GroupsOutlined";
+import VolumeUpIcon from "@mui/icons-material/VolumeUp";
 import { useTranslation } from "react-i18next";
 import realTimeColab from "@App/libs/connection/colabLib";
 import settingsStore from "@App/libs/mobx/mobx";
 import { meetingManager } from "@App/libs/meeting/meetingManager";
 import { meetingInviteUrlFor, type HostInviteStatus } from "@App/libs/meeting/meetingInviteBus";
+import { meetingSoundPlayer, OutgoingMeetingInviteRingPolicy } from "@App/libs/meeting/meetingFeedback";
 import { displayNameOf } from "../types";
 
 export interface MeetingInviteDialogProps {
@@ -43,8 +46,31 @@ export default function MeetingInviteDialog({ open, onClose, meetingId, title }:
   const [rows, setRows] = useState<InviteRow[]>([]);
   const [copied, setCopied] = useState(false);
   const [snapshot, setSnapshot] = useState(() => meetingManager.getState());
+  const [serverConnected, setServerConnected] = useState(() =>
+    typeof navigator !== "undefined" && navigator.onLine && settingsStore.getUnrmb("serverConnState") === "connected",
+  );
+  const [soundPrompt, setSoundPrompt] = useState<"enable" | "unsupported" | null>(null);
+  const activeInviteRingsRef = useRef<Set<string>>(new Set());
+  const inviteRingPolicyRef = useRef(new OutgoingMeetingInviteRingPolicy({ open, serverConnected }));
 
   useEffect(() => meetingManager.subscribe((state) => setSnapshot({ ...state })), []);
+
+  useEffect(() => {
+    const syncConnection = () => setServerConnected(
+      navigator.onLine && settingsStore.getUnrmb("serverConnState") === "connected",
+    );
+    const disposeReaction = reaction(
+      () => settingsStore.getUnrmb("serverConnState"),
+      syncConnection,
+    );
+    window.addEventListener("online", syncConnection);
+    window.addEventListener("offline", syncConnection);
+    return () => {
+      disposeReaction();
+      window.removeEventListener("online", syncConnection);
+      window.removeEventListener("offline", syncConnection);
+    };
+  }, []);
 
   useEffect(() => {
     if (!open) return;
@@ -71,6 +97,57 @@ export default function MeetingInviteDialog({ open, onClose, meetingId, title }:
   const sourceRoomId = snapshot.sourceRoomId || settingsStore.get("roomId") || "";
   const inviteUrl = meetingInviteUrlFor(meetingId, sourceRoomId);
   const memberIds = new Set(snapshot.members.map((member) => member.uniqId));
+
+  useEffect(() => {
+    const meetingReady = snapshot.inMeeting && snapshot.stage === "in-meeting";
+    const nextRings = inviteRingPolicyRef.current.update({
+      open,
+      serverConnected,
+      meetingReady,
+      inviteStates: snapshot.inviteStates,
+      memberIds,
+      now: Date.now(),
+    });
+
+    for (const ringId of activeInviteRingsRef.current) {
+      if (!nextRings.has(ringId)) meetingSoundPlayer.stopInviteRinging(ringId);
+    }
+    for (const ringId of nextRings) {
+      if (activeInviteRingsRef.current.has(ringId)) continue;
+      const result = meetingSoundPlayer.startInviteRinging(ringId);
+      if (result === "locked") setSoundPrompt("enable");
+      else if (result === "unsupported") setSoundPrompt("unsupported");
+    }
+    if (nextRings.size === 0) setSoundPrompt(null);
+    activeInviteRingsRef.current = nextRings;
+  }, [open, snapshot.inMeeting, snapshot.stage, snapshot.inviteStates, snapshot.members, serverConnected]);
+
+  useEffect(() => () => {
+    for (const ringId of activeInviteRingsRef.current) meetingSoundPlayer.stopInviteRinging(ringId);
+    activeInviteRingsRef.current.clear();
+  }, []);
+
+  const enablePendingInviteSounds = async () => {
+    const unlocked = await meetingSoundPlayer.unlockFromGesture();
+    if (!unlocked) {
+      setSoundPrompt(meetingSoundPlayer.supported ? "enable" : "unsupported");
+      return;
+    }
+    if (!serverConnected) return;
+    let needsEnable = false;
+    for (const ringId of activeInviteRingsRef.current) {
+      const result = meetingSoundPlayer.startInviteRinging(ringId);
+      if (result === "locked") needsEnable = true;
+    }
+    setSoundPrompt(needsEnable ? "enable" : null);
+  };
+
+  const closeInviteDialog = () => {
+    for (const ringId of activeInviteRingsRef.current) meetingSoundPlayer.stopInviteRinging(ringId);
+    activeInviteRingsRef.current.clear();
+    setSoundPrompt(null);
+    onClose();
+  };
 
   const copyLink = async () => {
     if (!meetingId) return;
@@ -99,7 +176,7 @@ export default function MeetingInviteDialog({ open, onClose, meetingId, title }:
   return (
     <Dialog
       open={open}
-      onClose={onClose}
+      onClose={closeInviteDialog}
       maxWidth="sm"
       fullWidth
       PaperProps={{ sx: { width: "min(520px, calc(100vw - 24px))", overflow: "hidden" } }}
@@ -124,6 +201,22 @@ export default function MeetingInviteDialog({ open, onClose, meetingId, title }:
       </DialogTitle>
 
       <DialogContent sx={{ px: { xs: 2, sm: 3 }, pb: 2, overflowY: "auto" }}>
+        {soundPrompt === "enable" && (
+          <Button
+            data-testid="meeting-outgoing-invite-enable-sound"
+            onClick={() => void enablePendingInviteSounds()}
+            startIcon={<VolumeUpIcon />}
+            size="small"
+            sx={{ mb: 1.25, minHeight: 40, textTransform: "none" }}
+          >
+            {t("meeting.inviteEnableSound", "启用邀请铃声")}
+          </Button>
+        )}
+        {soundPrompt === "unsupported" && (
+          <Typography role="status" sx={{ mb: 1.25, fontSize: "0.75rem", color: "text.secondary" }}>
+            {t("meeting.inviteSoundUnavailable", "当前浏览器不支持邀请提示音")}
+          </Typography>
+        )}
         <Box sx={{ p: 2, minWidth: 0, borderRadius: 2.5, bgcolor: "action.hover" }}>
           <Stack direction={{ xs: "column", sm: "row" }} alignItems={{ xs: "stretch", sm: "center" }} justifyContent="space-between" gap={1.5}>
             <Box sx={{ minWidth: 0 }}>

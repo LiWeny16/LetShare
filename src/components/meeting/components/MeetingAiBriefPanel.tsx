@@ -1,27 +1,40 @@
-import { useState } from "react";
-import { Alert, Box, Button, Chip, Divider, IconButton, MenuItem, Paper, Stack, Tooltip, Typography } from "@mui/material";
-import AssignmentOutlinedIcon from "@mui/icons-material/AssignmentOutlined";
-import CheckCircleOutlineIcon from "@mui/icons-material/CheckCircleOutline";
+import { useState, type ReactNode } from "react";
+import {
+  Alert,
+  Box,
+  Button,
+  Chip,
+  IconButton,
+  MenuItem,
+  Paper,
+  Stack,
+  Tooltip,
+  Typography,
+} from "@mui/material";
 import AutoAwesomeOutlinedIcon from "@mui/icons-material/AutoAwesomeOutlined";
-import DownloadOutlinedIcon from "@mui/icons-material/DownloadOutlined";
-import HelpOutlineIcon from "@mui/icons-material/HelpOutline";
+import ContentCopyIcon from "@mui/icons-material/ContentCopy";
+import GraphicEqOutlinedIcon from "@mui/icons-material/GraphicEqOutlined";
 import MoreHorizIcon from "@mui/icons-material/MoreHoriz";
 import OpenInFullIcon from "@mui/icons-material/OpenInFull";
 import SettingsOutlinedIcon from "@mui/icons-material/SettingsOutlined";
+import SmartToyOutlinedIcon from "@mui/icons-material/SmartToyOutlined";
+import StopRoundedIcon from "@mui/icons-material/StopRounded";
 import SubjectOutlinedIcon from "@mui/icons-material/SubjectOutlined";
-import { useTranslation } from "react-i18next";
 import type { MeetingMinutesJson, MeetingTranscriptSegment } from "@App/libs/meeting/meetingAi";
+import { aiMore } from "@App/libs/i18n/meetingAiMoreTranslations";
 import { MEETING_PANEL_GUTTER } from "../designTokens";
-import MeetingMinutesSwitch from "./MeetingMinutesSwitch";
 import { MeetingMenu } from "./MeetingMenu";
+import MeetingLiveNotesList from "./MeetingLiveNotesList";
 
-export type MeetingAiBriefStatus = "unconfigured" | "ready" | "transcribing" | "recording" | "generating" | "done";
+export type MeetingAiBriefStatus = "unconfigured" | "ready" | "transcribing" | "recording" | "paused" | "generating" | "done";
 
 export interface MeetingAiBriefPanelProps {
   status: MeetingAiBriefStatus;
   statusLabel: string;
-  modelLabel?: string;
   canControl: boolean;
+  recordingRunning?: boolean;
+  receiving?: boolean;
+  canSummarize?: boolean;
   startDisabled?: boolean;
   summary: string;
   summaryData: MeetingMinutesJson | null;
@@ -29,142 +42,173 @@ export interface MeetingAiBriefPanelProps {
   transcript: MeetingTranscriptSegment[];
   interim?: string;
   error?: string;
-  onConnect: () => void;
+  audioMuted?: boolean;
+  summaryWarning?: string;
+  questionPanel?: ReactNode;
+  onConnect?: () => void;
   onStart: () => void;
   onStop: () => void;
   onExpand: () => void;
   onSettings: () => void;
   onExport: () => void;
+  onCopySummary?: () => void | Promise<void>;
+  onAskAssistant?: () => void;
+  onSummarizeNow?: () => void;
 }
-
-const kindStyle = {
-  decision: { color: "#167a56", icon: <CheckCircleOutlineIcon fontSize="small" /> },
-  action: { color: "#a66a00", icon: <AssignmentOutlinedIcon fontSize="small" /> },
-  question: { color: "text.secondary", icon: <HelpOutlineIcon fontSize="small" /> },
-} as const;
 
 const textWrap = { minWidth: 0, overflowWrap: "anywhere" } as const;
-const buttonStyle = { minWidth: 0, minHeight: 40, maxWidth: "100%", borderRadius: 1.5, textTransform: "none", whiteSpace: "normal", textAlign: "center", lineHeight: 1.3, overflowWrap: "anywhere" } as const;
-
-function safeText(value: string, fallback: string): string {
-  const clean = value.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
-  return clean || fallback;
-}
-
-function formatTime(value: number, locale: string, justNow: string): string {
-  if (!Number.isFinite(value) || value <= 0) return justNow;
-  return new Intl.DateTimeFormat(locale, { hour: "2-digit", minute: "2-digit" }).format(new Date(value));
-}
-
-function TranscriptLine({ segment }: { segment: MeetingTranscriptSegment }) {
-  const { t, i18n } = useTranslation();
+function SummaryList({ title, items }: { title: string; items: string[] }) {
+  if (!items.length) return null;
   return (
-    <Box sx={{ py: 1, minWidth: 0, borderBottom: "1px solid #eef0f3", "&:last-child": { borderBottom: 0 } }}>
-      <Stack direction="row" spacing={1} alignItems="baseline" flexWrap="wrap" sx={{ minWidth: 0 }}>
-        <Typography sx={{ ...textWrap, flex: "1 1 auto", color: "text.primary", fontSize: "0.75rem", fontWeight: 800 }}>
-          {segment.speakerName || t("meeting.aiBriefUnnamed", "未命名成员")}
-        </Typography>
-        <Typography sx={{ flexShrink: 0, color: "text.disabled", fontSize: "0.75rem" }}>
-          {formatTime(segment.startMs, i18n.resolvedLanguage || "en", t("meeting.aiBriefJustNow", "刚刚"))}
-        </Typography>
+    <Box>
+      <Typography sx={{ color: "#475467", fontSize: "0.72rem", fontWeight: 850, mb: 0.4 }}>{title}</Typography>
+      <Stack spacing={0.4}>
+        {items.slice(0, 6).map((item, index) => (
+          <Typography key={`${item}-${index}`} sx={{ color: "#344054", fontSize: "0.76rem", lineHeight: 1.6 }}>· {item}</Typography>
+        ))}
       </Stack>
-      <Typography sx={{ ...textWrap, mt: 0.5, color: "text.secondary", fontSize: "0.875rem", lineHeight: 1.55, whiteSpace: "pre-wrap" }}>{segment.text}</Typography>
     </Box>
   );
 }
 
 export default function MeetingAiBriefPanel({
-  status, statusLabel, modelLabel, canControl, startDisabled = false, summary, summaryData, timeline, transcript,
-  interim = "", error = "", onConnect, onStart, onStop, onExpand, onSettings, onExport,
+  status,
+  statusLabel,
+  canControl,
+  recordingRunning,
+  receiving = true,
+  canSummarize = false,
+  startDisabled = false,
+  summary,
+  summaryData,
+  timeline,
+  transcript,
+  interim = "",
+  error = "",
+  audioMuted = false,
+  summaryWarning = "",
+  onStart,
+  onStop,
+  onExpand,
+  onSettings,
+  onExport,
+  onCopySummary,
+  onAskAssistant,
+  onSummarizeNow,
 }: MeetingAiBriefPanelProps) {
-  const { t, i18n } = useTranslation();
   const [menuAnchor, setMenuAnchor] = useState<null | HTMLElement>(null);
-  const latest = transcript.slice(-3);
-  const current = timeline[timeline.length - 1];
-  const topic = current?.summary || current?.transcript || t("meeting.aiBriefCurrentTopicFallback", "正在整理当前讨论");
-  const overview = summaryData?.overview || safeText(summary, status === "transcribing" ? t("meeting.aiBriefTranscriptOnlyOverview", "当前仅保存本机转写，连接模型后会生成会议重点。") : t("meeting.aiBriefEmptyOverview", "开始记录后，这里会显示会议重点。"));
-  const statusText = {
-    unconfigured: t("meeting.aiBriefStatusUnconfigured", statusLabel),
-    ready: t("meeting.aiBriefStatusReady", statusLabel),
-    transcribing: t("meeting.aiBriefStatusTranscribing", statusLabel),
-    recording: t("meeting.aiBriefStatusRecording", statusLabel),
-    generating: t("meeting.aiBriefStatusGenerating", statusLabel),
-    done: t("meeting.aiBriefStatusDone", statusLabel),
-  }[status];
-  const modelText = modelLabel?.startsWith("已连接 · ") ? `${t("meeting.aiBriefConnected", "已连接")} · ${modelLabel.slice("已连接 · ".length)}` : modelLabel;
-  const decisions = summaryData?.decisions.slice(-2) || [];
-  const actions = summaryData?.actionItems.slice(-2) || [];
-  const questions = summaryData?.openQuestions.slice(-2) || [];
-  const hasUpdates = decisions.length + actions.length + questions.length > 0;
+  const [copied, setCopied] = useState(false);
+  const running = recordingRunning ?? (status === "recording" || status === "transcribing" || status === "paused");
+  const activelyReceiving = running && receiving;
+  const timelineNotes = timeline.map((item, index) => ({
+    id: `timeline-${item.id || index}`,
+    atMs: item.startMs,
+    speakerName: item.speakerName,
+    text: item.summary || item.transcript,
+  }));
+  const speakers = Array.from(new Set(transcript.map((segment) => segment.speakerName).filter(Boolean)));
+  const overview = summaryData?.overview || summary;
+  const decisions = summaryData?.decisions?.map((item) => item.text) || [];
+  const actions = summaryData?.actionItems?.map((item) => {
+    const owner = [item.owner, item.deadline].filter(Boolean).join(" · ");
+    return owner ? `${item.task} (${owner})` : item.task;
+  }) || [];
+  const questions = summaryData?.openQuestions?.map((item) => item.question) || [];
+
+  const copyMinutes = async () => {
+    try {
+      await onCopySummary?.();
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // Clipboard is best-effort; the export menu remains available.
+    }
+  };
 
   return (
     <Box data-testid="meeting-ai-minutes-panel" sx={{ height: "100%", minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column", overflowX: "hidden", bgcolor: (theme) => theme.palette.mode === "dark" ? theme.palette.background.paper : "#F9F9F9" }}>
-      <Box sx={{ px: MEETING_PANEL_GUTTER, pt: 2, pb: 1, flexShrink: 0 }}>
+      <Box sx={{ px: MEETING_PANEL_GUTTER, pt: 1.5, pb: 0.9, flexShrink: 0 }}>
         <Stack direction="row" alignItems="center" spacing={0.5} sx={{ minWidth: 0 }}>
           <AutoAwesomeOutlinedIcon sx={{ color: "primary.main", fontSize: 20, flexShrink: 0 }} />
           <Box sx={{ flex: 1, minWidth: 0 }}>
             <Stack direction="row" gap={0.5} alignItems="center" flexWrap="wrap" sx={{ minWidth: 0 }}>
-              <Typography sx={{ ...textWrap, color: "text.primary", fontSize: "1rem", fontWeight: 850 }}>{t("meeting.aiBriefTitle", "AI 纪要")}</Typography>
-              <Chip size="small" label={statusText} sx={{ maxWidth: "100%", height: "auto", minHeight: 21, bgcolor: status === "recording" || status === "done" ? "#ecfdf3" : "#f2f4f7", color: status === "recording" || status === "done" ? "#167a56" : "#667085", fontSize: "0.75rem", fontWeight: 800, "& .MuiChip-label": { display: "block", whiteSpace: "normal", overflowWrap: "anywhere" } }} />
+              <Typography sx={{ ...textWrap, color: "text.primary", fontSize: "1rem", fontWeight: 850 }}>{aiMore("aiMoreAIMeetingNotes")}</Typography>
+              <Chip size="small" label={statusLabel} sx={{ maxWidth: "100%", height: "auto", minHeight: 21, bgcolor: activelyReceiving || status === "done" ? "#ecfdf3" : "#f2f4f7", color: activelyReceiving || status === "done" ? "#167a56" : "#667085", fontSize: "0.72rem", fontWeight: 800, "& .MuiChip-label": { display: "block", whiteSpace: "normal", overflowWrap: "anywhere" } }} />
             </Stack>
-            {modelText && <Typography sx={{ ...textWrap, mt: 0.5, color: "text.disabled", fontSize: "0.75rem" }}>{modelText}</Typography>}
           </Box>
-          <Tooltip title={t("meeting.aiBriefExpand", "展开完整纪要")}>
-            <IconButton size="small" onClick={onExpand} aria-label={t("meeting.aiBriefExpand", "展开完整纪要")} sx={{ width: 40, height: 40, flexShrink: 0, color: "primary.main" }}><OpenInFullIcon fontSize="small" /></IconButton>
-          </Tooltip>
-          <Tooltip title={t("meeting.aiBriefMore", "纪要更多操作")}>
-            <IconButton size="small" onClick={(event) => setMenuAnchor(event.currentTarget)} aria-label={t("meeting.aiBriefMore", "纪要更多操作")} aria-haspopup="menu" aria-expanded={Boolean(menuAnchor)} sx={{ width: 40, height: 40, flexShrink: 0, color: "text.secondary" }}><MoreHorizIcon /></IconButton>
-          </Tooltip>
+          <Tooltip title={aiMore("aiMoreExpandFullMinutes")}><IconButton size="small" onClick={onExpand} aria-label={aiMore("aiMoreExpandFullMinutes")} sx={{ width: 40, height: 40, flexShrink: 0, color: "primary.main" }}><OpenInFullIcon fontSize="small" /></IconButton></Tooltip>
+          <Tooltip title={aiMore("aiMoreMoreMinutesActions")}><IconButton size="small" onClick={(event) => setMenuAnchor(event.currentTarget)} aria-label={aiMore("aiMoreMoreMinutesActions")} aria-haspopup="menu" aria-expanded={Boolean(menuAnchor)} sx={{ width: 40, height: 40, flexShrink: 0, color: "text.secondary" }}><MoreHorizIcon /></IconButton></Tooltip>
           <MeetingMenu anchorEl={menuAnchor} open={Boolean(menuAnchor)} onClose={() => setMenuAnchor(null)}>
-            <MenuItem onClick={() => { setMenuAnchor(null); onSettings(); }} sx={{ minHeight: 40, whiteSpace: "normal", overflowWrap: "anywhere" }}><SettingsOutlinedIcon fontSize="small" />{t("meeting.aiBriefSettings", "模型设置")}</MenuItem>
-            <MenuItem onClick={() => { setMenuAnchor(null); onExport(); }} sx={{ minHeight: 40, whiteSpace: "normal", overflowWrap: "anywhere" }}><SubjectOutlinedIcon fontSize="small" />{t("meeting.aiBriefExport", "导出纪要")}</MenuItem>
+            <MenuItem onClick={() => { setMenuAnchor(null); onSettings(); }} sx={{ minHeight: 40, whiteSpace: "normal", overflowWrap: "anywhere" }}><SettingsOutlinedIcon fontSize="small" />{aiMore("aiMoreNotesSettings")}</MenuItem>
+            <MenuItem onClick={() => { setMenuAnchor(null); onExport(); }} sx={{ minHeight: 40, whiteSpace: "normal", overflowWrap: "anywhere" }}><SubjectOutlinedIcon fontSize="small" />{aiMore("aiMoreExportNotes")}</MenuItem>
           </MeetingMenu>
         </Stack>
       </Box>
 
-      <Box sx={{ flex: 1, minWidth: 0, minHeight: 0, overflowY: "auto", overflowX: "hidden", px: MEETING_PANEL_GUTTER, py: 1.5 }}>
-        {error && <Alert severity="error" sx={{ mb: 1.5, borderRadius: 1.5, fontSize: "0.875rem", "& .MuiAlert-message": textWrap }}>{error}</Alert>}
-        {status === "unconfigured" && !timeline.length ? (
-          <Stack spacing={1.5} sx={{ minWidth: 0 }}>
-            <Typography sx={{ ...textWrap, color: "text.primary", fontSize: "1rem", fontWeight: 850 }}>{t("meeting.aiBriefNotStarted", "尚未开始记录")}</Typography>
-            <Typography sx={{ ...textWrap, color: "text.secondary", fontSize: "0.875rem", lineHeight: 1.6 }}>{t("meeting.aiBriefConnectHint", "连接模型后，将自动整理会议重点、决策和行动项。")}</Typography>
-            {canControl ? <>
-              <Button variant="contained" onClick={onConnect} sx={{ ...buttonStyle, fontWeight: 800 }}>{t("meeting.aiBriefConnect", "连接模型")}</Button>
-              <Button variant="text" onClick={onStart} disabled={startDisabled} sx={{ ...buttonStyle, color: "text.secondary" }}>{t("meeting.aiBriefTranscriptOnlyStart", "仅开始实时转写")}</Button>
-            </> : <Typography sx={{ ...textWrap, color: "text.disabled", fontSize: "0.875rem" }}>{t("meeting.aiBriefAwaitHost", "等待主持人开始会议纪要。")}</Typography>}
-            <Typography sx={{ ...textWrap, color: "text.disabled", fontSize: "0.75rem" }}>{t("meeting.aiBriefKeyHint", "密钥默认仅在当前标签页使用")}</Typography>
+      <Paper data-testid="meeting-shared-summary-card" elevation={0} sx={{ mx: MEETING_PANEL_GUTTER, mb: 0.6, px: 1.2, py: 1, flexShrink: 0, maxHeight: "34%", overflowY: "auto", borderRadius: 1.7, border: "1px solid #dce8f7", bgcolor: "#fff" }}>
+        <Stack direction="row" alignItems="center" spacing={0.5} flexWrap="wrap" useFlexGap>
+          <Typography sx={{ color: "#475467", fontSize: "0.72rem", fontWeight: 850 }}>{aiMore("aiMoreMeetingOverview")}</Typography>
+          <Box sx={{ flex: 1 }} />
+          {summaryData && <>
+            <Chip size="small" label={aiMore("aiMoreCountDecisions", { count: decisions.length })} sx={{ height: 20, bgcolor: "#e8f8f2", color: "#16805b", fontSize: "0.61rem" }} />
+            <Chip size="small" label={aiMore("aiMoreCountActionItems", { count: actions.length })} sx={{ height: 20, bgcolor: "#fff5df", color: "#a66a00", fontSize: "0.61rem" }} />
+            <Tooltip title={copied ? aiMore("aiMoreCopied") : aiMore("aiMoreCopyMinutes")}><IconButton size="small" onClick={() => void copyMinutes()} aria-label={aiMore("aiMoreCopyMinutes")}><ContentCopyIcon sx={{ fontSize: 17 }} /></IconButton></Tooltip>
+          </>}
+          {canSummarize && running && onSummarizeNow && <Button size="small" onClick={onSummarizeNow} sx={{ minHeight: 28, px: 0.75, textTransform: "none", fontSize: "0.68rem" }}>{aiMore("aiMoreSummarizeNow")}</Button>}
+        </Stack>
+        {summaryWarning && <Alert severity="warning" sx={{ mt: 0.55, py: 0.1, borderRadius: 1.25, fontSize: "0.72rem", "& .MuiAlert-message": textWrap }}>{summaryWarning}</Alert>}
+        <Typography sx={{ mt: 0.45, color: "#344054", fontSize: "0.78rem", lineHeight: 1.65, whiteSpace: "pre-wrap", ...textWrap }}>{overview || aiMore("aiMoreWaitingForTranscript")}</Typography>
+        {summaryData && <Stack spacing={0.65} sx={{ mt: 0.65 }}>
+          <SummaryList title={aiMore("aiMoreKeyDecisions")} items={decisions} />
+          <SummaryList title={aiMore("aiMoreActionItems")} items={actions} />
+          <SummaryList title={aiMore("aiMoreOpenQuestions")} items={questions} />
+        </Stack>}
+      </Paper>
+
+      <Box sx={{ flex: 1, minWidth: 0, minHeight: 0, overflowY: "auto", overflowX: "hidden", px: MEETING_PANEL_GUTTER, py: 1.25 }}>
+        {error && <Alert severity="error" sx={{ mb: 1.5, borderRadius: 1.5, fontSize: "0.8rem", "& .MuiAlert-message": textWrap }}>{error}</Alert>}
+        {running && audioMuted && <Alert severity="warning" data-testid="meeting-ai-muted-warning" sx={{ mb: 1.5, borderRadius: 1.5, fontSize: "0.8rem", "& .MuiAlert-message": textWrap }}>{aiMore("aiMoreMutedMinutesWarning")}</Alert>}
+        <Stack direction="row" alignItems="baseline" justifyContent="space-between" gap={1}>
+          <Typography sx={{ color: "#172033", fontSize: "0.9rem", fontWeight: 900 }}>{aiMore("aiMoreMeetingOutline")}</Typography>
+          <Stack direction="row" spacing={0.3} alignItems="baseline">
+            <Typography data-testid="meeting-minutes-segment-count" sx={{ color: "#98a2b3", fontSize: "0.66rem", fontVariantNumeric: "tabular-nums" }}>{transcript.length}</Typography>
+            <Typography sx={{ color: "#98a2b3", fontSize: "0.66rem" }}>{aiMore("aiMoreUnitStatements")}{interim ? ` · ${aiMore("aiMoreRecognizing")}` : ""}</Typography>
           </Stack>
-        ) : (
-          <Stack spacing={2} sx={{ minWidth: 0 }}>
-            {status === "ready" && <Paper elevation={0} sx={{ p: 1.5, minWidth: 0, border: "1px solid #e4e7ec", borderRadius: 1.75, bgcolor: "action.hover" }}>
-              <Stack direction="row" alignItems="center" justifyContent="space-between" gap={1} sx={{ minWidth: 0 }}>
-                <Box sx={{ minWidth: 0, flex: 1 }}><Typography sx={{ ...textWrap, color: "text.primary", fontSize: "1rem", fontWeight: 850 }}>{t("meeting.aiBriefReady", "准备就绪")}</Typography><Typography sx={{ ...textWrap, mt: 0.5, color: "text.secondary", fontSize: "0.875rem", lineHeight: 1.55 }}>{t("meeting.aiBriefReadyHint", "打开后将实时整理议题、观点、决策和行动项。")}</Typography></Box>
-                {canControl && <Box component="label" sx={{ display: "grid", placeItems: "center", width: 40, height: 40, flexShrink: 0 }}><MeetingMinutesSwitch checked={false} onChange={() => onStart()} disabled={startDisabled} data-testid="meeting-minutes-start" aria-label={t("meeting.aiBriefStart", "开始记录")} /></Box>}
-              </Stack>
-            </Paper>}
-            {(status === "recording" || status === "transcribing" || status === "done" || timeline.length > 0) && <>
-              <Box sx={{ minWidth: 0 }}>
-                <Typography sx={{ ...textWrap, color: "text.secondary", fontSize: "0.75rem", fontWeight: 800 }}>{t("meeting.aiBriefTopic", "当前议题")}</Typography>
-                <Typography sx={{ ...textWrap, mt: 0.5, color: "text.primary", fontSize: "1rem", fontWeight: 800, lineHeight: 1.5 }}>{summaryData?.meetingTitle || topic}</Typography>
-                {current && <Typography sx={{ mt: 0.5, color: "text.disabled", fontSize: "0.75rem" }}>{formatTime(current.startMs, i18n.resolvedLanguage || "en", t("meeting.aiBriefJustNow", "刚刚"))}</Typography>}
-              </Box>
-              <Divider />
-              <Box sx={{ minWidth: 0 }}><Typography sx={{ ...textWrap, color: "text.primary", fontSize: "0.875rem", fontWeight: 800 }}>{t("meeting.aiBriefHighlights", "讨论重点")}</Typography><Typography sx={{ ...textWrap, mt: 1, color: "text.secondary", fontSize: "0.875rem", lineHeight: 1.7, whiteSpace: "pre-wrap" }}>{overview}</Typography></Box>
-              {hasUpdates && <Stack spacing={2} sx={{ minWidth: 0 }}>
-                {decisions.length > 0 && <Box sx={{ minWidth: 0 }}><Typography sx={{ ...textWrap, color: "text.primary", fontSize: "0.875rem", fontWeight: 800, mb: 1 }}>{t("meeting.aiBriefDecisions", "会议结论")}</Typography><Stack spacing={0.5} sx={{ p: 1.5, minWidth: 0, borderLeft: "2px solid", borderColor: "primary.light", borderRadius: "0 8px 8px 0", bgcolor: "action.hover" }}>{decisions.map((item, index) => <Typography key={`${item.text}-${index}`} sx={{ ...textWrap, color: "text.secondary", fontSize: "0.875rem", lineHeight: 1.6 }}>{item.text}</Typography>)}</Stack></Box>}
-                {actions.length > 0 && <Box sx={{ minWidth: 0 }}><Typography sx={{ ...textWrap, color: "text.primary", fontSize: "0.875rem", fontWeight: 800, mb: 1 }}>{t("meeting.aiBriefActions", "待办事项")} · {actions.length}</Typography><Stack spacing={1}>{actions.map((item, index) => <Stack key={`${item.task}-${index}`} direction="row" spacing={1} alignItems="flex-start" sx={{ minWidth: 0 }}><Box sx={{ color: kindStyle.action.color, mt: 0.25, flexShrink: 0 }}>{kindStyle.action.icon}</Box><Box sx={{ minWidth: 0, flex: 1 }}><Typography sx={{ ...textWrap, color: "text.primary", fontSize: "0.875rem", lineHeight: 1.5 }}>{item.task}</Typography>{(item.owner || item.deadline) && <Typography sx={{ ...textWrap, color: "text.secondary", fontSize: "0.75rem", mt: 0.5 }}>{[item.owner, item.deadline].filter(Boolean).join(" · ")}</Typography>}</Box></Stack>)}</Stack></Box>}
-                {questions.length > 0 && <Box sx={{ minWidth: 0 }}><Typography sx={{ ...textWrap, color: "text.primary", fontSize: "0.875rem", fontWeight: 800, mb: 1 }}>{t("meeting.aiBriefQuestions", "待讨论")}</Typography><Stack spacing={1}>{questions.map((item, index) => <Stack key={`${item.question}-${index}`} direction="row" spacing={1} alignItems="flex-start" sx={{ minWidth: 0 }}><Box sx={{ color: kindStyle.question.color, flexShrink: 0 }}>{kindStyle.question.icon}</Box><Typography sx={{ ...textWrap, flex: 1, color: "text.secondary", fontSize: "0.875rem", lineHeight: 1.5 }}>{item.question}</Typography></Stack>)}</Stack></Box>}
-              </Stack>}
-              {!summaryData && latest.length > 0 && <Box sx={{ minWidth: 0 }}><Stack direction="row" alignItems="center" justifyContent="space-between" spacing={1} sx={{ mb: 0.5 }}><Typography sx={{ ...textWrap, color: "text.secondary", fontSize: "0.75rem", fontWeight: 800 }}>{t("meeting.aiBriefLatest", "最新转写")}</Typography><Typography data-testid="meeting-minutes-segment-count" sx={{ flexShrink: 0, color: "text.disabled", fontSize: "0.75rem", fontVariantNumeric: "tabular-nums" }}>{transcript.length}</Typography></Stack><Paper elevation={0} sx={{ px: 1, minWidth: 0, border: "1px solid #eef0f3", borderRadius: 1.5, bgcolor: "background.paper" }}>{latest.map((segment) => <TranscriptLine key={segment.id} segment={segment} />)}{interim && <Typography sx={{ ...textWrap, py: 1, color: "text.disabled", fontSize: "0.875rem", whiteSpace: "pre-wrap" }}>{interim}</Typography>}</Paper></Box>}
-              {status === "transcribing" && (summaryData?.overview || safeText(summary, "")) && <Alert severity="info" sx={{ borderRadius: 1.5, fontSize: "0.875rem", "& .MuiAlert-message": textWrap }}>{t("meeting.aiBriefTranscriptOnlyHint", "当前仅实时转写。连接模型后可生成会议重点。")}</Alert>}
-              {canControl && (status === "recording" || status === "transcribing") && <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={1} sx={{ minWidth: 0 }}><Typography sx={{ ...textWrap, color: "text.secondary", fontSize: "0.875rem", fontWeight: 750 }}>{t("meeting.aiBriefRecording", "记录")}</Typography><Box component="label" sx={{ display: "grid", placeItems: "center", width: 40, height: 40, flexShrink: 0 }}><MeetingMinutesSwitch checked onChange={() => onStop()} data-testid="meeting-minutes-stop" aria-label={t("meeting.aiBriefStop", "停止记录")} /></Box></Stack>}
-              <Button fullWidth variant="outlined" onClick={onExpand} sx={{ ...buttonStyle, fontWeight: 800 }}>{t("meeting.aiBriefViewFull", "查看完整纪要")}</Button>
-            </>}
+        </Stack>
+        <Box data-testid="meeting-minutes-flow" sx={{ mt: 1.2 }}>
+          {timelineNotes.length > 0
+            ? <MeetingLiveNotesList notes={timelineNotes} speakers={speakers} compact />
+            : <Typography data-testid="meeting-minutes-waiting" sx={{ py: 2, color: "text.secondary", fontSize: "0.76rem", textAlign: "center" }}>{aiMore("aiMoreWaitingForTranscript")}</Typography>}
+        </Box>
+      </Box>
+      <Box data-testid="meeting-minutes-bar" sx={{ flexShrink: 0, px: MEETING_PANEL_GUTTER, py: 1, borderTop: "1px solid", borderColor: "divider", bgcolor: "#fff" }}>
+        <Stack direction="row" alignItems="center" spacing={1}>
+          <Box aria-hidden sx={{ width: 36, height: 36, borderRadius: "50%", display: "grid", placeItems: "center", flexShrink: 0, bgcolor: activelyReceiving ? "#eaf9f1" : "#eef5ff", color: activelyReceiving ? "#16805b" : "primary.main" }}>
+            <AutoAwesomeOutlinedIcon sx={{ fontSize: 19 }} />
+          </Box>
+          <Box sx={{ flex: 1, minWidth: 0 }}>
+            <Typography sx={{ ...textWrap, color: "text.primary", fontSize: "0.84rem", fontWeight: 850 }}>{aiMore("aiMoreMeetingNotes")}</Typography>
+            <Typography sx={{ color: "text.secondary", fontSize: "0.68rem", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{activelyReceiving ? aiMore("aiMoreRecordingOutline") : running ? aiMore("aiMoreMinutesPaused") : status === "done" ? aiMore("aiMoreMinutesSummaryGenerated") : aiMore("aiMoreMinutesPurpose")}</Typography>
+          </Box>
+          {canControl ? (
+            activelyReceiving ? (
+              <Tooltip title={aiMore("aiMorePauseMinutes")}><IconButton onClick={onStop} data-testid="meeting-minutes-stop" aria-label={aiMore("aiMorePauseMinutes")} sx={{ width: 40, height: 40, flexShrink: 0, bgcolor: "#1d2939", color: "#fff", "&:hover": { bgcolor: "#101828" } }}><StopRoundedIcon sx={{ fontSize: 20 }} /></IconButton></Tooltip>
+            ) : (
+              <Tooltip title={running ? aiMore("aiMoreResumeMinutes") : aiMore("aiMoreStartRecording")}><span><IconButton onClick={onStart} disabled={startDisabled} data-testid="meeting-minutes-start" aria-label={running ? aiMore("aiMoreResumeMinutes") : aiMore("aiMoreStartRecording")} sx={{ width: 40, height: 40, flexShrink: 0, bgcolor: "primary.main", color: "#fff", "&:hover": { bgcolor: "primary.dark" }, "&.Mui-disabled": { bgcolor: "#e4e7ec", color: "#98a2b3" } }}><GraphicEqOutlinedIcon sx={{ fontSize: 20 }} /></IconButton></span></Tooltip>
+            )
+          ) : (
+            <Typography sx={{ ...textWrap, maxWidth: 120, textAlign: "right", color: "text.disabled", fontSize: "0.7rem" }}>{aiMore("aiMoreTheTranscriptionSourceIsNotReady")}</Typography>
+          )}
+        </Stack>
+        {onAskAssistant && (
+          <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={0.5} sx={{ mt: 0.5 }}>
+            <Typography sx={{ color: "text.secondary", fontSize: "0.7rem", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{running ? aiMore("aiMoreListeningToMeeting") : ""}</Typography>
+            <Stack direction="row" spacing={0.5} alignItems="center" sx={{ flexShrink: 0 }}>
+              {onAskAssistant && <Button size="small" variant="text" startIcon={<SmartToyOutlinedIcon sx={{ fontSize: 16 }} />} onClick={onAskAssistant} data-testid="meeting-ask-assistant" sx={{ minHeight: 28, px: 0.75, textTransform: "none", fontSize: "0.7rem", fontWeight: 750 }}>{aiMore("aiMoreAskAIAssistant")}</Button>}
+            </Stack>
           </Stack>
         )}
       </Box>
-
-      {(summaryData || timeline.length > 0 || transcript.length > 0) && <Box sx={{ flexShrink: 0, minWidth: 0, px: MEETING_PANEL_GUTTER, py: 1.5, borderTop: "1px solid", borderColor: "divider" }}><Typography sx={{ ...textWrap, mb: 1, color: "text.secondary", fontSize: "0.75rem" }}>{t("meeting.aiBriefDisclaimer", "AI 生成内容，请结合会议实际核对")}</Typography><Button fullWidth variant="contained" startIcon={<DownloadOutlinedIcon />} onClick={onExport} sx={{ ...buttonStyle, borderRadius: 1.75, fontWeight: 800 }}>{t("meeting.aiBriefExport", "导出纪要")}</Button></Box>}
     </Box>
   );
 }

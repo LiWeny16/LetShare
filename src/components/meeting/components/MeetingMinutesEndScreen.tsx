@@ -1,31 +1,29 @@
-import { useTranslation } from "react-i18next";
-import { aiMore, aiMoreLocale } from "@App/libs/i18n/meetingAiMoreTranslations";
+import { aiMore, aiMoreLocale, aiMoreMarkdownLabels } from "@App/libs/i18n/meetingAiMoreTranslations";
 import { useMemo } from "react";
-import { Box, Button, Chip, Divider, Paper, Stack, Typography } from "@mui/material";
+import { Alert, Box, Button, Chip, Divider, Paper, Stack, Typography } from "@mui/material";
 import CheckCircleOutlineIcon from "@mui/icons-material/CheckCircleOutline";
 import DownloadIcon from "@mui/icons-material/Download";
 import NotesOutlinedIcon from "@mui/icons-material/NotesOutlined";
 import TaskAltIcon from "@mui/icons-material/TaskAlt";
 import type { MeetingMinutesHistoryRecord } from "@App/libs/meeting/meetingMinutesHistory";
+import { downloadMeetingMinutesMarkdown } from "@App/libs/meeting/meetingMinutesMarkdown";
 
 function formatDate(value: number): string {
   if (!value) return aiMore("aiMoreJustNow");
   return new Intl.DateTimeFormat(aiMoreLocale(), { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).format(new Date(value));
 }
 
-export default function MeetingMinutesEndScreen({ record, onExit, embedded = false }: { record: MeetingMinutesHistoryRecord; onExit: () => void; embedded?: boolean }) {
-  useTranslation();
+export default function MeetingMinutesEndScreen({ record, onExit, embedded = false, saved = true }: { record: MeetingMinutesHistoryRecord; onExit: () => void; embedded?: boolean; saved?: boolean }) {
   const data = record.summaryData;
   const overview = data?.overview || record.summary || aiMore("aiMoreNoAISummaryWasGeneratedBut");
   const timeline = useMemo(() => (data?.timeline?.length ? data.timeline : record.timeline).slice(-8), [data?.timeline, record.timeline]);
   const download = () => {
-    const blob = new Blob([JSON.stringify(record, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = `${record.title || "meeting-minutes"}.json`;
-    anchor.click();
-    URL.revokeObjectURL(url);
+    downloadMeetingMinutesMarkdown({
+      title: data?.meetingTitle || record.title,
+      summaryData: data,
+      timeline: data?.timeline || [],
+      transcript: data ? [] : record.transcript,
+    }, aiMoreMarkdownLabels(), aiMoreLocale());
   };
   return (
     <Box data-testid="meeting-ended-summary" sx={{ position: embedded ? "relative" : "fixed", inset: embedded ? undefined : 0, zIndex: embedded ? undefined : 60, minHeight: embedded ? "100%" : "100dvh", bgcolor: "#f4f7fb", p: { xs: 1.5, sm: 3 }, overflowY: "auto" }}>
@@ -41,11 +39,13 @@ export default function MeetingMinutesEndScreen({ record, onExit, embedded = fal
           </Stack>
         </Stack>
 
-        <Paper elevation={0} sx={{ p: { xs: 1.75, sm: 2.5 }, border: "1px solid #dce6f0", borderRadius: 3, bgcolor: "#fff" }}>
+        {!saved && <Alert severity="warning" sx={{ mb: 1.5 }}>{aiMore("aiMoreMinutesEndNotSaved")}</Alert>}
+        <Alert severity="info" sx={{ mb: 1.5 }}>{data || record.summary ? aiMore("aiMoreMinutesEndMayBeIncomplete") : aiMore("aiMoreMinutesEndTranscriptOnly")}</Alert>
+        <Paper elevation={0} sx={{ p: { xs: 1.75, sm: 2.5 }, border: "1px solid #dce6f0", borderRadius: 3, bgcolor: "#fff" }}> 
           <Stack direction="row" spacing={1.1} alignItems="flex-start">
             <Box sx={{ width: 38, height: 38, borderRadius: 2, display: "grid", placeItems: "center", bgcolor: "#eaf2ff", color: "#1677ff", flexShrink: 0 }}><NotesOutlinedIcon /></Box>
             <Box sx={{ minWidth: 0, flex: 1 }}>
-              <Stack direction="row" alignItems="center" spacing={0.8} flexWrap="wrap"><Typography sx={{ color: "#243b56", fontSize: "1rem", fontWeight: 850 }}>{aiMore("aiMoreMeetingNotes")}</Typography><Chip size="small" icon={<CheckCircleOutlineIcon />} label={aiMore("aiMoreSavedOnThisDevice")} sx={{ height: 23, color: "#148765", bgcolor: "#e8f8f2", fontSize: "0.66rem" }} /></Stack>
+              <Stack direction="row" alignItems="center" spacing={0.8} flexWrap="wrap"><Typography sx={{ color: "#243b56", fontSize: "1rem", fontWeight: 850 }}>{aiMore("aiMoreMeetingNotes")}</Typography>{saved && <Chip size="small" icon={<CheckCircleOutlineIcon />} label={aiMore("aiMoreSavedOnThisDevice")} sx={{ height: 23, color: "#148765", bgcolor: "#e8f8f2", fontSize: "0.66rem" }} />}</Stack>
               <Typography sx={{ mt: 1, color: "#30485f", fontSize: "0.9rem", lineHeight: 1.75 }}>{overview}</Typography>
               <Stack direction="row" spacing={1.2} flexWrap="wrap" sx={{ mt: 1.5 }}>
                 <Chip size="small" label={aiMore("aiMoreCountStatements", { count: record.transcript.length })} />

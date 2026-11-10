@@ -87,7 +87,7 @@ export function makePipeline(ctx: AudioContextState | null = "running", resumeRe
       pipeline.detachCalls += 1;
     },
     async setSinkId() {
-      return true;
+      return "applied";
     },
     getOptions() {
       return { volume: 1, clarity: true, widen: false };

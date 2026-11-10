@@ -13,9 +13,11 @@ import { MeetingDialog as Dialog } from "./MeetingDialog";
  *   - 过期（倒计时归零或服务器 expired 回执）→ 双方显示 expired，禁止继续接受。
  */
 import { useEffect, useRef, useState } from "react";
+import { reaction } from "mobx";
 import { createRoot } from "react-dom/client";
 import {
   Box,
+  Button,
   DialogContent,
   DialogTitle,
   IconButton,
@@ -25,14 +27,25 @@ import GroupsIcon from "@mui/icons-material/Groups";
 import CallIcon from "@mui/icons-material/Call";
 import CallEndIcon from "@mui/icons-material/CallEnd";
 import CloseIcon from "@mui/icons-material/Close";
+import VolumeUpIcon from "@mui/icons-material/VolumeUp";
 import { useTranslation } from "react-i18next";
 import realTimeColab from "@App/libs/connection/colabLib";
 import { meetingManager } from "@App/libs/meeting/meetingManager";
 import { meetingInviteBus, type MeetingInviteIncoming } from "@App/libs/meeting/meetingInviteBus";
 import settingsStore from "@App/libs/mobx/mobx";
 import alertUseMUI from "@App/libs/tools/alert";
+import { meetingSoundPlayer, shouldRingIncomingMeetingInvite } from "@App/libs/meeting/meetingFeedback";
 
 const RING_BLUE = "#1677ff";
+
+function rememberStoppedInviteRing(stopped: Set<string>, inviteId: string): void {
+  if (!inviteId) return;
+  stopped.add(inviteId);
+  if (stopped.size > 50) {
+    const oldest = stopped.values().next().value;
+    if (oldest) stopped.delete(oldest);
+  }
+}
 
 export default function IncomingMeetingInviteDialog() {
   const { t } = useTranslation();
@@ -42,10 +55,44 @@ export default function IncomingMeetingInviteDialog() {
   // an invite that was already accepted by the manager.
   const [invite, setInvite] = useState<MeetingInviteIncoming | null>(() => meetingManager.getState().pendingInvite);
   const [serverExpired, setServerExpired] = useState(false);
+  const [soundPrompt, setSoundPrompt] = useState<"enable" | "unsupported" | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const countdownRef = useRef<number | undefined>(undefined);
   /** 当前弹窗 inviteId 的 ref：status 回执按 inviteId 匹配，避免房间主行回执误伤本弹窗。 */
   const inviteIdRef = useRef<string>("");
+  const stoppedInviteRingsRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    const stopRingingForConnectionLoss = () => {
+      const pending = meetingManager.getState().pendingInvite;
+      if (pending) rememberStoppedInviteRing(stoppedInviteRingsRef.current, pending.inviteId);
+      setSoundPrompt(null);
+      meetingSoundPlayer.stopAllInviteRings();
+    };
+    const unlockOnGesture = () => {
+      if (!meetingSoundPlayer.unlocked) void meetingSoundPlayer.unlockFromGesture();
+    };
+    const onOffline = stopRingingForConnectionLoss;
+    const onPageHide = stopRingingForConnectionLoss;
+    document.addEventListener("pointerdown", unlockOnGesture, true);
+    document.addEventListener("keydown", unlockOnGesture, true);
+    document.addEventListener("touchstart", unlockOnGesture, { capture: true, passive: true });
+    window.addEventListener("offline", onOffline);
+    window.addEventListener("pagehide", onPageHide);
+    const disposeConnectionReaction = reaction(
+      () => settingsStore.getUnrmb("serverConnState"),
+      (status) => { if (status !== "connected") stopRingingForConnectionLoss(); },
+    );
+    return () => {
+      document.removeEventListener("pointerdown", unlockOnGesture, true);
+      document.removeEventListener("keydown", unlockOnGesture, true);
+      document.removeEventListener("touchstart", unlockOnGesture, true);
+      window.removeEventListener("offline", onOffline);
+      window.removeEventListener("pagehide", onPageHide);
+      disposeConnectionReaction();
+      meetingSoundPlayer.stopAllInviteRings();
+    };
+  }, []);
 
   const enterMeeting = (meetingId: string, sourceRoomId: string) => {
     if (!meetingId) return;
@@ -83,6 +130,8 @@ export default function IncomingMeetingInviteDialog() {
     };
     const onStatus = (msg: { inviteId?: string; uniqId: string; action: string }) => {
       if (msg.action === "expired" && msg.inviteId && msg.inviteId === inviteIdRef.current) {
+        rememberStoppedInviteRing(stoppedInviteRingsRef.current, msg.inviteId);
+        meetingSoundPlayer.stopInviteRinging(msg.inviteId);
         setServerExpired(true);
         setNow(Date.now());
       }
@@ -133,8 +182,48 @@ export default function IncomingMeetingInviteDialog() {
 
   const expired = !invite || serverExpired || now >= (invite.expiresAt ?? 0);
   const remainingSec = invite ? Math.max(0, Math.ceil((invite.expiresAt - now) / 1000)) : 0;
+  const currentInviteId = invite?.inviteId ?? "";
+  const canRingInvite = shouldRingIncomingMeetingInvite(
+    Boolean(currentInviteId),
+    invite?.expiresAt ?? 0,
+    now,
+    navigator.onLine,
+    settingsStore.getUnrmb("serverConnState") ?? "disconnected",
+    serverExpired || stoppedInviteRingsRef.current.has(currentInviteId),
+  );
 
-  const close = () => setInvite(null);
+  useEffect(() => {
+    if (!currentInviteId || !canRingInvite) {
+      setSoundPrompt(null);
+      return;
+    }
+    if (stoppedInviteRingsRef.current.has(currentInviteId)) {
+      setSoundPrompt(null);
+      return;
+    }
+    const result = meetingSoundPlayer.startInviteRinging(currentInviteId);
+    setSoundPrompt(result === "locked" ? "enable" : result === "unsupported" ? "unsupported" : null);
+    return () => meetingSoundPlayer.stopInviteRinging(currentInviteId);
+  }, [currentInviteId, canRingInvite]);
+
+  const close = () => {
+    rememberStoppedInviteRing(stoppedInviteRingsRef.current, inviteIdRef.current);
+    meetingSoundPlayer.stopInviteRinging(inviteIdRef.current);
+    setSoundPrompt(null);
+    setInvite(null);
+  };
+
+  const enableInviteSound = async () => {
+    if (!invite || expired || stoppedInviteRingsRef.current.has(invite.inviteId)) return;
+    const unlocked = await meetingSoundPlayer.unlockFromGesture();
+    if (!unlocked) {
+      setSoundPrompt(meetingSoundPlayer.supported ? "enable" : "unsupported");
+      return;
+    }
+    if (!navigator.onLine || settingsStore.getUnrmb("serverConnState") !== "connected") return;
+    const result = meetingSoundPlayer.startInviteRinging(invite.inviteId);
+    setSoundPrompt(result === "locked" ? "enable" : result === "unsupported" ? "unsupported" : null);
+  };
 
   const onAccept = () => {
     if (!invite || expired) return;
@@ -205,6 +294,22 @@ export default function IncomingMeetingInviteDialog() {
             ? t("meeting.invExpiredBadge", "邀请已过期")
             : t("meeting.invCountdown", "{{count}} 秒后过期", { count: remainingSec })}
         </Typography>
+        {soundPrompt === "enable" && !expired && (
+          <Button
+            data-testid="meeting-invite-enable-sound"
+            onClick={() => void enableInviteSound()}
+            startIcon={<VolumeUpIcon />}
+            size="small"
+            sx={{ mt: 0.75, minHeight: 40, textTransform: "none" }}
+          >
+            {t("meeting.inviteEnableSound", "启用邀请铃声")}
+          </Button>
+        )}
+        {soundPrompt === "unsupported" && (
+          <Typography role="status" sx={{ mt: 0.75, fontSize: "0.75rem", color: "text.secondary" }}>
+            {t("meeting.inviteSoundUnavailable", "当前浏览器不支持邀请提示音")}
+          </Typography>
+        )}
       </DialogContent>
       <Box sx={{ display: "flex", justifyContent: "center", gap: 3, px: 3, pb: 3 }}>
         <IconButton

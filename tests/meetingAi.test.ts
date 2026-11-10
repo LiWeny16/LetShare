@@ -4,216 +4,176 @@ import assert from "node:assert/strict";
 import {
   DEFAULT_MEETING_AI_CONFIG,
   DEFAULT_MEMBER_MEETING_AI_PREFERENCES,
-  SUMMARY_PROVIDERS,
-  buildMeetingSummaryPrompt,
-  clearMeetingAiSecrets,
-  getMeetingAiSecret,
+  EXPECTED_MEETING_AI_ASR_PROVIDER,
+  EXPECTED_MEETING_AI_SUMMARY_MODEL,
+  EXPECTED_MEETING_AI_SUMMARY_PROVIDER,
+  MEETING_AI_ASSISTANT_ID,
+  canSendMeetingMinutesSegment,
+  canStartCaptionOnlyCapture,
+  hasSharedMeetingMinutesCapability,
+  isValidMeetingMinutesSummaryPayload,
   getMemberMeetingAiPreferences,
-  recommendWasmModel,
-  requestMeetingSummary,
-  requestMimoAsr,
-  BrowserSpeechSession,
+  getMeetingMinutesNoticeKey,
+  mergeMeetingMinutesTimeline,
+  parseMeetingMinutesJson,
+  saveMemberMeetingAiSettings,
   sanitizeMeetingAiConfig,
-  setMeetingAiSecret,
+  shouldShowMeetingMinutesNotice,
   setMemberMeetingAiPreferences,
-  type MeetingTranscriptSegment,
+  ServerStreamAsrSession,
 } from "../src/app/libs/meeting/meetingAi";
 
-test("AI 会议配置会裁剪未知/过长输入，且默认 MiMo 使用 token-plan endpoint", () => {
-  const config = sanitizeMeetingAiConfig({
-    ...DEFAULT_MEETING_AI_CONFIG,
+test("AI 会议配置只保留服务端流式识别，历史偏好一律归一", () => {
+  const legacy = sanitizeMeetingAiConfig({
     enabled: true,
+    language: "en-US",
+    // Historical local-engine values must never survive normalization.
+    asrSource: "browser-speech" as never,
+    asrModel: "tiny",
+    // Legacy BYOK provider settings are ignored by the server-backed client.
     summaryProvider: "mimo",
-    summaryBaseUrl: "https://token-plan-cn.xiaomimimo.com/v1/",
     summaryModel: "mimo-v2.5-pro",
-    asrModel: "x".repeat(200),
-  });
-  assert.equal(config.enabled, true);
-  assert.equal(config.summaryBaseUrl, "https://token-plan-cn.xiaomimimo.com/v1");
-  assert.equal(config.summaryModel, "mimo-v2.5-pro");
-  assert.equal(config.asrModel.length, 64);
-  assert.equal(SUMMARY_PROVIDERS.find((item) => item.id === "mimo")?.apiKeyHeader, "api-key");
-
-  const deepSeek = sanitizeMeetingAiConfig({ summaryProvider: "deepseek" });
-  assert.equal(deepSeek.summaryBaseUrl, "https://api.deepseek.com/v1");
-  assert.equal(deepSeek.summaryModel, "deepseek-v4-flash");
+    summaryBaseUrl: "https://obsolete.invalid/v1",
+  } as never);
+  assert.deepEqual(legacy, { enabled: true, requireConsent: false, language: "en-US", asrSource: "server-stream", asrModel: "server-asr" });
+  const wasm = sanitizeMeetingAiConfig({ asrSource: "wasm" as never, asrModel: "small" });
+  assert.equal(wasm.asrSource, "server-stream");
+  assert.equal(wasm.asrModel, "server-asr");
+  assert.equal(wasm.enabled, false);
+  assert.equal(DEFAULT_MEETING_AI_CONFIG.requireConsent, false);
+  assert.equal(DEFAULT_MEETING_AI_CONFIG.asrSource, "server-stream");
 });
 
-test("MiMo summary configuration only accepts the two official endpoints and current summary models", () => {
-  const tokenPlan = sanitizeMeetingAiConfig({ summaryProvider: "mimo", summaryBaseUrl: "https://example.invalid/v1", summaryModel: "mimo-v2.5-asr" });
-  assert.equal(tokenPlan.summaryBaseUrl, "https://token-plan-cn.xiaomimimo.com/v1");
-  assert.equal(tokenPlan.summaryModel, "mimo-v2.5-pro");
-  const normalApi = sanitizeMeetingAiConfig({ summaryProvider: "mimo", summaryBaseUrl: "https://api.xiaomimimo.com/v1/", summaryModel: "mimo-v2.5" });
-  assert.equal(normalApi.summaryBaseUrl, "https://api.xiaomimimo.com/v1");
-  assert.equal(normalApi.summaryModel, "mimo-v2.5");
+test("minutes notice is shown to late joiners once for each active recording epoch", () => {
+  const capabilities = { capabilitiesKnown: true, serverMix: true, ai: true } as const;
+  const lateJoinSnapshot = { ...capabilities, running: true, recordingId: "recording-2", consented: false };
+  const activeKey = getMeetingMinutesNoticeKey(lateJoinSnapshot, "1234");
+  assert.equal(activeKey, "recording-2");
+  assert.equal(shouldShowMeetingMinutesNotice(activeKey, ""), true, "an active snapshot must show the notice without prior consent");
+  assert.equal(shouldShowMeetingMinutesNotice(activeKey, activeKey), false, "acknowledgement hides this recording's notice");
+  const nextRecordingKey = getMeetingMinutesNoticeKey({ ...capabilities, running: true, recordingId: "recording-3", consented: false }, "1234");
+  assert.equal(shouldShowMeetingMinutesNotice(nextRecordingKey, activeKey), true, "a new recording gets a new notice");
+  assert.equal(getMeetingMinutesNoticeKey({ ...capabilities, running: false, recordingId: "recording-3" }, "1234"), "");
+  assert.equal(getMeetingMinutesNoticeKey({ capabilitiesKnown: false, running: true }, "1234"), "", "old servers without a capability handshake do not show a false recording notice");
+  assert.equal(getMeetingMinutesNoticeKey({ ...capabilities, running: true }, "1234"), "1234:active");
+  assert.equal(getMeetingMinutesNoticeKey({ ...capabilities, ai: false, running: true, recordingId: "recording-asr-only" }, "1234"), "recording-asr-only", "a confirmed active audio mix still notifies members even without summary capability");
 });
 
-test("BYOK secret stays in memory and is not part of the public meeting config", () => {
-  clearMeetingAiSecrets();
-  setMeetingAiSecret("summary", "secret-only-in-memory");
-  assert.equal(getMeetingAiSecret("summary"), "secret-only-in-memory");
-  const publicConfig = JSON.stringify(DEFAULT_MEETING_AI_CONFIG);
-  assert.equal(publicConfig.includes("secret-only-in-memory"), false);
-  clearMeetingAiSecrets();
-  assert.equal(getMeetingAiSecret("summary"), "");
+test("shared minutes require explicit server capabilities and summary payloads are never byte-sliced", () => {
+  assert.equal(hasSharedMeetingMinutesCapability({ capabilitiesKnown: false, serverMix: true, ai: true }), false);
+  assert.equal(hasSharedMeetingMinutesCapability({ capabilitiesKnown: true, serverMix: false, ai: true }), false);
+  assert.equal(hasSharedMeetingMinutesCapability({ capabilitiesKnown: true, serverMix: true, ai: false }), false);
+  assert.equal(hasSharedMeetingMinutesCapability({ capabilitiesKnown: true, serverMix: true, ai: true }), true);
+
+  const chinese = JSON.stringify({ overview: "摘要" });
+  assert.equal(isValidMeetingMinutesSummaryPayload(chinese, new TextEncoder().encode(chinese).length), true);
+  assert.equal(isValidMeetingMinutesSummaryPayload(chinese, new TextEncoder().encode(chinese).length - 1), false, "UTF-8 bytes, not JS character count, determine the limit");
+  assert.equal(isValidMeetingMinutesSummaryPayload('{"overview":"broken"', 1024), false, "partial JSON is never sent");
 });
 
-test("member transcription preferences are local, default to free browser ASR, and can be disabled", () => {
+test("mixed minutes do not require consent while per-speaker ASR remains caption-only", () => {
+  assert.equal(canStartCaptionOnlyCapture({ running: true, captionActive: true, consented: true }), false);
+  assert.equal(canStartCaptionOnlyCapture({ running: true, captionActive: false, consented: true }), false);
+  assert.equal(canStartCaptionOnlyCapture({ running: false, captionActive: true, consented: true }), true);
+  assert.equal(canStartCaptionOnlyCapture({ running: false, captionActive: true, consented: false }), false);
+  assert.equal(canSendMeetingMinutesSegment({ running: true, captionActive: false, consented: false }), true);
+  assert.equal(canSendMeetingMinutesSegment({ running: false, captionActive: true, consented: false }), false);
+});
+
+test("partial member preference updates preserve opt-out and normalize to server streaming", () => {
+  assert.deepEqual(DEFAULT_MEMBER_MEETING_AI_PREFERENCES, { enabled: true, language: "zh-CN", asrSource: "server-stream", asrModel: "server-asr" });
+  setMemberMeetingAiPreferences({ enabled: false });
+  const languageOnlyUpdate = setMemberMeetingAiPreferences({ language: "en-US", asrSource: "iflytek" as never, asrModel: "iflytek-realtime" });
+  assert.equal(languageOnlyUpdate.enabled, false, "a language-only update must preserve the member's opt-out");
+  assert.equal(languageOnlyUpdate.language, "en-US");
+  assert.equal(languageOnlyUpdate.asrSource, "server-stream");
+  assert.deepEqual(getMemberMeetingAiPreferences(), { enabled: false, language: "en-US", asrSource: "server-stream", asrModel: "server-asr" });
   setMemberMeetingAiPreferences(DEFAULT_MEMBER_MEETING_AI_PREFERENCES);
-  assert.deepEqual(getMemberMeetingAiPreferences(), DEFAULT_MEMBER_MEETING_AI_PREFERENCES);
-  setMemberMeetingAiPreferences({ enabled: false, asrSource: "mimo-asr", asrModel: "mimo-v2.5-asr", language: "en-US" });
-  assert.deepEqual(getMemberMeetingAiPreferences(), { enabled: false, asrSource: "mimo-asr", asrModel: "mimo-v2.5-asr", language: "en-US" });
+  assert.equal(getMemberMeetingAiPreferences().enabled, true);
+});
+
+test("saving member settings persists its selected subtitle language", () => {
+  setMemberMeetingAiPreferences({ enabled: false, language: "zh-CN" });
+  const saved = saveMemberMeetingAiSettings("en-US");
+  assert.equal(saved.language, "en-US");
+  assert.equal(saved.enabled, false, "saving a language must not opt the member back in");
+  assert.deepEqual(getMemberMeetingAiPreferences(), saved);
   setMemberMeetingAiPreferences(DEFAULT_MEMBER_MEETING_AI_PREFERENCES);
 });
 
-test("MiMo OpenAI-compatible summary request uses api-key header and never sends the key in JSON", async () => {
-  const originalFetch = globalThis.fetch;
-  let requestUrl = "";
-  let requestHeaders = new Headers();
-  let requestBody = "";
-  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    requestUrl = String(input);
-    requestHeaders = new Headers(init?.headers);
-    requestBody = String(init?.body ?? "");
-    return new Response(JSON.stringify({ choices: [{ message: { content: "{\"summary\":\"完成验收\"}" } }] }), { status: 200, headers: { "content-type": "application/json" } });
-  }) as typeof fetch;
-  try {
-    const segments: MeetingTranscriptSegment[] = [{ id: "s1", speakerId: "alice:u1", speakerName: "Alice", text: "我们下周完成验收", startMs: 1, endMs: 2, final: true }];
-    const result = await requestMeetingSummary({
-      provider: "mimo",
-      baseUrl: "https://token-plan-cn.xiaomimimo.com/v1",
-      model: "mimo-v2.5-pro",
-      apiKey: "secret-only-in-header",
-      segments,
-    });
-    assert.equal(result, "{\"summary\":\"完成验收\"}");
-    assert.equal(requestUrl, "https://token-plan-cn.xiaomimimo.com/v1/chat/completions");
-    assert.equal(requestHeaders.get("api-key"), "secret-only-in-header");
-    assert.equal(requestHeaders.get("authorization"), null);
-    assert.equal(requestBody.includes("secret-only-in-header"), false);
-    assert.match(requestBody, /下周完成验收/);
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+test("meeting AI provider constants describe expected backend services", () => {
+  assert.equal(EXPECTED_MEETING_AI_ASR_PROVIDER, "Somni");
+  assert.equal(EXPECTED_MEETING_AI_SUMMARY_PROVIDER, "Gemini");
+  assert.equal(EXPECTED_MEETING_AI_SUMMARY_MODEL, "gemini-3.5-flash-lite");
 });
 
-test("custom summary supports the Anthropic Messages protocol", async () => {
-  const originalFetch = globalThis.fetch;
-  let requestUrl = "";
-  let requestHeaders = new Headers();
-  let requestBody = "";
-  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    requestUrl = String(input);
-    requestHeaders = new Headers(init?.headers);
-    requestBody = String(init?.body ?? "");
-    return new Response(JSON.stringify({ content: [{ type: "text", text: "{\"overview\":\"custom anthropic\"}" }] }), { status: 200, headers: { "content-type": "application/json" } });
-  }) as typeof fetch;
-  try {
-    const result = await requestMeetingSummary({
-      provider: "custom",
-      protocol: "anthropic",
-      baseUrl: "https://summary.example.com/anthropic",
-      model: "custom-model",
-      apiKey: "custom-secret",
-      segments: [{ id: "s1", speakerId: "u1", speakerName: "Alice", text: "讨论接口", startMs: 1, endMs: 2, final: true }],
-    });
-    assert.equal(result, "{\"overview\":\"custom anthropic\"}");
-    assert.equal(requestUrl, "https://summary.example.com/anthropic/messages");
-    assert.equal(requestHeaders.get("x-api-key"), "custom-secret");
-    assert.equal(requestHeaders.get("authorization"), null);
-    assert.equal(requestBody.includes("custom-secret"), false);
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+test("the reserved assistant identity is stable", () => {
+  assert.equal(MEETING_AI_ASSISTANT_ID, "ai:meeting-assistant");
 });
 
-test("MiMo ASR sends WAV input_audio to the Token Plan chat endpoint", async () => {
-  const originalFetch = globalThis.fetch;
-  let requestUrl = "";
-  let requestHeaders = new Headers();
-  let requestPayload: any;
-  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    requestUrl = String(input);
-    requestHeaders = new Headers(init?.headers);
-    requestPayload = JSON.parse(String(init?.body ?? "{}"));
-    return new Response(JSON.stringify({ choices: [{ message: { content: "这是一次真实的会议转写。" } }] }), { status: 200, headers: { "content-type": "application/json" } });
-  }) as typeof fetch;
-  try {
-    const result = await requestMimoAsr({ apiKey: "secret-only-in-header", audio: new Uint8Array([82, 73, 70, 70]), language: "zh-CN" });
-    assert.equal(result, "这是一次真实的会议转写。");
-    assert.equal(requestUrl, "https://token-plan-cn.xiaomimimo.com/v1/chat/completions");
-    assert.equal(requestHeaders.get("api-key"), "secret-only-in-header");
-    assert.equal(requestHeaders.get("authorization"), null);
-    assert.equal(requestPayload.model, "mimo-v2.5-asr");
-    assert.equal(requestPayload.asr_options.language, "zh");
-    assert.equal(requestPayload.messages[0].content[0].type, "input_audio");
-    assert.match(requestPayload.messages[0].content[0].input_audio.data, /^data:audio\/wav;base64,/);
-    assert.equal(JSON.stringify(requestPayload).includes("secret-only-in-header"), false);
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+test("parseMeetingMinutesJson tolerates fenced JSON and normalizes timeline kinds", () => {
+  const parsed = parseMeetingMinutesJson('```json\n' + JSON.stringify({
+    meetingTitle: "评审",
+    overview: "结论摘要",
+    timeline: [
+      { id: "t1", startMs: 1, endMs: 2, speakerName: "Alice", summary: "讨论", kind: "weird" },
+      { startMs: 5, speakerName: "Bob", transcript: "决定上线", kind: "decision" },
+    ],
+    decisions: [{ text: "上线", timeMs: 5 }],
+    actionItems: [{ task: "发布", owner: "Bob" }],
+    openQuestions: [{ question: "回滚方案" }],
+  }) + "\n```");
+  assert.equal(parsed?.meetingTitle, "评审");
+  assert.equal(parsed?.overview, "结论摘要");
+  assert.equal(parsed?.timeline.length, 2);
+  assert.equal(parsed?.timeline[0].kind, "speech", "unknown kinds fall back to speech");
+  assert.equal(parsed?.timeline[1].kind, "decision");
+  assert.equal(parsed?.timeline[1].id, "timeline-2");
+  assert.equal(parsed?.decisions[0].text, "上线");
+  assert.equal(parsed?.actionItems[0].owner, "Bob");
+  assert.equal(parseMeetingMinutesJson("not json"), null);
+  assert.equal(parseMeetingMinutesJson(""), null);
+  assert.equal(parseMeetingMinutesJson(JSON.stringify({ contextTruncated: true }))?.contextTruncated, true, "shared compaction warnings survive recipient parsing");
 });
 
-test("browser SpeechRecognition stops after a terminal network error instead of restarting", async () => {
-  const originalWindow = (globalThis as any).window;
-  const instances: Array<{ onerror: ((event: { error?: string }) => void) | null; onend: (() => void) | null; start: () => void; abort: () => void }> = [];
-  let starts = 0;
-  let aborts = 0;
-  (globalThis as any).window = {
-    SpeechRecognition: class {
-      onresult = null;
-      onerror: ((event: { error?: string }) => void) | null = null;
-      onend: (() => void) | null = null;
-      continuous = false;
-      interimResults = false;
-      maxAlternatives = 1;
-      lang = "";
-      start = () => { starts += 1; };
-      stop = () => undefined;
-      abort = () => { aborts += 1; };
-      constructor() { instances.push(this); }
-    },
-    setTimeout,
-    clearTimeout,
+test("shared timeline keeps distinct events when model IDs are missing or reused", () => {
+  const first = {
+    id: "timeline-1", startMs: 1_000, endMs: 1_400, speakerName: "Mina",
+    summary: "Design option A", transcript: "We will review option A", kind: "speech" as const,
   };
-  try {
-    const errors: string[] = [];
-    const session = new BrowserSpeechSession({ language: "zh-CN", onFinal: () => undefined, onError: (message) => errors.push(message) });
-    assert.equal(session.start(), true);
-    instances[0].onerror?.({ error: "network" });
-    instances[0].onend?.();
-    await new Promise((resolve) => setTimeout(resolve, 300));
-    assert.equal(session.isRunning(), false);
-    assert.equal(starts, 1);
-    assert.equal(aborts, 1);
-    assert.deepEqual(errors, ["SpeechRecognition: network"]);
-  } finally {
-    (globalThis as any).window = originalWindow;
-  }
+  const second = {
+    ...first, startMs: 2_000, endMs: 2_500, summary: "Design option B", transcript: "We will review option B",
+  };
+  const firstMerge = mergeMeetingMinutesTimeline([], [first]);
+  const secondMerge = mergeMeetingMinutesTimeline(firstMerge, [second]);
+  const repeatedMerge = mergeMeetingMinutesTimeline(secondMerge, [second]);
+
+  assert.equal(secondMerge.length, 2, "a reused generated ID must append a different event");
+  assert.equal(repeatedMerge.length, 2, "a repeated event with the same time, speaker, and content must deduplicate");
+  assert.equal(repeatedMerge[0].transcript, first.transcript, "the earlier node must remain unchanged");
+  assert.equal(repeatedMerge[1].transcript, second.transcript);
+  assert.notEqual(repeatedMerge[0].id, repeatedMerge[1].id);
+  assert.ok(repeatedMerge.every((item) => item.id && !/^timeline-\d+$/.test(item.id)), "unstable model IDs are replaced with stable content IDs");
+
+  const noIdFirst = { ...first, id: "" };
+  const noIdSecond = { ...second, id: "" };
+  const noIdMerge = mergeMeetingMinutesTimeline([], [noIdFirst, noIdSecond]);
+  assert.equal(noIdMerge.length, 2, "different events without model IDs remain separate");
+  assert.equal(mergeMeetingMinutesTimeline(noIdMerge, [noIdFirst, noIdSecond]).length, 2, "the same no-ID events deduplicate across responses");
 });
 
-test("summary prompt is deterministic and excludes interim transcript", () => {
-  const prompt = buildMeetingSummaryPrompt([
-    { id: "final", speakerId: "a", speakerName: "Alice", text: "保留我", startMs: 0, endMs: 10, final: true },
-    { id: "interim", speakerId: "a", speakerName: "Alice", text: "不要保留", startMs: 0, endMs: 10, final: false },
-  ]);
-  assert.match(prompt, /保留我/);
-  assert.equal(prompt.includes("不要保留"), false);
-});
-
-test("incremental summary prompt carries compact prior JSON and only new final segments", () => {
-  const prompt = buildMeetingSummaryPrompt([
-    { id: "new", speakerId: "b", speakerName: "Bob", text: "补充一个行动项", startMs: 20, endMs: 30, final: true },
-    { id: "interim", speakerId: "b", speakerName: "Bob", text: "不要发送", startMs: 20, endMs: 30, final: false },
-  ], { previousSummary: '{"meetingTitle":"评审","overview":"已有结论"}', incremental: true });
-  assert.match(prompt, /已有结论/);
-  assert.match(prompt, /补充一个行动项/);
-  assert.equal(prompt.includes("不要发送"), false);
-  assert.match(prompt, /增量/);
-});
-
-test("WASM recommendation follows advertised memory and CPU thresholds", () => {
-  assert.equal(recommendWasmModel({ deviceMemory: 4, hardwareConcurrency: 2 }), "tiny");
-  assert.equal(recommendWasmModel({ deviceMemory: 8, hardwareConcurrency: 4 }), "base");
-  assert.equal(recommendWasmModel({ deviceMemory: 16, hardwareConcurrency: 8 }), "small");
+test("ServerStreamAsrSession reports an error instead of starting without a microphone", async () => {
+  const errors: string[] = [];
+  const session = new ServerStreamAsrSession({
+    language: "zh-CN",
+    onStart: () => assert.fail("must not start without mediaDevices"),
+    onAudio: () => undefined,
+    onStop: () => undefined,
+    onError: (message) => errors.push(message),
+  });
+  const started = await session.start();
+  assert.equal(started, false);
+  assert.equal(errors.length, 1);
+  assert.equal(session.isRunning(), false);
+  session.stop();
 });

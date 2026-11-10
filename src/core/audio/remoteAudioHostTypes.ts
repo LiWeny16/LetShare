@@ -7,6 +7,8 @@ import type { Clock } from "./remoteAudioClock";
 import type { AudibleVia, CtxState } from "./remoteAudioDecision";
 
 /** host 需要的管线能力端口；生产注入 RemoteAudioPipeline，单测注入假管线。 */
+export type SinkRouteResult = "applied" | "unsupported" | "failed";
+
 export type AudioPipelinePort = {
   attach(stream: MediaStream, opts: { volume: number; clarity: boolean; widen: boolean }): boolean;
   update(opts: { volume?: number; clarity?: boolean; widen?: boolean }): void;
@@ -14,7 +16,7 @@ export type AudioPipelinePort = {
   resume(): Promise<boolean>;
   suspend(): void;
   detach(): void;
-  setSinkId(deviceId: string): Promise<boolean>;
+  setSinkId(deviceId: string): Promise<SinkRouteResult>;
   readonly ctxState: AudioContextState | null;
   getOptions(): { volume: number; clarity: boolean; widen: boolean };
   onStateChange(listener: (state: AudioContextState) => void): () => void;

@@ -35,7 +35,7 @@ test("volume changes do not rebuild processing or reroute the output device", ()
 test("selected output follows playback path changes and can return to default", () => {
   const pipeline = makePipeline("suspended");
   const pipelineSinks: string[] = [];
-  pipeline.setSinkId = async (id) => { pipelineSinks.push(id); return true; };
+  pipeline.setSinkId = async (id) => { pipelineSinks.push(id); return "applied"; };
   const output = makeElement();
   const elementSinks: string[] = [];
   output.setSinkId = async (id) => { elementSinks.push(id); };
@@ -56,6 +56,69 @@ test("selected output follows playback path changes and can return to default", 
   pipeline.emit();
   assert.equal(elementSinks.at(-1), "speaker");
   host.dispose();
+});
+
+test("AC-PLAYBACK-001: failed AudioContext sink routing hands audible playback to the selected media element", async () => {
+  const pipeline = makePipeline("running");
+  const output = makeElement();
+  const elementSinks: string[] = [];
+  pipeline.setSinkId = async () => "failed";
+  output.setSinkId = async (id) => { elementSinks.push(id); };
+  const { host } = makeHost(pipeline, makeFakeClock().clock, output);
+
+  host.setPrefs({ volume: 1, clarity: true, widen: false, sinkId: "usb-speaker" });
+  host.setStream(makeStream());
+  await flushMicrotasks();
+
+  assert.equal(elementSinks.at(-1), "usb-speaker", "the selected device should be applied to the fallback element");
+  assert.equal(host.state.audibleVia, "element", "the fallback element must become the active playback route");
+  assert.equal(output.muted, false, "the selected element must not remain structurally muted");
+  assert.equal(output.volume, 1);
+  assert.equal(output.paused, false);
+  assert.equal(pipeline.updates.at(-1)?.volume, 0, "the inactive pipeline must be muted after handoff");
+  host.dispose();
+});
+
+test("AC-PLAYBACK-005: unsupported pipeline routing keeps default output but falls back for a custom device", async () => {
+  const pipeline = makePipeline("running");
+  const pipelineSinks: string[] = [];
+  pipeline.setSinkId = async (id) => { pipelineSinks.push(id); return "unsupported"; };
+  const output = makeElement();
+  const elementSinks: string[] = [];
+  output.setSinkId = async (id) => { elementSinks.push(id); };
+  const { host } = makeHost(pipeline, makeFakeClock().clock, output);
+
+  host.setStream(makeStream());
+  await flushMicrotasks();
+  assert.equal(pipelineSinks.at(-1), "", "startup checks the default route without claiming support");
+  assert.equal(host.state.audibleVia, "pipeline", "unsupported default routing must not mute the live pipeline");
+  assert.deepEqual(elementSinks, [], "the default route needs no element handoff");
+
+  host.setPrefs({ volume: 1, clarity: true, widen: false, sinkId: "usb-speaker" });
+  await flushMicrotasks();
+  assert.equal(elementSinks.at(-1), "usb-speaker", "custom routing should use the element when pipeline routing is unsupported");
+  assert.equal(host.state.audibleVia, "element");
+  assert.equal(output.muted, false);
+  assert.equal(pipeline.updates.at(-1)?.volume, 0);
+  host.dispose();
+});
+
+test("AC-PLAYBACK-004: a stale sink failure cannot route a released output element", async () => {
+  const pipeline = makePipeline("running");
+  const pending: Array<(result: "applied" | "unsupported" | "failed") => void> = [];
+  pipeline.setSinkId = () => new Promise((resolve) => pending.push(resolve));
+  const output = makeElement();
+  const elementSinks: string[] = [];
+  output.setSinkId = async (id) => { elementSinks.push(id); };
+  const { host } = makeHost(pipeline, makeFakeClock().clock, output);
+
+  host.setPrefs({ volume: 1, clarity: true, widen: false, sinkId: "usb-speaker" });
+  host.setStream(makeStream());
+  host.dispose();
+  for (const resolve of pending) resolve("failed");
+  await flushMicrotasks();
+
+  assert.deepEqual(elementSinks, [], "late failures must not configure an element after host disposal");
 });
 
 test("AudioContext construction failure falls back to element while honoring local mute", () => {

@@ -21,6 +21,7 @@
  * 本模块顶层零浏览器 API 引用（Node 单测可 import）；构造可注入 ctx 工厂便于单测。
  */
 import { clampSpeakerVolume } from "./remoteAudioDecision";
+import type { SinkRouteResult } from "./remoteAudioHostTypes";
 
 export type RemoteAudioPipelineOptions = {
   /** 播放音量 0..2（1 = 100%；>1 经 GainNode 增益，压缩器防爆音） */
@@ -193,16 +194,16 @@ export class RemoteAudioPipeline {
     };
   }
 
-  /** 扬声器选择：Chromium 110+ AudioContext.setSinkId；不支持返回 false（调用方回退元素路径）。 */
-  async setSinkId(deviceId: string): Promise<boolean> {
+  /** 扬声器选择区分 API 不支持与设备路由失败，供宿主只在需要时回退元素路径。 */
+  async setSinkId(deviceId: string): Promise<SinkRouteResult> {
     const ctx = this.ctx as (AudioContext & { setSinkId?: (id: string) => Promise<unknown> }) | null;
-    if (!ctx?.setSinkId) return false;
+    if (!ctx?.setSinkId) return "unsupported";
     try {
       await ctx.setSinkId(deviceId);
-      return true;
+      return "applied";
     } catch (err) {
       console.warn("[RemoteAudioPipeline] setSinkId failed:", err);
-      return false;
+      return "failed";
     }
   }
 

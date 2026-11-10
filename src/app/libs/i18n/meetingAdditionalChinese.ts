@@ -1,6 +1,14 @@
 /** Chinese counterparts to the meeting UI translations. */
 export const meetingAdditionalChinese: Record<string, string> = {
   "savedDeviceNotListed": "已保存设备（当前未列出）",
+  "connectionOffline": "网络暂时断开，会议连接将在网络恢复后重试。",
+  "connectionReconnecting": "会议连接中断，正在重连…",
+  "connectionUnavailable": "会议服务器连接不可用，正在重试…",
+  "connectionRestored": "会议连接已恢复",
+  "inviteEnableSound": "启用邀请铃声",
+  "inviteSoundUnavailable": "当前浏览器不支持邀请提示音",
+  "memberSoundEnable": "启用成员提示音",
+  "memberSoundBlocked": "浏览器需要一次交互才能播放成员提示音。",
   "screenShareFailed": "屏幕共享启动失败",
   "invBusyInCall": "通话中无法加入会议",
   "applyApprovedToast": "入会申请已通过，正在进入会议",

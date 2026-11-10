@@ -1645,6 +1645,7 @@ export class RealTimeColab {
   private readonly connectEpoch = new SessionEpoch();
   /** 服务端存活探测（缺陷②）：半开连接的唯一兜底。 */
   private serverLiveness: ServerLiveness | null = null;
+  private serverTrafficListeners = new Set<() => void>();
   /** 重连调度唯一入口（A4/P1/P2）：所有退出路径二选一 —— 已排下一次 或 终止态+原因。 */
   private readonly reconnectController = new ReconnectController({
    clock: systemClock,
@@ -1734,9 +1735,23 @@ export class RealTimeColab {
    this.serverLiveness = null;
   }
 
+  /** Subscribe to actual server downlink traffic; listeners should be short-lived. */
+  public onServerTraffic(listener: () => void): () => void {
+   this.serverTrafficListeners.add(listener);
+   return () => this.serverTrafficListeners.delete(listener);
+  }
+
   /** 任意下行帧都算服务端存活（协议 Pong 对 JS 不可见，只能靠应用层帧）。 */
   private noteServerTraffic(): void {
    this.serverLiveness?.noteInbound();
+   if (this.serverTrafficListeners.size === 0) return;
+   for (const listener of [...this.serverTrafficListeners]) {
+    try {
+     listener();
+    } catch (error) {
+     console.warn("[ColabLib] Server traffic listener failed:", error);
+    }
+   }
   }
 
   private handleServerLivenessDead(reason: string): void {

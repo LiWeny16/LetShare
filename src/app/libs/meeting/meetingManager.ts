@@ -21,6 +21,7 @@ import { fetchTurnCredentials, type TurnIceServer } from "@App/libs/connection/p
 import alertUseMUI from "@App/libs/tools/alert";
 import i18n from "@App/libs/i18n/i18n";
 import { configurePublishPeerConnection } from "./meetingSdp";
+import { upsertRemoteTrack } from "./remoteTrackIdentity";
 import { limitMeetingTitle } from "./meetingTitle";
 import { meetingConnectionState, meetingPeerConnectionConstructor } from "./meetingCompat";
 import { acquireMeetingAudio, acquireMeetingMedia, acquireMeetingVideo, mediaErrorKind, microphoneErrorKind, type MicrophoneError } from "./meetingMedia";
@@ -29,6 +30,7 @@ import {
   type MeetingNetworkMetrics,
   type VideoAdaptationLevel,
 } from "./meetingNetwork";
+import { shouldAnnounceMemberJoin } from "./meetingFeedback";
 import { orderVideoCodecs, type VideoCodecPrioritySetting } from "@App/libs/call/videoCapture";
 import { nsPipeline } from "@App/libs/call/noiseSuppression";
 import {
@@ -51,7 +53,7 @@ import {
   type MeetingInviteIncoming,
   type MeetingInviteStatusMsg,
 } from "./meetingInviteBus";
-import { sanitizeMeetingAiConfig, type MeetingAiConfig, type MeetingMinutesPublicState, type MeetingTranscriptSegment } from "./meetingAi";
+import { canSendMeetingMinutesSegment, canStartCaptionOnlyCapture, hasSharedMeetingMinutesCapability, isValidMeetingMinutesSummaryPayload, sanitizeMeetingAiConfig, type MeetingAiConfig, type MeetingMinutesPublicState, type MeetingMinutesSubscription, type MeetingMinutesSummaryRequest, type MeetingTranscriptSegment } from "./meetingAi";
 import { installDiagnostics, registerDiagnosticsProvider, type MeetingDump } from "../../../diagnostics/index";
 // 来电式弹窗全局自挂载（share 页 / meeting 页跨路由可见）；依赖 deferred 引用，无初始化环。
 import "../../../components/meeting/components/IncomingMeetingInviteDialog";
@@ -124,12 +126,16 @@ export type MeetingEvent =
         ts: number;
         /** 定向私聊目标（缺省 = 公聊广播）。接收端只显示 to===自己 或来自自己的私聊。 */
         to?: string;
+        /** Private meeting-assistant stream frame kind. */
+        kind?: "ai-delta" | "ai-done" | "ai-error" | string;
+        requestId?: string;
       };
     }
   | { type: "meeting:draw"; data: any }
   | { type: "meeting:ended"; data: { roomId: string; reason: string } }
   | { type: "meeting:kicked"; data: { roomId: string } }
   | { type: "meeting:breakout"; data: { action: string; room: string; main?: string } }
+  | { type: "meeting:member-joined"; data: { uniqId: string; name?: string } }
   | { type: "meeting:host-changed"; data: { roomId: string; hostId: string; hostName?: string } }
   | { type: "meeting:presentation"; data: PresentationState }
   | { type: "meeting:sharing-request"; data: { action: "focus-request" | "focus-requested" | "focus-response"; requestId?: string; from?: string; to?: string; accepted?: boolean; target?: PresentationFocusTarget } }
@@ -150,7 +156,7 @@ export type MeetingEvent =
   | { type: "meeting:invite-status"; data: MeetingInviteStatusMsg }
   | { type: "meeting:apply"; data: { requestId: string; from: string; fromName?: string; title?: string } }
   | { type: "meeting:apply-status"; data: MeetingApplicationStatusMsg }
-  | { type: "meeting:minutes"; data: { kind: string; minutes?: MeetingMinutesPublicState; segment?: MeetingTranscriptSegment; segments?: MeetingTranscriptSegment[]; summary?: string; uniqId?: string; accepted?: boolean } };
+  | { type: "meeting:minutes"; data: { kind: string; minutes?: MeetingMinutesPublicState; minutesSubscription?: MeetingMinutesSubscription; segment?: MeetingTranscriptSegment; segments?: MeetingTranscriptSegment[]; summary?: string; replay?: boolean; code?: string; recordingId?: string; fromSeq?: number; throughSeq?: number; coordinatorEpoch?: number; retryAfterMs?: number; uniqId?: string; accepted?: boolean } };
 
 export interface MeetingState {
   inMeeting: boolean;
@@ -181,6 +187,7 @@ export interface MeetingState {
   applicants: Map<string, MeetingApplicant>;
   /** AI 会议纪要只保留公开状态；API Key 永远不进入这里。 */
   minutes: MeetingMinutesPublicState;
+  minutesSubscription: MeetingMinutesSubscription;
   /**
    * 本端媒体获取失败（getUserMedia）：denied=权限被拒 / not-found=无设备 / failed=其他。
    * 失败必须显式上报 —— 静默降级会让用户误以为摄像头/麦克风正常发布（P0：不得伪装成功）。
@@ -240,7 +247,7 @@ export interface MeetingManager {
   /** 房主：结束会议（全员退出并释放服务器资源）。 */
   endMeeting(): void;
   /** 会议内聊天：缺省房间广播；传入 to（成员 uniqId）= 定向私聊（服务器校验双方均为会议成员）。 */
-  sendChat(text: string, to?: string): void;
+  sendChat(text: string, to?: string, requestId?: string): void;
   requestChatHistory(): void;
   /** 画板操作广播（服务器纯转发）。 */
   sendDraw(msg: Record<string, unknown>): void;
@@ -275,11 +282,22 @@ export interface MeetingManager {
   /** 主持人：拒绝申请（仅本地清除，不通知被邀请方）。 */
   rejectApplicant(uniqId: string): void;
   configureMinutes(config: MeetingAiConfig): void;
-  startMinutes(): void;
+  startMinutes(summaryLanguage?: "zh-CN" | "en-US"): void;
+  setMinutesReceiving(enabled: boolean, recordingId?: string, afterSeq?: number): void;
   stopMinutes(): void;
   consentMinutes(accepted: boolean): void;
+  setCaptionsSubscribed(enabled: boolean): void;
+  flushMinutesSegments(): void;
+  requestMinutesReplay(recordingId: string, afterSeq?: number): void;
+  requestMeetingAI(task: "summary" | "translate" | "question" | "live-notes" | "final-minutes", input: string, targetLanguage?: "zh" | "en", summaryRequest?: MeetingMinutesSummaryRequest): Promise<string>;
   sendMinutesSegment(segment: Omit<MeetingTranscriptSegment, "speakerId" | "speakerName">): void;
-  sendMinutesSummary(summary: string): void;
+  /** Uploads one PCM chunk for server-side recognition (speaker = this client). */
+  sendServerAsrChunk(pcmBase64: string, language: string): void;
+  startServerAsrStream(language: string): void;
+  sendServerAsrStreamAudio(pcmBase64: string): void;
+  stopServerAsrStream(): void;
+  /** Publish the one shared summary and its covered recording sequence. */
+  sendMinutesSummary(summary: string, recordingId: string, throughSeq: number, coordinatorEpoch: number): boolean;
   /** 会议内改名：更新本地身份并经服务器广播给全部成员（不入会时仅本地改名）。 */
   renameInMeeting(name: string): void;
 }
@@ -288,10 +306,8 @@ const EMPTY_MINUTES: MeetingMinutesPublicState = {
   configured: false,
   running: false,
   requireConsent: true,
-  asrSource: "browser-speech",
-  asrModel: "browser-network",
-  summaryProvider: "mimo",
-  summaryModel: "mimo-v2.5-pro",
+  asrSource: "server-stream",
+  asrModel: "server-asr",
   consented: false,
 };
 
@@ -310,6 +326,7 @@ class MeetingManagerImpl implements MeetingManager {
     pendingInvite: null,
     applicants: new Map<string, MeetingApplicant>(),
     minutes: { ...EMPTY_MINUTES },
+    minutesSubscription: { enabled: false },
     meetingError: undefined,
   };
   private listeners = new Set<(s: MeetingState) => void>();
@@ -367,6 +384,7 @@ class MeetingManagerImpl implements MeetingManager {
   /** Meeting-owned keep-alive; ordinary room presence is intentionally not reused. */
   private meetingHeartbeatTimer: number | null = null;
   private minutesSegmentQueue: Array<Omit<MeetingTranscriptSegment, "speakerId" | "speakerName">> = [];
+  private meetingAIRequests = new Map<string, { roomId: string; timer: number; task: string; summaryRequest?: MeetingMinutesSummaryRequest; resolve: (text: string) => void; reject: (error: Error) => void }>();
   private minutesSegmentTimer: number | null = null;
   private subscriptionRetryTimers = new Map<string, number>();
   /** 会议 SFU 使用与通话/文件链路一致的短效 TURN 凭据；空值时仍可退化为 STUN。 */
@@ -387,7 +405,7 @@ class MeetingManagerImpl implements MeetingManager {
   }
 
   private emit(): void {
-    const s = { ...this.state, members: [...this.state.members], remoteTracks: [...this.state.remoteTracks], minutes: { ...this.state.minutes } };
+    const s = { ...this.state, members: [...this.state.members], remoteTracks: [...this.state.remoteTracks], minutes: { ...this.state.minutes }, minutesSubscription: { ...this.state.minutesSubscription } };
     this.listeners.forEach((cb) => cb(s));
   }
   private emitEvent(ev: MeetingEvent): void {
@@ -463,6 +481,7 @@ class MeetingManagerImpl implements MeetingManager {
       microphoneError: undefined,
       microphonePending: false,
       meetingError: { ...error, roomId: error.roomId ?? failedRoomId },
+      minutesSubscription: { enabled: false },
     };
     this.setStage("idle");
   }
@@ -473,7 +492,7 @@ class MeetingManagerImpl implements MeetingManager {
     return () => this.listeners.delete(cb);
   }
   getState(): MeetingState {
-    return { ...this.state, members: [...this.state.members], remoteTracks: [...this.state.remoteTracks], minutes: { ...this.state.minutes } };
+    return { ...this.state, members: [...this.state.members], remoteTracks: [...this.state.remoteTracks], minutes: { ...this.state.minutes }, minutesSubscription: { ...this.state.minutesSubscription } };
   }
 
   /** 只读诊断快照（window.__ls.dump）：不写任何状态、不改变任何会话行为。 */
@@ -667,6 +686,8 @@ class MeetingManagerImpl implements MeetingManager {
   setMuted(muted: boolean): void {
     const token = ++this.audioCaptureGeneration;
     if (muted) {
+      // A queued final must not be transmitted after the user mutes.
+      this.clearMinutesSegmentQueue();
       const roomId = this.meetingChannel;
       const lifecycle = this.lifecycle;
       const oldTrack = this.localTrack("audio");
@@ -1138,7 +1159,7 @@ class MeetingManagerImpl implements MeetingManager {
     }
     const defaultMicOn = settingsStore.get("meetingMicrophoneDefaultOn") ?? false;
     const defaultCameraOn = settingsStore.get("meetingCameraDefaultOn") ?? false;
-    this.state = { ...this.state, roomId, title: undefined, hostId: undefined, breakoutMain: undefined, breakoutRooms: [], members: [], remoteTracks: [], muted: !defaultMicOn, cameraOn: defaultCameraOn, inviteStates: {}, applicationStates: {}, mediaError: undefined, meetingError: undefined, presentation: { mode: "", ownerId: "", epoch: 0, screenOwnerId: "", screenEpoch: 0, whiteboardActive: false, whiteboardLeaderId: "", whiteboardEpoch: 0, whiteboardVisible: false, whiteboardForceOpen: false, whiteboardFocusEpoch: 0, focusTarget: "", focusEpoch: 0, presenterId: "", presenterEpoch: 0, presenterTarget: "", presenterFollowEpoch: 0 }, minutes: { ...EMPTY_MINUTES } };
+    this.state = { ...this.state, roomId, title: undefined, hostId: undefined, breakoutMain: undefined, breakoutRooms: [], members: [], remoteTracks: [], muted: !defaultMicOn, cameraOn: defaultCameraOn, inviteStates: {}, applicationStates: {}, mediaError: undefined, meetingError: undefined, presentation: { mode: "", ownerId: "", epoch: 0, screenOwnerId: "", screenEpoch: 0, whiteboardActive: false, whiteboardLeaderId: "", whiteboardEpoch: 0, whiteboardVisible: false, whiteboardForceOpen: false, whiteboardFocusEpoch: 0, focusTarget: "", focusEpoch: 0, presenterId: "", presenterEpoch: 0, presenterTarget: "", presenterFollowEpoch: 0 }, minutes: { ...EMPTY_MINUTES }, minutesSubscription: { enabled: false } };
     this.setStage("joining");
     // 公网会议不能只依赖 STUN：云端 SFU 的 UDP 端口并不保证对所有客户端可达。
     // 先尽快取得短效 TURN；端点失败时最多等待 2.5s 后继续纯 STUN，不阻塞会议创建。
@@ -1286,6 +1307,7 @@ class MeetingManagerImpl implements MeetingManager {
 		this.setStage("leaving");
 		this.sendMeeting("meeting:leave", {}, leavingChannel);
 		this.clearMinutesSegmentQueue();
+    this.rejectMeetingAIRequests();
     for (const sub of this.subscribers.values()) sub.getSenders().forEach((s) => s.track?.stop());
     this.subscribers.forEach((s) => s.close());
     this.subscribers.clear();
@@ -1308,7 +1330,7 @@ class MeetingManagerImpl implements MeetingManager {
     this.meetingChannel = "";
     const defaultMicOn = settingsStore.get("meetingMicrophoneDefaultOn") ?? false;
     const defaultCameraOn = settingsStore.get("meetingCameraDefaultOn") ?? false;
-    this.state = { ...this.state, roomId: undefined, title: undefined, hostId: undefined, breakoutMain: undefined, breakoutRooms: [], members: [], remoteTracks: [], muted: !defaultMicOn, cameraOn: defaultCameraOn, screenOn: false, presentation: { mode: "", ownerId: "", epoch: 0, screenOwnerId: "", screenEpoch: 0, whiteboardActive: false, whiteboardLeaderId: "", whiteboardEpoch: 0, whiteboardVisible: false, whiteboardForceOpen: false, whiteboardFocusEpoch: 0, focusTarget: "", focusEpoch: 0, presenterId: "", presenterEpoch: 0, presenterTarget: "", presenterFollowEpoch: 0 }, inviteStates: {}, minutes: { ...EMPTY_MINUTES } };
+    this.state = { ...this.state, roomId: undefined, title: undefined, hostId: undefined, breakoutMain: undefined, breakoutRooms: [], members: [], remoteTracks: [], muted: !defaultMicOn, cameraOn: defaultCameraOn, screenOn: false, presentation: { mode: "", ownerId: "", epoch: 0, screenOwnerId: "", screenEpoch: 0, whiteboardActive: false, whiteboardLeaderId: "", whiteboardEpoch: 0, whiteboardVisible: false, whiteboardForceOpen: false, whiteboardFocusEpoch: 0, focusTarget: "", focusEpoch: 0, presenterId: "", presenterEpoch: 0, presenterTarget: "", presenterFollowEpoch: 0 }, inviteStates: {}, minutes: { ...EMPTY_MINUTES }, minutesSubscription: { enabled: false } };
     this.setStage("idle");
   }
 
@@ -1816,15 +1838,18 @@ class MeetingManagerImpl implements MeetingManager {
         const title = typeof data?.title === "string" ? data.title : undefined;
         const incomingPresentation = this.parsePresentation(data?.presentation);
         const incomingMinutes = this.parseMinutes(data?.minutes);
+        const joined = data?.joined === true;
+        const incomingMinutesSubscription: MeetingMinutesSubscription | null = data?.minutesSubscription && typeof data.minutesSubscription.enabled === "boolean"
+          ? { enabled: data.minutesSubscription.enabled }
+          : joined ? { enabled: true } : null;
         // `meeting:info` is sent only after the server has validated the room
         // and registered this participant. Treat that acknowledgement as the
         // logical join boundary. Local media and the publish PC are separate
         // capabilities: a user without a camera/microphone must still be able
         // to chat, subscribe, share later, or open the whiteboard.
-        const joined = data?.joined === true;
         const stage = joined && this.state.stage === "joining" ? "in-meeting" : this.state.stage;
         if (joined) this.clearJoinAckTimer();
-        if (host || title !== undefined || incomingPresentation || incomingMinutes || joined) {
+        if (host || title !== undefined || incomingPresentation || incomingMinutes || incomingMinutesSubscription || joined) {
           this.state = {
             ...this.state,
             stage,
@@ -1832,7 +1857,8 @@ class MeetingManagerImpl implements MeetingManager {
             hostId: host || this.state.hostId,
             title: title === undefined ? this.state.title : title || undefined,
             presentation: incomingPresentation ?? this.state.presentation,
-            minutes: incomingMinutes ? { ...incomingMinutes, consented: this.state.stage === "in-meeting" && this.state.minutes.running && incomingMinutes.running && this.state.minutes.consented } : this.state.minutes,
+            minutes: incomingMinutes ? { ...incomingMinutes, consented: this.state.stage === "in-meeting" && (this.state.minutes.running || !!this.state.minutes.captionActive) && (incomingMinutes.running || !!incomingMinutes.captionActive) && this.state.minutes.consented } : incomingMinutesSubscription?.enabled === false ? { ...this.state.minutes, summary: undefined } : this.state.minutes,
+            minutesSubscription: incomingMinutesSubscription ?? this.state.minutesSubscription,
           };
           this.emit();
         }
@@ -1975,19 +2001,49 @@ class MeetingManagerImpl implements MeetingManager {
       case "meeting:minutes": {
         if (!isMeetingChannelEvent(channel, this.meetingChannel)) return;
         const kind = typeof data?.kind === "string" ? data.kind : "";
+        if (kind === "ai-result") {
+          const requestId = String(data.requestId || "");
+          const pending = this.meetingAIRequests.get(requestId);
+          if (pending && pending.roomId === this.meetingChannel) {
+            this.meetingAIRequests.delete(requestId);
+            window.clearTimeout(pending.timer);
+            const expected = pending.summaryRequest;
+            const metadataMatches = !expected || (
+              data.recordingId === expected.recordingId
+              && data.coordinatorEpoch === expected.coordinatorEpoch
+              && data.throughSeq === expected.throughSeq
+            );
+            if (!metadataMatches) pending.reject(new Error("摘要响应已过期，已保留共享原文。"));
+            else if (data.ok === true && typeof data.output === "string") pending.resolve(data.output);
+            else pending.reject(new Error("会议 AI 服务暂不可用，已保留原文。"));
+          }
+          return;
+        }
         const incomingMinutes = this.parseMinutes(data?.minutes);
+        const incomingSubscription: MeetingMinutesSubscription | null = data?.minutesSubscription && typeof data.minutesSubscription.enabled === "boolean"
+          ? { enabled: data.minutesSubscription.enabled }
+          : null;
         if (incomingMinutes) {
           this.state = {
             ...this.state,
-            minutes: { ...incomingMinutes, consented: false },
+            // Keep consent while either shared feature still uses speech; a
+            // newly configured session without captions requires fresh opt-in.
+            minutes: { ...incomingMinutes, consented: kind === "started" || (kind === "configured" && !this.state.minutes.captionActive) || ((kind === "stopped" || kind === "captions") && !incomingMinutes.running && !incomingMinutes.captionActive) ? false : this.state.minutes.consented },
           };
-          this.emit();
         }
+        if (incomingSubscription) {
+          this.state = {
+            ...this.state,
+            minutesSubscription: incomingSubscription,
+            ...(incomingSubscription.enabled ? {} : { minutes: { ...this.state.minutes, summary: undefined } }),
+          };
+        }
+        if (incomingMinutes || incomingSubscription) this.emit();
         if (kind === "consent" && data?.uniqId === this.clientId()) {
           this.state = { ...this.state, minutes: { ...this.state.minutes, consented: data.accepted === true } };
           this.emit();
         }
-        if (kind === "segment" && typeof data?.text === "string" && typeof data?.segmentId === "string") {
+        if (kind === "segment" && this.state.minutesSubscription.enabled && typeof data?.text === "string" && typeof data?.segmentId === "string") {
           const segment: MeetingTranscriptSegment = {
             id: data.segmentId,
             speakerId: typeof data.from === "string" ? data.from : "",
@@ -1996,9 +2052,12 @@ class MeetingManagerImpl implements MeetingManager {
             startMs: Number.isFinite(Number(data.startMs)) ? Number(data.startMs) : Date.now(),
             endMs: Number.isFinite(Number(data.endMs)) ? Number(data.endMs) : Date.now(),
             final: data.final !== false,
+            ...(data.language === "zh-CN" || data.language === "en-US" ? { language: data.language } : {}),
+            ...(typeof data.recordingId === "string" && data.recordingId ? { recordingId: data.recordingId.slice(0, 128) } : {}),
+            ...(Number.isSafeInteger(data.seq) && data.seq > 0 ? { seq: data.seq } : {}),
           };
           this.emitEvent({ type: "meeting:minutes", data: { kind, segment } });
-		} else if (kind === "segments" && Array.isArray(data?.segments)) {
+        } else if (kind === "segments" && this.state.minutesSubscription.enabled && Array.isArray(data?.segments)) {
           const segments: MeetingTranscriptSegment[] = data.segments.flatMap((item: any) => {
             if (!item || typeof item.text !== "string") return [];
             return [{
@@ -2009,15 +2068,46 @@ class MeetingManagerImpl implements MeetingManager {
               startMs: Number.isFinite(Number(item.startMs)) ? Number(item.startMs) : Date.now(),
               endMs: Number.isFinite(Number(item.endMs)) ? Number(item.endMs) : Date.now(),
               final: item.final !== false,
+              ...(item.language === "zh-CN" || item.language === "en-US" ? { language: item.language } : {}),
+              ...(typeof item.recordingId === "string" && item.recordingId ? { recordingId: item.recordingId.slice(0, 128) } : {}),
+              ...(Number.isSafeInteger(item.seq) && item.seq > 0 ? { seq: item.seq } : {}),
             } satisfies MeetingTranscriptSegment];
           });
-          if (segments.length) this.emitEvent({ type: "meeting:minutes", data: { kind, segments } });
-        } else if (kind === "summary" && typeof data?.summary === "string") {
-          this.emitEvent({ type: "meeting:minutes", data: { kind, summary: data.summary } });
+          if (segments.length) this.emitEvent({ type: "meeting:minutes", data: { kind, segments, ...(data.replay === true ? { replay: true } : {}), ...(typeof data.recordingId === "string" ? { recordingId: data.recordingId.slice(0, 128) } : {}), ...(Number.isSafeInteger(data.fromSeq) ? { fromSeq: data.fromSeq } : {}), ...(Number.isSafeInteger(data.throughSeq) ? { throughSeq: data.throughSeq } : {}) } });
+        } else if (kind === "summary" && this.state.minutesSubscription.enabled && typeof data?.summary === "string") {
+          this.emitEvent({ type: "meeting:minutes", data: { kind, summary: data.summary, ...(incomingMinutes ? { minutes: incomingMinutes } : {}), ...(typeof data.recordingId === "string" ? { recordingId: data.recordingId.slice(0, 128) } : {}), ...(Number.isSafeInteger(data.throughSeq) ? { throughSeq: data.throughSeq } : {}), ...(Number.isSafeInteger(data.coordinatorEpoch) ? { coordinatorEpoch: data.coordinatorEpoch } : {}) } });
+        } else if (kind === "asr-error" && this.state.minutesSubscription.enabled && data?.code === "transcription_failed") {
+          this.emitEvent({ type: "meeting:minutes", data: {
+            kind, code: "transcription_failed",
+            ...(typeof data.recordingId === "string" ? { recordingId: data.recordingId.slice(0, 128) } : {}),
+            ...(Number.isSafeInteger(data.retryAfterMs) && data.retryAfterMs > 0 ? { retryAfterMs: data.retryAfterMs } : {}),
+          } });
+        } else if (kind === "subscription") {
+          const coordinatorId = typeof data.summaryCoordinatorId === "string" ? data.summaryCoordinatorId.slice(0, 128) : undefined;
+          const coordinatorEpoch = Number.isSafeInteger(data.summaryCoordinatorEpoch) && data.summaryCoordinatorEpoch >= 0 ? data.summaryCoordinatorEpoch : undefined;
+          if (coordinatorId !== undefined || coordinatorEpoch !== undefined) {
+            this.state = {
+              ...this.state,
+              minutes: {
+                ...this.state.minutes,
+                ...(coordinatorId === undefined ? {} : { summaryCoordinatorId: coordinatorId }),
+                ...(coordinatorEpoch === undefined ? {} : { summaryCoordinatorEpoch: coordinatorEpoch }),
+              },
+            };
+            this.emit();
+          }
+          this.emitEvent({ type: "meeting:minutes", data: { kind, minutes: this.state.minutes, minutesSubscription: incomingSubscription ?? this.state.minutesSubscription } });
         } else if (kind === "consent") {
           this.emitEvent({ type: "meeting:minutes", data: { kind, uniqId: data.uniqId, accepted: data.accepted === true } });
         } else if (kind) {
-          this.emitEvent({ type: "meeting:minutes", data: { kind, minutes: this.state.minutes } });
+          this.emitEvent({ type: "meeting:minutes", data: {
+            kind,
+            minutes: this.state.minutes,
+            ...(incomingSubscription ? { minutesSubscription: incomingSubscription } : {}),
+            ...(typeof data.recordingId === "string" ? { recordingId: data.recordingId.slice(0, 128) } : {}),
+            ...(Number.isSafeInteger(data.throughSeq) ? { throughSeq: data.throughSeq } : {}),
+            ...(Number.isSafeInteger(data.coordinatorEpoch) ? { coordinatorEpoch: data.coordinatorEpoch } : {}),
+          } });
         }
         return;
       }
@@ -2217,13 +2307,21 @@ class MeetingManagerImpl implements MeetingManager {
         if (data?.type === "join" && memberUniqId && memberUniqId !== this.clientId()) {
           // 幂等：服务器可能重复广播 join（重连/重复订阅），已存在则跳过
           if (this.state.members.some((m) => m.uniqId === memberUniqId)) return;
+          const announceJoin = shouldAnnounceMemberJoin(
+            this.state.stage,
+            memberUniqId,
+            this.clientId(),
+            this.state.members.map((member) => member.uniqId),
+          );
+          const memberName = typeof data.userName === "string" ? data.userName : undefined;
           const list = [...this.state.members, {
             uniqId: memberUniqId,
-            name: typeof data.userName === "string" ? data.userName : undefined,
+            name: memberName,
             media: this.parseMemberMedia(data.media) ?? this.defaultMemberMedia(),
           }];
           this.state = { ...this.state, members: list };
           this.emit();
+          if (announceJoin) this.emitEvent({ type: "meeting:member-joined", data: { uniqId: memberUniqId, name: memberName } });
           this.subscribeToPeer(memberUniqId);
         } else if (data?.type === "leave" && memberUniqId) {
           this.clearSubscriptionRetry(memberUniqId);
@@ -2293,6 +2391,8 @@ class MeetingManagerImpl implements MeetingManager {
   private async rebuildAfterReconnect(): Promise<void> {
     const roomId = this.meetingChannel;
     const lifecycle = ++this.lifecycle;
+    this.clearMinutesSegmentQueue();
+    this.rejectMeetingAIRequests();
     this.state = { ...this.state, microphonePending: false };
     this.monitorLocalMicrophone();
     this.clearSubscriptionRetry();
@@ -2413,9 +2513,6 @@ class MeetingManagerImpl implements MeetingManager {
     if ((this.subscribers.get(uid) && meetingConnectionState(this.subscribers.get(uid)!) === "connected") && (kinds.has("audio") || kinds.has("video"))) {
       this.subscriptionRecoveryCycles.delete(uid);
     }
-    const trackId = track?.id ?? stream.id;
-    const exists = this.state.remoteTracks.find((t) => t.uniqId === uid && (t.track?.id ?? t.stream.id) === trackId);
-    if (exists) return;
     // 音频轨也入列（UI 用隐藏 audio 元素统一播放）；视频轨按 track 分瓦片渲染，
     // 同成员摄像头+屏幕共享两路 video 各自成瓦片。
     // Keep each remote media entry track-scoped.  The SFU can expose the
@@ -2427,7 +2524,8 @@ class MeetingManagerImpl implements MeetingManager {
     // two video tracks at once.
     const mediaStream = track ? new MediaStream([track]) : stream;
     const entry: RemoteTrack = { uniqId: uid, kind, stream: mediaStream, track };
-    const tracks = [...this.state.remoteTracks, entry];
+    const tracks = upsertRemoteTrack(this.state.remoteTracks, entry);
+    if (!tracks) return;
     this.state = { ...this.state, remoteTracks: tracks };
     this.emit();
   }
@@ -2492,16 +2590,23 @@ class MeetingManagerImpl implements MeetingManager {
 
   private parseMinutes(data: any): MeetingMinutesPublicState | null {
     if (!data || typeof data !== "object") return null;
-    const asrSource = data.asrSource === "mimo-asr" || data.asrSource === "wasm" || data.asrSource === "iflytek" ? data.asrSource : "browser-speech";
-    const summaryProvider = data.summaryProvider === "openai" || data.summaryProvider === "deepseek" || data.summaryProvider === "anthropic" || data.summaryProvider === "custom" ? data.summaryProvider : "mimo";
     return {
       configured: data.configured === true,
       running: data.running === true,
+      serverMix: data.serverMix === true,
+      ai: data.ai === true,
+      capabilitiesKnown: data.capabilitiesKnown === true,
+      captionActive: data.captionActive === true,
+      recordingId: typeof data.recordingId === "string" ? data.recordingId.slice(0, 128) : "",
+      ...(Number.isSafeInteger(data.latestSegmentSeq) && data.latestSegmentSeq >= 0 ? { latestSegmentSeq: data.latestSegmentSeq } : {}),
+      ...(Number.isSafeInteger(data.summaryThroughSeq) && data.summaryThroughSeq >= 0 ? { summaryThroughSeq: data.summaryThroughSeq } : {}),
+      ...(Number.isSafeInteger(data.historyStartSeq) && data.historyStartSeq >= 0 ? { historyStartSeq: data.historyStartSeq } : {}),
+      ...(typeof data.summaryCoordinatorId === "string" ? { summaryCoordinatorId: data.summaryCoordinatorId.slice(0, 128) } : {}),
+      ...(Number.isSafeInteger(data.summaryCoordinatorEpoch) && data.summaryCoordinatorEpoch >= 0 ? { summaryCoordinatorEpoch: data.summaryCoordinatorEpoch } : {}),
+      ...(data.summaryLanguage === "zh-CN" || data.summaryLanguage === "en-US" ? { summaryLanguage: data.summaryLanguage } : {}),
       requireConsent: data.configured === true ? data.requireConsent !== false : true,
-      asrSource,
-      asrModel: typeof data.asrModel === "string" ? data.asrModel : asrSource === "mimo-asr" ? "mimo-v2.5-asr" : "browser-network",
-      summaryProvider,
-      summaryModel: typeof data.summaryModel === "string" ? data.summaryModel : "mimo-v2.5-pro",
+      asrSource: "server-stream",
+      asrModel: typeof data.asrModel === "string" && data.asrModel ? data.asrModel : "server-asr",
       consented: data.consented === true,
       ...(typeof data.summary === "string" ? { summary: data.summary } : {}),
     };
@@ -2527,9 +2632,12 @@ class MeetingManagerImpl implements MeetingManager {
   endMeeting(): void {
     this.sendMeeting("meeting:end", {});
   }
-  sendChat(text: string, to?: string): void {
+  sendChat(text: string, to?: string, requestId?: string): void {
     // 公聊广播 / 定向私聊：to 为成员 uniqId，服务器校验发送者与目标均为当前会议成员
-    this.sendMeeting("meeting:chat", to ? { text, to } : { text });
+    const payload: Record<string, string> = { text };
+    if (to) payload.to = to;
+    if (requestId) payload.requestId = requestId;
+    this.sendMeeting("meeting:chat", payload);
   }
   requestChatHistory(): void {
     if (!this.isMeetingRoom(this.meetingChannel) || this.state.stage === "idle" || this.state.stage === "leaving") return;
@@ -2543,34 +2651,83 @@ class MeetingManagerImpl implements MeetingManager {
       requireConsent: safe.requireConsent,
       asrSource: safe.asrSource,
       asrModel: safe.asrModel,
-      summaryProvider: safe.summaryProvider,
-      summaryModel: safe.summaryModel,
     });
   }
-  startMinutes(): void {
-    if (!this.isMeetingRoom(this.meetingChannel) || this.state.stage !== "in-meeting") return;
-    this.sendMeeting("meeting:minutes", { action: "start" });
+  startMinutes(summaryLanguage?: "zh-CN" | "en-US"): void {
+    if (!this.isMeetingRoom(this.meetingChannel) || this.state.stage !== "in-meeting" || !hasSharedMeetingMinutesCapability(this.state.minutes)) return;
+    this.sendMeeting("meeting:minutes", { action: "start", ...(summaryLanguage ? { summaryLanguage } : {}) });
   }
-	stopMinutes(): void {
+	setMinutesReceiving(enabled: boolean, recordingId = this.state.minutes.recordingId || "", afterSeq = this.state.minutes.summaryThroughSeq || 0): void {
 		if (!this.isMeetingRoom(this.meetingChannel) || this.state.stage === "idle" || this.state.stage === "leaving") return;
-		this.flushMinutesSegmentQueue();
-		this.sendMeeting("meeting:minutes", { action: "stop" });
+		if (enabled && (!recordingId || recordingId !== this.state.minutes.recordingId || !Number.isSafeInteger(afterSeq) || afterSeq < 0)) return;
+		this.sendMeeting("meeting:minutes", {
+			action: "receive",
+			enabled: enabled === true,
+			...(recordingId ? { recordingId: recordingId.slice(0, 128) } : {}),
+			...(enabled ? { afterSeq } : {}),
+		});
+	}
+	stopMinutes(): void {
+		this.setMinutesReceiving(false);
 	}
 	consentMinutes(accepted: boolean): void {
+		if (!accepted) this.clearMinutesSegmentQueue();
 		if (!this.isMeetingRoom(this.meetingChannel) || this.state.stage !== "in-meeting") return;
 		this.sendMeeting("meeting:minutes", { action: "consent", accepted: accepted === true });
 	}
+  setCaptionsSubscribed(enabled: boolean): void {
+    if (!this.isMeetingRoom(this.meetingChannel) || this.state.stage !== "in-meeting") return;
+    this.sendMeeting("meeting:minutes", { action: "caption-subscribe", enabled });
+  }
+  /** Send any debounced final speech before leaving or stopping. */
+  flushMinutesSegments(): void {
+    if (!this.isMeetingRoom(this.meetingChannel)) return;
+    this.flushMinutesSegmentQueue(this.meetingChannel);
+  }
+  requestMinutesReplay(recordingId: string, afterSeq = 0): void {
+    if (!this.isMeetingRoom(this.meetingChannel) || this.state.stage !== "in-meeting") return;
+    if (!this.state.minutesSubscription.enabled) return;
+    if (!recordingId || recordingId !== this.state.minutes.recordingId || this.state.minutes.latestSegmentSeq === undefined) return;
+    if (!Number.isSafeInteger(afterSeq) || afterSeq < 0) return;
+    this.sendMeeting("meeting:minutes", { action: "replay", recordingId, afterSeq });
+  }
+  requestMeetingAI(task: "summary" | "translate" | "question" | "live-notes" | "final-minutes", input: string, targetLanguage?: "zh" | "en", summaryRequest?: MeetingMinutesSummaryRequest): Promise<string> {
+    if (!this.isMeetingRoom(this.meetingChannel) || this.state.stage !== "in-meeting" || typeof window === "undefined") return Promise.reject(new Error("会议 AI 服务暂不可用，已保留原文。"));
+    if (!input.trim() || new TextEncoder().encode(input).length > 16 * 1024) return Promise.reject(new Error("会议内容为空或过长。"));
+    const roomId = this.meetingChannel;
+    const requestId = typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    if (task === "summary") {
+      const current = this.state.minutes;
+      const actor = this.clientId();
+      if (!summaryRequest || !this.state.minutesSubscription.enabled
+        || !actor || current.summaryCoordinatorId !== actor
+        || summaryRequest.recordingId !== current.recordingId
+        || summaryRequest.coordinatorEpoch !== current.summaryCoordinatorEpoch
+        || !Number.isSafeInteger(summaryRequest.throughSeq) || summaryRequest.throughSeq <= (current.summaryThroughSeq ?? 0)
+        || (current.latestSegmentSeq !== undefined && summaryRequest.throughSeq > current.latestSegmentSeq)) {
+        return Promise.reject(new Error("当前成员已不再负责此纪要，已保留共享原文。"));
+      }
+    }
+    return new Promise((resolve, reject) => {
+      const timer = window.setTimeout(() => { this.meetingAIRequests.delete(requestId); reject(new Error("会议 AI 服务暂不可用，已保留原文。")); }, 65_000);
+      this.meetingAIRequests.set(requestId, { roomId, timer, task, ...(summaryRequest ? { summaryRequest: { ...summaryRequest } } : {}), resolve, reject });
+      this.sendMeeting("meeting:minutes", { action: "ai", requestId, task, input, targetLanguage, ...(summaryRequest ? summaryRequest : {}) }, roomId);
+    });
+  }
+  private rejectMeetingAIRequests(): void {
+    for (const pending of this.meetingAIRequests.values()) { window.clearTimeout(pending.timer); pending.reject(new Error("已离开会议。")); }
+    this.meetingAIRequests.clear();
+  }
 	private clearMinutesSegmentQueue(): void {
 		if (this.minutesSegmentTimer !== null && typeof window !== "undefined") window.clearTimeout(this.minutesSegmentTimer);
 		this.minutesSegmentTimer = null;
 		this.minutesSegmentQueue = [];
 	}
-	private flushMinutesSegmentQueue(roomId = this.meetingChannel): void {
-		if (this.minutesSegmentTimer !== null && typeof window !== "undefined") window.clearTimeout(this.minutesSegmentTimer);
+	private flushMinutesSegmentQueue(roomId = this.meetingChannel): void {		if (this.minutesSegmentTimer !== null && typeof window !== "undefined") window.clearTimeout(this.minutesSegmentTimer);
 		this.minutesSegmentTimer = null;
 		if (!this.minutesSegmentQueue.length || !this.isMeetingRoom(roomId)) return;
 		const segments = this.minutesSegmentQueue.splice(0, this.minutesSegmentQueue.length);
-		this.sendMeeting("meeting:minutes", { action: "segments", segments: segments.map((segment) => ({ segmentId: segment.id, text: segment.text, startMs: segment.startMs, endMs: segment.endMs, final: segment.final })) }, roomId);
+		this.sendMeeting("meeting:minutes", { action: "segments", segments: segments.map((segment) => ({ segmentId: segment.id, text: segment.text, startMs: segment.startMs, endMs: segment.endMs, final: segment.final, language: segment.language, recordingId: segment.recordingId })) }, roomId);
 	}
 	private queueMinutesSegment(segment: Omit<MeetingTranscriptSegment, "speakerId" | "speakerName">): void {
 		this.minutesSegmentQueue.push(segment);
@@ -2582,23 +2739,60 @@ class MeetingManagerImpl implements MeetingManager {
 			this.minutesSegmentTimer = window.setTimeout(() => this.flushMinutesSegmentQueue(), 1500);
 		}
 	}
-	sendMinutesSegment(segment: Omit<MeetingTranscriptSegment, "speakerId" | "speakerName">): void {
+	startServerAsrStream(language: string): void {
 		if (!this.isMeetingRoom(this.meetingChannel) || this.state.stage !== "in-meeting") return;
+		if (!canStartCaptionOnlyCapture(this.state.minutes)) return;
+		if (this.state.muted || this.state.microphonePending || this.state.microphoneError) return;
+		this.sendMeeting("meeting:minutes", { action: "asr-stream", event: "start", language: language === "en" ? "en" : "zh" });
+	}
+	sendServerAsrStreamAudio(pcmBase64: string): void {
+		if (!this.isMeetingRoom(this.meetingChannel) || this.state.stage !== "in-meeting") return;
+		if (!canStartCaptionOnlyCapture(this.state.minutes)) return;
+		if (this.state.muted || this.state.microphonePending || this.state.microphoneError) return;
+		if (!pcmBase64 || pcmBase64.length > 48_000) return;
+		this.sendMeeting("meeting:minutes", { action: "asr-stream", event: "audio", pcm: pcmBase64 });
+	}
+	stopServerAsrStream(): void {
+		if (!this.isMeetingRoom(this.meetingChannel)) return;
+		this.sendMeeting("meeting:minutes", { action: "asr-stream", event: "stop" });
+	}
+	sendServerAsrChunk(pcmBase64: string, language: string): void {
+		if (!this.isMeetingRoom(this.meetingChannel) || this.state.stage !== "in-meeting") return;
+		if (!canStartCaptionOnlyCapture(this.state.minutes)) return;
+		if (this.state.muted || this.state.microphonePending || this.state.microphoneError) return;
+		if (typeof pcmBase64 !== "string" || pcmBase64.length < 200 || pcmBase64.length > 400_000) return;
+		this.sendMeeting("meeting:minutes", { action: "asr-chunk", pcm: pcmBase64, language: language === "en" ? "en" : "zh" });
+	}
+	sendMinutesSegment(segment: Omit<MeetingTranscriptSegment, "speakerId" | "speakerName">): void {
+		if (!this.isMeetingRoom(this.meetingChannel) || this.state.stage !== "in-meeting" || !canSendMeetingMinutesSegment(this.state.minutes) || this.state.muted || this.state.microphonePending || this.state.microphoneError) return;
 		const text = String(segment.text || "").trim();
 		if (!text) return;
-		this.queueMinutesSegment({
-			id: String(segment.id || "").slice(0, 128),
-			text: text.slice(0, 4000),
-			startMs: Number.isFinite(segment.startMs) ? segment.startMs : Date.now(),
-			endMs: Number.isFinite(segment.endMs) ? segment.endMs : Date.now(),
-			final: segment.final !== false,
-		});
+    const normalized: Omit<MeetingTranscriptSegment, "speakerId" | "speakerName"> = {
+      id: String(segment.id || (typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`)).slice(0, 128),
+      text: text.slice(0, 4000),
+      startMs: Number.isFinite(segment.startMs) ? segment.startMs : Date.now(),
+      endMs: Number.isFinite(segment.endMs) ? segment.endMs : Date.now(),
+      final: segment.final !== false,
+      ...(segment.language === "zh-CN" || segment.language === "en-US" ? { language: segment.language } : {}),
+      ...(this.state.minutes.running && this.state.minutes.recordingId ? { recordingId: this.state.minutes.recordingId } : {}),
+    };
+    this.queueMinutesSegment(normalized);
+    // Save the sender's finalized speech locally before relying on the
+    // batched server echo; early leavers should not lose their own last line.
+    this.emitEvent({ type: "meeting:minutes", data: { kind: "segments", segments: [{ ...normalized, speakerId: realTimeColab.getUniqId() || "", speakerName: realTimeColab.getUserName() || "" }] } });
 	}
-  sendMinutesSummary(summary: string): void {
-    if (!this.isMeetingRoom(this.meetingChannel) || this.state.stage !== "in-meeting") return;
+  sendMinutesSummary(summary: string, recordingId: string, throughSeq: number, coordinatorEpoch: number): boolean {
+    if (!this.isMeetingRoom(this.meetingChannel) || this.state.stage !== "in-meeting" || !this.state.minutesSubscription.enabled || !hasSharedMeetingMinutesCapability(this.state.minutes)) return false;
+    const current = this.state.minutes;
+    if (!recordingId || recordingId !== current.recordingId
+      || current.summaryCoordinatorId !== this.clientId()
+      || coordinatorEpoch !== current.summaryCoordinatorEpoch
+      || !Number.isSafeInteger(throughSeq) || throughSeq <= (current.summaryThroughSeq ?? 0)
+      || (current.latestSegmentSeq !== undefined && throughSeq > current.latestSegmentSeq)) return false;
     const text = String(summary || "").trim();
-    if (!text) return;
-    this.sendMeeting("meeting:minutes", { action: "summary", summary: text.slice(0, 128 * 1024) });
+    if (!isValidMeetingMinutesSummaryPayload(text)) return false;
+    this.sendMeeting("meeting:minutes", { action: "summary", summary: text, recordingId: recordingId.slice(0, 128), throughSeq, coordinatorEpoch });
+    return true;
   }
   sendDraw(msg: Record<string, unknown>): void {
     this.sendMeeting("meeting:draw", msg);
@@ -2814,7 +3008,13 @@ class MeetingManagerImpl implements MeetingManager {
     if (!/^\d{4}[A-Z]\d{1,2}$|^\d{4}$/.test(roomId)) return;
     const prevChannel = this.meetingChannel;
     const lifecycle = ++this.lifecycle;
-    this.state = { ...this.state, microphonePending: false };
+    // Stop capture before switching identity/channel and never let an old
+    // room's queued speech or AI response reach the new room.
+    this.state = { ...this.state, stage: "joining", microphonePending: false };
+    this.emit();
+    if (prevChannel) this.flushMinutesSegmentQueue(prevChannel);
+    this.clearMinutesSegmentQueue();
+    this.rejectMeetingAIRequests();
     this.monitorLocalMicrophone();
     this.clearSubscriptionRetry();
     this.subscriptionRecoveryCycles.clear();
@@ -2844,7 +3044,7 @@ class MeetingManagerImpl implements MeetingManager {
     this.meetingChannel = roomId;
     this.stopMeetingHeartbeat();
     this.syncMeetingRoute(roomId);
-    this.state = { ...this.state, roomId, members: [], remoteTracks: [], presentation: { mode: "", ownerId: "", epoch: 0, screenOwnerId: "", screenEpoch: 0, whiteboardActive: false, whiteboardLeaderId: "", whiteboardEpoch: 0, whiteboardVisible: false, whiteboardForceOpen: false, whiteboardFocusEpoch: 0, focusTarget: "", focusEpoch: 0, presenterId: "", presenterEpoch: 0, presenterTarget: "", presenterFollowEpoch: 0 } };
+    this.state = { ...this.state, roomId, title: undefined, hostId: undefined, minutes: { ...EMPTY_MINUTES }, minutesSubscription: { enabled: false }, members: [], remoteTracks: [], presentation: { mode: "", ownerId: "", epoch: 0, screenOwnerId: "", screenEpoch: 0, whiteboardActive: false, whiteboardLeaderId: "", whiteboardEpoch: 0, whiteboardVisible: false, whiteboardForceOpen: false, whiteboardFocusEpoch: 0, focusTarget: "", focusEpoch: 0, presenterId: "", presenterEpoch: 0, presenterTarget: "", presenterFollowEpoch: 0 } };
     this.setStage("joining");
     this.emit();
     this.sendMeeting("meeting:join", {

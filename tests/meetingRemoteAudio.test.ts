@@ -42,6 +42,17 @@ test("participant gains apply to all their tracks independently and survive trac
   manager.dispose();
 });
 
+test("AC-PLAYBACK-002: an unlock gesture before the first remote track retries when that track arrives", async () => {
+  const { manager, hosts, track } = setup();
+  await manager.unlock();
+  assert.equal(hosts.length, 0);
+
+  manager.setTracks([{ memberId: "alice", track: track("late-audio") }]);
+
+  assert.equal(hosts[0]!.pipeline.resumeCalls, 1, "late track host should retry the prior unlock intent");
+  manager.dispose();
+});
+
 test("element fallback preserves local mute and reports gain caps for amplification", () => {
   const { manager, hosts, track } = setup();
   manager.setTracks([{ memberId: "alice", track: track("a") }, { memberId: "bob", track: track("b") }]);

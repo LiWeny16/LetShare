@@ -52,6 +52,8 @@ export class RemoteAudioHost {
   private playbackState: PlaybackState = "waiting-for-track";
   private designated: AudibleVia = "none";
   private gainCapped = false;
+  private sinkRouteGeneration = 0;
+  private sinkRoutingFallback = false;
   private disposed = false;
   private readonly listeners = new Set<(state: RemoteAudioHostState) => void>();
   private readonly clock: Clock;
@@ -98,6 +100,7 @@ export class RemoteAudioHost {
         this.output.srcObject = this.stream;
         this.reconcile("bindElement");
         this.ensurePlaying();
+        this.applySinkId(true);
       }
     }
     this.emit();
@@ -108,6 +111,8 @@ export class RemoteAudioHost {
     if (this.disposed || stream === this.stream) return;
     this.stream = stream;
     if (!stream) {
+      this.sinkRouteGeneration += 1;
+      this.sinkRoutingFallback = false;
       this.teardownStream();
       return;
     }
@@ -125,6 +130,7 @@ export class RemoteAudioHost {
     if (this.disposed) return;
     const previous = this.prefs;
     this.prefs = { ...prefs, volume: clampSpeakerVolume(prefs.volume) };
+    if (previous.sinkId !== this.prefs.sinkId) this.sinkRoutingFallback = false;
     if (!this.stream) return;
     if (previous.clarity !== this.prefs.clarity || previous.widen !== this.prefs.widen) this.pipeline.update({ clarity: this.prefs.clarity, widen: this.prefs.widen });
     this.reconcile("setPrefs");
@@ -137,6 +143,10 @@ export class RemoteAudioHost {
    */
   async unlock(): Promise<void> {
     if (this.disposed || !this.stream) return;
+    // A deliberate gesture retries a failed custom-device route as well as
+    // resuming playback. Browsers may still reject late playback; the visible
+    // recovery affordance remains the source of truth for that case.
+    this.sinkRoutingFallback = false;
     const resumed = await this.pipeline.resume();
     this.reconcile("user-gesture");
     const out = this.output;
@@ -205,6 +215,7 @@ export class RemoteAudioHost {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.sinkRouteGeneration += 1;
     this.stopWatching();
     this.pipeline.detach();
     this.releaseElement(this.sink, true);
@@ -233,7 +244,10 @@ export class RemoteAudioHost {
 
   /** 全部状态跃迁的唯一入口：纯函数裁决 → 结构性互斥 → 事件（P3）。 */
   private reconcile(reason: string): void {
-    const decision = decide(this.ctxState(), this.elementState(), this.prefs);
+    const baseDecision = decide(this.ctxState(), this.elementState(), this.prefs);
+    const decision = this.sinkRoutingFallback && baseDecision.audibleVia === "pipeline"
+      ? { ...baseDecision, audibleVia: "element" as const }
+      : baseDecision;
     const previous = this.designated;
     this.designated = decision.audibleVia;
     this.gainCapped = decision.gainCapped;
@@ -341,7 +355,22 @@ export class RemoteAudioHost {
 
   private applySinkId(forceDefault = false): void {
     const sinkId = this.prefs.sinkId;
-    if (sinkId || forceDefault) applySinkRouting(this.pipeline, this.output, this.designated === "pipeline", sinkId ?? "");
+    if (!sinkId && !forceDefault) return;
+    const viaPipeline = this.designated === "pipeline";
+    const generation = ++this.sinkRouteGeneration;
+    const isCurrent = () => !this.disposed && generation === this.sinkRouteGeneration && this.stream !== null;
+    void applySinkRouting(this.pipeline, this.output, viaPipeline, sinkId ?? "", isCurrent).then((result) => {
+      if (!isCurrent()) return;
+      if (viaPipeline && result === "element" && !this.sinkRoutingFallback) {
+        this.sinkRoutingFallback = true;
+        console.warn("[RemoteAudioHost] selected device is using the output element fallback");
+        this.reconcile("sink-routing-fallback");
+        this.ensurePlaying();
+      } else if (viaPipeline && result === "pipeline" && this.sinkRoutingFallback) {
+        this.sinkRoutingFallback = false;
+        this.reconcile("sink-routing-restored");
+      }
+    });
   }
 
   // ─── 内部：存活看门狗（C-10）────────────────────────────────────

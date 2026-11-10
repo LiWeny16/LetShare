@@ -1,179 +1,140 @@
-import { useTranslation } from "react-i18next";
-import { aiMore, aiMoreText } from "@App/libs/i18n/meetingAiMoreTranslations";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Alert,
   Box,
   Button,
-  Collapse,
-  CircularProgress,
-  FormControl,
-  FormControlLabel,
-  IconButton,
-  InputLabel,
-  LinearProgress,
-  MenuItem,
-  Paper,
-  Select,
   Stack,
-  TextField,
   Typography,
 } from "@mui/material";
-import ArrowBackIcon from "@mui/icons-material/ArrowBack";
-import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
-import GraphicEqIcon from "@mui/icons-material/GraphicEq";
-import KeyOutlinedIcon from "@mui/icons-material/KeyOutlined";
-import TuneIcon from "@mui/icons-material/Tune";
-import ApiIcon from "@mui/icons-material/Api";
-import PublicIcon from "@mui/icons-material/Public";
-import XiaomiIcon from "@thesvg/react/xiaomi";
-import ClaudeIcon from "@thesvg/react/claude";
-import DeepseekIcon from "@thesvg/react/deepseek";
-import OpenaiChatgptIcon from "@thesvg/react/openai-chatgpt";
+import SettingsOutlinedIcon from "@mui/icons-material/SettingsOutlined";
+import type { MeetingAiConfig } from "@App/libs/meeting/meetingAi";
 import {
-  MIMO_API_BASE_URL,
-  MIMO_TOKEN_PLAN_BASE_URL,
-  SUMMARY_PROVIDERS,
-  WASM_MODELS,
-  type AsrSource,
-  type MeetingAiConfig,
-  type SummaryProvider,
-  type WasmModelId,
+  EXPECTED_MEETING_AI_ASR_PROVIDER,
+  EXPECTED_MEETING_AI_SUMMARY_PROVIDER,
+  EXPECTED_MEETING_AI_SUMMARY_MODEL,
 } from "@App/libs/meeting/meetingAi";
-import MeetingMinutesSwitch from "./MeetingMinutesSwitch";
-
-type Credentials = { appId: string; apiKey: string; apiSecret: string };
+import { aiMore } from "@App/libs/i18n/meetingAiMoreTranslations";
 
 export interface MeetingAiSettingsViewProps {
-  isHost: boolean;
+  recordingRunning?: boolean;
   config: MeetingAiConfig;
-  summaryKey: string;
-  memberAsrEnabled: boolean;
-  memberAsrSource: AsrSource;
-  memberLanguage: string;
-  memberApiKey: string;
-  iflytek: Credentials;
-  sourceReady: boolean;
-  iflytekCredentialsReady: boolean;
-  selectedWasm: WasmModelId;
-  recommendedModel: WasmModelId;
-  downloaded: Record<string, boolean>;
-  downloadProgress: Record<string, number>;
-  error: string;
+  error?: string;
   onBack: () => void;
-  onSave: () => void | Promise<void>;
-  onMemberAsrChange: (patch: { enabled?: boolean; language?: string; asrSource?: AsrSource; asrModel?: string }) => void;
-  onMemberApiKeyChange: (value: string) => void;
+  onSave: () => void;
   onUpdateConfig: (patch: Partial<MeetingAiConfig>) => void;
-  onChooseProvider: (provider: SummaryProvider) => void;
-  onChooseSource: (source: AsrSource) => void;
-  onSummaryKeyChange: (value: string) => void;
-  onIflytekChange: (value: Credentials) => void;
-  onDownloadModel: (model: WasmModelId) => void;
 }
 
-const fieldSx = { "& .MuiOutlinedInput-root": { borderRadius: 1.5, bgcolor: "#fff" } };
-const pressableSx = { transition: "transform 160ms cubic-bezier(.2,0,0,1)", "&:active": { transform: "scale(.98)" } };
-
-function SectionTitle({ title, detail }: { title: string; detail?: string }) {
-  return <Box><Typography sx={{ color: "#172033", fontSize: "0.86rem", fontWeight: 850 }}>{title}</Typography>{detail && <Typography sx={{ mt: 0.3, color: "#667085", fontSize: "0.72rem", lineHeight: 1.55 }}>{detail}</Typography>}</Box>;
-}
-
-function ProviderMark({ provider }: { provider: SummaryProvider }) {
-  const brand = provider === "mimo"
-    ? { Icon: XiaomiIcon, color: "#ff6900" }
-    : provider === "openai"
-      ? { Icon: OpenaiChatgptIcon, color: "#111827" }
-      : provider === "deepseek"
-        ? { Icon: DeepseekIcon, color: "#4d6bfe" }
-        : provider === "anthropic"
-          ? { Icon: ClaudeIcon, color: "#d97757" }
-          : null;
-  return <Box sx={{ width: 26, height: 26, borderRadius: 1.25, display: "grid", placeItems: "center", bgcolor: brand ? `${brand.color}14` : "#1677ff14", color: brand?.color ?? "#1677ff" }}>
-    {brand ? <brand.Icon width={19} height={19} aria-hidden="true" /> : <TuneIcon sx={{ fontSize: 19 }} aria-hidden="true" />}
-  </Box>;
-}
-
+/** Shared meeting AI settings and each member's next-session language preference. */
 export default function MeetingAiSettingsView({
-  isHost,
+  recordingRunning = false,
   config,
-  summaryKey,
-  memberAsrEnabled,
-  memberAsrSource,
-  memberLanguage,
-  memberApiKey,
-  iflytek,
-  sourceReady,
-  iflytekCredentialsReady,
-  selectedWasm,
-  recommendedModel,
-  downloaded,
-  downloadProgress,
-  error,
+  error = "",
   onBack,
   onSave,
-  onMemberAsrChange,
-  onMemberApiKeyChange,
   onUpdateConfig,
-  onChooseProvider,
-  onChooseSource,
-  onSummaryKeyChange,
-  onIflytekChange,
-  onDownloadModel,
 }: MeetingAiSettingsViewProps) {
-  useTranslation();
-  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [localError, setLocalError] = useState("");
   const [saving, setSaving] = useState(false);
-  const selectedProvider = SUMMARY_PROVIDERS.find((item) => item.id === config.summaryProvider) ?? SUMMARY_PROVIDERS[0];
-  const mimoEndpoint = config.summaryBaseUrl === MIMO_API_BASE_URL ? "api" : "token-plan";
+  useEffect(() => { if (error) setLocalError(error); }, [error]);
+
   const save = async () => {
     if (saving) return;
     setSaving(true);
+    setLocalError("");
     try {
-      await onSave();
+      await Promise.resolve(onSave());
+    } catch (saveError) {
+      setLocalError(saveError instanceof Error ? saveError.message : aiMore("aiMoreSaveFailed"));
     } finally {
       setSaving(false);
     }
   };
 
-  return <Box data-testid="meeting-ai-minutes-panel" sx={{ height: "100%", display: "flex", flexDirection: "column", bgcolor: "#f6f8fb" }}>
-    <Box sx={{ px: { xs: 1.25, sm: 1.75 }, py: 1.05, display: "flex", alignItems: "center", gap: 0.8, bgcolor: "#fff", borderBottom: "1px solid #e4e7ec" }}>
-      <IconButton onClick={onBack} aria-label={aiMore("aiMoreBackToAINotes")} sx={{ minWidth: 42, minHeight: 42, color: "#1677ff" }}><ArrowBackIcon /></IconButton>
-      <Box sx={{ flex: 1, minWidth: 0 }}><Typography sx={{ color: "#172033", fontSize: "0.96rem", fontWeight: 850 }}>{aiMore("aiMoreConnectAnAIModel")}</Typography><Typography sx={{ mt: 0.15, color: "#667085", fontSize: "0.7rem" }}>{isHost ? aiMore("aiMoreTheKeyIsUsedOnlyIn") : aiMore("aiMoreTheHostHandlesSummariesConfigureTranscription")}</Typography></Box>
-      <TuneIcon sx={{ color: "#667085", fontSize: 20 }} />
-    </Box>
-    <Box sx={{ flex: 1, overflowY: "auto", p: { xs: 1.25, sm: 1.75 } }}>
-      <Stack spacing={1.25} sx={{ maxWidth: 680, mx: "auto" }}>
-        {isHost ? <>
-          <Paper elevation={0} sx={{ p: { xs: 1.35, sm: 1.6 }, border: "1px solid #e4e7ec", borderRadius: 2, bgcolor: "#fff" }}>
-            <Stack spacing={1.15}>
-              <SectionTitle title={aiMore("aiMoreNotesModel")} detail={aiMore("aiMoreTheHostConfiguresTheModelMembers")} />
-              <FormControl fullWidth size="small" sx={fieldSx}><InputLabel>{aiMore("aiMoreProvider")}</InputLabel><Select value={config.summaryProvider} label={aiMore("aiMoreProvider")} onChange={(event) => onChooseProvider(event.target.value as SummaryProvider)} renderValue={(value) => { const current = SUMMARY_PROVIDERS.find((item) => item.id === value) ?? SUMMARY_PROVIDERS[0]; return <Stack direction="row" spacing={1} alignItems="center"><ProviderMark provider={current.id} /><Box component="span">{current.id === "custom" ? aiMore("aiMoreCustom") : current.label}</Box></Stack>; }}>{SUMMARY_PROVIDERS.map((provider) => <MenuItem key={provider.id} value={provider.id}><ProviderMark provider={provider.id} />{provider.id === "custom" ? aiMore("aiMoreCustom") : provider.label}</MenuItem>)}</Select></FormControl>
-              <TextField size="small" fullWidth sx={fieldSx} label={`${selectedProvider.label} API Key`} type="password" value={summaryKey} onChange={(event) => onSummaryKeyChange(event.target.value)} autoComplete="off" InputProps={{ startAdornment: <KeyOutlinedIcon sx={{ mr: 0.7, color: "#98a2b3", fontSize: 18 }} /> }} inputProps={{ "data-testid": "meeting-minutes-api-key" }} />
-              {config.summaryProvider === "mimo" && <FormControl fullWidth size="small" sx={fieldSx}><InputLabel>{aiMore("aiMoreServiceRegion")}</InputLabel><Select value={mimoEndpoint} label={aiMore("aiMoreServiceRegion")} onChange={(event) => onUpdateConfig({ summaryBaseUrl: event.target.value === "api" ? MIMO_API_BASE_URL : MIMO_TOKEN_PLAN_BASE_URL })}><MenuItem value="token-plan"><Stack direction="row" spacing={1} alignItems="center"><PublicIcon sx={{ fontSize: 18, color: "#ff6900" }} /><Box component="span">{aiMore("aiMoreTokenPlanChina")}</Box></Stack></MenuItem><MenuItem value="api"><Stack direction="row" spacing={1} alignItems="center"><ApiIcon sx={{ fontSize: 18, color: "#475467" }} /><Box component="span">{aiMore("aiMoreStandardAPI")}</Box></Stack></MenuItem></Select></FormControl>}
-              {config.summaryProvider !== "custom" && selectedProvider.modelOptions.length > 0 ? <FormControl fullWidth size="small" sx={fieldSx}><InputLabel>{aiMore("aiMoreModel")}</InputLabel><Select value={config.summaryModel} label={aiMore("aiMoreModel")} onChange={(event) => onUpdateConfig({ summaryModel: event.target.value })}>{selectedProvider.modelOptions.map((model) => <MenuItem key={model.id} value={model.id}>{model.label}</MenuItem>)}</Select></FormControl> : <TextField size="small" fullWidth sx={fieldSx} label={aiMore("aiMoreModelName")} value={config.summaryModel} onChange={(event) => onUpdateConfig({ summaryModel: event.target.value })} inputProps={{ "data-testid": "meeting-minutes-model" }} />}
-              <Button variant="outlined" onClick={() => setAdvancedOpen((value) => !value)} endIcon={<ExpandMoreIcon sx={{ transform: advancedOpen ? "rotate(180deg)" : "none", transition: "transform 160ms" }} />} sx={{ justifyContent: "space-between", borderColor: "#e4e7ec", color: "#475467", textTransform: "none", borderRadius: 1.5, ...pressableSx }}>{aiMore("aiMoreAdvancedSettings")}</Button>
-              <Collapse in={advancedOpen} unmountOnExit><Stack spacing={1.1} sx={{ pt: 0.25 }}>{config.summaryProvider === "custom" && <FormControl fullWidth size="small" sx={fieldSx}><InputLabel>{aiMore("aiMoreCompatibleProtocol")}</InputLabel><Select value={config.summaryProtocol} label={aiMore("aiMoreCompatibleProtocol")} onChange={(event) => onUpdateConfig({ summaryProtocol: event.target.value as MeetingAiConfig["summaryProtocol"] })}><MenuItem value="openai">OpenAI Chat Completions</MenuItem><MenuItem value="anthropic">Anthropic Messages</MenuItem></Select></FormControl>}<TextField size="small" fullWidth sx={fieldSx} label="Base URL" value={config.summaryBaseUrl} onChange={(event) => onUpdateConfig({ summaryBaseUrl: event.target.value })} />{config.summaryProvider === "mimo" && <Typography sx={{ px: 0.25, color: "#667085", fontSize: "0.68rem" }}>{aiMore("aiMoreMiMoSupportsTokenPlanChinaAnd")}</Typography>}<Typography sx={{ color: "#667085", fontSize: "0.68rem", lineHeight: 1.5 }}>{aiMore("aiMoreConnectionErrorsWonTInterruptThe")}</Typography></Stack></Collapse>
+  return (
+    <Box sx={{ height: "100%", display: "flex", flexDirection: "column", bgcolor: "#f7f9fc" }}>
+      <Box sx={{ px: 1.5, py: 1.35, bgcolor: "#fff", borderBottom: "1px solid #e4eaf1", display: "flex", alignItems: "center", gap: 0.8, flexShrink: 0 }}>
+        <SettingsOutlinedIcon sx={{ color: "#1677ff", fontSize: 20 }} />
+        <Box sx={{ flex: 1 }}>
+          <Typography sx={{ fontWeight: 850, fontSize: "0.88rem" }}>{aiMore("aiMoreMeetingAssistant")}</Typography>
+          <Typography sx={{ color: "text.secondary", fontSize: "0.68rem" }}>
+            {aiMore("aiMoreExpectedServices", { asr: EXPECTED_MEETING_AI_ASR_PROVIDER, summary: EXPECTED_MEETING_AI_SUMMARY_PROVIDER })}
+          </Typography>
+        </Box>
+        <Button
+          size="small"
+          variant="text"
+          onClick={onBack}
+          sx={{ textTransform: "none", fontWeight: 700, color: "text.secondary" }}
+          aria-label={aiMore("aiMoreBackToMeeting")}
+        >
+          {aiMore("aiMoreBackToMeeting")}
+        </Button>
+      </Box>
+      <Box sx={{ p: 1.5, overflowY: "auto", flex: 1 }}>
+        <Stack spacing={1.35}>
+          <Alert
+            severity="info"
+            sx={{ borderRadius: 2, fontSize: "0.7rem", lineHeight: 1.6, bgcolor: "#eaf2ff", color: "#244e80" }}
+          >
+            {aiMore("aiMoreMeetingServerDescription", {
+              asr: EXPECTED_MEETING_AI_ASR_PROVIDER,
+              summary: EXPECTED_MEETING_AI_SUMMARY_PROVIDER,
+              model: EXPECTED_MEETING_AI_SUMMARY_MODEL,
+            })}
+          </Alert>
+          <Alert severity="info" sx={{ borderRadius: 2, fontSize: "0.7rem", lineHeight: 1.6 }}>
+            {aiMore("aiMoreMinutesParticipantInfo")}
+          </Alert>
+          <Box sx={{ p: 1.35, border: "1px solid #e1e8f0", borderRadius: 2.25, bgcolor: "#fff" }}>
+            <Stack spacing={0.6}>
+              <Typography sx={{ fontWeight: 800, fontSize: "0.8rem" }}>{aiMore("aiMoreMinutesOutputLanguage")}</Typography>
+              <Typography sx={{ color: "text.secondary", fontSize: "0.68rem", lineHeight: 1.5 }}>
+                {aiMore("aiMoreMinutesOutputLanguageDescription")}
+              </Typography>
+              <Box
+                role="radiogroup"
+                aria-label={aiMore("aiMoreMinutesOutputLanguage")}
+                sx={{ display: "flex", gap: 0.75 }}
+              >
+                {[
+                  { value: "zh-CN", label: aiMore("aiMoreChinese") },
+                  { value: "en-US", label: aiMore("aiMoreEnglish") },
+                ].map((language) => (
+                  <Box
+                    key={language.value}
+                    role="radio"
+                    aria-checked={config.language === language.value}
+                    aria-disabled={recordingRunning}
+                    tabIndex={recordingRunning ? -1 : 0}
+                    onClick={() => { if (!recordingRunning) onUpdateConfig({ language: language.value }); }}
+                    sx={{
+                      px: 1.6,
+                      py: 0.8,
+                      borderRadius: 1.5,
+                      cursor: recordingRunning ? "not-allowed" : "pointer",
+                      opacity: recordingRunning ? 0.72 : 1,
+                      fontSize: "0.75rem",
+                      fontWeight: 700,
+                      border: `1.5px solid ${config.language === language.value ? "#1677ff" : "#d7e1ec"}`,
+                      bgcolor: config.language === language.value ? "#eaf2ff" : "#fff",
+                      color: config.language === language.value ? "#1677ff" : "#53708f",
+                      "&:hover": { bgcolor: config.language === language.value ? "#eaf2ff" : "#f6f9fc" },
+                    }}
+                  >
+                    {language.label}
+                  </Box>
+                ))}
+              </Box>
             </Stack>
-          </Paper>
-          <Paper elevation={0} sx={{ p: { xs: 1.35, sm: 1.6 }, border: "1px solid #e4e7ec", borderRadius: 2, bgcolor: "#fff" }}><Stack spacing={1.1}><SectionTitle title={aiMore("aiMoreMemberTranscription")} detail={aiMore("aiMoreMembersUseChromeSpeechAPIBy")} /><FormControl fullWidth size="small" sx={fieldSx}><InputLabel>{aiMore("aiMoreTranscriptionSourceSuggestedByTheHost")}</InputLabel><Select value={config.asrSource} label={aiMore("aiMoreTranscriptionSourceSuggestedByTheHost")} onChange={(event) => onChooseSource(event.target.value as AsrSource)}><MenuItem value="browser-speech">Chrome Speech API</MenuItem><MenuItem value="mimo-asr">MiMo ASR</MenuItem><MenuItem value="wasm">Whisper WASM</MenuItem><MenuItem value="iflytek">{aiMore("aiMoreIFlytekRealTimeASR")}</MenuItem></Select></FormControl><Box sx={{ display: "flex", justifyContent: "flex-end", width: "100%" }}><FormControlLabel labelPlacement="start" control={<MeetingMinutesSwitch checked={config.requireConsent} onChange={(event) => onUpdateConfig({ requireConsent: event.target.checked })} />} label={aiMore("aiMoreAskMembersBeforeUsingLocalTranscription")} sx={{ m: 0, gap: 0.75, "& .MuiFormControlLabel-label": { color: "#475467", fontSize: "0.74rem", whiteSpace: "normal" } }} /></Box></Stack></Paper>
-        </> : <Alert severity="info" sx={{ borderRadius: 2, alignItems: "flex-start" }}><Typography sx={{ fontSize: "0.78rem", fontWeight: 800 }}>{aiMore("aiMoreTheHostGeneratesTheMeetingNotes")}</Typography><Typography sx={{ mt: 0.35, fontSize: "0.72rem", lineHeight: 1.55 }}>{aiMore("aiMoreChooseWhetherThisDeviceContributesTranscripts")}</Typography></Alert>}
-        <Paper elevation={0} sx={{ p: { xs: 1.35, sm: 1.6 }, border: "1px solid #e4e7ec", borderRadius: 2, bgcolor: "#fff" }}>
-          <Stack spacing={1.1}>
-            <Stack direction="row" alignItems="flex-start" justifyContent="space-between" gap={1}><SectionTitle title={aiMore("aiMoreTranscriptionOnThisDevice")} detail={aiMore("aiMoreYourVoiceIsRecognizedOnThis")} /></Stack>
-            <FormControl fullWidth size="small" sx={fieldSx}><InputLabel>{aiMore("aiMoreTranscriptionSource")}</InputLabel><Select value={isHost ? config.asrSource : memberAsrSource} label={aiMore("aiMoreTranscriptionSource")} onChange={(event) => { const source = event.target.value as AsrSource; if (isHost) onChooseSource(source); else onMemberAsrChange({ asrSource: source, asrModel: source === "mimo-asr" ? "mimo-v2.5-asr" : "browser-network" }); }}><MenuItem value="browser-speech">{aiMore("aiMoreChromeSpeechAPIFree")}</MenuItem><MenuItem value="mimo-asr">{aiMore("aiMoreMiMoASRYourOwnKey")}</MenuItem>{isHost ? <MenuItem value="wasm">{aiMore("aiMoreWhisperWASMLocal")}</MenuItem> : null}{isHost ? <MenuItem value="iflytek">{aiMore("aiMoreIFlytekRealTimeASR")}</MenuItem> : null}</Select></FormControl>
-            <FormControl fullWidth size="small" sx={fieldSx}><InputLabel>{aiMore("aiMoreRecognitionLanguage")}</InputLabel><Select value={isHost ? config.language : memberLanguage} label={aiMore("aiMoreRecognitionLanguage")} onChange={(event) => isHost ? onUpdateConfig({ language: event.target.value }) : onMemberAsrChange({ language: event.target.value })}><MenuItem value="zh-CN">{aiMore("aiMoreChinese")}</MenuItem><MenuItem value="en-US">English</MenuItem></Select></FormControl>
-            {(isHost ? config.asrSource : memberAsrSource) === "mimo-asr" && <TextField size="small" fullWidth sx={fieldSx} label={aiMore("aiMoreMiMoAPIKeyForThisDevice")} type="password" value={memberApiKey} onChange={(event) => onMemberApiKeyChange(event.target.value)} autoComplete="off" helperText={memberApiKey.trim() ? aiMore("aiMoreStoredOnlyInThisTab") : aiMore("aiMoreEnterAKeyToUseMiMo")} />}
-            {isHost && config.asrSource === "mimo-asr" && <Alert severity={sourceReady ? "success" : "warning"} icon={<GraphicEqIcon fontSize="small" />} sx={{ borderRadius: 1.5, fontSize: "0.7rem" }}>{sourceReady ? aiMore("aiMoreMiMoASRIsReadyOnThis") : aiMore("aiMoreEnterAMiMoAPIKeyFor")}</Alert>}
-            {!isHost && <Alert severity={memberAsrSource === "browser-speech" ? (sourceReady ? "success" : "warning") : (memberApiKey.trim() ? "success" : "warning")} sx={{ borderRadius: 1.5, fontSize: "0.7rem" }}>{memberAsrSource === "browser-speech" ? (sourceReady ? aiMore("aiMoreThisBrowserSupportsTranscription") : aiMore("aiMoreThisBrowserDoesNotSupportTranscription")) : (memberApiKey.trim() ? aiMore("aiMoreMiMoASRIsReadyOnThis") : aiMore("aiMoreNoMiMoAPIKeyIsSet"))}</Alert>}
-            {isHost && config.asrSource === "wasm" && <Stack spacing={0.8}><FormControl fullWidth size="small" sx={fieldSx}><InputLabel>{aiMore("aiMoreWhisperModel")}</InputLabel><Select value={selectedWasm} label={aiMore("aiMoreWhisperModel")} onChange={(event) => onUpdateConfig({ asrModel: event.target.value })}>{WASM_MODELS.map((model) => <MenuItem key={model.id} value={model.id}>{model.label} · {aiMoreText(model.size)}{model.id === recommendedModel ? aiMore("aiMoreRecommended") : ""}</MenuItem>)}</Select></FormControl>{WASM_MODELS.filter((model) => model.id === selectedWasm).map((model) => <Box key={model.id}><Typography sx={{ color: "#667085", fontSize: "0.68rem" }}>{aiMoreText(model.quality)}</Typography><Button size="small" onClick={() => onDownloadModel(model.id)} sx={{ mt: 0.45, textTransform: "none" }}>{downloaded[model.id] ? aiMore("aiMoreDownloaded") : aiMore("aiMoreDownloadModel")}</Button>{downloadProgress[model.id] > 0 && downloadProgress[model.id] < 1 && <LinearProgress variant="determinate" value={downloadProgress[model.id] * 100} sx={{ mt: 0.5 }} />}</Box>)}</Stack>}
-            {isHost && config.asrSource === "iflytek" && <Stack spacing={0.8}><TextField size="small" sx={fieldSx} label={aiMore("aiMoreIFlytekAppID")} value={iflytek.appId} onChange={(event) => onIflytekChange({ ...iflytek, appId: event.target.value })} /><TextField size="small" sx={fieldSx} label={aiMore("aiMoreIFlytekAPIKey")} type="password" value={iflytek.apiKey} onChange={(event) => onIflytekChange({ ...iflytek, apiKey: event.target.value })} /><TextField size="small" sx={fieldSx} label={aiMore("aiMoreIFlytekAPISecret")} type="password" value={iflytek.apiSecret} onChange={(event) => onIflytekChange({ ...iflytek, apiSecret: event.target.value })} /><Typography sx={{ color: iflytekCredentialsReady ? "#14976b" : "#c88700", fontSize: "0.68rem" }}>{iflytekCredentialsReady ? aiMore("aiMoreIFlytekCredentialsAreReady") : aiMore("aiMoreEnterAllCredentials")}</Typography></Stack>}
-            <Box sx={{ display: "flex", justifyContent: "flex-end", width: "100%" }}><FormControlLabel labelPlacement="start" control={<MeetingMinutesSwitch checked={isHost ? config.enabled : memberAsrEnabled} onChange={(event) => isHost ? onUpdateConfig({ enabled: event.target.checked }) : onMemberAsrChange({ enabled: event.target.checked })} />} label={aiMore("aiMoreContributeFromThisDevice")} sx={{ m: 0, gap: 0.75, "& .MuiFormControlLabel-label": { color: "#475467", fontSize: "0.72rem", fontWeight: 750, whiteSpace: "normal" } }} /></Box>
-          </Stack>
-        </Paper>
-        {error && <Alert severity="error" sx={{ borderRadius: 2 }}>{error}</Alert>}
-      </Stack>
+          </Box>
+          {localError && <Alert severity="error" sx={{ borderRadius: 2, fontSize: "0.72rem" }}>{localError}</Alert>}
+        </Stack>
+      </Box>
+      <Box sx={{ p: 1.2, borderTop: "1px solid #e4eaf1", bgcolor: "#fff", flexShrink: 0 }}>
+        <Button fullWidth variant="contained" onClick={() => void save()} disabled={saving || recordingRunning} sx={{ borderRadius: 1.75, textTransform: "none", fontWeight: 800 }}>
+          {saving ? aiMore("aiMoreSaving") : aiMore("aiMoreSave")}
+        </Button>
+      </Box>
     </Box>
-    <Box sx={{ p: 1.15, borderTop: "1px solid #e4e7ec", bgcolor: "#fff" }}><Button fullWidth variant="contained" onClick={() => void save()} disabled={saving} startIcon={saving ? <CircularProgress size={17} color="inherit" /> : undefined} sx={{ minHeight: 44, borderRadius: 1.5, textTransform: "none", fontWeight: 800, ...pressableSx }}>{saving ? (isHost ? aiMore("aiMoreTestingAndConnecting") : aiMore("aiMoreSaving")) : isHost ? aiMore("aiMoreTestAndConnect") : aiMore("aiMoreSaveDeviceSettings")}</Button></Box>
-  </Box>;
+  );
 }

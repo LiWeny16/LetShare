@@ -198,6 +198,21 @@ test("无 AudioContext 环境: attach 返回 false 不抛（元素路径兜底�
   pipeline.detach();
 });
 
+test("setSinkId distinguishes unsupported AudioContext routing from a rejected device route", async () => {
+  const unsupported = new RemoteAudioPipeline(() => makeFakeCtx().ctx as unknown as AudioContext);
+  unsupported.attach(makeFakeStream());
+  assert.equal(await unsupported.setSinkId(""), "unsupported");
+  assert.equal(await unsupported.setSinkId("usb-speaker"), "unsupported");
+  unsupported.detach();
+
+  const failingCtx = makeFakeCtx().ctx as unknown as AudioContext & { setSinkId: (id: string) => Promise<void> };
+  failingCtx.setSinkId = async () => { throw new Error("device unavailable"); };
+  const failing = new RemoteAudioPipeline(() => failingCtx);
+  failing.attach(makeFakeStream());
+  assert.equal(await failing.setSinkId(""), "failed");
+  failing.detach();
+});
+
 test("suspended ctx: attach 时补 resume（自动播放策略兜底）", () => {
   const { ctx } = makeFakeCtx({ suspended: true });
   const pipeline = new RemoteAudioPipeline(() => ctx as unknown as AudioContext);

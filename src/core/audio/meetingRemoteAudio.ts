@@ -22,6 +22,7 @@ export class MeetingRemoteAudio {
   private readonly createHost: () => TrackHost;
   private readonly createStream: (track: MediaStreamTrack) => MediaStream;
   private prefs: AudioPrefs = { volume: 1, clarity: true, widen: false };
+  private unlockRequested = false;
   private disposed = false;
 
   constructor(options: MeetingRemoteAudioOptions = {}) {
@@ -59,6 +60,10 @@ export class MeetingRemoteAudio {
       entry.unsubscribe = host.subscribe(() => this.emit());
       host.setPrefs(this.trackPrefs(memberId));
       host.setStream(this.createStream(track));
+      // A gesture can happen before the SFU delivers its first remote track.
+      // Retry on the new host; autoplay policy can still reject this later call,
+      // in which case the existing explicit recovery control remains available.
+      if (this.unlockRequested) void host.unlock();
     }
     this.emit();
   }
@@ -81,6 +86,7 @@ export class MeetingRemoteAudio {
 
   async unlock(): Promise<void> {
     if (this.disposed) return;
+    this.unlockRequested = true;
     await Promise.all([...this.tracks.values()].map(({ host }) => host.unlock()));
   }
 
