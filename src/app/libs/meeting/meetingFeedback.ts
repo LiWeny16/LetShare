@@ -17,17 +17,37 @@ export function shouldAnnounceMemberJoin(
   return true;
 }
 
-/** Resolve the visible meeting transport status from browser and server state. */
+/**
+ * Resolve the visible meeting transport status from browser and server state.
+ * A meeting that has never joined has no transport to lose: during the initial
+ * join, "connecting" and stale "disconnected" snapshots must not be reported as
+ * an interrupted connection.
+ */
 export function getMeetingConnectionNotice(
   browserOnline: boolean,
   serverState: MeetingServerConnectionState,
   awaitingServerConfirmation = false,
+  meetingEstablished = true,
 ): MeetingConnectionNotice {
   if (!browserOnline) return "offline";
+  if (!meetingEstablished) return null;
   if (awaitingServerConfirmation) return "reconnecting";
   if (serverState === "connecting" || serverState === "reconnecting") return "reconnecting";
   if (serverState === "disconnected") return "disconnected";
   return null;
+}
+
+/**
+ * The meeting surface is only allowed after the room is confirmed joined.
+ * Entry, reconnection and transport verification always render the join screen
+ * first so the real meeting UI can never flash before the loader.
+ */
+export function shouldShowMeetingJoinScreen(
+  stage: MeetingStage,
+  joined: boolean,
+  transportVerifying: boolean,
+): boolean {
+  return stage !== "leaving" && (!joined || transportVerifying);
 }
 
 export type MeetingConnectionBanner = MeetingConnectionNotice | "recovered";

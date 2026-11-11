@@ -54,6 +54,7 @@ import {
   type MeetingInviteStatusMsg,
 } from "./meetingInviteBus";
 import { canSendMeetingMinutesSegment, canStartCaptionOnlyCapture, hasSharedMeetingMinutesCapability, isValidMeetingMinutesSummaryPayload, sanitizeMeetingAiConfig, type MeetingAiConfig, type MeetingMinutesPublicState, type MeetingMinutesSubscription, type MeetingMinutesSummaryRequest, type MeetingTranscriptSegment } from "./meetingAi";
+import { nextLatestMeetingSegmentSeq } from "./meetingSummaryQueue";
 import { installDiagnostics, registerDiagnosticsProvider, type MeetingDump } from "../../../diagnostics/index";
 // 来电式弹窗全局自挂载（share 页 / meeting 页跨路由可见）；依赖 deferred 引用，无初始化环。
 import "../../../components/meeting/components/IncomingMeetingInviteDialog";
@@ -2056,6 +2057,7 @@ class MeetingManagerImpl implements MeetingManager {
             ...(typeof data.recordingId === "string" && data.recordingId ? { recordingId: data.recordingId.slice(0, 128) } : {}),
             ...(Number.isSafeInteger(data.seq) && data.seq > 0 ? { seq: data.seq } : {}),
           };
+          this.observeMinutesSegmentSeq([segment]);
           this.emitEvent({ type: "meeting:minutes", data: { kind, segment } });
         } else if (kind === "segments" && this.state.minutesSubscription.enabled && Array.isArray(data?.segments)) {
           const segments: MeetingTranscriptSegment[] = data.segments.flatMap((item: any) => {
@@ -2073,7 +2075,10 @@ class MeetingManagerImpl implements MeetingManager {
               ...(Number.isSafeInteger(item.seq) && item.seq > 0 ? { seq: item.seq } : {}),
             } satisfies MeetingTranscriptSegment];
           });
-          if (segments.length) this.emitEvent({ type: "meeting:minutes", data: { kind, segments, ...(data.replay === true ? { replay: true } : {}), ...(typeof data.recordingId === "string" ? { recordingId: data.recordingId.slice(0, 128) } : {}), ...(Number.isSafeInteger(data.fromSeq) ? { fromSeq: data.fromSeq } : {}), ...(Number.isSafeInteger(data.throughSeq) ? { throughSeq: data.throughSeq } : {}) } });
+          if (segments.length) {
+            this.observeMinutesSegmentSeq(segments);
+            this.emitEvent({ type: "meeting:minutes", data: { kind, segments, ...(data.replay === true ? { replay: true } : {}), ...(typeof data.recordingId === "string" ? { recordingId: data.recordingId.slice(0, 128) } : {}), ...(Number.isSafeInteger(data.fromSeq) ? { fromSeq: data.fromSeq } : {}), ...(Number.isSafeInteger(data.throughSeq) ? { throughSeq: data.throughSeq } : {}) } });
+          }
         } else if (kind === "summary" && this.state.minutesSubscription.enabled && typeof data?.summary === "string") {
           this.emitEvent({ type: "meeting:minutes", data: { kind, summary: data.summary, ...(incomingMinutes ? { minutes: incomingMinutes } : {}), ...(typeof data.recordingId === "string" ? { recordingId: data.recordingId.slice(0, 128) } : {}), ...(Number.isSafeInteger(data.throughSeq) ? { throughSeq: data.throughSeq } : {}), ...(Number.isSafeInteger(data.coordinatorEpoch) ? { coordinatorEpoch: data.coordinatorEpoch } : {}) } });
         } else if (kind === "asr-error" && this.state.minutesSubscription.enabled && data?.code === "transcription_failed") {
@@ -2586,6 +2591,19 @@ class MeetingManagerImpl implements MeetingManager {
       ...(typeof data.cameraTrackId === "string" && data.cameraTrackId ? { cameraTrackId: data.cameraTrackId } : {}),
       ...(typeof data.screenTrackId === "string" && data.screenTrackId ? { screenTrackId: data.screenTrackId } : {}),
     };
+  }
+
+  /**
+   * Live segment frames arrive without a minutes state broadcast. Track the
+   * highest delivered sequence locally so the shared-summary cursor can move
+   * instead of waiting for a state snapshot that may never come.
+   */
+  private observeMinutesSegmentSeq(segments: MeetingTranscriptSegment[]): void {
+    const current = this.state.minutes.latestSegmentSeq;
+    const latest = nextLatestMeetingSegmentSeq(current, segments, this.state.minutes.recordingId || "");
+    if (latest === undefined || latest === current) return;
+    this.state = { ...this.state, minutes: { ...this.state.minutes, latestSegmentSeq: latest } };
+    this.emit();
   }
 
   private parseMinutes(data: any): MeetingMinutesPublicState | null {

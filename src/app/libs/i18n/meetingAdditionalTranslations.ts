@@ -3,6 +3,7 @@ export const meetingAdditionalEnglish: Record<string, string> = {
   savedDeviceNotListed: 'Saved device (not currently listed)',
   connectionOffline: 'Network connection lost. The meeting will reconnect when it returns.', connectionReconnecting: 'Meeting connection interrupted. Reconnecting…',
   connectionUnavailable: 'Meeting server connection unavailable. Retrying…', connectionRestored: 'Meeting connection restored.',
+  connectionOfflineShort: 'Offline', connectionReconnectingShort: 'Reconnecting…', connectionUnavailableShort: 'Disconnected', connectionRestoredShort: 'Restored',
   inviteEnableSound: 'Enable invitation sound', inviteSoundUnavailable: 'Invitation sounds are not supported by this browser.',
   memberSoundEnable: 'Enable member sounds', memberSoundBlocked: 'Interact once to allow the browser to play member sounds.',
   screenShareFailed: 'Could not start screen sharing', invBusyInCall: 'You cannot join a meeting during a call',

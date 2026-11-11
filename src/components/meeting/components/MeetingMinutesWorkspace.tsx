@@ -4,6 +4,7 @@ import {
   Box,
   Button,
   Chip,
+  CircularProgress,
   IconButton,
   Paper,
   Stack,
@@ -43,6 +44,8 @@ export interface MeetingMinutesWorkspaceProps {
   receiving?: boolean;
   canSummarize?: boolean;
   busy?: boolean;
+  summarizing?: boolean;
+  summaryHint?: string;
   startLabel?: string;
   startDisabled?: boolean;
   onStart?: () => void;
@@ -75,6 +78,7 @@ function fallbackNotes(timeline: MeetingMinutesJson["timeline"]): LiveNote[] {
     atMs: item.startMs,
     speakerName: item.speakerName,
     text: item.summary || item.transcript,
+    kind: item.kind,
   }));
 }
 
@@ -88,7 +92,7 @@ function EmptyState({ title, detail }: { title: string; detail: string }) {
   );
 }
 
-function MeetingThread({ notes, speakers, transcriptCount }: { notes: LiveNote[]; speakers: string[]; transcriptCount: number }) {
+function MeetingThread({ notes, speakers, transcriptCount, summarizing }: { notes: LiveNote[]; speakers: string[]; transcriptCount: number; summarizing: boolean }) {
   return (
     <Stack spacing={1.5} data-testid="meeting-minutes-thread">
       <Box>
@@ -97,12 +101,20 @@ function MeetingThread({ notes, speakers, transcriptCount }: { notes: LiveNote[]
           <Stack direction="row" spacing={0.35} alignItems="baseline">
             <Typography data-testid="meeting-minutes-segment-count" sx={{ color: "#98a2b3", fontSize: "0.7rem", fontVariantNumeric: "tabular-nums" }}>{transcriptCount}</Typography>
             <Typography sx={{ color: "#98a2b3", fontSize: "0.7rem" }}>{aiMore("aiMoreUnitStatements")}</Typography>
+            {notes.length > 0 && <>
+              <Typography sx={{ color: "#98a2b3", fontSize: "0.7rem", px: 0.2 }}>·</Typography>
+              <Typography data-testid="meeting-minutes-note-count" sx={{ color: "#98a2b3", fontSize: "0.7rem", fontVariantNumeric: "tabular-nums" }}>{notes.length}</Typography>
+              <Typography sx={{ color: "#98a2b3", fontSize: "0.7rem" }}>{aiMore("aiMoreUnitNotes")}</Typography>
+            </>}
+            {summarizing && <CircularProgress size={11} sx={{ ml: 0.3 }} />}
           </Stack>
         </Stack>
       </Box>
       {notes.length > 0
         ? <MeetingLiveNotesList notes={notes} speakers={speakers} />
-        : <EmptyState title={transcriptCount > 0 ? aiMore("aiMoreMinutesBeingOrganized") : aiMore("aiMoreWaitingForTranscript")} detail={transcriptCount > 0 ? aiMore("aiMoreMinutesBeingOrganized") : aiMore("aiMoreTranscriptStartsAfterRecording")} />}
+        : transcriptCount > 0
+          ? <EmptyState title={summarizing ? aiMore("aiMoreSummarizingOverview") : aiMore("aiMoreWaitingForAINotes")} detail={aiMore("aiMoreAINotesAutoGenerate")} />
+          : <EmptyState title={aiMore("aiMoreWaitingForTranscript")} detail={aiMore("aiMoreTranscriptStartsAfterRecording")} />}
     </Stack>
   );
 }
@@ -239,6 +251,8 @@ export default function MeetingMinutesWorkspace({
   receiving = true,
   canSummarize = false,
   busy = false,
+  summarizing = false,
+  summaryHint = "",
   startLabel = aiMore("aiMoreStartRecording"),
   startDisabled = false,
   onStart,
@@ -339,13 +353,18 @@ export default function MeetingMinutesWorkspace({
               <Chip size="small" label={aiMore("aiMoreCountActionItems", { count: summaryData.actionItems.length })} sx={{ height: 21, bgcolor: "#fff5df", color: "#a66a00", fontSize: "0.62rem" }} />
               <Tooltip title={aiMore("aiMoreCopyMinutes")}><IconButton size="small" aria-label={aiMore("aiMoreCopyMinutes")} onClick={() => void onCopySummary?.()}><ContentCopyIcon fontSize="small" /></IconButton></Tooltip>
             </>}
-            {canSummarize && running && onSummarizeNow && <Button size="small" onClick={onSummarizeNow} sx={{ textTransform: "none", minHeight: 28 }}>{aiMore("aiMoreSummarizeNow")}</Button>}
+            {canSummarize && running && onSummarizeNow && <Button size="small" onClick={onSummarizeNow} disabled={summarizing} startIcon={summarizing ? <CircularProgress size={13} color="inherit" /> : undefined} sx={{ textTransform: "none", minHeight: 28 }}>{summarizing ? aiMore("aiMoreSummarizing") : aiMore("aiMoreSummarizeNow")}</Button>}
           </Stack>
           {summaryWarning && <Alert severity="warning" sx={{ mt: 0.7, py: 0.1, borderRadius: 1.25, fontSize: "0.72rem" }}>{summaryWarning}</Alert>}
-          <Typography data-testid="meeting-minutes-overview" sx={{ mt: 0.55, color: "#344054", fontSize: "0.82rem", lineHeight: 1.65, whiteSpace: "pre-wrap" }}>{summaryData?.overview || summary || aiMore("aiMoreWaitingForTranscript")}</Typography>
+          {summaryData?.overview || summary
+            ? <Typography data-testid="meeting-minutes-overview" sx={{ mt: 0.55, color: "#344054", fontSize: "0.82rem", lineHeight: 1.65, whiteSpace: "pre-wrap" }}>{summaryData?.overview || summary}</Typography>
+            : summarizing
+              ? <Stack direction="row" spacing={0.8} alignItems="center" data-testid="meeting-minutes-overview" sx={{ mt: 0.65 }}><CircularProgress size={13} /><Typography sx={{ color: "#53708f", fontSize: "0.78rem" }}>{aiMore("aiMoreSummarizingOverview")}</Typography></Stack>
+              : <Typography data-testid="meeting-minutes-overview" sx={{ mt: 0.55, color: "#344054", fontSize: "0.82rem", lineHeight: 1.65, whiteSpace: "pre-wrap" }}>{aiMore("aiMoreWaitingForTranscript")}</Typography>}
+          {summaryHint && <Typography sx={{ mt: 0.5, color: "#98a2b3", fontSize: "0.7rem" }}>{summaryHint}</Typography>}
         </Paper>
         <Box sx={{ flex: 1, minHeight: 0, overflowY: "auto", p: { xs: 1.4, sm: 2.3 }, bgcolor: "#f8fafc" }}>
-          {tab === 0 && <MeetingThread notes={notes} speakers={speakers} transcriptCount={transcript.length} />}
+          {tab === 0 && <MeetingThread notes={notes} speakers={speakers} transcriptCount={transcript.length} summarizing={summarizing} />}
           {tab === 1 && <TranscriptPanel rows={transcriptRows} focusSegmentId={focusSegmentId} focusRequestId={focusRequestId} />}
           {tab === 2 && <ProfessionalMinutes summary={summary} summaryData={summaryData} onCopySummary={onCopySummary} summaryWarning={summaryWarning} />}
         </Box>

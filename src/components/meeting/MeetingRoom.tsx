@@ -61,7 +61,7 @@ import CenterFocusStrongIcon from "@mui/icons-material/CenterFocusStrong";
 import PictureInPictureAltIcon from "@mui/icons-material/PictureInPictureAlt";
 import realTimeColab from "@App/libs/connection/colabLib";
 import settingsStore from "@App/libs/mobx/mobx";
-import { getMeetingConnectionNotice, meetingSoundPlayer, MeetingConnectionRecoveryConfirmation, transitionMeetingConnectionBanner, type MeetingConnectionNotice, type MeetingServerConnectionState } from "@App/libs/meeting/meetingFeedback";
+import { getMeetingConnectionNotice, meetingSoundPlayer, MeetingConnectionRecoveryConfirmation, shouldShowMeetingJoinScreen, transitionMeetingConnectionBanner, type MeetingConnectionNotice, type MeetingServerConnectionState } from "@App/libs/meeting/meetingFeedback";
 import { setAppLanguage } from "@App/libs/i18n/i18n";
 import {
   MeetingRemoteAudio,
@@ -89,6 +89,7 @@ import MeetingMediaSettingsDialog from "./components/MeetingMediaSettingsDialog"
 import MeetingAiMinutesDialog from "./components/MeetingAiMinutesDialog";
 import MeetingLiveCaptionsPanel, { MeetingCaptionOverlay, type CaptionEntry, type CaptionLanguage } from "./components/MeetingLiveCaptionsPanel";
 import MeetingMinutesConsentDialog from "./components/MeetingMinutesConsentDialog";
+import MeetingJoinLoader from "./components/MeetingJoinLoader";
 import MeetingMinutesEndScreen from "./components/MeetingMinutesEndScreen";
 import { useLocalStream } from "./hooks/useLocalStream";
 import { useMeetingTimer, formatDuration } from "./hooks/useMeetingTimer";
@@ -154,7 +155,20 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
   const [memberSoundPrompt, setMemberSoundPrompt] = useState<"enable" | "unsupported" | null>(null);
   const pendingMemberChimeRef = useRef(false);
   const previousNetworkIssueRef = useRef(false);
-  const networkIssue = getMeetingConnectionNotice(browserOnline, serverConnectionState, awaitingServerConfirmation);
+  // A transport drop can only be reported after this tab has actually joined.
+  // Before that, "connecting" / a stale "disconnected" snapshot is the normal
+  // entry path, not an interruption.
+  const meetingEstablishedRef = useRef(state.stage === "in-meeting");
+  const networkIssue = getMeetingConnectionNotice(
+    browserOnline,
+    serverConnectionState,
+    awaitingServerConfirmation,
+    meetingEstablishedRef.current || state.stage === "in-meeting",
+  );
+
+  useEffect(() => {
+    if (state.stage === "in-meeting") meetingEstablishedRef.current = true;
+  }, [state.stage]);
 
   useEffect(() => {
     const recovery = new MeetingConnectionRecoveryConfirmation(
@@ -195,6 +209,48 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
     }
     return;
   }, [networkIssue]);
+
+  const connectionIssue = connectionNotice === "offline" || connectionNotice === "reconnecting" || connectionNotice === "disconnected";
+  const connectionLabel = connectionNotice === "offline"
+    ? t("meeting.connectionOfflineShort", "网络已断开")
+    : connectionNotice === "reconnecting"
+      ? t("meeting.connectionReconnectingShort", "重连中…")
+      : connectionNotice === "disconnected"
+        ? t("meeting.connectionUnavailableShort", "连接不可用")
+        : connectionNotice === "recovered"
+          ? t("meeting.connectionRestoredShort", "已恢复")
+          : "";
+  const connectionDetail = connectionNotice === "offline"
+    ? t("meeting.connectionOffline", "网络暂时断开，会议连接将在网络恢复后重试。")
+    : connectionNotice === "reconnecting"
+      ? t("meeting.connectionReconnecting", "会议连接中断，正在重连…")
+      : connectionNotice === "disconnected"
+        ? t("meeting.connectionUnavailable", "会议服务器连接不可用，正在重试…")
+        : connectionNotice === "recovered"
+          ? t("meeting.connectionRestored", "会议连接已恢复")
+          : "";
+  const statusDotColor = connectionNotice === "offline" || connectionNotice === "disconnected"
+    ? "error.main"
+    : connectionNotice === "reconnecting" || state.stage !== "in-meeting"
+      ? "warning.main"
+      : "success.main";
+
+  // The real meeting surface must never be the first thing shown: entry and
+  // every reconnection verification go through the join screen until the
+  // server confirms the room is live again.
+  const joined = state.stage === "in-meeting";
+  const transportVerifying = connectionIssue
+    || awaitingServerConfirmation
+    || serverConnectionState === "connecting"
+    || serverConnectionState === "reconnecting";
+  const showJoinScreen = shouldShowMeetingJoinScreen(state.stage, joined, transportVerifying);
+  const joinScreenLabel = connectionNotice === "offline"
+    ? t("meeting.connectionOfflineShort", "网络已断开")
+    : connectionNotice === "disconnected"
+      ? t("meeting.connectionUnavailableShort", "连接不可用")
+      : transportVerifying && meetingEstablishedRef.current
+        ? t("meeting.connectionReconnectingShort", "重连中…")
+        : t("meeting.joining", "正在加入…");
 
   const selfId = realTimeColab.getUniqId() ?? "";
   const amHost = !!state.hostId && state.hostId === selfId;
@@ -928,6 +984,19 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
     return <MeetingMinutesEndScreen record={toMeetingMinutesHistoryRecord(minutesSession)} saved={minutesSaveStatus === "saved"} onExit={onExit} />;
   }
 
+  if (showJoinScreen) {
+    return (
+      <Box
+        data-testid="meeting-join-screen"
+        data-stage={state.stage}
+        data-verifying={transportVerifying ? "true" : "false"}
+        sx={{ position: "fixed", inset: 0, zIndex: 1200, display: "grid", placeItems: "center", px: 2, bgcolor: pageBackground, color: "text.primary" }}
+      >
+        <MeetingJoinLoader label={joinScreenLabel} />
+      </Box>
+    );
+  }
+
   return (
     <Stack
       ref={meetingShellRef}
@@ -1036,10 +1105,25 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
         {inBreakout && <Chip label={t("meeting.breakoutChip", "分组讨论")} size="small" color="warning" variant="outlined" />}
         <Box sx={{ flex: 1 }} />
         <Stack direction="row" alignItems="center" spacing={{ xs: 0.75, sm: 1.5 }}>
-          <Stack direction="row" alignItems="center" spacing={0.6} sx={{ display: { xs: "none", sm: "flex" } }}>
-            <Box sx={{ width: 7, height: 7, borderRadius: "50%", bgcolor: state.stage === "in-meeting" ? "success.main" : "warning.main" }} />
-            <MeetingElapsed stage={state.stage} />
-          </Stack>
+          <Tooltip title={connectionDetail}>
+            <Stack
+              direction="row"
+              alignItems="center"
+              spacing={0.6}
+              role="status"
+              data-testid="meeting-network-status"
+              data-status={connectionNotice ?? (state.stage === "in-meeting" ? "connected" : "joining")}
+              sx={{ display: { xs: connectionNotice ? "flex" : "none", sm: "flex" }, minWidth: 0 }}
+            >
+              <Box sx={{ width: 7, height: 7, borderRadius: "50%", flexShrink: 0, bgcolor: statusDotColor }} />
+              <Box sx={{ display: { xs: "none", sm: "block" } }}><MeetingElapsed stage={state.stage} /></Box>
+              {connectionLabel && (
+                <Typography sx={{ fontSize: "0.7rem", fontWeight: 750, color: connectionIssue ? "warning.dark" : "success.dark", maxWidth: 168, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {connectionLabel}
+                </Typography>
+              )}
+            </Stack>
+          </Tooltip>
           <Chip
             data-testid="meeting-people-count"
             icon={<PeopleIcon sx={{ fontSize: 16 }} />}
@@ -1104,23 +1188,6 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
         </Stack>
       </Box>
 
-      {connectionNotice && (
-        <Alert
-          role="status"
-          data-testid="meeting-network-status"
-          data-status={connectionNotice}
-          severity={connectionNotice === "recovered" ? "success" : "warning"}
-          sx={{ flexShrink: 0, borderRadius: 0, alignItems: "center", "& .MuiAlert-message": { minWidth: 0, fontSize: "0.78rem" } }}
-        >
-          {connectionNotice === "offline"
-            ? t("meeting.connectionOffline", "网络暂时断开，会议连接将在网络恢复后重试。")
-            : connectionNotice === "reconnecting"
-              ? t("meeting.connectionReconnecting", "会议连接中断，正在重连…")
-              : connectionNotice === "disconnected"
-                ? t("meeting.connectionUnavailable", "会议服务器连接不可用，正在重试…")
-                : t("meeting.connectionRestored", "会议连接已恢复")}
-        </Alert>
-      )}
       {memberSoundPrompt && (
         <Alert
           role="status"

@@ -25,6 +25,8 @@ export const malayAdditionalTranslations = {
     connectionReconnecting: 'Sambungan mesyuarat terputus, sedang menyambung semula…',
     connectionUnavailable: 'Sambungan ke pelayan mesyuarat tidak tersedia. Mencuba semula…',
     connectionRestored: 'Sambungan mesyuarat telah pulih.',
+    connectionOfflineShort: 'Luar talian', connectionReconnectingShort: 'Menyambung semula…',
+    connectionUnavailableShort: 'Terputus', connectionRestoredShort: 'Dipulihkan',
     inviteEnableSound: 'Hidupkan bunyi jemputan', inviteSoundUnavailable: 'Pelayar ini tidak menyokong bunyi jemputan.',
     memberSoundEnable: 'Hidupkan bunyi ahli', memberSoundBlocked: 'Berinteraksi sekali untuk membenarkan pelayar memainkan bunyi ahli.',
     panelNavigation: "Panel mesyuarat",

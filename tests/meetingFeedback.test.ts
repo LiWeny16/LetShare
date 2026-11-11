@@ -10,6 +10,7 @@ import {
   OutgoingMeetingInviteRingPolicy,
   shouldRingIncomingMeetingInvite,
   shouldRingOutgoingMeetingInvite,
+  shouldShowMeetingJoinScreen,
   shouldAnnounceMemberJoin,
   transitionMeetingConnectionBanner,
 } from "../src/app/libs/meeting/meetingFeedback";
@@ -32,6 +33,24 @@ test("meeting connection notice distinguishes offline, reconnecting, disconnecte
   assert.deepEqual(transitionMeetingConnectionBanner("offline", false), { banner: "offline", hasIssue: true });
   assert.deepEqual(transitionMeetingConnectionBanner("reconnecting", true), { banner: "reconnecting", hasIssue: true });
   assert.deepEqual(transitionMeetingConnectionBanner(null, true), { banner: "recovered", hasIssue: false });
+});
+
+test("the meeting surface is never rendered before the join screen", () => {
+  assert.equal(shouldShowMeetingJoinScreen("idle", false, false), true, "page entry waits on the loader");
+  assert.equal(shouldShowMeetingJoinScreen("joining", false, false), true);
+  assert.equal(shouldShowMeetingJoinScreen("in-meeting", true, true), true, "reconnection verification hides the meeting until the room is confirmed");
+  assert.equal(shouldShowMeetingJoinScreen("in-meeting", true, false), false);
+  assert.equal(shouldShowMeetingJoinScreen("leaving", true, false), false, "leaving must not flash a loader");
+  assert.equal(shouldShowMeetingJoinScreen("leaving", false, true), false);
+});
+
+test("initial join is never reported as an interrupted meeting connection", () => {
+  assert.equal(getMeetingConnectionNotice(true, "connecting", false, false), null);
+  assert.equal(getMeetingConnectionNotice(true, "reconnecting", false, false), null);
+  assert.equal(getMeetingConnectionNotice(true, "disconnected", false, false), null);
+  assert.equal(getMeetingConnectionNotice(false, "disconnected", false, false), "offline", "a genuinely offline browser still tells the user");
+  assert.equal(getMeetingConnectionNotice(true, "connecting", false, true), "reconnecting");
+  assert.equal(getMeetingConnectionNotice(true, "disconnected", false, true), "disconnected");
 });
 
 test("browser online waits for downlink traffic before announcing meeting recovery", () => {

@@ -1,7 +1,17 @@
 import { Box, Paper, Stack, Typography } from "@mui/material";
 import { aiMore, aiMoreLocale } from "@App/libs/i18n/meetingAiMoreTranslations";
 
-export type LiveNote = { id: string; atMs: number; speakerName?: string; text: string };
+export type LiveNoteKind = "speech" | "decision" | "action" | "question";
+export type LiveNote = { id: string; atMs: number; speakerName?: string; text: string; kind?: LiveNoteKind };
+
+function kindMeta(kind?: LiveNoteKind): { label: string; bgcolor: string; color: string } | null {
+  switch (kind) {
+    case "decision": return { label: aiMore("aiMoreMarkdownKindDecision"), bgcolor: "#e8f8f2", color: "#14976b" };
+    case "action": return { label: aiMore("aiMoreMarkdownKindAction"), bgcolor: "#fff5df", color: "#a66a00" };
+    case "question": return { label: aiMore("aiMoreMarkdownKindQuestion"), bgcolor: "#f2edff", color: "#8b5cf6" };
+    default: return null;
+  }
+}
 
 function formatGroupTime(value: number): string {
   if (!Number.isFinite(value) || value <= 0) return "";
@@ -65,11 +75,19 @@ export default function MeetingLiveNotesList({
             {aiMore("aiMoreMeetingAssistant")} {formatGroupTime(atMs)}
           </Typography>
           <Stack spacing={compact ? 0.65 : 0.85}>
-            {group.map((note) => (
-              <Paper key={note.id} elevation={0} sx={{ px: compact ? 1.15 : 1.55, py: compact ? 0.9 : 1.25, borderRadius: "8px", bgcolor: "#f7f7f8", border: "1px solid #f0f0f2" }}>
-                <NoteText text={note.text} speakers={speakers} compact={compact} />
-              </Paper>
-            ))}
+            {group.map((note) => {
+              const meta = kindMeta(note.kind);
+              return (
+                <Paper key={note.id} elevation={0} sx={{ px: compact ? 1.15 : 1.55, py: compact ? 0.9 : 1.25, borderRadius: "8px", bgcolor: "#f7f7f8", border: "1px solid #f0f0f2" }}>
+                  <Stack direction="row" spacing={0.6} alignItems="flex-start">
+                    {meta && <Box component="span" sx={{ flexShrink: 0, px: 0.55, py: 0.1, borderRadius: 1, bgcolor: meta.bgcolor, color: meta.color, fontSize: compact ? "0.6rem" : "0.64rem", fontWeight: 850, lineHeight: 1.6 }}>{meta.label}</Box>}
+                    <Box sx={{ flex: 1, minWidth: 0 }}>
+                      <NoteText text={note.text} speakers={speakers} compact={compact} />
+                    </Box>
+                  </Stack>
+                </Paper>
+              );
+            })}
           </Stack>
         </Box>
       ))}

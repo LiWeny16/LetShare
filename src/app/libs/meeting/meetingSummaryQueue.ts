@@ -79,3 +79,26 @@ export function maxIncludedMeetingSegmentSeq(segments: MeetingTranscriptSegment[
   const seqs = segments.map((segment) => segment.seq).filter((seq): seq is number => Number.isSafeInteger(seq));
   return seqs.length ? Math.max(...seqs) : undefined;
 }
+
+/**
+ * Track the highest delivered sequence for the active recording. Live segment
+ * frames are not accompanied by a minutes state broadcast, so without this the
+ * summary upper bound can stay stale and no summary request is ever queued.
+ */
+export function nextLatestMeetingSegmentSeq(
+  current: number | undefined,
+  segments: Array<Pick<MeetingTranscriptSegment, "seq" | "recordingId">>,
+  recordingId: string,
+): number | undefined {
+  if (!recordingId) return current;
+  let latest = Number.isSafeInteger(current) && (current ?? 0) >= 0 ? current! : 0;
+  let observed = false;
+  for (const segment of segments) {
+    if (segment.recordingId !== recordingId) continue;
+    if (Number.isSafeInteger(segment.seq) && segment.seq! > latest) {
+      latest = segment.seq!;
+      observed = true;
+    }
+  }
+  return observed ? latest : current;
+}

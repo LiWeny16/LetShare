@@ -4,6 +4,7 @@ import {
   getPendingMeetingSummarySegments,
   maxIncludedMeetingSegmentSeq,
   mergeMeetingTranscriptSegments,
+  nextLatestMeetingSegmentSeq,
 } from "../src/app/libs/meeting/meetingSummaryQueue";
 import type { MeetingTranscriptSegment } from "../src/app/libs/meeting/meetingAi";
 
@@ -93,5 +94,27 @@ test("legacy servers can still queue final rows from the active recording", () =
       cursorEnabled: false,
     }).map(({ id }) => id),
     ["one"],
+  );
+});
+
+test("live segments raise the latest sequence before any minutes state broadcast", () => {
+  assert.equal(nextLatestMeetingSegmentSeq(0, [segment("one", 1), segment("two", 2)], "recording-a"), 2);
+  assert.equal(nextLatestMeetingSegmentSeq(undefined, [segment("one", 1)], "recording-a"), 1);
+  assert.equal(nextLatestMeetingSegmentSeq(undefined, [], "recording-a"), undefined);
+  assert.equal(nextLatestMeetingSegmentSeq(2, [segment("old", 9, "recording-old")], "recording-a"), 2);
+  assert.equal(nextLatestMeetingSegmentSeq(5, [segment("one", 3)], "recording-a"), 5);
+});
+
+test("raising the latest sequence unblocks the pending summary queue", () => {
+  const transcript = [segment("one", 1), segment("two", 2)];
+  const latestSegmentSeq = nextLatestMeetingSegmentSeq(0, transcript, "recording-a");
+  assert.deepEqual(
+    getPendingMeetingSummarySegments(transcript, {
+      recordingId: "recording-a",
+      summaryThroughSeq: 0,
+      latestSegmentSeq,
+      cursorEnabled: true,
+    }).map(({ id }) => id),
+    ["one", "two"],
   );
 });

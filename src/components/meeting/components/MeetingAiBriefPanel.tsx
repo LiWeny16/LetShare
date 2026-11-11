@@ -4,6 +4,7 @@ import {
   Box,
   Button,
   Chip,
+  CircularProgress,
   IconButton,
   MenuItem,
   Paper,
@@ -44,6 +45,8 @@ export interface MeetingAiBriefPanelProps {
   error?: string;
   audioMuted?: boolean;
   summaryWarning?: string;
+  summarizing?: boolean;
+  summaryHint?: string;
   questionPanel?: ReactNode;
   onConnect?: () => void;
   onStart: () => void;
@@ -87,6 +90,8 @@ export default function MeetingAiBriefPanel({
   error = "",
   audioMuted = false,
   summaryWarning = "",
+  summarizing = false,
+  summaryHint = "",
   onStart,
   onStop,
   onExpand,
@@ -105,6 +110,7 @@ export default function MeetingAiBriefPanel({
     atMs: item.startMs,
     speakerName: item.speakerName,
     text: item.summary || item.transcript,
+    kind: item.kind,
   }));
   const speakers = Array.from(new Set(transcript.map((segment) => segment.speakerName).filter(Boolean)));
   const overview = summaryData?.overview || summary;
@@ -154,10 +160,15 @@ export default function MeetingAiBriefPanel({
             <Chip size="small" label={aiMore("aiMoreCountActionItems", { count: actions.length })} sx={{ height: 20, bgcolor: "#fff5df", color: "#a66a00", fontSize: "0.61rem" }} />
             <Tooltip title={copied ? aiMore("aiMoreCopied") : aiMore("aiMoreCopyMinutes")}><IconButton size="small" onClick={() => void copyMinutes()} aria-label={aiMore("aiMoreCopyMinutes")}><ContentCopyIcon sx={{ fontSize: 17 }} /></IconButton></Tooltip>
           </>}
-          {canSummarize && running && onSummarizeNow && <Button size="small" onClick={onSummarizeNow} sx={{ minHeight: 28, px: 0.75, textTransform: "none", fontSize: "0.68rem" }}>{aiMore("aiMoreSummarizeNow")}</Button>}
+          {canSummarize && running && onSummarizeNow && <Button size="small" onClick={onSummarizeNow} disabled={summarizing} startIcon={summarizing ? <CircularProgress size={13} color="inherit" /> : undefined} sx={{ minHeight: 28, px: 0.75, textTransform: "none", fontSize: "0.68rem" }}>{summarizing ? aiMore("aiMoreSummarizing") : aiMore("aiMoreSummarizeNow")}</Button>}
         </Stack>
         {summaryWarning && <Alert severity="warning" sx={{ mt: 0.55, py: 0.1, borderRadius: 1.25, fontSize: "0.72rem", "& .MuiAlert-message": textWrap }}>{summaryWarning}</Alert>}
-        <Typography sx={{ mt: 0.45, color: "#344054", fontSize: "0.78rem", lineHeight: 1.65, whiteSpace: "pre-wrap", ...textWrap }}>{overview || aiMore("aiMoreWaitingForTranscript")}</Typography>
+        {overview
+          ? <Typography sx={{ mt: 0.45, color: "#344054", fontSize: "0.78rem", lineHeight: 1.65, whiteSpace: "pre-wrap", ...textWrap }}>{overview}</Typography>
+          : summarizing
+            ? <Stack direction="row" spacing={0.8} alignItems="center" sx={{ mt: 0.55 }}><CircularProgress size={13} /><Typography sx={{ color: "#53708f", fontSize: "0.76rem", ...textWrap }}>{aiMore("aiMoreSummarizingOverview")}</Typography></Stack>
+            : <Typography sx={{ mt: 0.45, color: "#344054", fontSize: "0.78rem", lineHeight: 1.65, whiteSpace: "pre-wrap", ...textWrap }}>{aiMore("aiMoreWaitingForTranscript")}</Typography>}
+        {summaryHint && <Typography sx={{ mt: 0.5, color: "#98a2b3", fontSize: "0.68rem", ...textWrap }}>{summaryHint}</Typography>}
         {summaryData && <Stack spacing={0.65} sx={{ mt: 0.65 }}>
           <SummaryList title={aiMore("aiMoreKeyDecisions")} items={decisions} />
           <SummaryList title={aiMore("aiMoreActionItems")} items={actions} />
@@ -173,12 +184,20 @@ export default function MeetingAiBriefPanel({
           <Stack direction="row" spacing={0.3} alignItems="baseline">
             <Typography data-testid="meeting-minutes-segment-count" sx={{ color: "#98a2b3", fontSize: "0.66rem", fontVariantNumeric: "tabular-nums" }}>{transcript.length}</Typography>
             <Typography sx={{ color: "#98a2b3", fontSize: "0.66rem" }}>{aiMore("aiMoreUnitStatements")}{interim ? ` · ${aiMore("aiMoreRecognizing")}` : ""}</Typography>
+            {timelineNotes.length > 0 && <>
+              <Typography sx={{ color: "#98a2b3", fontSize: "0.66rem", px: 0.2 }}>·</Typography>
+              <Typography data-testid="meeting-minutes-note-count" sx={{ color: "#98a2b3", fontSize: "0.66rem", fontVariantNumeric: "tabular-nums" }}>{timelineNotes.length}</Typography>
+              <Typography sx={{ color: "#98a2b3", fontSize: "0.66rem" }}>{aiMore("aiMoreUnitNotes")}</Typography>
+            </>}
+            {summarizing && <CircularProgress size={10} sx={{ ml: 0.4 }} />}
           </Stack>
         </Stack>
         <Box data-testid="meeting-minutes-flow" sx={{ mt: 1.2 }}>
           {timelineNotes.length > 0
             ? <MeetingLiveNotesList notes={timelineNotes} speakers={speakers} compact />
-            : <Typography data-testid="meeting-minutes-waiting" sx={{ py: 2, color: "text.secondary", fontSize: "0.76rem", textAlign: "center" }}>{aiMore("aiMoreWaitingForTranscript")}</Typography>}
+            : summarizing
+              ? <Stack direction="row" spacing={0.8} alignItems="center" justifyContent="center" data-testid="meeting-minutes-waiting" sx={{ py: 2 }}><CircularProgress size={13} /><Typography sx={{ color: "text.secondary", fontSize: "0.76rem" }}>{aiMore("aiMoreSummarizingOverview")}</Typography></Stack>
+              : <Typography data-testid="meeting-minutes-waiting" sx={{ py: 2, color: "text.secondary", fontSize: "0.76rem", textAlign: "center" }}>{transcript.length > 0 ? aiMore("aiMoreWaitingForAINotes") : aiMore("aiMoreWaitingForTranscript")}</Typography>}
         </Box>
       </Box>
       <Box data-testid="meeting-minutes-bar" sx={{ flexShrink: 0, px: MEETING_PANEL_GUTTER, py: 1, borderTop: "1px solid", borderColor: "divider", bgcolor: "#fff" }}>
