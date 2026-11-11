@@ -1,3 +1,0 @@
-# Codex project config intentionally avoids WF-MAX capacity defaults.
-# codex-cli 0.144.x can reject scalar agent-capacity caps during TUI skills/list.
-# WF-MAX manages fan-out caps in Harness docs and task state instead.

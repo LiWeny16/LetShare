@@ -4,13 +4,13 @@
   "status": "in_progress",
   "mode": "wf",
   "tier": "standard",
-  "phase": "closeout",
+  "phase": "verify",
   "gate": "VERIFICATION-GATE",
-  "updatedAt": "2026-09-17T00:00:00+08:00",
+  "updatedAt": "2026-11-10T12:36:30+08:00",
   "activeQuestion": null,
-  "nextAction": "archive task after user confirms closeout",
-  "acceptance": ["consent", "distributed-final-segments", "browser-speech-e2e", "summary-provider-contract"],
-  "queues": { "ready": [], "running": [], "blocked": ["whisper-wasm-runtime"], "done": ["meeting-minutes-protocol", "consent-flow", "browser-speech-e2e"] },
+  "nextAction": "Complete a fresh multi-speaker meeting verification and, if deployment is requested, deploy the Gemini/Somni server configuration.",
+  "acceptance": ["notice-only", "server-mixed-asr", "somni-asr", "server-gemini-summary", "server-asr-vad", "captions-paused", "live-incremental-summary", "real-two-browser-e2e-current", "assistant-private-chat"],
+  "queues": { "ready": ["real-two-browser-e2e-current"], "running": [], "blocked": [], "done": ["meeting-minutes-protocol", "notice-only", "server-audio-mixer", "somni-batch-asr", "server-asr-vad", "captions-paused", "server-gemini-summary-routing", "live-incremental-summary", "assistant-private-chat", "streaming-ai-chat", "yuanbao-panel-layout"] },
   "dispatchLedger": [
     { "id": "01a0acfc-b2fa-7350-9469-0ddd202c99e9", "role": "codebase-explorer", "status": "Returned" },
     { "id": "01a0acfc-b433-70f1-b3a1-cea85a3b815c", "role": "codebase-explorer", "status": "Returned" },
@@ -20,7 +20,18 @@
     { "id": "01a0ad06-7023-78c2-9116-62e81bf19112", "role": "verifier", "status": "Returned" },
     { "id": "01a0ad06-715f-7ae1-be4d-9282d34ad6cb", "role": "reviewer", "status": "Returned" }
   ],
-  "decisions": [],
-  "risks": ["Whisper WASM currently has model download/recommendation only; do not present it as a working transcription source."],
-  "artifacts": ["tests/e2e/meeting-ai-minutes.e2e.mts", "src/app/libs/meeting/meetingAi.ts"]
+  "decisions": [
+    "Server mixes every current publisher's Opus audio during minutes. Participants receive an acknowledgement-only notice; the notice does not gate audio capture.",
+    "Somni ASR uses the configured remote login and non-streaming PCM16 WebSocket protocol. Energy VAD suppresses long silent spans before bounded batches are sent.",
+    "Meeting summaries use only the protected server-side gemini-3.5-flash-lite gateway path; no client BYOK key or GLM fallback is used.",
+    "Live captions remain temporarily disabled in both the client and server, without deleting caption code."
+  ],
+  "risks": [
+    "Mixed-batch speaker attribution uses the loudest participant and is approximate; a slow ASR upstream can cause bounded-queue drops.",
+    "Energy VAD may miss very quiet speech or pass loud background noise; the revised path needs a fresh multi-speaker real-room check.",
+    "The Somni archive does not establish the ASR model name. Credentials must come from the deployment environment and must never be committed.",
+    "The online server still has the old GLM configuration; this task did not deploy or restart it.",
+    "Pure-Go Opus decoding requires Go 1.24+, so the server Dockerfile and Go version docs were bumped."
+  ],
+  "artifacts": ["tests/e2e/meeting-ai-minutes.e2e.mts", "tests/e2e/meeting-ai-minutes-server-mix.e2e.mts", "tests/e2e/meeting-ai-assistant-chat.e2e.mts", "src/app/libs/meeting/meetingAi.ts", "src/components/meeting/components/MeetingChat.tsx", "src/components/meeting/components/MeetingAiBriefPanel.tsx", "server/internal/handler/meeting_audio_minutes.go", "server/internal/handler/meeting_asr_stream.go", "server/internal/handler/meeting_assistant.go", "server/internal/sfu/track_fanout.go", "server/env.meeting.example"]
 }

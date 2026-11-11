@@ -8,12 +8,12 @@ Global task index. Load at session start to see what is active and what was done
 
 ## Task Index
 
-Non-archived tasks only (max 5). Archived tasks are listed in `Harness/tasks/_archive/INDEX.md` (see `Harness/specs/protocols/TASK_ARCHIVE.md`).
+Non-archived tasks only (max 5). Archived tasks are listed in `Harness/tasks/_archive/INDEX.md` (see `C:/Users/onion/.harness/create-harness-vibe-coding/Harness/specs/protocols/TASK_ARCHIVE.md`).
 
 | ID | Goal | Phase | Closed |
 |----|------|-------|--------|
 | task-implement-rich-file-previews | Manual browser verification of PDF, MP4/WebM, .md, and multiple selected files at mobile/desktop widths. Then dispatch haiku reviewer. | Validation | - |
-| task-meeting-ai-minutes | Complete and verify the real Whisper WASM runtime, or explicitly split it into a follow-up scope. | Verify | - |
+| task-meeting-ai-minutes | Ship server-mixed AI meeting minutes (Somni batch ASR + GLM-4.7-Flash) and temporarily disable captions. | Verify | - |
 
 ## Current WF Diagnostic Addendum (2026-09-17)
 
@@ -77,3 +77,20 @@ Non-archived tasks only (max 5). Archived tasks are listed in `Harness/tasks/_ar
 | 2026-09-04 | 房主显式"离开"=结束会议（无主机转移机制） | 避免无人管控的僵尸会议长期占用 SFU 内存与会议号 |
 | 2026-07-16 | Treat relay JWT as the authoritative PRO state and refresh custom relay auth before large relay sends when the token changes. | Backend relay authorization is evaluated from `pro_token` at socket handshake time; invite-code cookie alone is insufficient. |
 | 2026-07-16 | Keep sender-selected `server` priority explicit and remove silent fallback between relay and P2P. | The bug report requires sender-controlled channel choice to be coherent with actual runtime behavior. |
+
+## 2026-11-06 Server-Mixed Minutes Implementation
+
+- Captions are hidden behind `LIVE_CAPTIONS_ENABLED = false` in `MeetingRoom.tsx`; caption code remains in place for later restoration.
+- The SFU fanout now exposes an audio RTP tap. `MeetingAudioMinutesSession` decodes each consenting publisher's Opus with pure-Go `github.com/pion/opus`, mixes 20 ms frames to 16 kHz mono PCM16, and sends 20 s batches to Somni's WebSocket using the non-streaming start/audio/stop/final flow.
+- Server minutes start/stop/teardown now owns mixer lifecycle. Transcript segments are broadcast as `speakerName: 会议音频` with the active `recordingId`; no speaker names are invented.
+- The host summary path always calls the protected server AI action, which uses fixed `glm-4.7-flash`. The BYOK provider/key UI was replaced with a server-side information panel.
+- Server env accepts `MEETING_ASR_STREAM_*` with `SOMNI_ASR_*` fallbacks. `GLM_API_KEY` stays server-side; `MEETING_AI_ENABLED=false` remains a hard off switch.
+- Verification: `go build ./...`, `go vet ./...`, `go test ./... -count=1`, `npx tsc --noEmit`, and `tests/meetingAi.test.ts` passed. A real Somni probe passed for silence and for a synthetic Chinese TTS WAV (30 runes returned). `pnpm test` passed 833/834; the single failure is an unrelated flaky file-transfer test that passes in isolation. `pnpm lint` still reports only pre-existing errors in unrelated files.
+
+## 2026-11-06 Meeting Assistant Private Chat
+
+- Added a pinned `会议助手` private-chat contact. It is not a meeting member or SFU participant.
+- `meeting:chat` to `ai:meeting-assistant` is intercepted server-side; the assistant gets only the current meeting summary plus up to 120 recent transcript segments, streams short answers back to the asker only, and stores the private Q/A in per-user filtered chat history.
+- Added `live-notes` and `final-minutes` model tasks. The small panel is now Yuanbao-style: expandable overview card + `以下为会中实时笔记` + bottom `立即总结` / `去提问 AI 助手`.
+- The assistant uses a lightweight streaming + three-dot thinking animation for the first version; `assistant-ui` remains a possible presentation-layer replacement.
+- Verification: real `tests/e2e/meeting-ai-assistant-chat.e2e.mts` passed (real meeting → assistant private chat → streaming Gemini answer), `pnpm test` 834/834, `go test ./internal/handler`, and `go vet ./...`.

@@ -1,5 +1,5 @@
 # AGENTS.md
 
-Codex compatibility entry. Do not put workflow rules, role rules, command tables, or Harness routing here.
+Read `CLAUDE.md` first. This project uses the global Harness runtime at `C:/Users/onion/.harness/create-harness-vibe-coding`.
 
-Read `CLAUDE.md` and follow it as the single source of startup, routing, workflow, and safety instructions. If this file conflicts with `CLAUDE.md`, `CLAUDE.md` wins.
+Keep task capsules, project memory, and project settings under local `Harness/`; use the global runtime only for shared framework docs, commands, skills, agents, settings defaults, and scripts.

@@ -21,7 +21,7 @@ Built-in agents:
 - `.claude/agents/researcher.md`: product, market, open-source, dependency, pricing, policy, and ecosystem research.
 - `.claude/agents/docs-researcher.md`: official docs, API, SDK, config, limits, errors, and examples verification.
 
-For multi-agent research plus build work, create the dispatch table in `Harness/tasks/<task-id>/PLAN.md` and follow `Harness/specs/runtime/dispatch.md`.
+For multi-agent research plus build work, create the dispatch table in `Harness/tasks/<task-id>/PLAN.md` and follow `C:/Users/onion/.harness/create-harness-vibe-coding/Harness/specs/runtime/dispatch.md`.
 
 Research Agent input:
 
@@ -113,7 +113,7 @@ Use these patterns when turning research into PRD or feature docs:
 
 ## Executable research policy (0.9.2)
 
-Use `node Harness/scripts/research-policy.mjs decide --task-type chore --json`
+Use `node C:/Users/onion/.harness/create-harness-vibe-coding/Harness/scripts/research-policy.mjs decide --task-type chore --json`
 before external research. The optional repeatable triggers are
 `capability-gap`, `volatile-api`, `user-request`, `repeated-failure`, and
 `benchmark-gap`; without a trigger a simple local chore does not require web
@@ -122,7 +122,7 @@ research. The decision output is `{search, reasons, addDependency:false}`.
 Record a checked source in the task capsule with:
 
 ```text
-node Harness/scripts/research-policy.mjs record --project ROOT --task TASK --input REFERENCE.json [--apply] --json
+node C:/Users/onion/.harness/create-harness-vibe-coding/Harness/scripts/research-policy.mjs record --project ROOT --task TASK --input REFERENCE.json [--apply] --json
 ```
 
 The JSON reference contains `url`, `title`, `sourceType`, `version`, `license`,

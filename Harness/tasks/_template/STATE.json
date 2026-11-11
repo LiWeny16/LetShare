@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "taskId": "task-example",
+  "status": "active",
+  "mode": "direct",
+  "tier": "none",
+  "phase": "intake",
+  "gate": null,
+  "project": "default",
+  "tags": [],
+  "createdAt": "2026-07-16T00:00:00.000Z",
+  "startedAt": null,
+  "closedAt": null,
+  "updatedAt": "2026-07-16T00:00:00.000Z",
+  "activeQuestion": null,
+  "nextAction": "Define goal and acceptance criteria",
+  "context": {
+    "intent": {
+      "original": "",
+      "current": "",
+      "changes": []
+    },
+    "constraints": [],
+    "facts": [],
+    "assumptions": [],
+    "decisions": [],
+    "evidence": [],
+    "attempts": [],
+    "handoff": {
+      "summary": "",
+      "unresolved": []
+    }
+  },
+  "acceptance": [],
+  "links": {
+    "dependsOn": [],
+    "blocks": [],
+    "related": []
+  },
+  "queues": {
+    "ready": [],
+    "running": [],
+    "blocked": [],
+    "done": []
+  },
+  "workItems": [],
+  "dispatchLedger": [],
+  "decisions": [],
+  "risks": [],
+  "artifacts": []
+}

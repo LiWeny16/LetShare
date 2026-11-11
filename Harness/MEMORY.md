@@ -1,122 +1,13 @@
-# MEMORY.md - create-harness-vibe-coding Project Resource Index
+# MEMORY.md - LetShare Project Memory
 
-> `CLAUDE.md` is the session entry router; `Harness/README.md` is the Harness documentation index. This file persists cross-session context: resource index, user preferences, tool usage standards.
-> Detailed memory lives in `Harness/memory/`. Keep entries short, newest first, and free of secrets.
+Project memory lives here and under `Harness/memory/`.
 
-## Agents (Sub-agents)
+Global memory lives under `C:/Users/onion/.harness/create-harness-vibe-coding/Harness/memory/` and is only for cross-project lessons and preferences.
 
-- [researcher](../.claude/agents/researcher.md) - product, market, open-source, dependency, pricing, policy, and ecosystem research.
-- [docs-researcher](../.claude/agents/docs-researcher.md) - official docs, API, SDK, config, limits, errors, and examples verification.
-- [planner](../.claude/agents/planner.md) - task split, dependencies, write sets, and dispatch table.
-- [architect](../.claude/agents/architect.md) - boundaries, ports, data-flow, and state impact.
-- [test-writer](../.claude/agents/test-writer.md) - failing tests or manual verification before implementation.
-- [tdd-guide](../.claude/agents/tdd-guide.md) - AC-linked RED tests, browser UI acceptance, and Playwright/CDP evidence before implementation.
-- [implementer](../.claude/agents/implementer.md) - bounded implementation inside declared write set.
-- [debugger](../.claude/agents/debugger.md) - smallest fix for a reproduced failure.
-- [reviewer](../.claude/agents/reviewer.md) - read-only spec/AC and code/architecture/test review.
-- [verifier](../.claude/agents/verifier.md) - verification commands and AC evidence matrix.
-- [reflector](../.claude/agents/reflector.md) - closeout synthesis, contradiction check, and final acceptance gate verdict.
-- [task-scribe](../.claude/agents/task-scribe.md) - task state, heartbeat, dispatch ledger, evidence pointers — small-fast chore agent.
-- [codebase-explorer](../.claude/agents/codebase-explorer.md) - scoped read-only source exploration, file discovery, symbol tracing — small-fast.
-- [memory-master](../.claude/agents/memory-master.md) - memory writing, dedup, consolidation, and cross-project knowledge extraction.
-- [context-master](../.claude/agents/context-master.md) - context analysis, compression alerts, and session knowledge extraction for memory-master.
-- [explore-manager](../.claude/agents/explore-manager.md) - WF-MAX W0 exploration: spawn 5-10 read-only researchers, synthesize, report to CEO.
-- [architect-manager](../.claude/agents/architect-manager.md) - WF-MAX W1 architecture: spawn 3 architects, synthesize interface contracts, report to CEO.
-- [implement-manager](../.claude/agents/implement-manager.md) - WF-MAX W2 implementation: spawn 5-7 implementers (one file_claim each), merge, report to CEO.
-- [review-manager](../.claude/agents/review-manager.md) - optional native review manager: choose the smallest bounded fan-out, deduplicate, classify severity, and report to the controller.
+Project settings live in `Harness/settings.json`; global settings defaults live in `C:/Users/onion/.harness/create-harness-vibe-coding/Harness/settings.json`. Project settings win.
 
-Stack-specific agents can be added after the product shape is known.
+Rules:
 
-## Skills (Workflows)
-
-- [WF Mode](specs/workflows/WF.md) - WF-KERNEL tiered orchestration: WF-Light (minimal roles), WF-Standard (adds review), WF-Full (complete role chain incl. reflector and cross-review).
-- [wf](../.claude/skills/wf/SKILL.md) - Claude Code WF skill command; mirrored for Codex at `../.agents/skills/wf/SKILL.md`.
-- [subagent-orchestrator](../.claude/skills/subagent-orchestrator/SKILL.md) - controller-led subagent orchestration, parallel read-only passes, review gates, and recovery handoffs.
-- [wf-readme](../.claude/skills/wf-readme/SKILL.md) - README preservation, append-only development sections, structured tables, and approved architecture diagrams.
-- [wf-agents-docs](../.claude/skills/wf-agents-docs/SKILL.md) - source-backed Claude/Codex/OpenCode CLI invocation, JSON output, resume, telemetry, and automation gotchas.
-- [wf-review](../.claude/skills/wf-review/SKILL.md) - native-only peer review: the controller dispatches bounded clean reviewer subagents, deduplicates evidence, and decides.
-- [wf-help](../.claude/skills/wf-help/SKILL.md) - Codex compatibility shim for `$wf-help` / `/skills wf-help`; returns the direct command table without entering WF.
-- [wf-update](../.claude/skills/wf-update/SKILL.md) - GitHub-based incremental harness update, checksum comparison, and safe in-place updates.
-- [wf-learn](../.claude/skills/wf-learn/SKILL.md) - explicit evidence-to-method learning cycle with anti-overfitting gate, route-load proof, and scoped memory writes.
-- [wf-max](../.claude/skills/wf-max/SKILL.md) - WF kernel + evidence-driven fan-out: WF-Max-Useful may persist a no-spawn rationale when dependencies, acceptance, coordination, budget, or runtime evidence show no benefit; WF-Max-Strict is explicit only; current runtime capacity remains authoritative.
-- [wf-auto](../.claude/skills/wf-auto/SKILL.md) - perpetual adaptive auto-optimization: evidence-selected probes, dynamic obligations, intent checkpoints, evidence ledger.
-- [wf-auto-spark](../.claude/skills/wf-auto-spark/SKILL.md) - perpetual inspiration mode: external spark search, long-term roadmap with staged milestones, <=50% deviation guard.
-- [wf-browser](../.claude/skills/wf-browser/SKILL.md) - built-in agent-operable browser architecture and runtime-control workflow with BrowserOS Neo as the default user-provided browser, manual setup prompt, readiness levels, WebSocket bridge, UI capability contract, observe/act primitives, virtual cursor, multi-window/subagent leases, `Harness/wf-browser/` artifacts, and explicit Playwright/CDP fallback.
-- [wf-ui](../.claude/skills/wf-ui/SKILL.md) - Codex compatibility shim for `$wf-ui` / `/skills wf-ui`; direct command starts the local browser control panel without entering WF.
-- [wf-init](../.claude/skills/wf-init/SKILL.md) - Codex compatibility shim for `$wf-init` / `/skills wf-init`; direct command initializes a project against the global Harness runtime without entering WF.
-- [wf-search](../.claude/skills/wf-search/SKILL.md) - Codex compatibility shim for `$wf-search` / `/skills wf-search`; direct command validates and renders a structured search evidence report without entering WF.
-- [tdd](../.claude/skills/tdd/SKILL.md) - acceptance-driven TDD: AC-linked RED tests, real UI clicks for browser-visible behavior, Playwright/CDP evidence, and configured coverage gate.
-- [wf-remove](../.claude/skills/wf-remove/SKILL.md) - safely remove Harness framework files (SAFE/MODIFIED/USER classes), auto-prune empty directories, backup option.
-- [wf-task-record](../.claude/skills/wf-task-record/SKILL.md) - Codex compatibility: use $wf-task-record or /skills wf-task-record to wrap task-state.mjs record.
-- [wf-task-list](../.claude/skills/wf-task-list/SKILL.md) - Codex compatibility: use $wf-task-list or /skills wf-task-list to wrap task-state.mjs list.
-- [wf-task-archive](../.claude/skills/wf-task-archive/SKILL.md) - Codex compatibility: use $wf-task-archive or /skills wf-task-archive to wrap task-state.mjs archive.
-- [wf-command-create](../.claude/skills/wf-command-create/SKILL.md) - Codex compatibility: use $wf-command-create or /skills wf-command-create to update command surfaces from `command-surface.json`.
-
-Codex repo-skill mirrors live under `../.agents/skills/` with the same skill names.
-
-## Direct Commands
-
-- [wf-help](../.claude/commands/wf-help.md) - direct `/wf-help` command that returns a WF command table; Codex mirror skill supports `$wf-help` without entering WF.
-- [wf-update](../.claude/commands/wf-update.md) - direct `/wf-update` command for script-driven update checks, safe apply, conflict handling, and release highlights.
-- [wf-task-record](../.claude/commands/wf-task-record.md) - direct `/wf-task-record` command that wraps `node Harness/scripts/task-state.mjs record`.
-- [wf-task-list](../.claude/commands/wf-task-list.md) - direct `/wf-task-list` command that wraps `node Harness/scripts/task-state.mjs list`.
-- [wf-task-archive](../.claude/commands/wf-task-archive.md) - direct `/wf-task-archive` command that wraps `node Harness/scripts/task-state.mjs archive`.
-- [wf-command-create](../.claude/commands/wf-command-create.md) - direct `/wf-command-create` command for task-backed wf-* command surface changes.
-- [wf-ui](../.claude/commands/wf-ui.md) - direct `/wf-ui` command that starts the local Harness backend and browser control panel.
-- [wf-init](../.claude/commands/wf-init.md) - direct `/wf-init` command that binds the current project to the globally installed Harness runtime (thin bridge; global version is authoritative).
-
-Stack-specific skills can be added after the product shape is known.
-
-## Rules (Harness Constraints)
-
-Located under `.claude/rules/ecc/`, auto-loaded by the CC engine:
-
-- [common.md](../.claude/rules/ecc/common.md) - universal harness constraints for context loading, verification, subagents, and security (alwaysApply: true)
-- Language-specific rules pending Claude Code initialization (e.g. python.md, typescript.md, etc.)
-
-## Harness (Runtime)
-
-- [Docs router](README.md)
-- [Acceptance protocol](specs/protocols/ACCEPTANCE_PROTOCOL.md)
-- [Agent isolation protocol](specs/protocols/AGENT_ISOLATION.md)
-- [Harness Bridge](specs/protocols/HARNESS_BRIDGE.md)
-- [Debug protocol](specs/protocols/DEBUG_PROTOCOL.md)
-- [Memory protocol](specs/protocols/MEMORY_PROTOCOL.md)
-- [WF mode](specs/workflows/WF.md)
-- [WF Max mode](specs/workflows/WF-MAX.md)
-- [WF kernel contract](specs/workflows/WF-KERNEL.md)
-- [WF state machine / resume](specs/workflows/WF-STATE.md)
-- [Task archive mechanism](specs/protocols/TASK_ARCHIVE.md)
-- [0-1 lifecycle](specs/guides/lifecycle.md)
-- [Research protocol](research/README.md)
-- [Context loading protocol](specs/runtime/context-loading.md)
-- [Dispatch protocol](specs/runtime/dispatch.md)
-- [Subagent orchestration](specs/runtime/subagents.md)
-- [Command surface registry](specs/runtime/command-surface.json)
-- [Extension contract](specs/guides/extension.md)
-- [Architecture docs](project/architecture.md)
-- [Agent workflow](specs/runtime/agent-workflow.md)
-- [Acceptance templates](templates/)
-- [Harness validator](scripts/validate-harness.mjs)
-- [Settings](settings.json)
-- [Version file](.harness-version)
-
-## Memory Folder
-
-> L2 startup digest: `memory/startup-hints.md` — lightweight hints loaded at session start.
-> L3 route index: `memory/routes.md` — scenario hit-rules index (not detailed memory).
-> L3 detailed files: loaded only when scenario matches via routes.
-
-- [Startup hints](memory/startup-hints.md) - L2 lightweight startup digest (5-10 hints, no dates). Loaded at Harness session start; not a replacement for full router.
-- [Memory routes](memory/routes.md) - L3 route index with signals/scoring/avoid rules. Not detailed memory — hit-rules only.
-- [Tool usage/reflections](memory/tool-usage-reflections.md) - repeated tool failures, better command patterns, environment-specific fixes.
-- [User corrections/preferences](memory/user-corrections-preferences.md) - repeated user corrections, durable preferences, common-sense course corrections.
-- [Agent lessons/patterns](memory/agent-lessons-patterns.md) - reusable lessons from review, debugging, validation, and handoff loops.
-
-Write to the memory folder when the guidance should survive chat context loss:
-
-- Use `memory/tool-usage-reflections.md` when the same tool/use pattern fails 3+ times, a better command pattern is found, or an environment-specific fix should be reused.
-- Use `memory/user-corrections-preferences.md` when the user explicitly asks to remember a preference, or the user corrects the same assumption/pattern 2+ times.
-- Use `memory/agent-lessons-patterns.md` when a review/debug loop yields a reusable lesson or regression guard.
-- Use this file for the resource index and routing pointers, not long-form lessons.
-- Never record secrets, credentials, tokens, or private data. If a memory is ambiguous, ask before writing.
+- Keep project-specific decisions, task evidence, and repo facts in this project.
+- Keep reusable cross-project lessons in global memory only when safe and non-secret.
+- Never store project task state, secrets, raw transcripts, or private project facts in global memory/settings.
