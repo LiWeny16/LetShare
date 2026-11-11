@@ -28,6 +28,7 @@
   <link rel="icon" type="image/svg+xml" href="./icons/favicon_io/favicon-32x32.png" />
   <link rel="apple-touch-icon" href="./icons/favicon_io/apple-touch-icon.png">
   <meta name="theme-color" content="#ffffff" />
+  <meta name="letshare-build" content="3.9.11-0252b7e1b434">
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="LetShare">
   <meta property="og:title" content="LetShare - Fast File & Text Sharing Without Login">
@@ -263,10 +264,10 @@
       }
     }
   </style>
-  <script type="module" crossorigin src="./static/index-BLsYyNYq.js"></script>
-  <link rel="modulepreload" crossorigin href="./static/selectionTheme-57CVrYvV.js">
+  <script type="module" crossorigin src="./static/index-MO1VTgWu.js"></script>
+  <link rel="modulepreload" crossorigin href="./static/selectionTheme-mLm8jSiH.js">
   <link rel="stylesheet" crossorigin href="./static-B1UlI5QL.selectionTheme.css">
-  <link rel="stylesheet" crossorigin href="./static-Blrrw-69.index.css">
+  <link rel="stylesheet" crossorigin href="./static-DU-pABPB.index.css">
 <link rel="manifest" href="./manifest.webmanifest"></head>
 
 <body>
@@ -397,7 +398,8 @@
 
   <script>
     // SW 注册 + 版本哨兵机制
-    // version.json changes are recorded without interrupting the active page.
+    // version.json 与本页面 meta[name=letshare-build] 的构建 id 对比。
+    // 发现新构建时只弹非阻塞提示，绝不自动刷新（避免打断通话/传输）。
     // 无版本变化时，所有缓存 365 天有效，秒开
     if ("serviceWorker" in navigator && location.protocol === "https:") {
       (function() {
@@ -406,6 +408,20 @@
         var VERSION_CHECK_MS = 200; // 200ms 后立刻检查版本
         var hadController = Boolean(navigator.serviceWorker.controller);
         var currentVersion = null;
+        // 构建 id 由 post-build 脚本注入 meta；开发/旧版 HTML 保留占位符（以 __ 开头）
+        var loadedBuild = (function() {
+          try {
+            var meta = typeof document.querySelector === "function"
+              ? document.querySelector('meta[name="letshare-build"]')
+              : null;
+            return (meta && meta.content) || "";
+          } catch (e) {
+            return "";
+          }
+        })();
+        var pendingBuild = "";    // 页面隐藏时发现的构建，等可见后再提示
+        var dismissedBuild = "";  // 用户选“稍后”的构建 id；更新的构建 id 会再次提示
+        var promptStyleInjected = false;
 
         // ── 版本哨兵：检测 server 上是否有新版本 ──────────────
 
@@ -415,34 +431,132 @@
             .catch(function() { return null; });
         }
 
+        function isRealBuild(build) {
+          return !!build && build.indexOf("__") !== 0;
+        }
+
+        function onNewBuild(buildId) {
+          // 开发/旧版（meta 为占位符或空）不提示
+          if (!isRealBuild(loadedBuild) || buildId === loadedBuild) return;
+          if (buildId === dismissedBuild) return;
+          if (document.hidden) {
+            pendingBuild = buildId;
+            return;
+          }
+          showUpdatePrompt(buildId);
+        }
+
         function checkVersion() {
           fetchRemoteVersion().then(function(remote) {
             if (!remote || !remote.v) return;
 
-            var stored = null;
-            try {
-              stored = localStorage.getItem("letshare-version");
-            } catch(e) {}
+            // 仅用于诊断：记录最新远端版本。
+            // 提示与否由本页 meta 构建 id 与 remote.v 对比决定，不使用该值判断。
+            try { localStorage.setItem("letshare-version", remote.v); } catch(e) {}
 
-            if (!stored) {
-              // 首次访问，记录当前版本
-              try { localStorage.setItem("letshare-version", remote.v); } catch(e) {}
-              currentVersion = remote.v;
-              return;
+            currentVersion = remote.v;
+            if (isRealBuild(loadedBuild) && remote.v !== loadedBuild) {
+              console.log("[SW] New build available: " + loadedBuild + " -> " + remote.v);
             }
-
-            if (stored !== remote.v) {
-              console.log("[SW] Version changed: " + stored + " -> " + remote.v + "; current page stays active.");
-              try { localStorage.setItem("letshare-version", remote.v); } catch(e) {}
-              currentVersion = remote.v;
-            } else {
-              currentVersion = remote.v;
-            }
+            onNewBuild(remote.v);
           });
+        }
+
+        // ── 新版本提示（非阻塞，绝不自动刷新）──────────────────
+
+        function injectPromptStyle() {
+          if (promptStyleInjected || document.getElementById("letshare-update-prompt-style")) return;
+          var style = document.createElement("style");
+          style.id = "letshare-update-prompt-style";
+          style.textContent = [
+            "#letshare-update-prompt{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(16px + env(safe-area-inset-bottom));z-index:10001;max-width:min(92vw, 420px);width:max-content;background:#fff;color:#1f2937;border:1px solid #e4eaf1;border-radius:12px;box-shadow:0 12px 32px rgba(15,23,42,.18);padding:14px 16px;font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;box-sizing:border-box;text-align:left}",
+            "#letshare-update-prompt .lup-title{margin:0;font-size:15px;font-weight:600;line-height:1.35;color:#1f2937}",
+            "#letshare-update-prompt .lup-body{margin:6px 0 0;font-size:13px;line-height:1.55;color:#53708f}",
+            "#letshare-update-prompt .lup-actions{display:flex;align-items:center;justify-content:flex-end;gap:6px;margin-top:12px}",
+            "#letshare-update-prompt .lup-update{appearance:none;border:none;border-radius:8px;background:#1677ff;color:#fff;font-size:13px;font-weight:600;line-height:1;padding:9px 14px;cursor:pointer;touch-action:manipulation;-webkit-tap-highlight-color:transparent}",
+            "#letshare-update-prompt .lup-update:disabled{opacity:.65;cursor:default}",
+            "#letshare-update-prompt .lup-later{appearance:none;border:none;background:transparent;color:#53708f;font-size:13px;font-weight:500;line-height:1;padding:9px 10px;cursor:pointer;touch-action:manipulation;-webkit-tap-highlight-color:transparent}"
+          ].join("");
+          (document.head || document.documentElement).appendChild(style);
+          promptStyleInjected = true;
+        }
+
+        function showUpdatePrompt(buildId) {
+          if (!isRealBuild(loadedBuild) || buildId === dismissedBuild) return;
+          var existing = document.getElementById("letshare-update-prompt");
+          if (existing) {
+            if (existing.getAttribute("data-build") === buildId) return; // 同一构建只提示一次
+            if (existing.parentNode) existing.parentNode.removeChild(existing); // 更新的构建：替换旧卡片
+          }
+          injectPromptStyle();
+
+          var langAttr = (document.documentElement.lang || "").toLowerCase();
+          var zh = langAttr.indexOf("zh") === 0 || (navigator.language || "").toLowerCase().indexOf("zh") === 0;
+          var title = zh ? "发现新版本" : "Update available";
+          var body = zh ? "刷新页面以使用最新版本。会议或传输进行中时，刷新会中断当前会话。" : "Reload to use the latest version. Reloading ends any active meeting or transfer.";
+          var updateLabel = zh ? "立即更新" : "Update now";
+          var updatingLabel = zh ? "正在更新…" : "Updating…";
+          var laterLabel = zh ? "稍后" : "Later";
+
+          var card = document.createElement("div");
+          card.id = "letshare-update-prompt";
+          card.setAttribute("role", "status");
+          card.setAttribute("aria-live", "polite");
+          card.setAttribute("data-build", buildId);
+
+          var titleEl = document.createElement("div");
+          titleEl.className = "lup-title";
+          titleEl.textContent = title;
+
+          var bodyEl = document.createElement("div");
+          bodyEl.className = "lup-body";
+          bodyEl.textContent = body;
+
+          var updateBtn = document.createElement("button");
+          updateBtn.type = "button";
+          updateBtn.className = "lup-update";
+          updateBtn.textContent = updateLabel;
+          updateBtn.addEventListener("click", function() {
+            updateBtn.textContent = updatingLabel;
+            updateBtn.disabled = true;
+            Promise.all([
+              navigator.serviceWorker.getRegistrations().then(function(regs) {
+                return Promise.all(regs.map(function(reg) { return reg.unregister(); }));
+              }),
+              ("caches" in window)
+                ? caches.keys().then(function(keys) {
+                    return Promise.all(keys.map(function(key) { return caches.delete(key); }));
+                  })
+                : Promise.resolve()
+            ]).catch(function(){}).then(function() {
+              location.reload();
+            });
+          });
+
+          var laterBtn = document.createElement("button");
+          laterBtn.type = "button";
+          laterBtn.className = "lup-later";
+          laterBtn.textContent = laterLabel;
+          laterBtn.addEventListener("click", function() {
+            dismissedBuild = buildId;
+            if (card.parentNode) card.parentNode.removeChild(card);
+          });
+
+          var actions = document.createElement("div");
+          actions.className = "lup-actions";
+          actions.appendChild(updateBtn);
+          actions.appendChild(laterBtn);
+
+          card.appendChild(titleEl);
+          card.appendChild(bodyEl);
+          card.appendChild(actions);
+          (document.body || document.documentElement).appendChild(card);
         }
 
         // 首次检查：等 SW 和页面加载完成后延迟执行
         setTimeout(checkVersion, VERSION_CHECK_MS);
+        // 定期版本轮询：新版本部署后及时提示（最多 3 分钟）
+        setInterval(checkVersion, 3 * 60 * 1000);
         // Service worker controller changes keep the current page active.
 
         navigator.serviceWorker.addEventListener("controllerchange", function() {
@@ -462,13 +576,14 @@
               setInterval(function() {
                 registration.update().catch(function() {});
               }, POLL_MS);
-              // updatefound records a ready worker; it is left waiting for natural page closure.
+              // updatefound records a ready worker; check immediately so a new build prompts promptly.
               registration.addEventListener("updatefound", function() {
                 var newWorker = registration.installing;
                 if (!newWorker) return;
                 newWorker.addEventListener("statechange", function() {
                   if (newWorker.state === "installed" && navigator.serviceWorker.controller) {
-                    console.log("[SW] New version installed; waiting for this page to close.");
+                    console.log("[SW] New version installed; checking for a reload prompt.");
+                    checkVersion();
                   }
                 });
               });
@@ -489,6 +604,11 @@
           navigator.serviceWorker.getRegistration().then(function(reg) {
             if (reg) reg.update().catch(function() {});
           });
+          if (pendingBuild) {
+            var remembered = pendingBuild;
+            pendingBuild = "";
+            showUpdatePrompt(remembered);
+          }
         });
 
         // ── 网络恢复 → 立即检查 ────────────────────────────────
