@@ -26,7 +26,7 @@ export const indonesianBaseTranslations = {
     awaitingConfirmation: 'Menunggu konfirmasi penerima...', noTasks: 'Tidak ada tugas aktif', routeP2P: 'P2P langsung', routeRelay: 'Relai',
   },
   settings: {
-    displayName: 'Nama tampilan', title: 'Pengaturan', languageLabel: 'Bahasa', languageOptions: { system: 'Ikuti sistem', zh: 'Mandarin Sederhana' },
+    displayName: 'Nama tampilan', themeLight: 'Terang', themeDark: 'Gelap', themeBlue: 'Biru', themeGreen: 'Hijau', themeSunset: 'Jingga senja', themeCoolGray: 'Abu-abu sejuk', title: 'Pengaturan', languageLabel: 'Bahasa', languageOptions: { system: 'Ikuti sistem', zh: 'Mandarin Sederhana' },
     roomId: { label: 'ID ruang', required: 'ID ruang wajib diisi', placeholder: 'Masukkan ID ruang, misalnya ruangku', helper: 'Perangkat harus menggunakan ID ruang yang sama' },
     saveButton: 'Simpan pengaturan', saving: 'Menyimpan…', joinSuccess: 'Berhasil bergabung ke ruang',
     advanced: {

@@ -46,6 +46,10 @@ i18n
         },
     }).then(() => updateDocumentLanguage(getEffectiveLang()));
 
+// Expose the initialized instance for low-level libraries that cannot import
+// this module (they would otherwise pull mobx/localStorage into Node tests).
+(globalThis as { __LETS_HARE_I18N__?: typeof i18n }).__LETS_HARE_I18N__ = i18n;
+
 if (typeof window !== 'undefined') {
     window.addEventListener('languagechange', () => {
         if (settingsStore.get('userLanguage') === 'system') {

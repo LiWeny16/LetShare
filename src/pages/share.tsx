@@ -2290,7 +2290,7 @@ const Share = observer(() => {
               icon: DownloadIcon, title: t('meeting.downloads', '下载管理'), sub: t('meeting.downloadsSub', '查看进行中的传输'), badge: activeTransferCount, onClick: () => setDwnloadPageState(true),
             })}
             {factoryMenuItem({
-              icon: NotesOutlinedIcon, title: "查看会议纪要历史", sub: "打开本机保存的已结束会议", onClick: () => setMeetingHistoryOpen(true),
+              icon: NotesOutlinedIcon, title: t('workspace.meetingHistory', '查看会议纪要历史'), sub: t('workspace.meetingHistorySub', '打开本机保存的已结束会议'), onClick: () => setMeetingHistoryOpen(true),
             })}
           </Menu>
 

@@ -6,6 +6,16 @@
  * captures/streams audio and renders the structured minutes.
  */
 
+// Low-level libraries that cannot import the i18n module (Node unit tests,
+// audio worklets) read the live instance from the global; without it the
+// English/Chinese fallback keeps the message readable.
+type Translator = { t: (key: string, fallback: string) => string };
+function t(key: string, fallback: string): string {
+  const instance = (globalThis as { __LETS_HARE_I18N__?: Translator }).__LETS_HARE_I18N__;
+  if (!instance) return fallback;
+  try { return instance.t(key, fallback); } catch { return fallback; }
+}
+
 /** The only supported ASR source: server-side streaming recognition. */
 export type AsrSource = "server-stream";
 
@@ -379,11 +389,11 @@ export class ServerStreamAsrSession {
       this.sink.connect(this.context.destination);
       this.running = true;
       this.options.onStart(this.options.language === "en-US" ? "en" : "zh");
-      this.options.onStatus?.("正在使用会议流式识别…");
+      this.options.onStatus?.(t("meeting.streamRecognitionActive", "正在使用会议流式识别…"));
       return true;
     } catch (error) {
       this.stop();
-      this.options.onError?.(error instanceof Error ? error.message : "流式识别启动失败", { transient: true });
+      this.options.onError?.(error instanceof Error ? error.message : t("meeting.streamStartFailed", "流式识别启动失败"), { transient: true });
       return false;
     }
   }

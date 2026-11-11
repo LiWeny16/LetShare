@@ -1,4 +1,5 @@
 import { isMobile, osName } from "react-device-detect";
+import i18n from "../i18n/i18n";
 
 export const getDeviceType = (): "apple" | "android" | "desktop" => {
   if (isMobile && osName === "iOS") return "apple";
@@ -52,25 +53,25 @@ export function compareUniqIdPriority(myId: string, fromId: string): boolean {
 export function validateRoomName(name: string | undefined | null): { isValid: boolean; message: string } {
 
   if (!name) {
-    return { isValid: false, message: '房间名不能为空' };
+    return { isValid: false, message: i18n.t("workspace.roomNameRequired", "房间名不能为空") };
   }
 
   if (name.length < 2) {
-    return { isValid: false, message: '房间名太短啦，至少两个字符' };
+    return { isValid: false, message: i18n.t("workspace.roomNameTooShort", "房间名太短啦，至少两个字符") };
   }
 
   if (name.length > 12) {
-    return { isValid: false, message: '房间名最多 12 个字符' };
+    return { isValid: false, message: i18n.t("workspace.roomNameTooLong", "房间名最多 12 个字符") };
   }
 
   const allowedPattern = /^[\u4e00-\u9fa5a-zA-Z0-9 _-]+$/;
   if (!allowedPattern.test(name)) {
     return {
       isValid: false,
-      message: '只能使用中文、字母、数字、空格、下划线或中划线',
+      message: i18n.t("workspace.roomNameCharset", "只能使用中文、字母、数字、空格、下划线或中划线"),
     };
   }
 
-  return { isValid: true, message: '房间名合法' };
+  return { isValid: true, message: i18n.t("workspace.roomNameValid", "房间名合法") };
 }
 

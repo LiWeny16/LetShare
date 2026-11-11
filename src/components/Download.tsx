@@ -455,8 +455,8 @@ export default function DownloadDrawerSlide({
       size: file.size,
     });
     setBrowserDownloadNotice(notice);
-    alertUseMUI(`${fileName} 已打包完成，请点击“保存文件”。`, 5000, { kind: "info" });
-  }, [replacePendingBrowserDownload]);
+    alertUseMUI(t("fileTransferV2.notice.zipReady", { fileName }), 5000, { kind: "info" });
+  }, [replacePendingBrowserDownload, t]);
 
   React.useEffect(() => {
     if (open) setVisible(true);
@@ -751,7 +751,7 @@ export default function DownloadDrawerSlide({
       if (isApp) {
         await saveBinaryToApp(zipFile);
 
-        alertUseMUI(`${zipFileName} 已成功保存到路径: /Download/letshare/`, 3000, {
+        alertUseMUI(t("fileTransferV2.notice.zipSavedPath", { fileName: zipFileName }), 3000, {
           kind: "success",
         });
       } else {
@@ -760,7 +760,7 @@ export default function DownloadDrawerSlide({
       return true;
     } catch (err) {
       console.error("打包下载失败:", err);
-      alertUseMUI("打包下载失败，请重试！", 2000, { kind: "error" });
+      alertUseMUI(t("fileTransferV2.notice.zipFailed"), 2000, { kind: "error" });
       return false;
     }
   };

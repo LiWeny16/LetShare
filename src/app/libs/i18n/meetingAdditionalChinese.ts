@@ -194,5 +194,7 @@ export const meetingAdditionalChinese: Record<string, string> = {
   "reconnectFailed": "会议连接重建失败，请重试。",
   "switchFailed": "切换会议失败，请重试。",
   "alreadyInMeeting": "当前已在会议中",
-  "chatAssistantUnavailable": "会议助手暂时不可用，请稍后再试。"
+  "chatAssistantUnavailable": "会议助手暂时不可用，请稍后再试。",
+  "streamRecognitionActive": "正在使用会议流式识别…",
+  "streamStartFailed": "流式识别启动失败"
 };

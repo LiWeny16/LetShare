@@ -26,7 +26,7 @@ const sharedMalayTranslation = {
         },
         welcome: "Selamat datang ke Aplikasi Saya",
         language: "Bahasa",
-        user: { idCopied: "ID pengguna disalin" }, workspace: { quickActions: "Akses pantas", quickActionsSub: "Mesyuarat dan pemindahan fail" },
+        user: { idCopied: "ID pengguna disalin" }, workspace: { quickActions: "Akses pantas", quickActionsSub: "Mesyuarat dan pemindahan fail", meetingHistory: "Lihat sejarah nota mesyuarat", meetingHistorySub: "Buka mesyuarat tamat yang disimpan pada peranti ini", roomNameRequired: "Nama bilik diperlukan", roomNameTooShort: "Nama bilik mesti sekurang-kurangnya 2 aksara", roomNameTooLong: "Nama bilik maksimum 12 aksara", roomNameCharset: "Gunakan aksara Cina, huruf, nombor, ruang, garis bawah atau sengkang", roomNameValid: "Nama bilik sah" },
         button: {
             file: "Fail",
             image: "Gambar",
@@ -109,6 +109,7 @@ const sharedMalayTranslation = {
         // settings
         settings: {
             displayName: "Nama paparan",
+            themeLight: "Cerah", themeDark: "Gelap", themeBlue: "Biru", themeGreen: "Hijau", themeSunset: "Jingga senja", themeCoolGray: "Kelabu sejuk",
             title: "Tetapan",
             languageLabel: "Bahasa",
             languageOptions: {
@@ -167,6 +168,8 @@ const sharedMalayTranslation = {
         },
         chat: {
             deleteHistoryFailed: "Tidak dapat memadam sejarah sembang. Sila cuba lagi.",
+            messageTampered: "[Pemalsuan mesej dikesan; paparan ditolak]",
+            decryptFailed: "[Mesej disulitkan tidak dapat dinyahsulit]",
             noMessages: "Tiada mesej sembang",
             inputPlaceholder: "Taip mesej...",
             deleteHistory: "Padam sejarah sembang",
@@ -387,7 +390,7 @@ export const resources = {
             },
             welcome: "Welcome to My App",
             language: "Language",
-            user: { idCopied: "User ID copied" }, workspace: { quickActions: "Quick actions", quickActionsSub: "Meetings and file transfers" },
+            user: { idCopied: "User ID copied" }, workspace: { quickActions: "Quick actions", quickActionsSub: "Meetings and file transfers", meetingHistory: "View meeting notes history", meetingHistorySub: "Open ended meetings saved on this device", roomNameRequired: "Room name is required", roomNameTooShort: "Room name must be at least 2 characters", roomNameTooLong: "Room name can be at most 12 characters", roomNameCharset: "Use Chinese characters, letters, numbers, spaces, underscores or hyphens", roomNameValid: "Room name is valid" },
             button: {
                 file: "File",
                 image: "Image",
@@ -472,6 +475,7 @@ export const resources = {
             // Settings
             settings: {
                 displayName: "Display name",
+                themeLight: "Light", themeDark: "Dark", themeBlue: "Blue", themeGreen: "Green", themeSunset: "Sunset", themeCoolGray: "Cool gray",
                 title: "Settings",
                 languageLabel: "Language",
                 languageOptions: {
@@ -530,6 +534,8 @@ export const resources = {
             },
             chat: {
                 deleteHistoryFailed: "Could not delete chat history. Please retry.",
+                messageTampered: "[Message tampering detected; display refused]",
+                decryptFailed: "[Could not decrypt this encrypted message]",
                 noMessages: "No chat messages yet",
                 renderFallbackTitle: "Chat is temporarily unavailable",
                 renderFallbackBody: "This message format is not supported right now, but you can safely close chat.",
@@ -814,7 +820,7 @@ export const resources = {
             },
             welcome: "欢迎使用我的应用",
             language: "语言",
-            user: { idCopied: "已复制用户 ID" }, workspace: { quickActions: "快捷入口", quickActionsSub: "会议与文件传输" },
+            user: { idCopied: "已复制用户 ID" }, workspace: { quickActions: "快捷入口", quickActionsSub: "会议与文件传输", meetingHistory: "查看会议纪要历史", meetingHistorySub: "打开本机保存的已结束会议", roomNameRequired: "房间名不能为空", roomNameTooShort: "房间名太短啦，至少两个字符", roomNameTooLong: "房间名最多 12 个字符", roomNameCharset: "只能使用中文、字母、数字、空格、下划线或中划线", roomNameValid: "房间名合法" },
             button: {
                 file: "文件",
                 image: "图片",
@@ -899,6 +905,7 @@ export const resources = {
             // Settings
             settings: {
                 displayName: "显示名称",
+                themeLight: "亮色", themeDark: "暗色", themeBlue: "蓝色", themeGreen: "绿色", themeSunset: "日落橙", themeCoolGray: "冷灰",
                 title: "设置",
                 languageLabel: "语言/Language",
                 languageOptions: {
@@ -959,6 +966,8 @@ export const resources = {
             },
             chat: {
                 deleteHistoryFailed: "无法删除聊天记录，请重试。",
+                messageTampered: "[检测到消息篡改，已拒绝显示]",
+                decryptFailed: "[加密消息解密失败]",
                 noMessages: "暂无聊天记录",
                 renderFallbackTitle: "聊天暂时无法显示",
                 renderFallbackBody: "这条消息格式暂不兼容，聊天窗口仍然可以安全关闭。",
@@ -1247,7 +1256,7 @@ export const resources = {
             call: { ...sharedMalayTranslation.translation.call, ...indonesianAdditionalTranslations.call },
             meeting: { ...sharedMalayTranslation.translation.meeting, ...indonesianAdditionalTranslations.meeting, ...meetingSettingsSearchTranslations.id },
             fileTransferV2: fileTransferV2Translations.id,
-            user: { idCopied: "ID pengguna disalin" }, workspace: { quickActions: "Akses cepat", quickActionsSub: "Rapat dan transfer file" },
+            user: { idCopied: "ID pengguna disalin" }, workspace: { quickActions: "Akses cepat", quickActionsSub: "Rapat dan transfer file", meetingHistory: "Lihat riwayat catatan rapat", meetingHistorySub: "Buka rapat selesai yang tersimpan di perangkat ini", roomNameRequired: "Nama ruang wajib diisi", roomNameTooShort: "Nama ruang minimal 2 karakter", roomNameTooLong: "Nama ruang maksimal 12 karakter", roomNameCharset: "Gunakan karakter Mandarin, huruf, angka, spasi, garis bawah, atau tanda hubung", roomNameValid: "Nama ruang valid" },
             proPlan: {
                 choose: "Pilih paket", subtitle: "Aktifkan relai server untuk koneksi yang lebih stabil.", current: "Paket saat ini", basic: "Dasar", free: "Gratis",
                 p2p: "Transfer P2P langsung (tanpa batas ukuran)", relayLimits: "Relai server (PRO ≤3GB / Gratis ≤50MB)", downgrade: "Beralih ke Free",

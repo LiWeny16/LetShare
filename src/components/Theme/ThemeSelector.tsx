@@ -1,18 +1,20 @@
 import { Box, Tooltip } from "@mui/material";
+import { useTranslation } from "react-i18next";
 import settingsStore from "@App/libs/mobx/mobx";
 
 const themes = [
- { key: "light", color: "#f5f5f5", label: "亮色" },
- { key: "dark", color: "#212121", label: "暗色" },
- { key: "blue", color: "#1976d2", label: "蓝色" },
- { key: "green", color: "#388e3c", label: "绿色" },
- { key: "sunset", color: "#f57c00", label: "日落橙" },
- { key: "coolGray", color: "#90a4ae", label: "冷灰" },
+ { key: "light", color: "#f5f5f5", labelKey: "settings.themeLight", label: "亮色" },
+ { key: "dark", color: "#212121", labelKey: "settings.themeDark", label: "暗色" },
+ { key: "blue", color: "#1976d2", labelKey: "settings.themeBlue", label: "蓝色" },
+ { key: "green", color: "#388e3c", labelKey: "settings.themeGreen", label: "绿色" },
+ { key: "sunset", color: "#f57c00", labelKey: "settings.themeSunset", label: "日落橙" },
+ { key: "coolGray", color: "#90a4ae", labelKey: "settings.themeCoolGray", label: "冷灰" },
 ];
 
 export type ThemeKey = typeof themes[number]["key"];
 
 const ThemeSelector = () => {
+ const { t } = useTranslation();
  const selected = settingsStore.get("userTheme") || "light";
 
  const handleSelect = (key: string) => {
@@ -34,7 +36,7 @@ const ThemeSelector = () => {
     const isSelected = selected === theme.key;
 
     return (
-     <Tooltip title={theme.label} key={theme.key} arrow>
+     <Tooltip title={t(theme.labelKey, theme.label)} key={theme.key} arrow>
       <div
        tabIndex={0}
        onClick={() => handleSelect(theme.key)}

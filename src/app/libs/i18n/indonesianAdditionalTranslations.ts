@@ -232,6 +232,8 @@ export const indonesianAdditionalTranslations = {
     switchFailed: "Tidak dapat berpindah rapat. Silakan coba lagi.",
     alreadyInMeeting: "Anda sudah berada di dalam rapat.",
     chatAssistantUnavailable: "Asisten rapat sementara tidak tersedia. Coba lagi sebentar lagi.",
+    streamRecognitionActive: "Menggunakan pengenalan streaming rapat…",
+    streamStartFailed: "Gagal memulai pengenalan streaming",
   },
   call: {
     voice: "Panggilan suara", video: "Panggilan video", incomingVideo: "Panggilan video masuk", incomingVoice: "Panggilan suara masuk", ringing: "Panggilan masuk…",

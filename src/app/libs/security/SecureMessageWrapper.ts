@@ -5,6 +5,7 @@
  */
 
 import { SimpleE2EEncryption, EncryptedTextMessage, UserKeyInfo } from './SimpleE2EEncryption';
+import i18n from "../i18n/i18n";
 
 export class SecureMessageWrapper {
  private encryption: SimpleE2EEncryption;
@@ -114,7 +115,7 @@ export class SecureMessageWrapper {
      console.error(`检测到消息篡改！来自 ${fromUniqId} 的消息签名无效`);
      return {
       type: "text",
-      message: "[检测到消息篡改，已拒绝显示]",
+      message: i18n.t("chat.messageTampered", "[检测到消息篡改，已拒绝显示]"),
       error: true
      };
     }
@@ -122,7 +123,7 @@ export class SecureMessageWrapper {
     // 其他解密失败情况
     return {
      type: "text",
-     message: "[加密消息解密失败]",
+     message: i18n.t("chat.decryptFailed", "[加密消息解密失败]"),
      error: true
     };
    }

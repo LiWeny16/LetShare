@@ -56,6 +56,8 @@ export const regionalCommonTranslations = {
       switchFailed: 'Tidak dapat menukar mesyuarat. Sila cuba lagi.',
       alreadyInMeeting: 'Anda sudah berada dalam mesyuarat.',
       chatAssistantUnavailable: 'Asisten mesyuarat tidak tersedia buat masa ini. Cuba lagi sedikit kemudian.',
+      streamRecognitionActive: 'Menggunakan pengecaman strim mesyuarat…',
+      streamStartFailed: 'Gagal memulakan pengecaman strim',
     },
     call: { voice: 'Panggilan suara', video: 'Panggilan video', incomingVideo: 'Panggilan video masuk', incomingVoice: 'Panggilan suara masuk', ringing: 'Panggilan masuk…', accept: 'Jawab', decline: 'Tolak', deviceDefault: 'Lalai sistem', connecting: 'Menyambung…', p2p: 'P2P terus', relay: 'Perantara', direct: 'Terus', close: 'Tutup', voiceOnly: 'Panggilan suara', unmute: 'Buka mikrofon', mute: 'Senyap', audioSettings: 'Tetapan audio', videoSettings: 'Tetapan video', videoOff: 'Matikan video', videoOn: 'Hidupkan video', hangup: 'Tamatkan panggilan', microphone: 'Mikrofon', speaker: 'Pembesar suara', volume: 'Kelantangan', inputLevel: 'Tahap input', camera: 'Kamera' },
     chat: { self: 'Saya', menuFolder: 'Folder', menuFile: 'Fail', menuImage: 'Gambar', menuClipboard: 'Papan klip', menuVideo: 'Panggilan video', plusMenu: 'Tindakan lain', unsupportedFile: 'Mesej fail tidak disokong', dropToSend: 'Lepaskan untuk menghantar', dropFolderHint: 'Fail dan folder akan dibungkus bersama laluan asal', renderFallbackTitle: 'Sembang tidak tersedia buat masa ini', renderFallbackBody: 'Format mesej ini tidak disokong buat masa ini, tetapi anda masih boleh menutup sembang dengan selamat.', renderFallbackClose: 'Tutup sembang' },

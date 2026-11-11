@@ -98,4 +98,6 @@ export const meetingAdditionalEnglish: Record<string, string> = {
   switchFailed: 'Could not switch meetings. Please try again.',
   alreadyInMeeting: 'You are already in a meeting.',
   chatAssistantUnavailable: 'The meeting assistant is temporarily unavailable. Try again shortly.',
+  streamRecognitionActive: 'Using meeting streaming recognition…',
+  streamStartFailed: 'Could not start streaming recognition',
 };
