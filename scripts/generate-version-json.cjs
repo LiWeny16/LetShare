@@ -3,6 +3,7 @@
 // When version changes → SW forces cache refresh → client reloads.
 const { readFileSync, writeFileSync } = require('fs');
 const { join } = require('path');
+const { gzipSync } = require('zlib');
 const { injectBuildId, buildIdForHtml } = require('./build-id.cjs');
 
 const docsDir = join(__dirname, '..', 'docs');
@@ -34,8 +35,16 @@ try {
   const normalized = indexHtml.replace(
     /(<meta name="letshare-build" content=")[^"]*(")/, "$1__LETSHARE_BUILD_ID__$2"
   );
-  writeFileSync(indexHtmlPath, injectBuildId(normalized, buildId), 'utf8');
-  console.log(`[version] Stamped build ${buildId} into docs/index.html`);
+  const stamped = injectBuildId(normalized, buildId);
+  writeFileSync(indexHtmlPath, stamped, 'utf8');
+  // vite-plugin-compression compressed the placeholder HTML earlier in the
+  // build, so its index.html.gz would otherwise keep serving the un-stamped
+  // document forever through nginx `gzip_static always` (the version prompt
+  // then never fires in production). Regenerate the gzip from the stamped
+  // HTML so the .html and .html.gz agree.
+  const indexGz = gzipSync(Buffer.from(stamped, 'utf8'), { level: 9 });
+  writeFileSync(`${indexHtmlPath}.gz`, indexGz);
+  console.log(`[version] Stamped build ${buildId} into docs/index.html (+ .gz ${indexGz.length} bytes)`);
 } catch (err) {
   console.error(`[version] ERROR: failed to stamp build id into docs/index.html: ${err.message}`);
   process.exit(1);
