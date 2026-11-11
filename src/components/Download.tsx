@@ -131,15 +131,19 @@ function formatSize(bytes: number): string {
   return `${bytes} B`;
 }
 
-function formatTransferDuration(ms: number, chinese: boolean): string {
-  if (ms < 1000) return chinese ? '不足 1 秒' : 'Less than 1 sec';
+type TranslateFn = (key: string, options?: Record<string, unknown>) => string;
+
+function formatTransferDuration(ms: number, t: TranslateFn): string {
+  if (ms < 1000) return t('fileTransferV2.duration.lessThanSecond');
   const seconds = Math.floor(ms / 1000);
   const hours = Math.floor(seconds / 3600);
   const minutes = Math.floor((seconds % 3600) / 60);
   const rest = seconds % 60;
-  return chinese
-    ? `${hours ? `${hours} 小时 ` : ''}${minutes ? `${minutes} 分 ` : ''}${rest} 秒`
-    : `${hours ? `${hours} hr ` : ''}${minutes ? `${minutes} min ` : ''}${rest} sec`;
+  return [
+    hours ? t('fileTransferV2.duration.hours', { hours }) : '',
+    minutes ? t('fileTransferV2.duration.minutes', { minutes }) : '',
+    t('fileTransferV2.duration.seconds', { seconds: rest }),
+  ].join('');
 }
 
 type SessionReceiveNotice = {
@@ -232,54 +236,46 @@ const FILE_TRANSFER_V2_STATUS_LABELS: Record<FileTransferV2TaskStatus, { key: st
   failed: { key: "failed", zh: "失败", en: "Failed" },
 };
 
-function getFileTransferV2RouteLabel(activePaths: Array<"p2p" | "relay">, isChinese: boolean): string {
+function getFileTransferV2RouteLabel(activePaths: Array<"p2p" | "relay">, t: TranslateFn): string {
   const hasP2P = activePaths.includes("p2p");
   const hasRelay = activePaths.includes("relay");
-  if (hasP2P && hasRelay) return isChinese ? "双链路" : "Hybrid";
-  if (hasP2P) return isChinese ? "P2P 直连" : "P2P";
-  if (hasRelay) return isChinese ? "公网中转" : "Public relay";
-  return isChinese ? "等待连接" : "Waiting for a path";
+  if (hasP2P && hasRelay) return t("fileTransferV2.route.hybrid");
+  if (hasP2P) return t("fileTransferV2.route.p2p");
+  if (hasRelay) return t("fileTransferV2.route.relay");
+  return t("fileTransferV2.route.waiting");
 }
 
-function getFileTransferV2PeerName(peerId: string, isChinese: boolean): string {
+function getFileTransferV2PeerName(peerId: string, t: TranslateFn): string {
   const profileName = realTimeColab.userList.get(peerId)?.userName?.trim();
   if (profileName) return profileName;
   const shortName = peerId.split(":", 1)[0]?.trim();
-  return shortName || (isChinese ? "对方" : "Other person");
+  return shortName || t("fileTransferV2.peerFallback");
 }
 
 function isFileTransferV2ActionableReason(reason: string | undefined): boolean {
   return Boolean(reason && /quota|storage|space|hash|mismatch|match|persist|commit|history|save|disk|database|expired|insufficient|not enough/i.test(reason));
 }
 
-function localizeFileTransferV2Error(message: string, isChinese: boolean): string {
+function localizeFileTransferV2Error(message: string, t: TranslateFn): string {
   if (/hash|source file|manifest|does not match/i.test(message)) {
-    return isChinese
-      ? "这不是原来的文件，请重新选择发送时的文件。已接收的内容会保留。"
-      : "That is not the original file. Choose the file you sent earlier; received data will be kept.";
+    return t("fileTransferV2.error.sourceMismatch");
   }
   if (/quota|storage|space/i.test(message)) {
-    return isChinese
-      ? "设备可用空间不足，无法保存接收内容。请释放空间后重试。"
-      : "There is not enough free space to save this transfer. Free some space and try again.";
+    return t("fileTransferV2.error.storageFull");
   }
   if (/expired/i.test(message)) {
-    return isChinese ? "此传输任务已过期，请重新发送文件。" : "This transfer has expired. Send the file again.";
+    return t("fileTransferV2.error.expired");
   }
   if (/history|indexeddb|commit|persist|database|save|pin|missing committed/i.test(message)) {
-    return isChinese
-      ? "无法保存接收内容。请检查设备可用空间后重试；已接收的内容会保留。"
-      : "The received file could not be saved. Check your available storage and try again; received data will be kept.";
+    return t("fileTransferV2.error.saveFailed");
   }
   if (/path|reconnect|connection|unavailable|closed|congested/i.test(message)) {
-    return isChinese
-      ? "连接暂时中断，恢复后会自动继续传输。"
-      : "The connection is temporarily unavailable. The transfer will continue when it returns.";
+    return t("fileTransferV2.error.connectionInterrupted");
   }
   if (/checkpoint|receive buffer|block saved locally/i.test(message)) {
-    return isChinese ? "接收内容已保存在此设备，正在等待继续传输。" : "Received data is saved on this device while the transfer waits to continue.";
+    return t("fileTransferV2.error.savedWaiting");
   }
-  return isChinese ? "文件操作失败，请重试。" : "This file action failed. Please try again.";
+  return t("fileTransferV2.error.actionFailed");
 }
 
 function getBrowserDownloadNotice(fileName: string): string {
@@ -304,10 +300,9 @@ export default function DownloadDrawerSlide({
   onClose: () => void;
   targetUserId?: string | null;
 }) {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   const theme = useTheme();
   const reduceMotion = useReducedMotion();
-  const isChinese = (i18n.resolvedLanguage || i18n.language)?.toLowerCase().startsWith("zh") ?? true;
   const [visible, setVisible] = React.useState(open);
   const [drawerExpanded, setDrawerExpanded] = React.useState(false);
   const [, forceUpdate] = React.useReducer((x) => x + 1, 0);
@@ -909,7 +904,7 @@ export default function DownloadDrawerSlide({
     if (!picker) {
       setFileTransferV2Errors(previous => ({
         ...previous,
-        [row.transferId]: isChinese ? "\u6b64\u6d4f\u89c8\u5668\u4e0d\u652f\u6301\u9009\u62e9\u78c1\u76d8\u4fdd\u5b58\u4f4d\u7f6e" : "This browser cannot choose a disk save location",
+        [row.transferId]: t("fileTransferV2.error.diskUnsupported"),
       }));
       return;
     }
@@ -930,9 +925,7 @@ export default function DownloadDrawerSlide({
         : Promise.resolve<PermissionState>(handle ? "granted" : "denied");
     void runFileTransferV2Action(row.transferId, async () => {
       const permission = await permissionPromise;
-      if (permission !== "granted") throw new Error(isChinese
-        ? "\u8bf7\u5141\u8bb8\u8bbf\u95ee\u5df2\u9009\u62e9\u7684\u4fdd\u5b58\u6587\u4ef6\uff0c\u6216\u91cd\u65b0\u9009\u62e9\u4fdd\u5b58\u4f4d\u7f6e\u3002"
-        : "Allow access to the selected save file, or choose a save location again.");
+      if (permission !== "granted") throw new Error(t("fileTransferV2.error.allowAccess"));
       await realTimeColab.resumeFileTransferV2(row.transferId);
     });
   };
@@ -942,7 +935,7 @@ export default function DownloadDrawerSlide({
     if (!handle) {
       setFileTransferV2Errors(previous => ({
         ...previous,
-        [row.transferId]: isChinese ? "\u627e\u4e0d\u5230\u4fdd\u5b58\u7684\u6587\u4ef6\uff0c\u8bf7\u91cd\u65b0\u63a5\u6536\u3002" : "The saved file is unavailable. Receive it again.",
+        [row.transferId]: t("fileTransferV2.error.savedUnavailable"),
       }));
       return;
     }
@@ -958,18 +951,18 @@ export default function DownloadDrawerSlide({
       if (result === "deleted") {
         setFileTransferV2Errors(previous => ({
           ...previous,
-          [row.transferId]: isChinese ? "\u6587\u4ef6\u5df2\u5220\u9664\uff0c\u8bf7\u91cd\u65b0\u63a5\u6536\u3002" : "The file was deleted. Receive it again.",
+          [row.transferId]: t("fileTransferV2.error.fileDeleted"),
         }));
         return;
       }
       if (result === "permission-required") {
         setFileTransferV2Errors(previous => ({
           ...previous,
-          [row.transferId]: isChinese ? "\u9700\u8981\u5141\u8bb8 LetShare \u8bbf\u95ee\u6b64\u6587\u4ef6\u540e\u624d\u80fd\u6253\u5f00\u3002" : "Allow LetShare to access this file before opening it.",
+          [row.transferId]: t("fileTransferV2.error.permissionRequired"),
         }));
         return;
       }
-      throw new Error(isChinese ? "\u65e0\u6cd5\u6253\u5f00\u4fdd\u5b58\u7684\u6587\u4ef6\u3002" : "Could not open the saved file.");
+      throw new Error(t("fileTransferV2.error.openFailed"));
     });
   };
 
@@ -1276,13 +1269,13 @@ export default function DownloadDrawerSlide({
         forceUpdate();
         if (restoredCount > 0) {
           alertUseMUI(
-            isChinese ? "部分文件未能删除，已保留在接收列表中。" : "Some files could not be deleted and remain in the received list.",
+            t("fileTransferV2.notice.partialDelete"),
             4000,
             { kind: "warning" },
           );
         } else if (cleanupPending) {
           alertUseMUI(
-            isChinese ? "文件记录已清除，部分存储数据仍待清理。" : "File records were cleared; some stored data still needs cleanup.",
+            t("fileTransferV2.notice.recordsCleared"),
             4000,
             { kind: "warning" },
           );
@@ -1300,11 +1293,11 @@ export default function DownloadDrawerSlide({
         });
         setPersistentFileCount(realTimeColab.receivedFiles.size);
         forceUpdate();
-        alertUseMUI(isChinese ? "清理记录时发生错误，请重试。" : "An error occurred while clearing file history. Please retry.", 4000, { kind: "warning" });
+        alertUseMUI(t("fileTransferV2.notice.clearError"), 4000, { kind: "warning" });
       }
     } catch (err) {
       console.warn('[Download] Failed to clear received files:', err);
-      alertUseMUI(isChinese ? "文件列表清理失败，请重试。" : "The received list could not be cleared. Please retry.", 4000, { kind: "warning" });
+      alertUseMUI(t("fileTransferV2.notice.clearFailed"), 4000, { kind: "warning" });
     } finally {
       realTimeColab.finishReceivedFilesHydrationMutation();
       realTimeColab.finishReceivedFilesClearMutation();
@@ -1468,13 +1461,13 @@ export default function DownloadDrawerSlide({
     forceUpdate();
     if (failedKeys.size > 0) {
       alertUseMUI(
-        isChinese ? "部分文件删除失败，已保留在列表中，请重试。" : "Some files could not be deleted and remain in the list. Please retry.",
+        t("fileTransferV2.notice.deletePartial"),
         4000,
         { kind: "warning" },
       );
     } else if (cleanupPending) {
       alertUseMUI(
-        isChinese ? "文件已从记录中删除，部分存储清理仍在等待处理。" : "The files were removed from history; some stored data still needs cleanup.",
+        t("fileTransferV2.notice.deleteCleanup"),
         4000,
         { kind: "warning" },
       );
@@ -1551,7 +1544,7 @@ export default function DownloadDrawerSlide({
       const historyWasDeleted = result.success || result.historyDeleted === true;
       if (!historyWasDeleted) {
         group.files.forEach(({ key }) => deletedReceivedMapKeysRef.current.delete(key));
-        alertUseMUI(result.error || (isChinese ? "文件删除失败，请重试。" : "The files could not be deleted. Please retry."), 4000, { kind: "warning" });
+        alertUseMUI(result.error || t("fileTransferV2.notice.deleteFailed"), 4000, { kind: "warning" });
         return;
       }
 
@@ -1575,12 +1568,12 @@ export default function DownloadDrawerSlide({
       });
       forceUpdate();
       if (!result.success) {
-        alertUseMUI(result.error || (isChinese ? "聊天记录已删除，但部分文件仍待清理。" : "Chat history was deleted, but some file cleanup is pending."), 4000, { kind: "warning" });
+        alertUseMUI(result.error || t("fileTransferV2.notice.chatDeletedCleanup"), 4000, { kind: "warning" });
       }
     } catch (err) {
       console.warn('[Download] Failed to delete persisted files from IndexedDB:', err);
       group.files.forEach(({ key }) => deletedReceivedMapKeysRef.current.delete(key));
-      alertUseMUI(isChinese ? "文件删除失败，请重试。" : "The files could not be deleted. Please retry.", 4000, { kind: "warning" });
+      alertUseMUI(t("fileTransferV2.notice.deleteFailed"), 4000, { kind: "warning" });
     }
   };
   const toggleUserExpand = (userId: string) => {
@@ -1692,8 +1685,8 @@ export default function DownloadDrawerSlide({
               }}
             >
             {sessionReceives.length > 0 && (
-              <Box role="region" aria-label={isChinese ? '本次接收' : 'Received this session'}>
-                <Typography variant="subtitle2" sx={{ mb: 0.75 }}>{isChinese ? '本次接收' : 'Received this session'}</Typography>
+              <Box role="region" aria-label={t('fileTransferV2.session.receivedThisSession')}>
+                <Typography variant="subtitle2" sx={{ mb: 0.75 }}>{t('fileTransferV2.session.receivedThisSession')}</Typography>
                 <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
                   {sessionReceives.map(notice => (
                     <Box key={notice.id} sx={{ display: 'flex', alignItems: 'center', gap: 0.75, p: 1, borderRadius: 1.5, bgcolor: 'action.hover' }}>
@@ -1701,11 +1694,11 @@ export default function DownloadDrawerSlide({
                       <Box sx={{ flex: 1, minWidth: 0 }}>
                         <Typography variant="body2" noWrap>{notice.fileName}</Typography>
                         <Typography variant="caption" color="text.secondary" sx={{ display: 'block', overflowWrap: 'anywhere' }}>
-                          {isChinese ? '来自' : 'From'} {notice.from.split(':')[0]} · {formatSize(notice.fileSize)} · {isChinese ? '耗时' : 'Duration'} {notice.durationMs === undefined ? '—' : formatTransferDuration(notice.durationMs, isChinese)}
+                          {t('fileTransferV2.session.from')} {notice.from.split(':')[0]} · {formatSize(notice.fileSize)} · {t('fileTransferV2.session.duration')} {notice.durationMs === undefined ? '—' : formatTransferDuration(notice.durationMs, t)}
                         </Typography>
                       </Box>
-                      <Tooltip title={notice.file ? t('chat.fileDownload') : notice.unavailable ? (isChinese ? '文件已不可用' : 'File no longer available') : (isChinese ? '文件已直接保存到磁盘' : 'File was saved directly to disk')}><span><IconButton disabled={!notice.file} aria-label={t('chat.fileDownload')} onClick={() => { if (notice.file) void downloadFile(notice.file); }} sx={{ minWidth: 40, minHeight: 40 }}><DownloadIcon /></IconButton></span></Tooltip>
-                      <Tooltip title={isChinese ? '移除通知' : 'Remove notification'}><IconButton aria-label={isChinese ? '移除通知' : 'Remove notification'} onClick={() => setSessionReceives(previous => previous.filter(item => item.id !== notice.id))} sx={{ minWidth: 40, minHeight: 40 }}><DeleteOutlineIcon /></IconButton></Tooltip>
+                      <Tooltip title={notice.file ? t('chat.fileDownload') : notice.unavailable ? t('fileTransferV2.session.fileUnavailable') : t('fileTransferV2.session.savedDirectlyToDisk')}><span><IconButton disabled={!notice.file} aria-label={t('chat.fileDownload')} onClick={() => { if (notice.file) void downloadFile(notice.file); }} sx={{ minWidth: 40, minHeight: 40 }}><DownloadIcon /></IconButton></span></Tooltip>
+                      <Tooltip title={t('fileTransferV2.session.removeNotice')}><IconButton aria-label={t('fileTransferV2.session.removeNotice')} onClick={() => setSessionReceives(previous => previous.filter(item => item.id !== notice.id))} sx={{ minWidth: 40, minHeight: 40 }}><DeleteOutlineIcon /></IconButton></Tooltip>
                     </Box>
                   ))}
                 </Box>
@@ -1715,10 +1708,10 @@ export default function DownloadDrawerSlide({
             <Box
               data-testid="file-v2-task-list"
               role="region"
-              aria-label={t("fileTransferV2.taskList.ariaLabel", { defaultValue: isChinese ? "文件传输" : "File transfers" })}
+              aria-label={t("fileTransferV2.taskList.ariaLabel")}
             >
               <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 1, flexWrap: "wrap", mb: 0.75 }}>
-                <Typography variant="subtitle2">{t("fileTransferV2.taskList.title", { defaultValue: isChinese ? "文件传输" : "File transfers" })}</Typography>
+                <Typography variant="subtitle2">{t("fileTransferV2.taskList.title")}</Typography>
               </Box>
                 <Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
                   {fileTransferV2Rows.map(row => {
@@ -1738,27 +1731,25 @@ export default function DownloadDrawerSlide({
                       : row.status === "paused" || row.status === "needs-source" || row.status === "offered" ? "warning"
                       : "default";
                     const statusLabel = isDirectDiskComplete && directAvailability === "deleted"
-                      ? (isChinese ? "\u6587\u4ef6\u5df2\u5220\u9664" : "File deleted")
+                      ? t("fileTransferV2.status.fileDeleted")
                       : isDirectDiskComplete && directAvailability === "permission-required"
-                        ? (isChinese ? "\u9700\u8981\u6388\u6743\u8bbf\u95ee" : "Permission required")
+                        ? t("fileTransferV2.status.permissionRequired")
                         : isDirectDiskComplete && directAvailability === "unavailable"
-                          ? (isChinese ? "\u65e0\u6cd5\u68c0\u67e5\u6587\u4ef6\u72b6\u6001" : "File status unavailable")
+                          ? t("fileTransferV2.status.statusUnavailable")
                           : isDirectDiskComplete && directAvailability === "available"
-                            ? (isChinese ? "\u5df2\u4fdd\u5b58\u5230\u78c1\u76d8" : "Saved to disk")
+                            ? t("fileTransferV2.status.savedToDisk")
                             : row.status === "offered" && row.direction === "receive"
-                              ? (isChinese ? "\u9009\u62e9\u4fdd\u5b58\u4f4d\u7f6e\u540e\u5f00\u59cb\u63a5\u6536" : "Choose where to save to start receiving")
+                              ? t("fileTransferV2.status.chooseSaveLocation")
                               : remotePaused
-                                ? (isChinese ? "\u5bf9\u65b9\u5df2\u6682\u505c\uff0c\u7b49\u5f85\u5bf9\u65b9\u7ee7\u7eed" : "The other person paused; waiting for them to continue")
+                                ? t("fileTransferV2.status.peerPaused")
                                 : row.status === "reconnecting"
-                                  ? (isChinese ? "\u8fde\u63a5\u6062\u590d\u540e\u81ea\u52a8\u7ee7\u7eed" : "Will continue when the connection returns")
+                                  ? t("fileTransferV2.status.willContinue")
                                   : row.status === "needs-source"
-                                    ? (isChinese ? "\u9700\u8981\u91cd\u65b0\u9009\u62e9\u6587\u4ef6" : "Choose the original file again")
-                                    : t(`fileTransferV2.status.${FILE_TRANSFER_V2_STATUS_LABELS[row.status].key}`, {
-                                      defaultValue: isChinese ? FILE_TRANSFER_V2_STATUS_LABELS[row.status].zh : FILE_TRANSFER_V2_STATUS_LABELS[row.status].en,
-                                    });
+                                    ? t("fileTransferV2.status.chooseOriginal")
+                                    : t(`fileTransferV2.status.${FILE_TRANSFER_V2_STATUS_LABELS[row.status].key}`);
                     const routeLabel = row.status === "completed" && row.activePaths.length === 0
-                      ? (isChinese ? "\u5df2\u5b8c\u6210" : "Finished")
-                      : getFileTransferV2RouteLabel(row.activePaths, isChinese);
+                      ? t("fileTransferV2.status.finished")
+                      : getFileTransferV2RouteLabel(row.activePaths, t);
                     const hasP2P = row.activePaths.includes("p2p");
                     const hasRelay = row.activePaths.includes("relay");
                     const routeColor = hasP2P && hasRelay ? "secondary"
@@ -1767,17 +1758,17 @@ export default function DownloadDrawerSlide({
                       : "default";
                     const retainedWithHistory = row.expiresAt > Date.now() + 365 * 24 * 60 * 60 * 1000;
                     const expiryLabel = retainedWithHistory
-                      ? (isChinese ? "已保存到历史记录，删除前保留" : "Retained with chat history until deleted")
+                      ? t("fileTransferV2.status.retained")
                       : new Date(row.expiresAt).toLocaleString();
                     const errorMessage = fileTransferV2Errors[row.transferId]
                       || row.reason
-                      || (row.status === "failed" ? (isChinese ? "文件传输失败。请删除任务后重试。" : "File transfer failed. Delete the task and try again.") : "");
+                      || (row.status === "failed" ? t("fileTransferV2.status.failedHint") : "");
                     const showError = !remotePaused && (Boolean(fileTransferV2Errors[row.transferId])
                       || row.status === "failed"
                       || isFileTransferV2ActionableReason(row.reason));
                     const showSpeed = ["preparing", "offering", "offered", "receiving", "transferring", "verifying"].includes(row.status)
                       && row.bytesPerSecond > 0;
-                    const peerName = getFileTransferV2PeerName(row.peerId, isChinese);
+                    const peerName = getFileTransferV2PeerName(row.peerId, t);
 
                     return (
                       <Box
@@ -1802,8 +1793,8 @@ export default function DownloadDrawerSlide({
                               </Typography>
                               <Typography variant="caption" color="text.secondary" sx={{ overflowWrap: "anywhere" }}>
                                 {row.direction === "send"
-                                  ? t("fileTransferV2.taskList.sendingTo", { defaultValue: isChinese ? "发送给" : "Sending to" })
-                                  : t("fileTransferV2.taskList.receivedFrom", { defaultValue: isChinese ? "来自" : "From" })} {peerName} · {formatSize(row.fileSize)}
+                                  ? t("fileTransferV2.taskList.sendingTo")
+                                  : t("fileTransferV2.taskList.receivedFrom")} {peerName} · {formatSize(row.fileSize)}
                               </Typography>
                             </Box>
                           </Box>
@@ -1813,15 +1804,13 @@ export default function DownloadDrawerSlide({
                         <Box>
                           {row.status !== "completed" && (
                             <Typography variant="caption" color="text.secondary" sx={{ display: "block", fontVariantNumeric: "tabular-nums" }}>
-                              {isChinese
-                                ? `已确认 ${formatSize(row.confirmedBytes)} / ${formatSize(row.fileSize)}${showSpeed ? ` · ${formatTransferSpeed(row.bytesPerSecond)}` : ""}`
-                                : `Confirmed ${formatSize(row.confirmedBytes)} / ${formatSize(row.fileSize)}${showSpeed ? ` · ${formatTransferSpeed(row.bytesPerSecond)}` : ""}`}
+                              {t("fileTransferV2.confirmedSizes", { confirmed: formatSize(row.confirmedBytes), total: formatSize(row.fileSize) })}{showSpeed ? ` · ${formatTransferSpeed(row.bytesPerSecond)}` : ""}
                             </Typography>
                           )}
                           <LinearProgress
                             variant="determinate"
                             value={row.progress}
-                            aria-label={isChinese ? `${row.fileName} 已确认进度` : `${row.fileName} confirmed progress`}
+                            aria-label={t("fileTransferV2.confirmedProgress", { name: row.fileName })}
                             data-testid={`file-v2-progress-${row.transferId}`}
                             sx={{ height: 6, borderRadius: 4, mt: 0.4 }}
                           />
@@ -1829,7 +1818,7 @@ export default function DownloadDrawerSlide({
 
                         {showError && (
                           <Alert severity="error" sx={{ py: 0 }} data-testid={`file-v2-error-${row.transferId}`}>
-                            {localizeFileTransferV2Error(errorMessage, isChinese)}
+                            {localizeFileTransferV2Error(errorMessage, t)}
                           </Alert>
                         )}
 
@@ -1837,9 +1826,7 @@ export default function DownloadDrawerSlide({
                           {row.needsSource && (
                             <>
                               <Typography variant="caption" color="text.secondary" sx={{ flexBasis: "100%" }}>
-                                {isChinese
-                                  ? "刷新页面后，请重新选择发送时的原文件；已接收的部分会保留。"
-                                  : "After refreshing, choose the same original file to continue. Already received parts are kept."}
+                                {t("fileTransferV2.needsSourceHint")}
                               </Typography>
                               <input
                                 ref={element => {
@@ -1858,7 +1845,7 @@ export default function DownloadDrawerSlide({
                                 data-testid={`file-v2-choose-source-${row.transferId}`}
                                 onClick={() => fileTransferV2SourceInputsRef.current.get(row.transferId)?.click()}
                               >
-                                {t("fileTransferV2.action.chooseSource", { defaultValue: isChinese ? "重新选择文件" : "Choose file again" })}
+                                {t("fileTransferV2.action.chooseSource")}
                               </Button>
                             </>
                           )}
@@ -1869,7 +1856,7 @@ export default function DownloadDrawerSlide({
                               disabled={busy}
                               data-testid={`file-v2-save-to-disk-${row.transferId}`}
                               onClick={() => handleChooseV2DirectDiskDestination(row)}
-                            >{isChinese ? "\u4fdd\u5b58\u5230\u78c1\u76d8" : "Save to disk"}</Button>
+                            >{t("fileTransferV2.action.saveToDisk")}</Button>
                           )}
                           {row.direction === "receive" && row.status === "paused" && row.storageMode === "direct-to-disk" && (
                             <>
@@ -1879,13 +1866,13 @@ export default function DownloadDrawerSlide({
                                 disabled={busy || !row.directFileHandle}
                                 data-testid={`file-v2-resume-disk-${row.transferId}`}
                                 onClick={() => resumeV2DirectDiskTransfer(row)}
-                              >{isChinese ? "\u6388\u6743\u5e76\u7ee7\u7eed" : "Allow and resume"}</Button>
+                              >{t("fileTransferV2.action.allowAndResume")}</Button>
                               <Button
                                 size="small"
                                 disabled={busy}
                                 data-testid={`file-v2-reselect-disk-${row.transferId}`}
                                 onClick={() => handleChooseV2DirectDiskDestination(row)}
-                              >{isChinese ? "\u91cd\u65b0\u9009\u62e9\u4f4d\u7f6e" : "Choose another location"}</Button>
+                              >{t("fileTransferV2.action.chooseAnotherLocation")}</Button>
                             </>
                           )}
                           {isDirectDiskComplete && row.directFileHandle && (
@@ -1895,7 +1882,7 @@ export default function DownloadDrawerSlide({
                               disabled={busy}
                               data-testid={`file-v2-open-disk-${row.transferId}`}
                               onClick={() => openV2DirectDiskFile(row)}
-                            >{isChinese ? "\u6253\u5f00\u6587\u4ef6" : "Open file"}</Button>
+                            >{t("fileTransferV2.action.openFile")}</Button>
                           )}
                           {canPause && (
                             <Button
@@ -1904,7 +1891,7 @@ export default function DownloadDrawerSlide({
                               disabled={busy}
                               data-testid={`file-v2-pause-${row.transferId}`}
                               onClick={() => void runFileTransferV2Action(row.transferId, () => realTimeColab.pauseFileTransferV2(row.transferId))}
-                            >{t("fileTransferV2.action.pause", { defaultValue: isChinese ? "暂停" : "Pause" })}</Button>
+                            >{t("fileTransferV2.action.pause")}</Button>
                           )}
                           {canResume && (
                             <Button
@@ -1913,7 +1900,7 @@ export default function DownloadDrawerSlide({
                               disabled={busy}
                               data-testid={`file-v2-resume-${row.transferId}`}
                               onClick={() => void runFileTransferV2Action(row.transferId, () => realTimeColab.resumeFileTransferV2(row.transferId))}
-                            >{t("fileTransferV2.action.resume", { defaultValue: isChinese ? "继续" : "Resume" })}</Button>
+                            >{t("fileTransferV2.action.resume")}</Button>
                           )}
                           {!terminal && (
                             <Button
@@ -1921,7 +1908,7 @@ export default function DownloadDrawerSlide({
                               color="inherit"
                               data-testid={`file-v2-cancel-${row.transferId}`}
                               onClick={() => void runFileTransferV2Action(row.transferId, () => realTimeColab.cancelFileTransferV2(row.transferId))}
-                            >{t("fileTransferV2.action.cancel", { defaultValue: isChinese ? "取消" : "Cancel" })}</Button>
+                            >{t("fileTransferV2.action.cancel")}</Button>
                           )}
                           {row.direction === "receive" && row.status === "completed" && row.storageMode !== "direct-to-disk" && (
                             <Button
@@ -1930,7 +1917,7 @@ export default function DownloadDrawerSlide({
                               disabled={busy}
                               data-testid={`file-v2-download-${row.transferId}`}
                               onClick={() => downloadFileTransferV2(row)}
-                            >{t("fileTransferV2.action.download", { defaultValue: isChinese ? "下载" : "Download" })}</Button>
+                            >{t("fileTransferV2.action.download")}</Button>
                           )}
                         </Box>
 
@@ -1940,20 +1927,20 @@ export default function DownloadDrawerSlide({
                           sx={{ mt: 0.1, "& > summary": { cursor: "pointer", width: "fit-content", py: 0.25 } }}
                         >
                           <Typography component="summary" variant="caption" color="text.secondary">
-                            {isChinese ? "详细信息" : "Details"}
+                            {t("fileTransferV2.details.title")}
                           </Typography>
                           <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 0.5, pt: 0.5 }}>
                             <Chip size="small" label={routeLabel} color={routeColor} variant="outlined" data-testid={`file-v2-route-${row.transferId}`} />
                             <Typography variant="caption" color="text.secondary" sx={{ overflowWrap: "anywhere" }}>
-                              {isChinese ? "对方 ID：" : "Other party ID: "}{row.peerId}
+                              {t("fileTransferV2.details.peerId")}{row.peerId}
                             </Typography>
                             <Typography variant="caption" color="text.secondary">
-                              {isChinese ? "排队：" : "Queued: "}{formatSize(row.queuedBytes)}
+                              {t("fileTransferV2.details.queued")}{formatSize(row.queuedBytes)}
                             </Typography>
                             <Typography variant="caption" color="text.secondary">
                               {retainedWithHistory
                                 ? expiryLabel
-                                : `${isChinese ? "保留至：" : "Expires: "}${expiryLabel}`}
+                                : `${t("fileTransferV2.details.expires")}${expiryLabel}`}
                             </Typography>
                             {terminal && (
                               <Button
@@ -1963,7 +1950,7 @@ export default function DownloadDrawerSlide({
                                 disabled={busy}
                                 data-testid={`file-v2-delete-${row.transferId}`}
                                 onClick={() => void runFileTransferV2Action(row.transferId, () => realTimeColab.deleteFileTransferV2(row.transferId))}
-                              >{t("fileTransferV2.action.delete", { defaultValue: isChinese ? "删除数据" : "Delete data" })}</Button>
+                              >{t("fileTransferV2.action.delete")}</Button>
                             )}
                           </Box>
                         </Box>
@@ -2538,7 +2525,7 @@ export default function DownloadDrawerSlide({
                                 }}
                                 onClick={(event) => event.stopPropagation()}
                                 onPointerDown={(event) => { event.stopPropagation(); handleDragSelectStart(key); }}
-                                inputProps={{ 'aria-label': `${t('download.selectFile', { defaultValue: isChinese ? '选择文件' : 'Select file' })}: ${file.name}` }}
+                                inputProps={{ 'aria-label': `${t('download.selectFile')}: ${file.name}` }}
                                 sx={{ width: 40, height: 40, touchAction: 'none' }}
                               />
                               <ButtonBase
