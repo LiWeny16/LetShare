@@ -8,6 +8,7 @@ import { CssBaseline, ThemeProvider, useMediaQuery } from "@mui/material"
 import { themes } from "@Com/Theme/themes"
 import { meetingManager } from "@App/libs/meeting/meetingManager"
 import type { MeetingError } from "@App/libs/meeting/meetingManager"
+import { markMeetingEntryBufferStart, resetMeetingEntryBufferClock } from "@App/libs/meeting/meetingEntryBuffer"
 import realTimeColab from "@App/libs/connection/colabLib"
 import { normalizeUserName } from "@App/libs/identity/identity"
 import settingsStore from "@App/libs/mobx/mobx"
@@ -50,6 +51,13 @@ function MeetingPage() {
   const [managerState, setManagerState] = useState(meetingManager.getState())
   const [connectionError, setConnectionError] = useState(false)
   const joinedRoomRef = useRef<string | null>(null)
+
+  // 入场缓冲时钟必须在本路由首次渲染时就启动：chunk 已缓存时 Suspense
+  // 缓冲页可能从未挂载，共享时钟仍要由这里记下来（fallback 侧的
+  // markMeetingEntryBufferStart 是幂等的，先记者胜）。卸载即清零：
+  // 离开会议永远不得再出现缓冲页。
+  useState(() => { markMeetingEntryBufferStart(); return 0; });
+  useEffect(() => () => { resetMeetingEntryBufferClock(); }, [])
 
   useEffect(() => meetingManager.subscribe(setManagerState), [])
 

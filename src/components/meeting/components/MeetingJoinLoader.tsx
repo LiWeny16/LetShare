@@ -1,32 +1,32 @@
-import { Box, Typography } from "@mui/material";
-import { motion, useReducedMotion } from "motion/react";
+import { useId } from "react";
 
 /**
  * Joining-the-meeting loader: a small elephant rides a LetShare tile down a
- * slide. The loop is ~3s; reduced-motion users get a static seated pose.
+ * slide. The loop is ~3s; reduced-motion users get a static seated pose
+ * (see src/style/meeting-loader.css).
+ *
+ * Dependency-free on purpose: no motion/react, no MUI, no CSS-module import.
+ * The eager route shell (src/pages/index.tsx) imports this as the /meeting
+ * Suspense fallback while the meeting chunk is still downloading, and node
+ * tests import it directly — so the animation lives in the global
+ * meeting-loader.css, which the route shell imports, never this component.
  */
-export default function MeetingJoinLoader({ label }: { label: string }) {
-  const reduceMotion = useReducedMotion();
+export default function MeetingJoinLoader({ label }: { label?: string }) {
+  // useId() is colon-delimited (":r0:"); strip it so the gradient ids stay
+  // plain fragment references and remain unique per mounted instance.
+  const uid = useId().replace(/[^a-zA-Z0-9]/g, "");
+  const tileGradientId = `meeting-join-tile-${uid}`;
+  const slideGradientId = `meeting-join-slide-${uid}`;
 
   return (
-    <Box
-      role="status"
-      aria-live="polite"
-      data-testid="meeting-join-loader"
-      sx={{ display: "grid", justifyItems: "center", gap: 1.1, px: 2, textAlign: "center" }}
-    >
-      <Box
-        component="svg"
-        viewBox="0 0 240 184"
-        aria-hidden="true"
-        sx={{ width: { xs: 196, sm: 224 }, height: "auto", display: "block", overflow: "visible" }}
-      >
+    <div className="ls-meeting-join-loader" role="status" aria-live="polite" data-testid="meeting-join-loader">
+      <svg className="ls-meeting-join-loader__svg" viewBox="0 0 240 184" aria-hidden="true">
         <defs>
-          <linearGradient id="meeting-join-tile" x1="0" y1="0" x2="1" y2="1">
+          <linearGradient id={tileGradientId} x1="0" y1="0" x2="1" y2="1">
             <stop offset="0%" stopColor="#3f9bff" />
             <stop offset="100%" stopColor="#1677ff" />
           </linearGradient>
-          <linearGradient id="meeting-join-slide" x1="0" y1="0" x2="1" y2="1">
+          <linearGradient id={slideGradientId} x1="0" y1="0" x2="1" y2="1">
             <stop offset="0%" stopColor="#8ec2ff" />
             <stop offset="100%" stopColor="#1677ff" />
           </linearGradient>
@@ -47,49 +47,38 @@ export default function MeetingJoinLoader({ label }: { label: string }) {
         <path
           d="M 20 46 C 46 48 70 58 94 80 C 120 104 150 118 196 126"
           fill="none"
-          stroke="url(#meeting-join-slide)"
+          stroke={`url(#${slideGradientId})`}
           strokeWidth="11"
           strokeLinecap="round"
         />
         <path d="M 101 94 L 95 154" stroke="#bad4ee" strokeWidth="5" strokeLinecap="round" />
         <path d="M 160 114 L 156 154" stroke="#bad4ee" strokeWidth="5" strokeLinecap="round" />
 
-        {/* Twinkles */}
-        <motion.path
+        {/* Twinkles: the transform attribute keeps the static/reduced-motion
+            position; while animating, the CSS transform (which includes the
+            same translate) overrides it with an identical result. */}
+        <path
+          className="ls-meeting-join-twinkle-1"
           d="M 0 -6 L 1.6 -1.6 L 6 0 L 1.6 1.6 L 0 6 L -1.6 1.6 L -6 0 L -1.6 -1.6 Z"
           transform="translate(202 58)"
           fill="#ffc94d"
-          style={{ transformBox: "fill-box", transformOrigin: "center" }}
-          animate={reduceMotion ? { opacity: 0.75 } : { opacity: [0.15, 1, 0.15], scale: [0.65, 1, 0.65] }}
-          transition={reduceMotion ? undefined : { duration: 2.4, repeat: Infinity, ease: "easeInOut" }}
         />
-        <motion.path
+        <path
+          className="ls-meeting-join-twinkle-2"
           d="M 0 -6 L 1.6 -1.6 L 6 0 L 1.6 1.6 L 0 6 L -1.6 1.6 L -6 0 L -1.6 -1.6 Z"
           transform="translate(214 92)"
           fill="#7eb5ff"
-          style={{ transformBox: "fill-box", transformOrigin: "center" }}
-          animate={reduceMotion ? { opacity: 0.6 } : { opacity: [0.12, 0.95, 0.12], scale: [0.6, 0.95, 0.6] }}
-          transition={reduceMotion ? undefined : { duration: 2.4, delay: 0.7, repeat: Infinity, ease: "easeInOut" }}
         />
-        <motion.path
+        <path
+          className="ls-meeting-join-twinkle-3"
           d="M 0 -6 L 1.6 -1.6 L 6 0 L 1.6 1.6 L 0 6 L -1.6 1.6 L -6 0 L -1.6 -1.6 Z"
           transform="translate(30 96)"
           fill="#a9c9f0"
-          style={{ transformBox: "fill-box", transformOrigin: "center" }}
-          animate={reduceMotion ? { opacity: 0.55 } : { opacity: [0.1, 0.9, 0.1], scale: [0.55, 0.9, 0.55] }}
-          transition={reduceMotion ? undefined : { duration: 2.4, delay: 1.3, repeat: Infinity, ease: "easeInOut" }}
         />
 
         {/* Rider: elephant sitting on a LetShare tile */}
         <g transform="translate(66 26)">
-          <motion.g
-            animate={reduceMotion
-              ? { x: 0, y: 0, opacity: 1 }
-              : { x: [0, 94, 94, 94, 0, 0], y: [0, 62, 62, 62, 0, 0], opacity: [1, 1, 1, 0, 0, 1] }}
-            transition={reduceMotion
-              ? undefined
-              : { duration: 2.8, times: [0, 0.52, 0.6, 0.61, 0.63, 0.7], repeat: Infinity, repeatDelay: 0.15, ease: "easeInOut" }}
-          >
+          <g className="ls-meeting-join-rider">
             {/* Tail */}
             <path d="M -28 18 C -40 17 -41 7 -33 4" fill="none" stroke="#20395c" strokeWidth="2.6" strokeLinecap="round" />
 
@@ -97,14 +86,10 @@ export default function MeetingJoinLoader({ label }: { label: string }) {
             <ellipse cx="-2" cy="0" rx="30" ry="24" fill="#93a9c6" stroke="#20395c" strokeWidth="2.6" />
 
             {/* Ear */}
-            <motion.g
-              style={{ transformBox: "fill-box", transformOrigin: "center" }}
-              animate={reduceMotion ? undefined : { rotate: [0, -6, 3, 0] }}
-              transition={reduceMotion ? undefined : { duration: 2.2, repeat: Infinity, ease: "easeInOut" }}
-            >
+            <g className="ls-meeting-join-ear">
               <ellipse cx="7" cy="-20" rx="12" ry="16" fill="#afc4dd" stroke="#20395c" strokeWidth="2.4" />
               <ellipse cx="8" cy="-19" rx="6.5" ry="10" fill="#d7e4f3" />
-            </motion.g>
+            </g>
 
             {/* Head */}
             <circle cx="20" cy="-20" r="17" fill="#93a9c6" stroke="#20395c" strokeWidth="2.6" />
@@ -117,19 +102,17 @@ export default function MeetingJoinLoader({ label }: { label: string }) {
             <path d="M 32 -12 c 3 3 6 4 10 3" fill="none" stroke="#ffffff" strokeWidth="3" strokeLinecap="round" />
 
             {/* Trunk */}
-            <motion.path
+            <path
+              className="ls-meeting-join-trunk"
               d="M 35 -26 C 42 -20 43 -8 36 -4 C 34 -9 32 -15 29 -19 Z"
               fill="#93a9c6"
               stroke="#20395c"
               strokeWidth="2.2"
               strokeLinejoin="round"
-              style={{ transformBox: "fill-box", transformOrigin: "top center" }}
-              animate={reduceMotion ? undefined : { rotate: [0, 5, -3, 0] }}
-              transition={reduceMotion ? undefined : { duration: 1.8, repeat: Infinity, ease: "easeInOut" }}
             />
 
             {/* LetShare tile sled */}
-            <rect x="-26" y="10" width="52" height="32" rx="11" fill="url(#meeting-join-tile)" />
+            <rect x="-26" y="10" width="52" height="32" rx="11" fill={`url(#${tileGradientId})`} />
             <rect x="-21" y="13.5" width="42" height="7" rx="3.5" fill="#ffffff" opacity="0.18" />
             <path d="M -14 20 v 11 q 0 3.4 4.2 3.4 h 8" fill="none" stroke="#ffffff" strokeWidth="3.2" strokeLinecap="round" strokeLinejoin="round" />
             <path d="M 3 26 L 10.5 21.5 M 3 26 L 10.5 30.5" fill="none" stroke="#ffffff" strokeWidth="1.6" strokeLinecap="round" />
@@ -140,10 +123,10 @@ export default function MeetingJoinLoader({ label }: { label: string }) {
             {/* Feet resting on the sled */}
             <ellipse cx="-11" cy="9" rx="7" ry="5" fill="#93a9c6" stroke="#20395c" strokeWidth="2.2" />
             <ellipse cx="7" cy="9" rx="7" ry="5" fill="#93a9c6" stroke="#20395c" strokeWidth="2.2" />
-          </motion.g>
+          </g>
         </g>
-      </Box>
-      <Typography sx={{ color: "text.secondary", fontSize: "0.78rem", fontWeight: 650, letterSpacing: "0.02em" }}>{label}</Typography>
-    </Box>
+      </svg>
+      {label ? <span className="ls-meeting-join-loader__label">{label}</span> : null}
+    </div>
   );
 }

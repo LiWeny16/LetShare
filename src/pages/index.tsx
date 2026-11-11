@@ -1,8 +1,10 @@
 import "../style/index.css"
+import "../style/meeting-loader.css"
 
 import { lazy, Suspense } from "react"
 import { HashRouter, Navigate, Route, Routes } from "react-router-dom"
 import { initializeIdentity } from "@App/libs/identity/identity"
+import MeetingEntryFallback from "../components/meeting/components/MeetingEntryFallback"
 
 // 首屏拆分：主页面（Share）与支付页（PayNow）体积大（MUI 全量 + 业务逻辑），
 // 改为懒加载，首屏只加载轻量路由壳，减少新设备第一次访问的下载量与超时。
@@ -39,7 +41,11 @@ export default function Index() {
     <Route
      path="/meeting"
      element={
-      <Suspense fallback={null}>
+      // /meeting 在 chunk 下载期间显示大象缓冲页（MeetingEntryFallback），
+      // 与会议 chunk 内的加入加载器是同一个组件：chunk 加载 + WS 连接 +
+      // join 确认全程连续显示，不再出现白屏。/ 与 /paynow 保持
+      // fallback={null}（延续 index.html 的 #app-loading 骨架屏，见上）。
+      <Suspense fallback={<MeetingEntryFallback />}>
        <MeetingPage />
       </Suspense>
      }

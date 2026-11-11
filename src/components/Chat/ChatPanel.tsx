@@ -29,6 +29,7 @@ import ContentPasteIcon from '@mui/icons-material/ContentPaste';
 import RedeemIcon from '@mui/icons-material/Redeem';
 import VideocamIcon from '@mui/icons-material/Videocam';
 import { useTranslation } from 'react-i18next';
+import i18n from '@App/libs/i18n/i18n';
 import ChatHistoryManager, { ChatMessage, ChatHistory } from '@App/libs/chat/ChatHistoryManager';
 import ChatIntegration from '@App/libs/chat/ChatIntegration';
 import realTimeColab from '@App/libs/connection/colabLib';
@@ -162,13 +163,13 @@ class ChatPanelErrorBoundary extends React.Component<
             >
                 <Box sx={{ width: 'min(420px, 100%)', p: 3, borderRadius: 3, bgcolor: '#fff', boxShadow: 8 }}>
                     <Typography variant="h6" sx={{ fontWeight: 700, color: '#172033', mb: 1 }}>
-                        聊天暂时无法显示
+                        {i18n.t('chat.renderFallbackTitle', '聊天暂时无法显示')}
                     </Typography>
                     <Typography variant="body2" sx={{ color: '#667085', mb: 2 }}>
-                        这条消息格式暂不兼容，聊天窗口仍然可以安全关闭。
+                        {i18n.t('chat.renderFallbackBody', '这条消息格式暂不兼容，聊天窗口仍然可以安全关闭。')}
                     </Typography>
                     <Button variant="contained" onClick={this.props.onClose} sx={{ minHeight: 44 }}>
-                        关闭聊天
+                        {i18n.t('chat.renderFallbackClose', '关闭聊天')}
                     </Button>
                 </Box>
             </Box>

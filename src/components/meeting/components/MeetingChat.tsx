@@ -190,7 +190,7 @@ export const MeetingChat = memo(function MeetingChat({ initialTarget }: { initia
           return;
         }
         if (kind === "ai-error") {
-          const message = text || "会议助手暂时不可用，请稍后再试。";
+          const message = text || t("meeting.chatAssistantUnavailable", "会议助手暂时不可用，请稍后再试。");
           setMsgs((prev) => prev.map((item) => item.requestId === requestId && item.from === MEETING_AI_ASSISTANT_ID ? { ...item, text: message, streaming: false, error: true } : item));
           return;
         }

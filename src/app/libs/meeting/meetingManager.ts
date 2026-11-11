@@ -436,7 +436,7 @@ class MeetingManagerImpl implements MeetingManager {
       this.joinAckTimer = window.setTimeout(() => {
         if (!this.isCurrentMeeting(roomId, lifecycle) || this.state.stage !== "joining") return;
         this.sendMeeting("meeting:leave", {}, roomId);
-        this.abortFailedJoin({ kind: "unavailable", message: "会议加入超时，请检查网络后重试" });
+        this.abortFailedJoin({ kind: "unavailable", message: t("meeting.joinTimeout", "会议加入超时，请检查网络后重试") });
       }, 8000);
     }, 12000);
   }
@@ -1155,7 +1155,7 @@ class MeetingManagerImpl implements MeetingManager {
     this.publishOfferPc = null;
     this.meetingChannel = roomId;
     if (!meetingPeerConnectionConstructor() || typeof MediaStream === "undefined") {
-      this.abortFailedJoin({ kind: "unsupported", message: "当前浏览器不支持会议音视频，请更新浏览器或使用系统浏览器打开。" });
+      this.abortFailedJoin({ kind: "unsupported", message: t("meeting.unsupportedMedia", "当前浏览器不支持会议音视频，请更新浏览器或使用系统浏览器打开。") });
       return;
     }
     const defaultMicOn = settingsStore.get("meetingMicrophoneDefaultOn") ?? false;
@@ -1283,7 +1283,7 @@ class MeetingManagerImpl implements MeetingManager {
       if (this.isCurrentMeeting(roomId, lifecycle)) {
         console.warn("[meeting] 发布端 PC 创建失败", error);
         this.sendMeeting("meeting:leave", {}, roomId);
-        this.abortFailedJoin({ kind: (error as Error)?.name === "NotSupportedError" ? "unsupported" : "unavailable", message: "无法建立会议音视频连接，请检查浏览器和网络后重试。" });
+        this.abortFailedJoin({ kind: (error as Error)?.name === "NotSupportedError" ? "unsupported" : "unavailable", message: t("meeting.mediaConnectFailed", "无法建立会议音视频连接，请检查浏览器和网络后重试。") });
       }
     }
   }
@@ -1446,7 +1446,7 @@ class MeetingManagerImpl implements MeetingManager {
   createMeeting(title?: string): Promise<string> {
     return new Promise<string>((resolve, reject) => {
       if (this.state.inMeeting || this.state.stage === "joining") {
-        reject(new Error("当前已在会议中"));
+        reject(new Error(t("meeting.alreadyInMeeting", "当前已在会议中")));
         return;
       }
       // 快速失败：WS 未连接时 sendMeetingMessage 会被静默丢弃，直接空等 5s 超时。
@@ -2432,7 +2432,7 @@ class MeetingManagerImpl implements MeetingManager {
       if (this.isCurrentMeeting(roomId, lifecycle)) {
         console.warn("[meeting] 重连后发布端 PC 重建失败", error);
         this.sendMeeting("meeting:leave", {}, roomId);
-        this.abortFailedJoin({ kind: "unavailable", message: "会议连接重建失败，请重试。" });
+        this.abortFailedJoin({ kind: "unavailable", message: t("meeting.reconnectFailed", "会议连接重建失败，请重试。") });
       }
     }
   }
@@ -3078,7 +3078,7 @@ class MeetingManagerImpl implements MeetingManager {
       if (this.isCurrentMeeting(roomId, lifecycle)) {
         console.warn("[meeting] 切换房间后发布端 PC 创建失败", error);
         this.sendMeeting("meeting:leave", {}, roomId);
-        this.abortFailedJoin({ kind: "unavailable", message: "切换会议失败，请重试。" });
+        this.abortFailedJoin({ kind: "unavailable", message: t("meeting.switchFailed", "切换会议失败，请重试。") });
       }
     }
   }

@@ -1,0 +1,158 @@
+/*
+ * Meeting join loader (src/components/meeting/components/MeetingJoinLoader.tsx)
+ * + the meeting-shell enter transition.
+ *
+ * The loader is dependency-free (plain SVG + this global stylesheet) so the
+ * eager route shell in src/pages/index.tsx can render it while the meeting
+ * chunk is still downloading.
+ */
+
+.ls-meeting-join-loader {
+  display: grid;
+  justify-items: center;
+  gap: 1.1rem;
+  padding: 0 1rem;
+  text-align: center;
+}
+
+.ls-meeting-join-loader__svg {
+  width: 196px;
+  height: auto;
+  display: block;
+  overflow: visible;
+}
+
+@media (min-width: 600px) {
+  .ls-meeting-join-loader__svg {
+    width: 224px;
+  }
+}
+
+.ls-meeting-join-loader__label {
+  color: inherit;
+  opacity: 0.68;
+  font-size: 0.78rem;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+}
+
+/* Rider: keyframes x [0,94,94,94,0,0] / y [0,62,62,62,0,0] / opacity
+ * [1,1,1,0,0,1], duration 2.8s, times [0,.52,.6,.61,.63,.7], repeat
+ * Infinity, repeatDelay 0.15s, ease-in-out. CSS has no per-repeat delay, so
+ * the 0.15s hold is folded into a 2.95s cycle: the original key times are
+ * rescaled by 2.8/2.95 and the last keyframe is stretched to 100% (the same
+ * value the animation held during the repeatDelay). */
+.ls-meeting-join-rider {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: ls-meeting-join-rider 2.95s ease-in-out infinite;
+}
+
+@keyframes ls-meeting-join-rider {
+  0% { transform: translate(0px, 0px); opacity: 1; }
+  49.36% { transform: translate(94px, 62px); opacity: 1; }
+  56.95% { transform: translate(94px, 62px); opacity: 1; }
+  57.9% { transform: translate(94px, 62px); opacity: 0; }
+  59.8% { transform: translate(0px, 0px); opacity: 0; }
+  66.44% { transform: translate(0px, 0px); opacity: 1; }
+  100% { transform: translate(0px, 0px); opacity: 1; }
+}
+
+/* Twinkles: opacity/scale pulses, 2.4s ease-in-out, delays 0 / 0.7s / 1.3s.
+ * animation-fill-mode: backwards holds the start keyframe during the initial
+ * delay so a late twinkle never flashes at full opacity first. The CSS
+ * transform includes the same translate as the SVG transform attribute (a
+ * CSS transform overrides the attribute), keeping the star in place. */
+.ls-meeting-join-twinkle-1,
+.ls-meeting-join-twinkle-2,
+.ls-meeting-join-twinkle-3 {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation-duration: 2.4s;
+  animation-timing-function: ease-in-out;
+  animation-iteration-count: infinite;
+  animation-fill-mode: backwards;
+}
+
+.ls-meeting-join-twinkle-1 {
+  animation-name: ls-meeting-join-twinkle-1;
+}
+
+.ls-meeting-join-twinkle-2 {
+  animation-name: ls-meeting-join-twinkle-2;
+  animation-delay: 0.7s;
+}
+
+.ls-meeting-join-twinkle-3 {
+  animation-name: ls-meeting-join-twinkle-3;
+  animation-delay: 1.3s;
+}
+
+@keyframes ls-meeting-join-twinkle-1 {
+  0%, 100% { opacity: 0.15; transform: translate(202px, 58px) scale(0.65); }
+  50% { opacity: 1; transform: translate(202px, 58px) scale(1); }
+}
+
+@keyframes ls-meeting-join-twinkle-2 {
+  0%, 100% { opacity: 0.12; transform: translate(214px, 92px) scale(0.6); }
+  50% { opacity: 0.95; transform: translate(214px, 92px) scale(0.95); }
+}
+
+@keyframes ls-meeting-join-twinkle-3 {
+  0%, 100% { opacity: 0.1; transform: translate(30px, 96px) scale(0.55); }
+  50% { opacity: 0.9; transform: translate(30px, 96px) scale(0.9); }
+}
+
+.ls-meeting-join-ear {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: ls-meeting-join-ear 2.2s ease-in-out infinite;
+}
+
+@keyframes ls-meeting-join-ear {
+  0% { transform: rotate(0deg); }
+  33.33% { transform: rotate(-6deg); }
+  66.67% { transform: rotate(3deg); }
+  100% { transform: rotate(0deg); }
+}
+
+.ls-meeting-join-trunk {
+  transform-box: fill-box;
+  transform-origin: top center;
+  animation: ls-meeting-join-trunk 1.8s ease-in-out infinite;
+}
+
+@keyframes ls-meeting-join-trunk {
+  0% { transform: rotate(0deg); }
+  33.33% { transform: rotate(5deg); }
+  66.67% { transform: rotate(-3deg); }
+  100% { transform: rotate(0deg); }
+}
+
+/* The real meeting surface fades in when the join screen releases it, so
+ * the handoff from loader to room never looks like a hard cut. */
+@keyframes ls-meeting-shell-enter { from { opacity: .55; } to { opacity: 1; } }
+.ls-meeting-shell-enter { animation: ls-meeting-shell-enter 200ms ease-out; }
+
+@media (prefers-reduced-motion: reduce) {
+  .ls-meeting-join-rider,
+  .ls-meeting-join-twinkle-1,
+  .ls-meeting-join-twinkle-2,
+  .ls-meeting-join-twinkle-3,
+  .ls-meeting-join-ear,
+  .ls-meeting-join-trunk {
+    animation: none;
+  }
+  /* Static seated pose: rider at origin, fully visible. */
+  .ls-meeting-join-rider {
+    transform: translate(0, 0);
+    opacity: 1;
+  }
+  /* Static twinkle poses (matched the old reduced-motion look). */
+  .ls-meeting-join-twinkle-1 { opacity: .75; }
+  .ls-meeting-join-twinkle-2 { opacity: .6; }
+  .ls-meeting-join-twinkle-3 { opacity: .55; }
+  .ls-meeting-shell-enter {
+    animation: none;
+  }
+}

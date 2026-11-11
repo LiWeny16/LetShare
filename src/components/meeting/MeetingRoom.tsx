@@ -93,6 +93,8 @@ import MeetingJoinLoader from "./components/MeetingJoinLoader";
 import MeetingMinutesEndScreen from "./components/MeetingMinutesEndScreen";
 import { useLocalStream } from "./hooks/useLocalStream";
 import { useMeetingTimer, formatDuration } from "./hooks/useMeetingTimer";
+import { useDelayedValue } from "./hooks/useDelayedValue";
+import { meetingEntryBufferRemainingMs } from "@App/libs/meeting/meetingEntryBuffer";
 import { useMeetingCaptionTranslations } from "./hooks/useMeetingCaptionTranslations";
 import { captionSourceLanguage, captionTranslationKey, resolveCaptionEngine, type CaptionEngineNote } from "@App/libs/meeting/meetingCaptions";
 
@@ -157,17 +159,19 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
   const previousNetworkIssueRef = useRef(false);
   // A transport drop can only be reported after this tab has actually joined.
   // Before that, "connecting" / a stale "disconnected" snapshot is the normal
-  // entry path, not an interruption.
-  const meetingEstablishedRef = useRef(state.stage === "in-meeting");
+  // entry path, not an interruption. State (not a ref) so the 800ms
+  // join-screen delay below re-renders deterministically when the tab first
+  // joins.
+  const [hasJoinedOnce, setHasJoinedOnce] = useState(state.stage === "in-meeting");
   const networkIssue = getMeetingConnectionNotice(
     browserOnline,
     serverConnectionState,
     awaitingServerConfirmation,
-    meetingEstablishedRef.current || state.stage === "in-meeting",
+    hasJoinedOnce || state.stage === "in-meeting",
   );
 
   useEffect(() => {
-    if (state.stage === "in-meeting") meetingEstablishedRef.current = true;
+    if (state.stage === "in-meeting") setHasJoinedOnce(true);
   }, [state.stage]);
 
   useEffect(() => {
@@ -243,12 +247,33 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
     || awaitingServerConfirmation
     || serverConnectionState === "connecting"
     || serverConnectionState === "reconnecting";
-  const showJoinScreen = shouldShowMeetingJoinScreen(state.stage, joined, transportVerifying);
+  const joinScreenGate = shouldShowMeetingJoinScreen(state.stage, joined, transportVerifying);
+  // An established meeting keeps its surface visible while a reconnect is
+  // verified; the full-screen join loader only takes over if the verifying
+  // state outlasts 800ms. Initial entry stays undelayed (0).
+  const delayedJoinScreen = useDelayedValue(joinScreenGate, hasJoinedOnce ? 800 : 0);
+  // Entry hold: the /meeting Suspense buffer (MeetingEntryFallback) started a
+  // shared 700ms clock before this chunk mounted. Keep the join screen up
+  // for whatever remains so a cached chunk + fast join never flashes the
+  // real room in between.
+  const [entryBufferHold, setEntryBufferHold] = useState(() => meetingEntryBufferRemainingMs() > 0);
+  // One-shot: the buffer clock was started by the route (Suspense fallback or
+  // MeetingPage) before this chunk mounted. Hold the loader for whatever
+  // remains even if the join acknowledgement arrives first — that early-join
+  // case is exactly why the minimum exists. Only unmount cancels the hold.
+  useEffect(() => {
+    const remaining = meetingEntryBufferRemainingMs();
+    if (remaining <= 0) { setEntryBufferHold(false); return; }
+    setEntryBufferHold(true);
+    const timer = window.setTimeout(() => setEntryBufferHold(false), remaining);
+    return () => window.clearTimeout(timer);
+  }, []);
+  const showJoinScreen = delayedJoinScreen || entryBufferHold;
   const joinScreenLabel = connectionNotice === "offline"
     ? t("meeting.connectionOfflineShort", "网络已断开")
     : connectionNotice === "disconnected"
       ? t("meeting.connectionUnavailableShort", "连接不可用")
-      : transportVerifying && meetingEstablishedRef.current
+      : transportVerifying && hasJoinedOnce
         ? t("meeting.connectionReconnectingShort", "重连中…")
         : t("meeting.joining", "正在加入…");
 
@@ -632,6 +657,10 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
           const targetLabel = ev.data.target === "screen" ? t("meeting.presentationVideoTarget", "视频") : t("meeting.presentationBoardTarget", "白板");
           alertUseMUI(ev.data.accepted ? t("meeting.presentationFocusApproved", { defaultValue: "{{target}}聚焦请求已通过", target: targetLabel }) : t("meeting.presentationFocusDeclined", { defaultValue: "{{target}}聚焦请求被拒绝", target: targetLabel }), 2500, { kind: ev.data.accepted ? "success" : "info" });
         }
+      } else if (ev.type === "meeting:minutes" && ev.data.kind === "stopped") {
+        if (!meetingManager.getState().minutes.running) {
+          alertUseMUI(t("meeting.minutesStoppedAllPaused", "所有成员已暂停，会议纪要已结束"), 3200, { kind: "info" });
+        }
       }
     });
   }, [onExit, t]);
@@ -1000,6 +1029,7 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
   return (
     <Stack
       ref={meetingShellRef}
+      className="ls-meeting-shell-enter"
       data-testid="meeting-shell"
       data-layout={stageFocusMode ? "stage-focus" : "normal"}
       sx={{
