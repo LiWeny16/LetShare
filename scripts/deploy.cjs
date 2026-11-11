@@ -147,20 +147,34 @@ async function warmFrontendAssets() {
     const meeting = newest(staticDir, staticNames, /^meeting-.*\.js$/);
     const endScreen = newest(staticDir, staticNames, /^MeetingMinutesEndScreen-.*\.js$/);
     const i18n = newest(staticDir, staticNames, /^i18n-.*\.js$/);
-    const meetingCss = newest(rootDir, rootNames, /^static-.*\.meeting\.css$/);
-    const excalidrawCss = newest(rootDir, rootNames, /^static-.*\.excalidraw-vendor\.css$/);
-    for (const rel of [meeting && `/static/${meeting}`, endScreen && `/static/${endScreen}`, i18n && `/static/${i18n}`, meetingCss && `/${meetingCss}`, excalidrawCss && `/${excalidrawCss}`]) {
+    const excalidrawBoard = newest(staticDir, staticNames, /^ExcalidrawBoard-.*\.js$/);
+    const meetingCss = newest(rootDir, rootNames, /^static-.*\.(meeting|ExcalidrawBoard)\.css$/);
+    for (const rel of [meeting && `/static/${meeting}`, endScreen && `/static/${endScreen}`, i18n && `/static/${i18n}`, excalidrawBoard && `/static/${excalidrawBoard}`, meetingCss && `/${meetingCss}`]) {
       if (rel) refs.add(rel);
+    }
+    // Warm the meeting chunk's static dependency closure: Vite split MUI into
+    // 800KB+ vendor chunks (Tune-*.js) that are cold misses on a direct
+    // /meeting entry, so warming only the meeting file is not enough.
+    if (meeting) {
+      const src = fs.readFileSync(path.join(staticDir, meeting), "utf8");
+      for (const m of src.matchAll(/from\s*["']\.\/([^"']+\.js)["']/g)) {
+        if (fs.existsSync(path.join(staticDir, m[1]))) refs.add(`/static/${m[1]}`);
+      }
     }
   } catch { /* static scan is best-effort */ }
 
   const fetchOne = (p) => new Promise((resolve) => {
-    const req = https.get(`${base}${p}`, { headers: { "Cache-Control": "no-cache" } }, (res) => {
+    const req = https.get(`${base}${p}`, { headers: { "Accept-Encoding": "gzip, deflate, br" } }, (res) => {
       res.resume();
-      res.on("end", () => resolve({ p, status: res.statusCode ?? 0 }));
+      res.on("end", () => resolve({
+        p,
+        status: res.statusCode ?? 0,
+        cache: String(res.headers["x-cache"] ?? ""),
+        encoding: String(res.headers["content-encoding"] ?? ""),
+      }));
     });
-    req.setTimeout(20_000, () => { req.destroy(); resolve({ p, status: 0, timeout: true }); });
-    req.on("error", () => resolve({ p, status: 0, error: true }));
+    req.setTimeout(20_000, () => { req.destroy(); resolve({ p, status: 0, cache: "timeout", encoding: "" }); });
+    req.on("error", () => resolve({ p, status: 0, cache: "error", encoding: "" }));
   });
 
   log("▶", `预热 CDN 关键资源（${refs.size} 个）...`);
@@ -168,7 +182,13 @@ async function warmFrontendAssets() {
   const ok = results.filter(r => r.status >= 200 && r.status < 400).length;
   log(ok === results.length ? "✓" : "⚠", `CDN 预热完成: ${ok}/${results.length} 成功`);
   for (const r of results.filter(x => x.status < 200 || x.status >= 400)) {
-    log("⚠", `预热未命中 ${r.p} -> ${r.status || (r.timeout ? "timeout" : "error")}`);
+    log("⚠", `预热未命中 ${r.p} -> ${r.status || r.cache}`);
+  }
+  // A second hit should come from the edge; surface whether the warm stuck.
+  const meetingPath = [...refs].find(p => /\/static\/meeting-.*\.js$/.test(p));
+  if (meetingPath) {
+    const probe = await fetchOne(meetingPath);
+    log(probe.cache.toLowerCase().includes("hit") ? "✓" : "⚠", `预热复验 ${probe.p}: ${probe.cache || probe.status}${probe.encoding ? " / " + probe.encoding : ""}`);
   }
 }
 
