@@ -9,6 +9,7 @@
  *   node scripts/deploy.cjs --backend     # 仅部署后端
  *   node scripts/deploy.cjs --dry-run     # 预览将要执行的操作
  *   node scripts/deploy.cjs --skip-cdn    # 跳过 CDN 刷新（默认: 有 AK 则刷新）
+ *   node scripts/deploy.cjs --no-warm     # 跳过部署后的 CDN 关键资源预热
  *
  * CDN 预热/刷新（可选）: 设置环境变量 ALIYUN_ACCESS_KEY_ID / ALIYUN_ACCESS_KEY_SECRET
  * 后会自动调用 RefreshObjectCaches。未设置 AK 则跳过（提示手动刷新）。
@@ -122,6 +123,55 @@ function cdnRefresh() {
   }).on("error", e => log("⚠", `CDN 刷新失败: ${e.message}`));
 }
 
+// ─── CDN 预热（部署后主动拉一遍关键新资源）───────────────
+// 新 hash 资源在 CDN 上是冷 MISS：首个用户要等回源拉 1.4MB meeting chunk。
+// 部署完成后主动通过公网 URL 请求一遍关键资源，把冷 MISS 留给部署机。
+async function warmFrontendAssets() {
+  const base = "https://letshare.fun";
+  const refs = new Set(["/", "/version.json", "/sw.js"]);
+  const staticDir = path.join(FRONTEND_DIST, "static");
+  const rootDir = FRONTEND_DIST;
+  const newest = (dir, names, re) => names
+    .filter(f => re.test(f))
+    .map(f => ({ f, m: fs.statSync(path.join(dir, f)).mtimeMs }))
+    .sort((a, b) => b.m - a.m)[0]?.f;
+
+  try {
+    const html = fs.readFileSync(path.join(rootDir, "index.html"), "utf8");
+    for (const m of html.matchAll(/(?:src|href)="\.\/([^"]+)"/g)) refs.add("/" + m[1]);
+  } catch { /* keep the base refs */ }
+
+  try {
+    const staticNames = fs.readdirSync(staticDir);
+    const rootNames = fs.readdirSync(rootDir);
+    const meeting = newest(staticDir, staticNames, /^meeting-.*\.js$/);
+    const endScreen = newest(staticDir, staticNames, /^MeetingMinutesEndScreen-.*\.js$/);
+    const i18n = newest(staticDir, staticNames, /^i18n-.*\.js$/);
+    const meetingCss = newest(rootDir, rootNames, /^static-.*\.meeting\.css$/);
+    const excalidrawCss = newest(rootDir, rootNames, /^static-.*\.excalidraw-vendor\.css$/);
+    for (const rel of [meeting && `/static/${meeting}`, endScreen && `/static/${endScreen}`, i18n && `/static/${i18n}`, meetingCss && `/${meetingCss}`, excalidrawCss && `/${excalidrawCss}`]) {
+      if (rel) refs.add(rel);
+    }
+  } catch { /* static scan is best-effort */ }
+
+  const fetchOne = (p) => new Promise((resolve) => {
+    const req = https.get(`${base}${p}`, { headers: { "Cache-Control": "no-cache" } }, (res) => {
+      res.resume();
+      res.on("end", () => resolve({ p, status: res.statusCode ?? 0 }));
+    });
+    req.setTimeout(20_000, () => { req.destroy(); resolve({ p, status: 0, timeout: true }); });
+    req.on("error", () => resolve({ p, status: 0, error: true }));
+  });
+
+  log("▶", `预热 CDN 关键资源（${refs.size} 个）...`);
+  const results = await Promise.all([...refs].map(fetchOne));
+  const ok = results.filter(r => r.status >= 200 && r.status < 400).length;
+  log(ok === results.length ? "✓" : "⚠", `CDN 预热完成: ${ok}/${results.length} 成功`);
+  for (const r of results.filter(x => x.status < 200 || x.status >= 400)) {
+    log("⚠", `预热未命中 ${r.p} -> ${r.status || (r.timeout ? "timeout" : "error")}`);
+  }
+}
+
 // ─── 部署前端（推 docs/ → ECS nginx 回源）───────────────
 function deployFrontend() {
   log("▶", "打包 docs/ → 上传 ECS nginx 回源口(18081)...");
@@ -176,6 +226,7 @@ async function main() {
   const doBackend = !a.includes("--frontend");
   const dry = a.includes("--dry-run");
   const skipCdn = a.includes("--skip-cdn");
+  const skipWarm = a.includes("--no-warm");
 
   console.log(`\n  LetShare Deploy → ${CONFIG.remote.host}${dry ? " [DRY-RUN]" : ""}\n`);
   const t0 = Date.now();
@@ -191,6 +242,7 @@ async function main() {
   if (doFrontend) {
     deployFrontend();
     if (!skipCdn) cdnRefresh();
+    if (!skipWarm) await warmFrontendAssets();
     if (!a.includes("--no-sync-docs")) syncDocs();
   }
 

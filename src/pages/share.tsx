@@ -90,6 +90,15 @@ import { useNavigate } from "react-router-dom";
 // 动态加载降噪管线模块（wasm 加载/Worklet 注册都发生在 process() 内，失败可回退）
 const loadNsPipeline = () => import("@App/libs/call/noiseSuppression");
 
+// Warm the lazy /meeting route while the create/join dialog is open, so the
+// meeting chunk downloads behind the user's device/preview interaction instead
+// of after they confirm. import() is cached, so repeated dialog opens are free.
+let meetingRoutePrefetch: Promise<unknown> | null = null;
+function prefetchMeetingRoute(): void {
+  if (meetingRoutePrefetch) return;
+  meetingRoutePrefetch = import("./meeting").catch(() => { meetingRoutePrefetch = null; });
+}
+
 /**
  * 按当前降噪模式（nsMode）采集纯音频通话流（统一采集层的语音分支）：
  * - rnnoise/gtcrn：先采原始流（浏览器降噪关），再进端侧 WebAudio 管线降噪，返回降噪后流。
@@ -899,6 +908,7 @@ const Share = observer(() => {
   };
 
   const openMeetingDialog = (mode: "create" | "join") => {
+    prefetchMeetingRoute();
     // Invalidate an older create request before switching the dialog mode.
     meetingCreateRequestRef.current += 1;
     setMeetingDialogMode(mode);

@@ -5,7 +5,7 @@ import { MeetingDialog as Dialog } from "./components/MeetingDialog";
  * collaboration controls stay predictable: product bar, dark stage,
  * conversation rail, and a labelled control dock.
  */
-import { isValidElement, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { isValidElement, lazy, Suspense, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { reaction } from "mobx";
 import { LayoutGroup, MotionConfig, motion } from "motion/react";
 import {
@@ -14,6 +14,7 @@ import {
   Box,
   Button,
   Chip,
+  CircularProgress,
   DialogActions,
   DialogContent,
   DialogTitle,
@@ -83,14 +84,12 @@ import { MeetingTitle } from "./components/MeetingTitle";
 import { MeetingChat } from "./components/MeetingChat";
 import { ParticipantsPanel } from "./components/ParticipantsPanel";
 import { Whiteboard } from "./components/Whiteboard";
-import { ExcalidrawBoard } from "./components/ExcalidrawBoard";
 import MeetingInviteDialog from "./components/MeetingInviteDialog";
 import MeetingMediaSettingsDialog from "./components/MeetingMediaSettingsDialog";
 import MeetingAiMinutesDialog from "./components/MeetingAiMinutesDialog";
-import MeetingLiveCaptionsPanel, { MeetingCaptionOverlay, type CaptionEntry, type CaptionLanguage } from "./components/MeetingLiveCaptionsPanel";
+import type { CaptionEntry, CaptionLanguage } from "./components/MeetingLiveCaptionsPanel";
 import MeetingMinutesConsentDialog from "./components/MeetingMinutesConsentDialog";
 import MeetingJoinLoader from "./components/MeetingJoinLoader";
-import MeetingMinutesEndScreen from "./components/MeetingMinutesEndScreen";
 import { useLocalStream } from "./hooks/useLocalStream";
 import { useMeetingTimer, formatDuration } from "./hooks/useMeetingTimer";
 import { useDelayedValue } from "./hooks/useDelayedValue";
@@ -110,6 +109,19 @@ import type { MemberTileData, FormFactor } from "./types";
 import { bindMeetingVideo } from "./videoBinding";
 import { MEETING_PANEL_GUTTER } from "./designTokens";
 import { isLowEndMeetingDevice, MeetingStageMotionContext } from "./meetingMotion";
+
+// Heavy, conditional panels stay out of the meeting entry chunk. Excalidraw
+// alone (plus its Mermaid dependency) is the bulk of the old 1.4MB route
+// chunk; the end screen is only needed after the meeting ends; captions are
+// parked behind LIVE_CAPTIONS_ENABLED and should never cost entry bandwidth.
+const ExcalidrawBoard = lazy(() =>
+  import("./components/ExcalidrawBoard").then((module) => ({ default: module.ExcalidrawBoard })),
+);
+const MeetingMinutesEndScreen = lazy(() => import("./components/MeetingMinutesEndScreen"));
+const MeetingLiveCaptionsPanel = lazy(() => import("./components/MeetingLiveCaptionsPanel"));
+const MeetingCaptionOverlay = lazy(() =>
+  import("./components/MeetingLiveCaptionsPanel").then((module) => ({ default: module.MeetingCaptionOverlay })),
+);
 
 export interface MeetingRoomProps {
   onExit: () => void;
@@ -1010,7 +1022,11 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
   };
 
   if (meetingEnded && minutesSession) {
-    return <MeetingMinutesEndScreen record={toMeetingMinutesHistoryRecord(minutesSession)} saved={minutesSaveStatus === "saved"} onExit={onExit} />;
+    return (
+      <Suspense fallback={<Box sx={{ position: "fixed", inset: 0, display: "grid", placeItems: "center", bgcolor: pageBackground, color: "text.primary" }}><MeetingJoinLoader /></Box>}>
+        <MeetingMinutesEndScreen record={toMeetingMinutesHistoryRecord(minutesSession)} saved={minutesSaveStatus === "saved"} onExit={onExit} />
+      </Suspense>
+    );
   }
 
   if (showJoinScreen) {
@@ -1258,7 +1274,7 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
         </Alert>
       )}
 
-            {LIVE_CAPTIONS_ENABLED && <MeetingLiveCaptionsPanel
+            {LIVE_CAPTIONS_ENABLED && <Suspense fallback={null}><MeetingLiveCaptionsPanel
               open={captionsOpen}
               active={captionsActive}
               entries={captionEntries}
@@ -1274,7 +1290,7 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
               onSourceLanguageChange={(language) => setMemberMeetingAiPreferences({ language })}
               onTargetLanguageChange={setCaptionTargetLanguage}
               onViewTranscript={(segmentId) => { setFocusTranscript({ segmentId, requestId: ++focusTranscriptSequence.current }); setMinutesExpanded(true); setCaptionsOpen(false); }}
-            />}
+            /></Suspense>}
       <Box
         component="main"
         sx={{
@@ -1307,7 +1323,7 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
               boxShadow: "0 12px 30px rgba(44, 57, 78, 0.12), 0 2px 8px rgba(44, 57, 78, 0.06)",
             }}
           >
-            {LIVE_CAPTIONS_ENABLED && <MeetingCaptionOverlay
+            {LIVE_CAPTIONS_ENABLED && <Suspense fallback={null}><MeetingCaptionOverlay
               active={captionsActive}
               busyHint={captionCaptureError || captionHint}
               captureActive={captionCaptureRunning}
@@ -1317,7 +1333,7 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
               targetLanguage={captionTargetLanguage}
               transcriptAvailable={captionTranscriptIds.size > 0}
               onViewTranscript={(segmentId) => { setFocusTranscript({ segmentId, requestId: ++focusTranscriptSequence.current }); setMinutesExpanded(true); }}
-            />}
+            /></Suspense>}
             {!minutesExpanded && <Stack direction="row" alignItems="center" spacing={1} sx={{ px: { xs: 1, sm: 1.5 }, pt: 0.5, minHeight: 44, flexShrink: 0, minWidth: 0 }}>
               <Typography sx={{ color: "text.primary", fontSize: "0.75rem", fontWeight: 750, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                 {activeSharingMode === "screen" ? t("meeting.screenSharing", "正在共享屏幕") : activeSharingMode === "whiteboard" ? t("meeting.whiteboard", "白板") : t("meeting.stage", "会议舞台")}
@@ -2326,7 +2342,9 @@ function ActiveSharingSurface({
             <Typography sx={{ fontSize: "0.78rem", fontWeight: 700 }}>{t("meeting.presentationExpandBoardHint", "白板正在共享，点击放大")}</Typography>
           </Stack>
         ) : boardMode === "excalidraw" ? (
-          <ExcalidrawBoard followPresentation={followPresentation} />
+          <Suspense fallback={<Stack sx={{ width: "100%", height: "100%", alignItems: "center", justifyContent: "center", color: "text.secondary" }}><CircularProgress size={22} /></Stack>}>
+            <ExcalidrawBoard followPresentation={followPresentation} />
+          </Suspense>
         ) : (
           <Whiteboard />
         )
