@@ -1,0 +1,1 @@
+import{t as e}from"./share-C4uBAlOn.js";export{e as readClipboard};
