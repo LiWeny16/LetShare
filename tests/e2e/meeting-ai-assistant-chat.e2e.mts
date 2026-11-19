@@ -76,7 +76,6 @@ test("meeting assistant is a private streaming chat contact", async (t) => {
 
   console.log("STEP open AI minutes and start");
   await page.getByTestId("meeting-ai-minutes-open").click();
-  await page.getByTestId("meeting-minutes-expand").click();
   await page.getByTestId("meeting-ai-minutes-workspace").waitFor({ state: "visible" });
   await page.getByTestId("meeting-minutes-start").click();
   await page.getByTestId("meeting-minutes-stop").waitFor({ state: "visible", timeout: 15_000 });

@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { aiMore, aiMoreLocale, aiMoreMarkdownLabels } from "@App/libs/i18n/meetingAiMoreTranslations";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { DialogContent } from "@mui/material";
+import { Box, DialogContent } from "@mui/material";
 import alertUseMUI from "@App/libs/tools/alert";
 import { meetingManager } from "@App/libs/meeting/meetingManager";
 import {
@@ -774,37 +774,45 @@ export default function MeetingAiMinutesDialog({ open, onClose, mode = "dialog",
   };
 
   const mountSurface = (surface: ReactNode) => portalTarget === undefined ? surface : portalTarget ? createPortal(surface, portalTarget) : null;
-  const statusLabel = aiMore(running ? receiving ? "aiMoreRecording" : "aiMoreMinutesPaused" : summary ? "aiMoreGenerated" : "aiMoreNotStarted");
-  const settingsSurface = settingsOpen && <MeetingAiSettingsView recordingRunning={running} config={config} error={visibleError}
-    onBack={() => setSettingsOpen(false)} onSave={saveSettings} onUpdateConfig={updateConfig} />;
-  if (mode === "workspace") {
-    return mountSurface(<>
+  const statusLabel = aiMore(summarizing ? "aiMoreSummarizing" : busy ? "aiMoreGenerating" : running ? receiving ? "aiMoreRecording" : "aiMoreMinutesPaused" : summary ? "aiMoreCompleted" : "aiMoreNotStarted");
+  const briefStatus = busy || summarizing ? "generating" : running ? (receiving ? summaryReady ? "recording" : "transcribing" : "paused") : summary ? "done" : summaryReady ? "ready" : "unconfigured";
+  if (mode === "workspace" && !settingsOpen) {
+    return mountSurface(
       <MeetingMinutesWorkspace open={open} embedded={embedded} onClose={onClose} onSettings={() => setSettingsOpen(true)}
-        canControl={meetingState.stage === "in-meeting"} running={running} receiving={receiving} canGenerateSummary={summaryReady}
+        canControl={meetingState.stage === "in-meeting"} running={running} receiving={receiving} canSummarize={isCoordinator}
         busy={busy} summarizing={summarizing} summaryHint={summaryHint}
         startDisabled={!minutesCapabilityReady || meetingState.stage !== "in-meeting"} onStart={() => void start()} onStop={() => void stop()}
         error={visibleError} summaryWarning={summaryWarning} statusLabel={statusLabel}
         summary={summary} summaryData={summaryData} timeline={timeline} transcript={transcript} tab={workspaceTab} onTabChange={setWorkspaceTab}
         focusSegmentId={focusTranscript?.segmentId} focusRequestId={focusTranscript?.requestId} onViewTranscript={onViewTranscript}
         onExport={exportSummary} onCopySummary={copySummary} onAskAssistant={onAskAssistant}
-        onSummarizeNow={isCoordinator ? () => void requestSummaryUpdate(true) : undefined} />
-      {settingsSurface && <Dialog open={open} onClose={() => setSettingsOpen(false)} fullWidth maxWidth="xs" PaperProps={{ "aria-label": aiMore("aiMoreNotesSettings") }}
-        container={portalTarget || undefined} sx={{
-          ...(portalTarget ? { position: "absolute", "& .MuiBackdrop-root": { position: "absolute" } } : {}),
-          "& .MuiDialog-container": { justifyContent: "flex-end", alignItems: "stretch" },
-        }}>
-        <DialogContent sx={{ p: 0 }}>{settingsSurface}</DialogContent>
-      </Dialog>}
-    </>);
+        onSummarizeNow={isCoordinator ? () => void requestSummaryUpdate(true) : undefined} />,
+    );
+  }
+  if (settingsOpen) {
+    const settingsSurface = <MeetingAiSettingsView recordingRunning={running} config={config} error={visibleError}
+      onBack={() => setSettingsOpen(false)} onSave={saveSettings} onUpdateConfig={updateConfig} />;
+    if (mode === "panel") return mountSurface(open ? settingsSurface : null);
+    if (mode === "workspace") return mountSurface(open ? (
+      <Box sx={{ position: "absolute", inset: 0, zIndex: 55 }}>
+        <Box sx={{ position: "absolute", inset: 0, bgcolor: "rgba(14,29,53,.32)" }} onClick={() => setSettingsOpen(false)} />
+        <Box sx={{ position: "absolute", right: 0, top: 0, bottom: 0, width: { xs: "100%", sm: "min(480px, 62%)" }, minWidth: 0, display: "flex", flexDirection: "column", bgcolor: "#f6f8fb", borderLeft: "1px solid #dfe7f0", boxShadow: "-12px 0 32px rgba(14,29,53,.18)" }}>{settingsSurface}</Box>
+      </Box>
+    ) : null);
+    return mountSurface(<Dialog open={open} onClose={busy ? undefined : onClose} fullWidth maxWidth="sm" data-testid="meeting-ai-minutes-dialog"
+      PaperProps={{ sx: { height: "min(820px, calc(100dvh - 24px))", borderRadius: { xs: 2, sm: 3 }, overflow: "hidden" } }}>
+      <DialogContent sx={{ p: 0, overflow: "hidden" }}>{settingsSurface}</DialogContent>
+    </Dialog>);
   }
 
-  const panel = settingsSurface || <MeetingAiBriefPanel statusLabel={statusLabel}
-    canControl={meetingState.stage === "in-meeting"} running={running} receiving={receiving} canGenerateSummary={summaryReady}
+  const briefPanel = <MeetingAiBriefPanel status={briefStatus} statusLabel={statusLabel}
+    canControl={meetingState.stage === "in-meeting"} recordingRunning={running} receiving={receiving} canSummarize={isCoordinator}
     startDisabled={busy || !minutesCapabilityReady || meetingState.stage !== "in-meeting"} summary={summary} summaryData={summaryData}
     timeline={timeline} transcript={transcript} summaryWarning={summaryWarning} summarizing={summarizing} summaryHint={summaryHint}
-    error={visibleError} audioMuted={meetingState.muted} onViewTranscript={onViewTranscript}
+    onCopySummary={copySummary} error={visibleError} audioMuted={meetingState.muted} onViewTranscript={onViewTranscript}
     onStart={() => void start()} onStop={() => void stop()} onExpand={onExpand ?? onClose} onSettings={() => setSettingsOpen(true)}
     onExport={exportSummary} onAskAssistant={onAskAssistant} onSummarizeNow={isCoordinator ? () => void requestSummaryUpdate(true) : undefined} />;
+  const panel = <Box sx={{ height: "100%", minHeight: 0, display: "flex", flexDirection: "column", bgcolor: "#fff" }}>{briefPanel}</Box>;
   if (mode === "panel") return mountSurface(open ? panel : null);
   return mountSurface(<Dialog open={open} onClose={busy ? undefined : onClose} fullWidth maxWidth="md" data-testid="meeting-ai-minutes-dialog"
     PaperProps={{ sx: { height: "min(820px, calc(100dvh - 24px))", overflow: "hidden" } }}>

@@ -40,7 +40,7 @@ export default function MeetingMinutesHistoryDialog({ open, onClose }: { open: b
           <IconButton onClick={() => void remove(selected)} aria-label={aiMore("aiMoreDeleteMeetingNotes")}><DeleteOutlineIcon /></IconButton>
           <IconButton onClick={onClose} aria-label={aiMore("aiMoreCloseNotesHistory")}><CloseIcon /></IconButton>
         </DialogTitle>
-        <DialogContent sx={{ p: 0, minHeight: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}><MeetingMinutesEndScreen record={selected} embedded onExit={() => setSelected(null)} /></DialogContent>
+        <DialogContent sx={{ p: 0, bgcolor: "#f4f7fb" }}><MeetingMinutesEndScreen record={selected} embedded onExit={() => setSelected(null)} /></DialogContent>
       </> : <>
         <DialogTitle sx={{ display: "flex", alignItems: "center", gap: 1, py: 1.5 }}>
           <Box sx={{ width: 34, height: 34, borderRadius: 1.75, display: "grid", placeItems: "center", bgcolor: "#eaf2ff", color: "#1677ff" }}><NotesOutlinedIcon fontSize="small" /></Box>

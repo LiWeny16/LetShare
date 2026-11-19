@@ -82,7 +82,7 @@ export default function MeetingMinutesScrollArea({ children, follow, readingPosi
   const label = aiMore("aiMoreJumpToLatestSummary");
   return (
     <Box sx={{ flex: 1, minWidth: 0, minHeight: 0, position: "relative", display: "flex", flexDirection: "column" }}>
-      <Box ref={viewportRef} onScroll={handleScroll} tabIndex={follow ? 0 : undefined} role={follow ? "region" : undefined} aria-label={follow ? aiMore("aiMoreLiveRecaps") : undefined}
+      <Box ref={viewportRef} onScroll={handleScroll} tabIndex={follow ? 0 : undefined} role={follow ? "region" : undefined} aria-label={follow ? aiMore("aiMoreMeetingOutline") : undefined}
         data-testid="meeting-minutes-scroll" sx={{
           flex: 1, minWidth: 0, minHeight: 0, overflowY: "auto", overflowX: "hidden",
           overscrollBehaviorY: "contain", overflowAnchor: follow ? "none" : undefined,

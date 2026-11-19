@@ -100,10 +100,8 @@ test("server-mixed minutes uses real Opus -> ASR -> Gemini", async (t) => {
 
   console.log("STEP host: open AI minutes settings");
   await host.getByTestId("meeting-ai-minutes-open").click();
-  await host.getByTestId("meeting-minutes-expand").click();
   await host.getByTestId("meeting-ai-minutes-workspace").waitFor({ state: "visible" });
-  await host.getByRole("button", { name: /更多纪要操作|More minutes actions/ }).click();
-  await host.getByRole("menuitem", { name: /纪要设置|Notes settings/ }).click();
+  await host.getByRole("button", { name: /纪要设置|Notes settings/ }).click();
   await host.getByRole("radiogroup", { name: "纪要生成语言" }).waitFor({ state: "visible", timeout: 10_000 });
   await host.getByRole("button", { name: "保存", exact: true }).click();
   await host.getByTestId("meeting-ai-minutes-workspace").waitFor({ state: "visible", timeout: 10_000 });
