@@ -36,6 +36,7 @@ import { buildMeetingMinutesMarkdown, downloadMeetingMinutesMarkdown } from "@Ap
 import {
   getPendingMeetingSummarySegments,
   groupMeetingSummaryTimeline,
+  isMeaningfulMeetingASRText,
   maxIncludedMeetingSegmentSeq,
   meetingSummaryDelay,
   mergeMeetingTranscriptSegments,
@@ -227,7 +228,7 @@ export default function MeetingAiMinutesDialog({ open, onClose, mode = "dialog",
     const currentFinal = parsedSummary(finalSummaryRef.current);
     const currentTimeline = summaryTimelineRef.current;
     const combined = currentFinal ? { ...currentFinal, timeline: currentTimeline } : null;
-    updateMeetingMinutesSession({ transcript: transcriptRef.current, summary: combined ? JSON.stringify(combined) : "", summaryData: combined, timeline: currentTimeline });
+    updateMeetingMinutesSession({ transcript: transcriptRef.current.filter((segment) => isMeaningfulMeetingASRText(segment.text)), summary: combined ? JSON.stringify(combined) : "", summaryData: combined, timeline: currentTimeline });
   };
   useEffect(() => registerMeetingMinutesFinalizer(async () => {
     if (finalRequestRef.current && !(await finalRequestRef.current)) return;
@@ -268,8 +269,8 @@ export default function MeetingAiMinutesDialog({ open, onClose, mode = "dialog",
     };
     summaryRecordingRef.current = meetingState.minutes.recordingId || "";
     summaryQueuedRef.current = false;
-    summaryPayloadTooLargeRef.current = false;
     summaryLastAttemptRef.current = 0;
+    summaryPayloadTooLargeRef.current = false;
     setTranscript(nextTranscript);
     setSummary(nextSummary);
     setFinalSummary(nextFinalSummary);
@@ -467,8 +468,13 @@ export default function MeetingAiMinutesDialog({ open, onClose, mode = "dialog",
   const scheduleSummaryUpdate = () => {
     const current = meetingManager.getState();
     if (!current.minutes.running || summaryPayloadTooLargeRef.current) return;
-    const pendingCount = getPendingSummary(current).length;
-    if (!pendingCount) return;
+    const pending = getPendingSummary(current).filter((segment) => isMeaningfulMeetingASRText(segment.text));
+    if (!pending.length) {
+      if (summaryTimerRef.current !== null) window.clearTimeout(summaryTimerRef.current);
+      summaryTimerRef.current = null;
+      summaryPendingSinceRef.current = null;
+      return;
+    }
     const now = Date.now();
     summaryPendingSinceRef.current ??= now;
     if (summaryInFlightRef.current) {
@@ -476,7 +482,8 @@ export default function MeetingAiMinutesDialog({ open, onClose, mode = "dialog",
       return;
     }
     if (summaryTimerRef.current !== null) window.clearTimeout(summaryTimerRef.current);
-    const delay = meetingSummaryDelay(pendingCount, summaryPendingSinceRef.current, summaryLastAttemptRef.current, now);
+    const delay = meetingSummaryDelay(pending, summaryPendingSinceRef.current, summaryLastAttemptRef.current, now);
+    if (delay === null) return;
     summaryTimerRef.current = window.setTimeout(() => {
       summaryTimerRef.current = null;
       void requestSummaryUpdateRef.current(false);
@@ -508,7 +515,9 @@ export default function MeetingAiMinutesDialog({ open, onClose, mode = "dialog",
     const coordinatorEpoch = startState.minutes.summaryCoordinatorEpoch;
     if (!roomId || !recordingId || !coordinatorId || !Number.isSafeInteger(coordinatorEpoch)
       || !isMeetingMinutesSummaryCoordinator(startState.minutes, startState.minutesSubscription, actor)) return;
-    const allPending = getPendingSummary(startState);
+    // Keep filtered rows in the internal sequence buffer so older servers'
+    // noise cannot create a cursor gap; never send those rows to the model.
+    const allPending = getPendingSummary(startState).filter((segment) => isMeaningfulMeetingASRText(segment.text));
     if (!allPending.length) {
       // Manual clicks must not feel dead: there is simply nothing new to feed the model.
       if (force) showSummaryHint(aiMore("aiMoreNoNewContentToSummarize"));
@@ -516,7 +525,8 @@ export default function MeetingAiMinutesDialog({ open, onClose, mode = "dialog",
     }
     const now = Date.now();
     summaryPendingSinceRef.current ??= now;
-    if (!force && meetingSummaryDelay(allPending.length, summaryPendingSinceRef.current, summaryLastAttemptRef.current, now) > 0) {
+    const delay = meetingSummaryDelay(allPending, summaryPendingSinceRef.current, summaryLastAttemptRef.current, now);
+    if (!force && (delay === null || delay > 0)) {
       scheduleSummaryUpdate();
       return;
     }
@@ -584,7 +594,6 @@ export default function MeetingAiMinutesDialog({ open, onClose, mode = "dialog",
     } catch (summaryError) {
       if (!summaryContextIsCurrent(context) || controller.signal.aborted) return;
       setBuiltInSummaryAvailable(false);
-      summaryLastAttemptRef.current = 0;
       const message = summaryError instanceof Error ? summaryError.message : aiMore("aiMoreCouldNotGenerateMeetingNotes");
       summaryErrorRef.current = message;
       setError(message);
@@ -654,7 +663,8 @@ export default function MeetingAiMinutesDialog({ open, onClose, mode = "dialog",
       }
       const next = mergeMeetingTranscriptSegments(transcriptRef.current, matching);
       transcriptRef.current = next;
-      setTranscript(next);
+      if (!matching.some((segment) => isMeaningfulMeetingASRText(segment.text))) return;
+      setTranscript(next.filter((segment) => isMeaningfulMeetingASRText(segment.text)));
       syncSession();
       if (!isMeetingMinutesSummaryCoordinator(currentState.minutes, currentState.minutesSubscription, realTimeColab.getUniqId() || "")) return;
       const pending = getPendingMeetingSummarySegments(next, {
@@ -690,7 +700,7 @@ export default function MeetingAiMinutesDialog({ open, onClose, mode = "dialog",
     const current = meetingManager.getState();
     const roomId = current.roomId || "";
     const recordingId = current.minutes.recordingId || "";
-    const captured = transcriptRef.current.filter((segment) => segment.recordingId === recordingId && segment.final && !!segment.text.trim());
+    const captured = transcriptRef.current.filter((segment) => segment.recordingId === recordingId && segment.final && isMeaningfulMeetingASRText(segment.text));
     const throughSeq = Math.max(maxIncludedMeetingSegmentSeq(captured) || 0, current.minutes.summaryThroughSeq || 0);
     if (current.stage !== "in-meeting" || !roomId || !recordingId || !current.minutesSubscription.enabled
       || receiveOverrideRef.current === false || !hasSharedMeetingMinutesCapability(current.minutes) || !throughSeq) {
@@ -847,7 +857,7 @@ export default function MeetingAiMinutesDialog({ open, onClose, mode = "dialog",
       title: sharedSummary?.meetingTitle || current.title || snapshot?.title,
       summaryData: exportSummaryData,
       timeline: sharedTimeline,
-      transcript: transcriptRef.current,
+      transcript: transcriptRef.current.filter((segment) => isMeaningfulMeetingASRText(segment.text)),
     };
   };
   const exportSummary = () => downloadMeetingMinutesMarkdown(meetingNotesExport(), aiMoreMarkdownLabels(), aiMoreLocale());

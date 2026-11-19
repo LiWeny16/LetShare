@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   getPendingMeetingSummarySegments,
   groupMeetingSummaryTimeline,
+  isMeaningfulMeetingASRText,
   maxIncludedMeetingSegmentSeq,
   meetingSummaryDelay,
   mergeMeetingTranscriptSegments,
@@ -14,15 +15,38 @@ function segment(id: string, seq: number | undefined, recordingId = "recording-a
   return { id, speakerId: "member", speakerName: "Member", text: id, startMs: Number(id.replace(/\D/g, "")) || 0, endMs: 1, final, recordingId, ...(seq === undefined ? {} : { seq }) };
 }
 
-test("automatic notes wait for a full minute regardless of the number of utterances", () => {
+test("automatic notes use the content or elapsed-time threshold with a minimum request interval", () => {
   const firstArrival = 100_000;
-  assert.equal(meetingSummaryDelay(1, firstArrival, 0, firstArrival), 60_000);
-  assert.equal(meetingSummaryDelay(2, firstArrival, 0, firstArrival + 10_000), 50_000);
-  assert.equal(meetingSummaryDelay(10, firstArrival, 0, firstArrival + 12_000), 48_000);
-  assert.equal(meetingSummaryDelay(3, firstArrival, 0, firstArrival + 59_999), 1);
-  assert.equal(meetingSummaryDelay(1, firstArrival, 0, firstArrival + 60_000), 0);
-  assert.equal(meetingSummaryDelay(3, firstArrival, firstArrival + 30_000, firstArrival + 60_000), 30_000);
-  assert.equal(meetingSummaryDelay(0, firstArrival, 0, firstArrival), 0);
+  const short = [{ text: "讨论下一阶段的计划。" }];
+  assert.equal(meetingSummaryDelay(short, firstArrival, 0, firstArrival), 60_000);
+  assert.equal(meetingSummaryDelay(short, firstArrival, 0, firstArrival + 59_999), 1);
+  assert.equal(meetingSummaryDelay(short, firstArrival, 0, firstArrival + 60_000), 0);
+  assert.equal(meetingSummaryDelay([{ text: "字".repeat(219) }], firstArrival, 0, firstArrival + 10_000), 50_000);
+  assert.equal(meetingSummaryDelay([{ text: "字".repeat(220) }], firstArrival, 0, firstArrival + 10_000), 0);
+  assert.equal(meetingSummaryDelay([{ text: "字".repeat(220) }], firstArrival, firstArrival, firstArrival + 5_000), 15_000);
+  assert.equal(meetingSummaryDelay([], firstArrival, 0, firstArrival + 120_000), null);
+  assert.equal(meetingSummaryDelay([{ text: "嗯，啊……" }], firstArrival, 0, firstArrival + 120_000), null);
+});
+
+test("single-character and filler-only ASR results are ignored without losing meaningful short phrases", () => {
+  for (const text of ["", "。", "嗯。", "好！", "嗯 啊，呃……", "哈哈", "hmm, um", "嗯 uh"]) {
+    assert.equal(isMeaningfulMeetingASRText(text), false, text);
+  }
+  for (const text of ["你好", "嗯，可以", "OK", "yes", "嗯，继续讨论"]) {
+    assert.equal(isMeaningfulMeetingASRText(text), true, text);
+  }
+});
+
+test("ignored legacy ASR rows do not create gaps in the shared summary cursor", () => {
+  const raw = [
+    { ...segment("filler", 1), text: "嗯" },
+    { ...segment("real", 2), text: "讨论周五上线" },
+    { ...segment("filler-again", 3), text: "啊啊" },
+  ];
+  const pending = getPendingMeetingSummarySegments(raw, { recordingId: "recording-a", summaryThroughSeq: 0, latestSegmentSeq: 3, cursorEnabled: true });
+  const useful = pending.filter((item) => isMeaningfulMeetingASRText(item.text));
+  assert.deepEqual(useful.map((item) => item.id), ["real"]);
+  assert.equal(maxIncludedMeetingSegmentSeq(useful), 2);
 });
 
 test("one synthesized discussion note covers the batch without assigning it to one of several speakers", () => {

@@ -131,6 +131,21 @@ test("the original minutes layout retains batched summaries and follows new note
   assert.equal(shared.timeline.length, historicalNotes.length + 1);
   assert.equal(shared.timeline.at(-1)?.speakerName, "", "a group discussion has no single-speaker label");
   assert.ok((await scrollPosition(viewport)).remaining <= 2, "new notes are followed at the bottom");
+  const fillerLines = ["嗯。", "嗯，啊……"].map((text, index) => ({ ...lines[0]!, text, segmentId: `noise-${index}`, seq: 34 + index }));
+  send("meeting:minutes", { kind: "segments", recordingId: RECORDING, segments: fillerLines });
+  await page.clock.runFor(61_000);
+  assert.equal(requests.length, 1, "noise alone never schedules another summary");
+  assert.equal(await workspace.getByTestId("meeting-minutes-segment-count").innerText(), "3", "noise is not shown as transcript");
+
+  const longLine = { ...lines[1]!, segmentId: "line-36", seq: 36, text: "部署前需要检查服务状态和回归结果。".repeat(20), startMs: Date.now(), endMs: Date.now() + 1000 };
+  send("meeting:minutes", { kind: "segments", recordingId: RECORDING, segments: [longLine] });
+  await workspace.getByTestId("meeting-minutes-thread").getByRole("progressbar").waitFor();
+  assert.equal(requests.length, 2, "enough meaningful speech triggers the size threshold before another minute");
+  assert.equal(requests[1]!.throughSeq, 36, "the summary cursor advances across ignored noise");
+  assert.deepEqual(JSON.parse(requests[1]!.input).segments.map(({ id }: { id: string }) => id), ["line-36"]);
+  const sizeSummary = "大家详细讨论了部署前的服务检查和回归安排。";
+  send("meeting:minutes", { kind: "ai-result", ...requests[1]!, ok: true, output: JSON.stringify({ timeline: [{ summary: sizeSummary, kind: "speech" }] }) });
+  await viewport.getByText(sizeSummary, { exact: true }).waitFor();
   assert.equal(requests.filter((request) => request.task === "final-minutes").length, 0, "live notes never request a full summary");
   await workspace.getByTestId("meeting-minutes-summarize").click();
   try {
@@ -140,6 +155,7 @@ test("the original minutes layout retains batched summaries and follows new note
     throw error;
   }
   assert.equal(requests.filter((request) => request.task === "final-minutes").length, 1);
+  assert.ok(JSON.parse(requests.find((request) => request.task === "final-minutes")!.input).segments.every((item: { id: string }) => !item.id.startsWith("noise-")));
   await workspace.getByRole("tab", { name: /会议脉络|Meeting outline/ }).click();
 
   await viewport.hover();
@@ -149,19 +165,20 @@ test("the original minutes layout retains batched summaries and follows new note
   function appendNote(text: string, seq: number) {
     publishSummary({ ...shared, timeline: [...shared.timeline, { ...historicalNotes[0]!, id: `new-${seq}`, summary: text, startMs: Date.now() }] }, seq);
   }
-  appendNote("新的讨论总结在阅读历史时到达。", 34);
+  appendNote("新的讨论总结在阅读历史时到达。", 37);
   await viewport.getByText("新的讨论总结在阅读历史时到达。", { exact: true }).waitFor();
   assert.equal((await scrollPosition(viewport)).top, previousPosition.top);
   await jump.click();
   await jump.waitFor({ state: "hidden" });
   assert.ok((await scrollPosition(viewport)).remaining <= 2);
-  appendNote("跳回底部之后继续跟随新总结。", 35);
+  appendNote("跳回底部之后继续跟随新总结。", 38);
   await viewport.getByText("跳回底部之后继续跟随新总结。", { exact: true }).waitFor();
   assert.ok((await scrollPosition(viewport)).remaining <= 2);
 
   const sourceButton = viewport.locator(".MuiPaper-root").filter({ hasText: paragraph }).getByRole("button", { name: /查看原话|View transcript source/ });
   await viewport.hover();
-  await page.mouse.wheel(0, -200);
+  await page.mouse.wheel(0, -520);
+  await sourceButton.scrollIntoViewIfNeeded();
   await jump.waitFor();
   const noteReadPosition = (await scrollPosition(viewport)).top;
   await sourceButton.click();
@@ -204,10 +221,10 @@ test("the original minutes layout retains batched summaries and follows new note
   await workspace.getByTestId("meeting-ask-assistant").click();
   await page.locator("#meeting-panel-content-chat").getByPlaceholder(/问会议助手|Ask the meeting assistant/).waitFor();
   assert.equal(await workspace.isVisible(), true, "the assistant can be used beside the restored desktop workspace");
-  const lastLine = { ...lines[0]!, segmentId: "line-36", seq: 36, text: "最后补充：上线前检查监控。", startMs: Date.now(), endMs: Date.now() + 1000 };
+  const lastLine = { ...lines[0]!, segmentId: "line-39", seq: 39, text: "最后补充：上线前检查监控。", startMs: Date.now(), endMs: Date.now() + 1000 };
   send("meeting:minutes", { kind: "segments", recordingId: RECORDING, segments: [lastLine] });
   await workspace.getByRole("tab", { name: /完整逐字稿|Full transcript/ }).click();
-  await workspace.locator('[data-segment-id="line-36"]').waitFor();
+  await workspace.locator('[data-segment-id="line-39"]').waitFor();
   await page.getByRole("button", { name: /更多离会选项|Leave options/ }).click();
   await page.getByRole("menuitem", { name: /结束会议|End meeting/ }).click();
   await page.getByRole("dialog").getByRole("button", { name: /结束会议|End meeting/ }).click();
@@ -215,7 +232,7 @@ test("the original minutes layout retains batched summaries and follows new note
   await endScreen.getByText("完成发布前回归测试", { exact: true }).waitFor();
   const finalRequests = requests.filter((request) => request.task === "final-minutes");
   assert.equal(finalRequests.length, 2, "ending the meeting summarizes the newly added speech once");
-  assert.ok(JSON.parse(finalRequests[1]!.input).segments.some((item: { id: string }) => item.id === "line-36"));
+  assert.ok(JSON.parse(finalRequests[1]!.input).segments.some((item: { id: string }) => item.id === "line-39"));
   await endScreen.getByText("完成发布前回归测试", { exact: true }).locator("..").getByRole("button", { name: /查看原话|View transcript source/ }).click();
   await endScreen.locator('[data-segment-id="line-32"][aria-current="true"]').waitFor();
   assert.deepEqual(pageErrors, []);

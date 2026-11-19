@@ -1,11 +1,30 @@
 import type { MeetingMinutesJson, MeetingTranscriptSegment } from "./meetingAi";
 
 const SUMMARY_BATCH_WAIT_MS = 60_000;
+const SUMMARY_BATCH_CHARACTERS = 220;
+const SUMMARY_MIN_REQUEST_INTERVAL_MS = 20_000;
+const ASR_FILLER_CHARACTERS = /^[嗯啊呃额唔噢哦喔呣唉欸诶哼咳哈呵]+$/u;
+const ASR_ENGLISH_FILLERS = new Set(["um", "umm", "uhm", "uh", "uhh", "huh", "hm", "hmm", "hmmm", "mm", "mmm", "mmhmm", "erm", "er", "ah", "eh", "mhm"]);
 
-/** Collect at least a minute of discussion before producing the next live note. */
-export function meetingSummaryDelay(pendingCount: number, pendingSince: number, lastAttempt: number, now: number): number {
-  if (pendingCount <= 0) return 0;
-  return Math.max(0, pendingSince + SUMMARY_BATCH_WAIT_MS - now, lastAttempt ? lastAttempt + SUMMARY_BATCH_WAIT_MS - now : 0);
+/** Ignore standalone ASR fragments and filler-only results, but keep real short phrases. */
+export function isMeaningfulMeetingASRText(text: string): boolean {
+  const words = text.match(/[\p{L}\p{N}]+/gu) || [];
+  const compact = words.join("");
+  if (Array.from(compact).length <= 1) return false;
+  return !words.every((word) => ASR_FILLER_CHARACTERS.test(word) || ASR_ENGLISH_FILLERS.has(word.toLowerCase()));
+}
+
+/** Return null for no useful speech, or wait until the size or time limit. */
+export function meetingSummaryDelay(segments: ReadonlyArray<Pick<MeetingTranscriptSegment, "text">>, pendingSince: number, lastAttempt: number, now: number): number | null {
+  let characters = 0;
+  for (const { text } of segments) {
+    if (!isMeaningfulMeetingASRText(text)) continue;
+    characters += (text.match(/[\p{L}\p{N}]/gu) || []).length;
+  }
+  if (!characters) return null;
+  const collectionDelay = characters >= SUMMARY_BATCH_CHARACTERS ? 0 : pendingSince + SUMMARY_BATCH_WAIT_MS - now;
+  const rateDelay = lastAttempt ? lastAttempt + SUMMARY_MIN_REQUEST_INTERVAL_MS - now : 0;
+  return Math.max(0, collectionDelay, rateDelay);
 }
 
 /** Publish one discussion note, with attribution taken from the source segments. */
