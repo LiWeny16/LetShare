@@ -98,7 +98,6 @@ test("meeting assistant is a private streaming chat contact", async (t) => {
   assert.equal(/会议助手暂时不可用|会议助手暂未配置|请求过于频繁/.test(answer), false, answer);
 
   if (process.env.E2E_CHAT_SCREENSHOT) await page.screenshot({ path: process.env.E2E_CHAT_SCREENSHOT, fullPage: false });
-  await page.getByTestId("meeting-ai-minutes-open").click();
   await page.getByTestId("meeting-minutes-stop").click();
   assert.equal(errors.length, 0, errors.join("\n"));
 });
