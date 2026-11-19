@@ -3,7 +3,7 @@ import { Box } from "@mui/material";
 /** Hand-drawn vector wordmark; remains sharp at every display scale. */
 export function LetShareWordmark() {
   return (
-    <Box component="svg" viewBox="0 0 190 54" role="img" aria-label="LetShare" sx={{ display: "block", width: { xs: 112, sm: 128 }, height: "auto", flexShrink: 0 }}>
+    <Box component="svg" viewBox="0 0 190 54" role="img" aria-label="LetShare" sx={{ display: "block", width: { xs: "clamp(76px, 27vw, 112px)", sm: 128 }, height: "auto", flexShrink: 0 }}>
       <g transform="translate(6 0) skewX(-6)" fill="none" strokeLinecap="round" strokeLinejoin="round" strokeWidth="5.4">
         <g stroke="#172b4d">
           <path d="M6 10v29q0 4 5 4h14" />

@@ -54,7 +54,6 @@ import SettingsIcon from "@mui/icons-material/Settings";
 import LanguageIcon from "@mui/icons-material/Language";
 import AutoAwesomeIcon from "@mui/icons-material/AutoAwesome";
 import ClosedCaptionOutlinedIcon from "@mui/icons-material/ClosedCaptionOutlined";
-import NotesOutlinedIcon from "@mui/icons-material/NotesOutlined";
 import DragIndicatorIcon from "@mui/icons-material/DragIndicator";
 import FullscreenIcon from "@mui/icons-material/Fullscreen";
 import FullscreenExitIcon from "@mui/icons-material/FullscreenExit";
@@ -321,6 +320,10 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
 
   const [panelOpen, setPanelOpen] = useState(!isMobileBp);
   const [panelTab, setPanelTab] = useState(0);
+  const previousConversationTab = useRef(0);
+  useEffect(() => {
+    if (panelTab !== 2) previousConversationTab.current = panelTab;
+  }, [panelTab]);
   const { panelWidth, setPanelWidth, panelRef, onPanelResizeStart, onPanelResizeMove, onPanelResizeEnd, onPanelResizeKeyDown } = useMeetingPanelResize(panelOpen, isMobileBp, setPanelOpen);
   const [legacyWhiteboardOn, setLegacyWhiteboardOn] = useState(false);
   const [endDialogOpen, setEndDialogOpen] = useState(false);
@@ -334,8 +337,40 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
   const [mediaSettingsOpen, setMediaSettingsOpen] = useState(false);
   const [languageAnchor, setLanguageAnchor] = useState<HTMLElement | null>(null);
   const [minutesExpanded, setMinutesExpanded] = useState(false);
+  useEffect(() => {
+    if (isMobileBp && minutesExpanded) setPanelOpen(false);
+  }, [isMobileBp, minutesExpanded]);
   const [focusTranscript, setFocusTranscript] = useState<{ segmentId: string; requestId: number }>();
   const focusTranscriptSequence = useRef(0);
+  const openedMinutesFromSidebar = useRef(false);
+  const openFullMinutes = () => {
+    if (!minutesExpanded) openedMinutesFromSidebar.current = panelOpen && panelTab === 2;
+    if (panelTab === 2) setPanelTab(previousConversationTab.current);
+    setMinutesExpanded(true);
+  };
+  const closeFullMinutes = () => {
+    setMinutesExpanded(false);
+    setFocusTranscript(undefined);
+    if (openedMinutesFromSidebar.current) {
+      setPanelTab(2);
+      setPanelOpen(true);
+    }
+  };
+  const showTranscriptSource = (segmentId: string) => {
+    setFocusTranscript({ segmentId, requestId: ++focusTranscriptSequence.current });
+    openFullMinutes();
+  };
+  const toggleMinutesSidebar = () => {
+    if (!minutesExpanded && panelOpen && panelTab === 2) {
+      if (isMobileBp) setPanelOpen(false);
+      else setPanelTab(previousConversationTab.current);
+      return;
+    }
+    setMinutesExpanded(false);
+    setFocusTranscript(undefined);
+    setPanelTab(2);
+    setPanelOpen(true);
+  };
   const [captionsOpen, setCaptionsOpen] = useState(false);
   const [captionCaptureError, setCaptionCaptureError] = useState("");
   const [captionCaptureStatus, setCaptionCaptureStatus] = useState("");
@@ -1141,7 +1176,7 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
           px: { xs: 1.25, sm: 2.5 },
           display: "flex",
           alignItems: "center",
-          gap: { xs: 1, sm: 2 },
+          gap: { xs: 0.75, sm: 2 },
           bgcolor: pageBackground,
         }}
       >
@@ -1150,7 +1185,7 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
         <MeetingTitle title={state.title} canEdit={amHost && !inBreakout && state.stage === "in-meeting"} onSave={(value) => meetingManager.updateMeetingTitle(value)} />
         {inBreakout && <Chip label={t("meeting.breakoutChip", "分组讨论")} size="small" color="warning" variant="outlined" />}
         <Box sx={{ flex: 1 }} />
-        <Stack direction="row" alignItems="center" spacing={{ xs: 0.75, sm: 1.5 }}>
+        <Stack direction="row" alignItems="center" spacing={{ xs: 0.5, sm: 1.5 }}>
           <Tooltip title={connectionDetail}>
             <Stack
               direction="row"
@@ -1289,7 +1324,7 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
               onClose={() => setCaptionsOpen(false)}
               onSourceLanguageChange={(language) => setMemberMeetingAiPreferences({ language })}
               onTargetLanguageChange={setCaptionTargetLanguage}
-              onViewTranscript={(segmentId) => { setFocusTranscript({ segmentId, requestId: ++focusTranscriptSequence.current }); setMinutesExpanded(true); setCaptionsOpen(false); }}
+              onViewTranscript={(segmentId) => { showTranscriptSource(segmentId); setCaptionsOpen(false); }}
             /></Suspense>}
       <Box
         component="main"
@@ -1332,7 +1367,7 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
               sourceLanguage={memberMinutesPreferences.language === "en-US" ? "en-US" : "zh-CN"}
               targetLanguage={captionTargetLanguage}
               transcriptAvailable={captionTranscriptIds.size > 0}
-              onViewTranscript={(segmentId) => { setFocusTranscript({ segmentId, requestId: ++focusTranscriptSequence.current }); setMinutesExpanded(true); }}
+              onViewTranscript={showTranscriptSource}
             /></Suspense>}
             {!minutesExpanded && <Stack direction="row" alignItems="center" spacing={1} sx={{ px: { xs: 1, sm: 1.5 }, pt: 0.5, minHeight: 44, flexShrink: 0, minWidth: 0 }}>
               <Typography sx={{ color: "text.primary", fontSize: "0.75rem", fontWeight: 750, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
@@ -1385,7 +1420,7 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
               </Tooltip>
             </Stack>}
             <Box data-testid="meeting-stage-content" sx={{ flex: 1, p: minutesExpanded ? 0 : activeSharingMode === "whiteboard" ? 0.5 : { xs: 1, sm: 1.5 }, pt: 0, minHeight: 0, display: "flex", flexDirection: "column" }}>
-              <Box ref={setMinutesWorkspaceContainer} sx={{ display: minutesExpanded ? "flex" : "none", flex: 1, minHeight: 0, flexDirection: "column" }} />
+              <Box ref={setMinutesWorkspaceContainer} sx={{ position: "relative", display: minutesExpanded ? "flex" : "none", flex: 1, minHeight: 0, flexDirection: "column" }} />
               <Box sx={{ display: minutesExpanded ? "none" : "flex", flex: 1, minHeight: 0, flexDirection: "column" }}>
               {focusedTile ? (
                 <Stack spacing={1} sx={{ height: "100%", minHeight: 0 }}>
@@ -1462,7 +1497,7 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
         </MotionConfig>
         </MeetingStageMotionContext.Provider>
 
-        {!panelOpen && !stageFocusMode && (
+        {!panelOpen && !stageFocusMode && !minutesExpanded && (
           <Tooltip title={t("meeting.panelOpen", "打开面板")}>
             <IconButton
               data-testid="meeting-panel-toggle"
@@ -1537,7 +1572,13 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
             data-testid="meeting-panel-tabs"
             aria-label={t("meeting.panelNavigation", "会议面板")}
             value={panelTab}
-            onChange={(_, value) => setPanelTab(value)}
+            onChange={(_, value) => {
+              if (value === 2 && minutesExpanded) toggleMinutesSidebar();
+              else {
+                if (minutesExpanded) openedMinutesFromSidebar.current = false;
+                setPanelTab(value);
+              }
+            }}
             variant="fullWidth"
             sx={{
               flexShrink: 0, minHeight: 40, mx: MEETING_PANEL_GUTTER, mt: MEETING_PANEL_GUTTER, p: 0.5, borderRadius: 2.25, position: "relative", isolation: "isolate",
@@ -1583,7 +1624,6 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
               />
             </Box>
             <Box id="meeting-panel-content-notes" role="tabpanel" aria-labelledby="meeting-panel-tab-notes" sx={{ display: panelTab === 2 ? "flex" : "none", flex: 1, minHeight: 0, flexDirection: "column" }}>
-              <Box sx={{ display: minutesExpanded ? "flex" : "none", flex: 1, minHeight: 0, flexDirection: "column" }}><Stack alignItems="center" justifyContent="center" spacing={1} sx={{ flex: 1, px: 2, textAlign: "center", color: "text.secondary" }}><NotesOutlinedIcon sx={{ color: BLUE, fontSize: 28 }} /><Typography sx={{ fontSize: "0.84rem", fontWeight: 800, color: "text.primary" }}>{t("meeting.presentationMinutesOnLeft", "AI 会议纪要详情见左边")}</Typography><Typography sx={{ fontSize: "0.7rem", lineHeight: 1.5 }}>{t("meeting.presentationMinutesPanelHint", "右侧保留聊天和成员，会议纪要正在左侧工作区展示。")}</Typography></Stack></Box>
               <Box ref={setMinutesBriefContainer} sx={{ display: minutesExpanded ? "none" : "flex", flex: 1, minHeight: 0, flexDirection: "column" }} />
             </Box>
           </Box>
@@ -1628,6 +1668,7 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
         {control(state.cameraOn ? <VideocamIcon /> : <VideocamOffIcon />, state.cameraOn ? t("meeting.stopVideo", "关闭摄像头") : t("meeting.startVideo", "开启摄像头"), () => meetingManager.setCameraOn(!state.cameraOn), state.cameraOn, false, state.stage !== "in-meeting")}
         <Divider orientation="vertical" flexItem sx={{ mx: 0.5, my: 1 }} />
         {control(state.screenOn ? <StopScreenShareIcon /> : <ScreenShareIcon />, state.screenOn ? t("meeting.stopShare", "停止共享") : t("meeting.shareScreen", "共享屏幕"), () => state.screenOn ? meetingManager.stopScreenShare() : void meetingManager.startScreenShare(), state.screenOn, false, state.stage !== "in-meeting")}
+        {control(<AutoAwesomeIcon />, t("meeting.aiMinutes", "AI 会议纪要"), toggleMinutesSidebar, minutesExpanded || (panelOpen && panelTab === 2), false, state.stage !== "in-meeting", "meeting-ai-minutes-open")}
         {control(<EditIcon />, whiteboardLabel, () => {
           if (!state.presentation.whiteboardActive) {
             meetingManager.claimPresentation("whiteboard", "excalidraw");
@@ -1638,7 +1679,6 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
         {meetingId && control(<LinkIcon />, t("meeting.inviteAction", "邀请"), () => setInviteOpen(true), false, false, false, "meeting-invite-open")}
         {control(panelOpen ? <CloseIcon /> : <ChatIcon />, panelOpen ? t("meeting.panelClose", "收起面板") : t("meeting.panelOpen", "打开面板"), () => setPanelOpen((value) => !value), panelOpen)}
         {LIVE_CAPTIONS_ENABLED && control(<ClosedCaptionOutlinedIcon />, t("meeting.liveCaptionsToolbar", "字幕与翻译"), () => { if (!captionsOpen && !captionsActive) setPersonalCaptions(true); setCaptionsOpen(!captionsOpen); }, captionsActive, false, state.stage !== "in-meeting", "meeting-live-captions-toolbar")}
-         {control(<AutoAwesomeIcon />, t("meeting.aiMinutes", "AI 会议纪要"), () => setMinutesExpanded((value) => !value), minutesExpanded, false, state.stage !== "in-meeting", "meeting-ai-minutes-open")}
         </Box>
         <Stack direction="row" alignItems="center" sx={{ flexShrink: 0, borderRadius: 2, bgcolor: (th) => alpha(th.palette.error.main, 0.08) }}>
           <Tooltip title={t("meeting.leave", "离开")} arrow>
@@ -1679,11 +1719,15 @@ export default function MeetingRoom({ onExit }: MeetingRoomProps) {
         embedded={minutesExpanded}
         portalTarget={minutesExpanded ? minutesWorkspaceContainer : minutesBriefContainer}
         focusTranscript={focusTranscript}
-        onViewTranscript={(segmentId) => { setFocusTranscript({ segmentId, requestId: ++focusTranscriptSequence.current }); setMinutesExpanded(true); }}
-        onClose={() => minutesExpanded ? setMinutesExpanded(false) : setPanelOpen(false)}
-        onExpand={() => setMinutesExpanded(true)}
+        onViewTranscript={showTranscriptSource}
+        onClose={() => minutesExpanded ? closeFullMinutes() : setPanelOpen(false)}
+        onExpand={openFullMinutes}
         onAskAssistant={() => {
-          setMinutesExpanded(false);
+          openedMinutesFromSidebar.current = false;
+          if (isMobileBp) {
+            setMinutesExpanded(false);
+            setFocusTranscript(undefined);
+          }
           setPanelOpen(true);
           setPanelTab(0);
           setPrivateChatTarget(MEETING_AI_ASSISTANT_ID);

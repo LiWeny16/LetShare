@@ -39,8 +39,8 @@ test("meeting without camera or microphone still joins and keeps meeting control
       transferPriority: "p2p",
       version: "3.8.4",
       isNewUser: false,
-      meetingCameraDefaultOn: false,
-      meetingMicrophoneDefaultOn: false,
+      meetingCameraDefaultOn: true,
+      meetingMicrophoneDefaultOn: true,
     }));
 
     // Deterministic no-device environment: both capture APIs fail as a real browser
@@ -104,10 +104,10 @@ test("meeting without camera or microphone still joins and keeps meeting control
     throw error;
   }
 
-  const state = await page.evaluate(() => (window as any).__meeting?.getState?.());
   const stage = page.getByTestId("meeting-stage");
   assert.equal(await stage.getAttribute("data-stage"), "in-meeting");
-  assert.equal(await stage.getAttribute("data-media-error"), "not-found");
+  await until("device capture reports a missing camera", async () => (await stage.getAttribute("data-media-error")) === "not-found");
+  const state = await page.evaluate(() => (window as any).__meeting?.getState?.());
   if (state) {
     assert.equal(state.stage, "in-meeting");
     assert.equal(state.mediaError, "not-found");
@@ -116,7 +116,7 @@ test("meeting without camera or microphone still joins and keeps meeting control
   }
 
   for (const label of [
-    /解除静音|Unmute/,
+    /重试麦克风|Retry mic/i,
     /开启摄像头|Start video|Turn on camera/,
     /共享屏幕|Share screen/,
     /白板|Whiteboard/,

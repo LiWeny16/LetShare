@@ -128,7 +128,7 @@ export function mergeMeetingMinutesTimeline(
 export type MeetingMinutesPublicState = {
   configured: boolean;
   running: boolean;
-  /** Server mixes every participant's published microphone audio into one ASR stream. */
+  /** Server transcribes published microphone audio for the shared recording. */
   serverMix?: boolean;
   /** Server-side summary generation is configured for this deployment. */
   ai?: boolean;
@@ -136,7 +136,7 @@ export type MeetingMinutesPublicState = {
   capabilitiesKnown?: boolean;
   captionActive?: boolean;
   recordingId?: string;
-  /** Highest mixed transcript sequence emitted and included in the shared summary. */
+  /** Highest transcript sequence emitted and included in the shared summary. */
   latestSegmentSeq?: number;
   summaryThroughSeq?: number;
   /** Earliest retained transcript sequence, for bounded server history. */

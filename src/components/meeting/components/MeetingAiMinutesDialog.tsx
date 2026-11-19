@@ -3,29 +3,8 @@ import { useTranslation } from "react-i18next";
 import { aiMore, aiMoreLocale, aiMoreMarkdownLabels } from "@App/libs/i18n/meetingAiMoreTranslations";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import {
-  Alert,
-  Avatar,
-  Box,
-  Button,
-  Chip,
-  DialogContent,
-  IconButton,
-  Paper,
-  Stack,
-  Tab,
-  Tabs,
-  Tooltip,
-  Typography,
-} from "@mui/material";
-import ArrowBackIcon from "@mui/icons-material/ArrowBack";
-import AutoAwesomeIcon from "@mui/icons-material/AutoAwesome";
-import DownloadIcon from "@mui/icons-material/Download";
-import CloseIcon from "@mui/icons-material/Close";
-import MicIcon from "@mui/icons-material/Mic";
-import NotesIcon from "@mui/icons-material/Notes";
-import PlayArrowIcon from "@mui/icons-material/PlayArrow";
-import StopCircleOutlinedIcon from "@mui/icons-material/StopCircleOutlined";
+import { DialogContent } from "@mui/material";
+import alertUseMUI from "@App/libs/tools/alert";
 import { meetingManager } from "@App/libs/meeting/meetingManager";
 import {
   DEFAULT_MEETING_AI_CONFIG,
@@ -37,7 +16,6 @@ import {
   mergeMeetingMinutesTimeline,
   saveMemberMeetingAiSettings,
   sanitizeMeetingAiConfig,
-  type AsrSource,
   type MeetingAiConfig,
   type MeetingMinutesJson,
   type MeetingMinutesSummaryRequest,
@@ -46,7 +24,6 @@ import {
 import realTimeColab from "@App/libs/connection/colabLib";
 import MeetingAiSettingsView from "./MeetingAiSettingsView";
 import MeetingAiBriefPanel from "./MeetingAiBriefPanel";
-import MeetingMinutesQuestionPanel, { type MeetingQuestionAnswer } from "./MeetingMinutesQuestionPanel";
 import MeetingMinutesWorkspace from "./MeetingMinutesWorkspace";
 import {
   ensureMeetingMinutesSession,
@@ -57,7 +34,9 @@ import { getMeetingMinutesSession } from "@App/libs/meeting/meetingMinutesSessio
 import { buildMeetingMinutesMarkdown, downloadMeetingMinutesMarkdown } from "@App/libs/meeting/meetingMinutesMarkdown";
 import {
   getPendingMeetingSummarySegments,
+  groupMeetingSummaryTimeline,
   maxIncludedMeetingSegmentSeq,
+  meetingSummaryDelay,
   mergeMeetingTranscriptSegments,
 } from "@App/libs/meeting/meetingSummaryQueue";
 
@@ -73,10 +52,6 @@ export interface MeetingAiMinutesDialogProps {
   onViewTranscript?: (segmentId: string) => void;
   onAskAssistant?: () => void;
 }
-
-const sourceLabels: Record<AsrSource, string> = {
-  "server-stream": "服务端流式识别",
-};
 
 const MINUTES_STATE_TIMEOUT_MS = 5_000;
 const SUMMARY_BROADCAST_TIMEOUT_MS = 5_000;
@@ -162,24 +137,6 @@ function waitForMinutesSubscription(enabled: boolean, recordingId: string, timeo
   });
 }
 
-const KIND_META = {
-  speech: { label: "发言", color: "#1677ff", bg: "#eaf2ff" },
-  decision: { label: "决策", color: "#14976b", bg: "#e8f8f2" },
-  action: { label: "待办", color: "#f59e0b", bg: "#fff5df" },
-  question: { label: "问题", color: "#8b5cf6", bg: "#f2edff" },
-} as const;
-
-function formatTime(value: number): string {
-  if (!Number.isFinite(value) || value <= 0) return aiMore("aiMoreJustNow");
-  return new Intl.DateTimeFormat(aiMoreLocale(), { hour: "2-digit", minute: "2-digit" }).format(new Date(value));
-}
-
-function formatElapsed(startedAt: number): string {
-  if (!startedAt) return "00:00";
-  const seconds = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
-  return `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
-}
-
 function parsedSummary(value: string): MeetingMinutesJson | null {
   return value ? parseMeetingMinutesJson(value) : null;
 }
@@ -197,35 +154,13 @@ function fallbackTimeline(transcript: MeetingTranscriptSegment[], summary: Meeti
   }));
 }
 
-function safeSummaryText(value: string, summary: MeetingMinutesJson | null): string {
-  if (summary?.overview) return summary.overview;
-  if (!value) return aiMore("aiMoreWaitingForTranscript");
-  return value.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
-}
-
-function SummaryList({ title, color, items }: { title: string; color: string; items: string[] }) {
-  return <Stack spacing={0.45}>{title && <Typography sx={{ color: "#53708f", fontSize: "0.7rem", fontWeight: 800 }}>{title}</Typography>}{items.slice(0, 4).map((item, index) => <Stack key={`${item}-${index}`} direction="row" spacing={0.7} alignItems="flex-start"><Box sx={{ mt: 0.65, width: 6, height: 6, borderRadius: "50%", bgcolor: color, flexShrink: 0 }} /><Typography sx={{ color: "#263b50", fontSize: "0.78rem", lineHeight: 1.55 }}>{item}</Typography></Stack>)}</Stack>;
-}
-
-function SummaryBlocks({ value }: { value: string }) {
-  const data = parsedSummary(value);
-  if (!data) return <Typography sx={{ color: "#30485f", fontSize: "0.83rem", lineHeight: 1.75 }}>{safeSummaryText(value, null)}</Typography>;
-  return <Stack spacing={1.4}><Typography sx={{ color: "#30485f", fontSize: "0.83rem", lineHeight: 1.75 }}>{data.overview || aiMore("aiMoreWaitingForTranscript")}</Typography>{data.decisions.length > 0 && <SummaryList title={aiMore("aiMoreKeyDecisions")} color="#14976b" items={data.decisions.map((item) => item.text)} />}{data.actionItems.length > 0 && <Stack spacing={0.65}><Typography sx={{ color: "#53708f", fontSize: "0.7rem", fontWeight: 800 }}>{aiMore("aiMoreActionItems")}</Typography>{data.actionItems.slice(0, 4).map((item, index) => <Box key={`${item.task}-${index}`} sx={{ px: 1, py: 0.8, borderRadius: 1.5, bgcolor: "#f7f9fc" }}><Typography sx={{ color: "#263b50", fontSize: "0.78rem", lineHeight: 1.45 }}>{item.task}</Typography><Typography sx={{ color: "#8a9aac", fontSize: "0.68rem", mt: 0.25 }}>{[item.owner, item.deadline].filter(Boolean).join(" · ") || aiMore("aiMoreOwnerAndDeadlineNotSet")}</Typography></Box>)}</Stack>}{data.openQuestions.length > 0 && <SummaryList title={aiMore("aiMoreOpenQuestions")} color="#8b5cf6" items={data.openQuestions.map((item) => item.question)} />}</Stack>;
-}
-
-function Timeline({ items, compact = false }: { items: MeetingMinutesJson["timeline"]; compact?: boolean }) {
-  return <Stack spacing={0} sx={{ position: "relative" }}>{items.length === 0 ? <Box sx={{ py: 7, textAlign: "center" }}><Avatar sx={{ mx: "auto", mb: 1.25, bgcolor: "#eaf2ff", color: "#1677ff" }}><MicIcon /></Avatar><Typography sx={{ color: "#30485f", fontWeight: 750, fontSize: "0.83rem" }}>{aiMore("aiMoreWaitingForTranscript")}</Typography><Typography sx={{ color: "#8a9aac", mt: 0.5, fontSize: "0.73rem" }}>{aiMore("aiMoreTranscriptStartsAfterRecording")}</Typography></Box> : items.map((item, index) => { const meta = KIND_META[item.kind] || KIND_META.speech; return <Box key={item.id || `${item.startMs}-${index}`} sx={{ display: "grid", gridTemplateColumns: compact ? "26px minmax(0, 1fr)" : "32px minmax(0, 1fr)", gap: compact ? 0.8 : 1.1, py: compact ? 1 : 1.35, position: "relative", "&:not(:last-child)::before": { content: '""', position: "absolute", left: compact ? 12 : 15, top: compact ? 30 : 37, bottom: 0, width: 1, bgcolor: "#dce7f2" } }}><Box sx={{ position: "relative", zIndex: 1, width: compact ? 26 : 32, height: compact ? 26 : 32, borderRadius: "50%", display: "grid", placeItems: "center", bgcolor: meta.bg, color: meta.color, fontSize: "0.62rem", fontWeight: 850 }}>{(item.speakerName || aiMore("aiMoreYou")).slice(0, 1)}</Box><Box sx={{ minWidth: 0 }}><Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap"><Typography sx={{ color: "#2d435a", fontSize: compact ? "0.73rem" : "0.78rem", fontWeight: 800 }}>{item.speakerName || aiMore("aiMoreUnnamedMember")}</Typography><Typography sx={{ color: "#9aa9b8", fontSize: "0.65rem" }}>{formatTime(item.startMs)}</Typography>{item.kind !== "speech" && <Chip label={meta.label} size="small" sx={{ height: 19, bgcolor: meta.bg, color: meta.color, fontSize: "0.62rem", fontWeight: 750 }} />}</Stack><Typography sx={{ mt: 0.35, color: "#263b50", fontSize: compact ? "0.76rem" : "0.83rem", lineHeight: 1.65, wordBreak: "break-word" }}>{item.summary || item.transcript}</Typography>{!compact && item.transcript && item.summary !== item.transcript && <Typography sx={{ mt: 0.25, color: "#8a9aac", fontSize: "0.7rem", lineHeight: 1.5 }}>{item.transcript}</Typography>}</Box></Box>; })}</Stack>;
-}
-
 export default function MeetingAiMinutesDialog({ open, onClose, mode = "dialog", embedded = false, onExpand, portalTarget, focusTranscript, onViewTranscript, onAskAssistant }: MeetingAiMinutesDialogProps) {
   const { t } = useTranslation();
   const [meetingState, setMeetingState] = useState(() => meetingManager.getState());
   const [config, setConfig] = useState<MeetingAiConfig>(() => ({ ...DEFAULT_MEETING_AI_CONFIG }));
-  const [questions, setQuestions] = useState<MeetingQuestionAnswer[]>([]);
   const [builtInSummaryAvailable, setBuiltInSummaryAvailable] = useState(false);
   const [transcript, setTranscript] = useState<MeetingTranscriptSegment[]>([]);
   const [summaryTimeline, setSummaryTimeline] = useState<MeetingMinutesJson["timeline"]>([]);
-  const [interim, setInterim] = useState("");
   const [summary, setSummary] = useState("");
   const [busy, setBusy] = useState(false);
   const [summarizing, setSummarizing] = useState(false);
@@ -237,12 +172,11 @@ export default function MeetingAiMinutesDialog({ open, onClose, mode = "dialog",
   const [summaryContextWarning, setSummaryContextWarning] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [workspaceTab, setWorkspaceTab] = useState(0);
-  const [startedAt, setStartedAt] = useState(0);
-  const [, forceClock] = useState(0);
   const startRequestAtRef = useRef(0);
   const transcriptRef = useRef<MeetingTranscriptSegment[]>([]);
   const summaryTimelineRef = useRef<MeetingMinutesJson["timeline"]>([]);
   const summaryTimerRef = useRef<number | null>(null);
+  const summaryPendingSinceRef = useRef<number | null>(null);
   const summaryInFlightRef = useRef(false);
   const requestSummaryUpdateRef = useRef<(force?: boolean) => Promise<void>>(async () => undefined);
   const scheduleSummaryUpdateRef = useRef<() => void>(() => undefined);
@@ -268,8 +202,6 @@ export default function MeetingAiMinutesDialog({ open, onClose, mode = "dialog",
   receiveOverrideRef.current = receiveOverride;
 
   const isHost = meetingState.hostId === realTimeColab.getUniqId();
-  // 识别全部在服务端完成，本机没有模型准备步骤，恒为就绪。
-  const sourceReady = true;
   // This client expects Gemini summaries and Somni ASR from the server; it
   // does not verify the deployed provider. `ai` is the capability flag.
   const minutesCapabilityReady = hasSharedMeetingMinutesCapability(meetingState.minutes);
@@ -306,6 +238,7 @@ export default function MeetingAiMinutesDialog({ open, onClose, mode = "dialog",
     summaryAbortRef.current?.abort(); summaryAbortRef.current = null;
     if (summaryTimerRef.current !== null) window.clearTimeout(summaryTimerRef.current);
     summaryTimerRef.current = null;
+    summaryPendingSinceRef.current = null;
     const nextTranscript: MeetingTranscriptSegment[] = [];
     const nextSummary = meetingState.minutesSubscription.enabled ? meetingState.minutes.summary || "" : "";
     const parsed = parsedSummary(nextSummary);
@@ -328,7 +261,6 @@ export default function MeetingAiMinutesDialog({ open, onClose, mode = "dialog",
     updateMeetingMinutesSession({ transcript: [], summary: nextSummary, summaryData: parsed, timeline: nextTimeline });
     setWorkspaceTab(0);
     setSettingsOpen(false);
-    setInterim("");
     setSummaryContextWarning("");
     summaryErrorRef.current = "";
     asrErrorRef.current = null;
@@ -340,7 +272,6 @@ export default function MeetingAiMinutesDialog({ open, onClose, mode = "dialog",
     if (!receiving) {
       // Pausing only stops new speech from arriving; the notes already
       // captured stay visible so the panel does not go blank.
-      setInterim("");
       return;
     }
     const incoming = meetingState.minutes.summary;
@@ -437,11 +368,9 @@ export default function MeetingAiMinutesDialog({ open, onClose, mode = "dialog",
     const language = current.minutes.running && sharedLanguage ? sharedLanguage : localPreferences.language;
     setConfig((previous) => sanitizeMeetingAiConfig({ ...previous, enabled: current.minutes.configured, requireConsent: current.minutes.requireConsent, language }));
   }, [open, meetingState.minutes.running, meetingState.minutes.summaryLanguage]);
-  useEffect(() => { setQuestions([]); }, [meetingState.roomId]);
   useEffect(() => {
     if (open && mode === "workspace" && focusTranscript?.segmentId) { setSettingsOpen(false); setWorkspaceTab(1); }
   }, [focusTranscript, mode, open]);
-  useEffect(() => { const timer = window.setInterval(() => forceClock((value) => value + 1), 1000); return () => window.clearInterval(timer); }, []);
   useEffect(() => () => {
     if (summaryTimerRef.current !== null) window.clearTimeout(summaryTimerRef.current);
     summaryTimerRef.current = null;
@@ -500,12 +429,21 @@ export default function MeetingAiMinutesDialog({ open, onClose, mode = "dialog",
 
   const scheduleSummaryUpdate = () => {
     const current = meetingManager.getState();
-    if (summaryTimerRef.current !== null || !current.minutes.running
-      || !isMeetingMinutesSummaryCoordinator(current.minutes, current.minutesSubscription, realTimeColab.getUniqId() || "")) return;
+    if (!current.minutes.running || summaryPayloadTooLargeRef.current) return;
+    const pendingCount = getPendingSummary(current).length;
+    if (!pendingCount) return;
+    const now = Date.now();
+    summaryPendingSinceRef.current ??= now;
+    if (summaryInFlightRef.current) {
+      summaryQueuedRef.current = true;
+      return;
+    }
+    if (summaryTimerRef.current !== null) window.clearTimeout(summaryTimerRef.current);
+    const delay = meetingSummaryDelay(pendingCount, summaryPendingSinceRef.current, summaryLastAttemptRef.current, now);
     summaryTimerRef.current = window.setTimeout(() => {
       summaryTimerRef.current = null;
       void requestSummaryUpdateRef.current(false);
-    }, 10_000);
+    }, delay);
   };
   scheduleSummaryUpdateRef.current = scheduleSummaryUpdate;
 
@@ -517,10 +455,6 @@ export default function MeetingAiMinutesDialog({ open, onClose, mode = "dialog",
     const actor = realTimeColab.getUniqId() || "";
     const initialState = meetingManager.getState();
     if (!isMeetingMinutesSummaryCoordinator(initialState.minutes, initialState.minutesSubscription, actor)) return;
-    if (!force && Date.now() - summaryLastAttemptRef.current < 15_000) {
-      scheduleSummaryUpdate();
-      return;
-    }
     if (summaryInFlightRef.current) {
       summaryQueuedRef.current = true;
       if (force && summaryWaitRef.current) {
@@ -543,6 +477,12 @@ export default function MeetingAiMinutesDialog({ open, onClose, mode = "dialog",
       if (force) showSummaryHint(aiMore("aiMoreNoNewContentToSummarize"));
       return;
     }
+    const now = Date.now();
+    summaryPendingSinceRef.current ??= now;
+    if (!force && meetingSummaryDelay(allPending.length, summaryPendingSinceRef.current, summaryLastAttemptRef.current, now) > 0) {
+      scheduleSummaryUpdate();
+      return;
+    }
     const batch = buildMeetingSummaryBatch(allPending, summaryRef.current);
     if (!batch.includedCount) {
       const message = t("meeting.minutesContextTooLarge", aiMore("aiMoreSummaryContextTooLarge"));
@@ -555,6 +495,9 @@ export default function MeetingAiMinutesDialog({ open, onClose, mode = "dialog",
     const pending = allPending.slice(0, batch.includedCount);
     const throughSeq = maxIncludedMeetingSegmentSeq(pending);
     if (throughSeq === undefined) return;
+    if (summaryTimerRef.current !== null) window.clearTimeout(summaryTimerRef.current);
+    summaryTimerRef.current = null;
+    summaryPendingSinceRef.current = null;
     summaryInFlightRef.current = true;
     let finishInFlight: () => void = () => undefined;
     summaryWaitRef.current = new Promise<void>((resolve) => {
@@ -579,7 +522,7 @@ export default function MeetingAiMinutesDialog({ open, onClose, mode = "dialog",
       const sharedResult = JSON.stringify({
         ...parsed,
         meetingTitle: parsed.meetingTitle || previousShared?.meetingTitle || startState.title || aiMore("aiMoreUntitledMeeting"),
-        timeline: mergeMeetingMinutesTimeline(previousShared?.timeline || [], parsed.timeline),
+        timeline: mergeMeetingMinutesTimeline(previousShared?.timeline || [], groupMeetingSummaryTimeline(parsed.timeline, pending)),
         ...(previousShared?.contextTruncated || batch.contentTruncated ? { contextTruncated: true } : {}),
       });
       if (new TextEncoder().encode(sharedResult).length > MAX_MEETING_MINUTES_SUMMARY_BYTES) {
@@ -652,7 +595,8 @@ export default function MeetingAiMinutesDialog({ open, onClose, mode = "dialog",
       summaryWaitRef.current = null;
       if (summaryTimerRef.current !== null) window.clearTimeout(summaryTimerRef.current);
       summaryTimerRef.current = null;
-      if (next.receiving && meetingState.minutes.running && isCoordinator) void requestSummaryUpdateRef.current(true);
+      summaryPendingSinceRef.current = null;
+      if (next.receiving && meetingState.minutes.running && isCoordinator) scheduleSummaryUpdateRef.current();
     }
   }, [meetingState.roomId, meetingState.minutes.recordingId, meetingState.minutes.summaryCoordinatorId, meetingState.minutes.summaryCoordinatorEpoch, meetingState.minutesSubscription.enabled, meetingState.minutes.running, receiveOverride, receiving, isCoordinator]);
 
@@ -686,8 +630,7 @@ export default function MeetingAiMinutesDialog({ open, onClose, mode = "dialog",
         cursorEnabled: hasSummaryCursor(currentState.minutes, next),
       });
       if (currentState.minutes.running) {
-        if (pending.length >= 2) void requestSummaryUpdateRef.current(false);
-        else if (pending.length) scheduleSummaryUpdateRef.current();
+        if (pending.length) scheduleSummaryUpdateRef.current();
       } else if (pending.length) {
         void requestSummaryUpdateRef.current(true);
       }
@@ -708,21 +651,6 @@ export default function MeetingAiMinutesDialog({ open, onClose, mode = "dialog",
     replayRequestedRef.current = requestKey;
     meetingManager.requestMinutesReplay(recordingId, 0);
   }, [meetingState.stage, meetingState.roomId, meetingState.minutes.recordingId, meetingState.minutes.latestSegmentSeq, meetingState.minutesSubscription.enabled]);
-
-  const clearSharedDisplay = () => {
-    transcriptRef.current = [];
-    summaryTimelineRef.current = [];
-    summaryRef.current = "";
-    summaryRecordingRef.current = meetingManager.getState().minutes.recordingId || "";
-    setTranscript([]);
-    setSummaryTimeline([]);
-    setSummary("");
-    setInterim("");
-    summaryErrorRef.current = "";
-    asrErrorRef.current = null;
-    setError("");
-    updateMeetingMinutesSession({ transcript: [], summary: "", summaryData: null, timeline: [] });
-  };
 
   const start = async () => {
     if (Date.now() - startRequestAtRef.current < 2_000) return;
@@ -779,7 +707,6 @@ export default function MeetingAiMinutesDialog({ open, onClose, mode = "dialog",
           throw new Error(aiMore("aiMoreSummaryBroadcastNotConfirmed"));
         }
       }
-      setStartedAt(Date.now());
     } catch (startError) {
       const message = startError instanceof Error ? startError.message : aiMore("aiMoreCouldNotStartMeetingNotesTry");
       setError(message);
@@ -801,7 +728,6 @@ export default function MeetingAiMinutesDialog({ open, onClose, mode = "dialog",
         setReceiveOverride(null);
         throw new Error(aiMore("aiMoreSummaryBroadcastNotConfirmed"));
       }
-      setStartedAt(0);
     } catch (stopError) {
       setError(stopError instanceof Error ? stopError.message : aiMore("aiMoreSummaryBroadcastNotConfirmed"));
     } finally {
@@ -809,10 +735,7 @@ export default function MeetingAiMinutesDialog({ open, onClose, mode = "dialog",
     }
   };
 
-  const clearSession = () => {
-    clearSharedDisplay();
-    summaryCursorRef.current = { recordingId: meetingState.minutes.recordingId || "", throughSeq: meetingState.minutes.summaryThroughSeq || 0 };
-  };  const saveSettings = async () => {
+  const saveSettings = async () => {
     if (meetingManager.getState().minutes.running) {
       setSettingsOpen(false);
       return;
@@ -826,61 +749,65 @@ export default function MeetingAiMinutesDialog({ open, onClose, mode = "dialog",
     setConfig(safe);
     setSettingsOpen(false);
   };
-  const exportSummary = () => {
+  const meetingNotesExport = () => {
     const sharedSummary = parsedSummary(summaryRef.current);
     const snapshot = getMeetingMinutesSession();
     const current = meetingManager.getState();
     const sharedTimeline = mergeMeetingMinutesTimeline(sharedSummary?.timeline || [], fallbackTimeline(transcriptRef.current, null));
     const exportSummaryData = sharedSummary ? { ...sharedSummary, timeline: sharedTimeline } : null;
-    downloadMeetingMinutesMarkdown({
+    return {
       title: sharedSummary?.meetingTitle || current.title || snapshot?.title,
       summaryData: exportSummaryData,
       timeline: sharedTimeline,
       transcript: sharedSummary ? [] : transcriptRef.current,
-    }, aiMoreMarkdownLabels(), aiMoreLocale());
+    };
   };
+  const exportSummary = () => downloadMeetingMinutesMarkdown(meetingNotesExport(), aiMoreMarkdownLabels(), aiMoreLocale());
   const copySummary = async () => {
-    const sharedSummary = parsedSummary(summaryRef.current);
-    const snapshot = getMeetingMinutesSession();
-    const current = meetingManager.getState();
-    const sharedTimeline = mergeMeetingMinutesTimeline(sharedSummary?.timeline || [], fallbackTimeline(transcriptRef.current, null));
-    const exportSummaryData = sharedSummary ? { ...sharedSummary, timeline: sharedTimeline } : null;
-    const markdown = buildMeetingMinutesMarkdown({
-      title: sharedSummary?.meetingTitle || current.title || snapshot?.title,
-      summaryData: exportSummaryData,
-      timeline: sharedTimeline,
-      transcript: sharedSummary ? [] : transcriptRef.current,
-    }, aiMoreMarkdownLabels(), aiMoreLocale());
-    try { await navigator.clipboard?.writeText(markdown); } catch { /* Clipboard is best-effort. */ }
+    try {
+      await navigator.clipboard.writeText(buildMeetingMinutesMarkdown(meetingNotesExport(), aiMoreMarkdownLabels(), aiMoreLocale()));
+      return true;
+    } catch {
+      alertUseMUI(t("toast.clipboardWriteFailed"), 3_000, { kind: "warning" });
+      return false;
+    }
   };
 
   const mountSurface = (surface: ReactNode) => portalTarget === undefined ? surface : portalTarget ? createPortal(surface, portalTarget) : null;
-  if (mode === "workspace" && !settingsOpen) return mountSurface(<MeetingMinutesWorkspace open={open} embedded={embedded} onClose={onClose} onSettings={() => setSettingsOpen(true)} canControl={meetingState.stage === "in-meeting"} running={running} receiving={receiving} canSummarize={isCoordinator} busy={busy} summarizing={summarizing} summaryHint={summaryHint} startLabel={aiMore("aiMoreStartRecording")} startDisabled={!minutesCapabilityReady || meetingState.stage !== "in-meeting"} onStart={() => void start()} onStop={() => void stop()} error={visibleError} summaryWarning={summaryWarning} statusLabel={summarizing ? aiMore("aiMoreSummarizing") : running ? receiving ? aiMore("aiMoreRecording") : aiMore("aiMoreMinutesPaused") : summary ? aiMore("aiMoreGenerated") : meetingState.minutes.configured ? aiMore("aiMoreConfiguredNotStarted") : aiMore("aiMoreNotConfigured")} summary={summary} summaryData={summaryData} timeline={timeline} transcript={transcript} tab={workspaceTab} onTabChange={setWorkspaceTab} focusSegmentId={focusTranscript?.segmentId} focusRequestId={focusTranscript?.requestId} onExport={exportSummary} onCopySummary={copySummary} onAskAssistant={onAskAssistant} onSummarizeNow={() => void requestSummaryUpdate(true)} />);
-  if (settingsOpen) {
-    const settingsSurface = <MeetingAiSettingsView recordingRunning={running} config={config} error={visibleError} onBack={() => setSettingsOpen(false)} onSave={saveSettings} onUpdateConfig={updateConfig} />;
-    if (mode === "panel") return mountSurface(open ? settingsSurface : null);
-    if (mode === "workspace") return mountSurface(open ? (
-      <Box sx={{ position: "absolute", inset: 0, zIndex: 55 }}>
-        <Box sx={{ position: "absolute", inset: 0, bgcolor: "rgba(14,29,53,.32)" }} onClick={() => setSettingsOpen(false)} />
-        <Box sx={{ position: "absolute", right: 0, top: 0, bottom: 0, width: { xs: "100%", sm: "min(480px, 62%)" }, minWidth: 0, display: "flex", flexDirection: "column", bgcolor: "#f6f8fb", borderLeft: "1px solid #dfe7f0", boxShadow: "-12px 0 32px rgba(14,29,53,.18)" }}>{settingsSurface}</Box>
-      </Box>
-    ) : null);
-    return mountSurface(<Dialog open={open} onClose={busy ? undefined : onClose} fullWidth maxWidth="sm" data-testid="meeting-ai-minutes-dialog" PaperProps={{ sx: { height: "min(820px, calc(100dvh - 24px))", borderRadius: { xs: 2, sm: 3 }, overflow: "hidden" } }}><DialogContent sx={{ p: 0, overflow: "hidden" }}>{settingsSurface}</DialogContent></Dialog>);
+  const statusLabel = aiMore(running ? receiving ? "aiMoreRecording" : "aiMoreMinutesPaused" : summary ? "aiMoreGenerated" : "aiMoreNotStarted");
+  const settingsSurface = settingsOpen && <MeetingAiSettingsView recordingRunning={running} config={config} error={visibleError}
+    onBack={() => setSettingsOpen(false)} onSave={saveSettings} onUpdateConfig={updateConfig} />;
+  if (mode === "workspace") {
+    return mountSurface(<>
+      <MeetingMinutesWorkspace open={open} embedded={embedded} onClose={onClose} onSettings={() => setSettingsOpen(true)}
+        canControl={meetingState.stage === "in-meeting"} running={running} receiving={receiving} canGenerateSummary={summaryReady}
+        busy={busy} summarizing={summarizing} summaryHint={summaryHint}
+        startDisabled={!minutesCapabilityReady || meetingState.stage !== "in-meeting"} onStart={() => void start()} onStop={() => void stop()}
+        error={visibleError} summaryWarning={summaryWarning} statusLabel={statusLabel}
+        summary={summary} summaryData={summaryData} timeline={timeline} transcript={transcript} tab={workspaceTab} onTabChange={setWorkspaceTab}
+        focusSegmentId={focusTranscript?.segmentId} focusRequestId={focusTranscript?.requestId} onViewTranscript={onViewTranscript}
+        onExport={exportSummary} onCopySummary={copySummary} onAskAssistant={onAskAssistant}
+        onSummarizeNow={isCoordinator ? () => void requestSummaryUpdate(true) : undefined} />
+      {settingsSurface && <Dialog open={open} onClose={() => setSettingsOpen(false)} fullWidth maxWidth="xs" PaperProps={{ "aria-label": aiMore("aiMoreNotesSettings") }}
+        container={portalTarget || undefined} sx={{
+          ...(portalTarget ? { position: "absolute", "& .MuiBackdrop-root": { position: "absolute" } } : {}),
+          "& .MuiDialog-container": { justifyContent: "flex-end", alignItems: "stretch" },
+        }}>
+        <DialogContent sx={{ p: 0 }}>{settingsSurface}</DialogContent>
+      </Dialog>}
+    </>);
   }
 
-
-
-
-  const livePanel = <Box sx={{ height: "100%", overflowY: "auto", bgcolor: "#f7f9fc" }}><Box sx={{ p: 1.25 }}><Paper elevation={0} sx={{ p: 1.35, borderRadius: 2.25, border: "1px solid #dfe8f3", bgcolor: "#fff" }}><Stack direction="row" alignItems="flex-start" spacing={1}><AutoAwesomeIcon sx={{ color: "#1677ff", fontSize: 18, mt: 0.1 }} /><Box sx={{ flex: 1, minWidth: 0 }}><Typography sx={{ color: "#53708f", fontSize: "0.68rem", fontWeight: 800 }}>当前会议摘要</Typography><Typography sx={{ mt: 0.45, color: "#243b56", fontSize: "0.8rem", lineHeight: 1.65 }}>{safeSummaryText(summary, summaryData)}</Typography></Box></Stack></Paper></Box><Box sx={{ px: 1.25 }}><Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 0.5 }}><Box><Typography sx={{ color: "#243b56", fontWeight: 850, fontSize: "0.82rem" }}>实时脉络</Typography><Typography data-testid="meeting-minutes-segment-count" sx={{ color: "#8a9aac", fontSize: "0.65rem", mt: 0.15 }}>{sourceLabels[config.asrSource]} · {transcript.length} 条片段{interim ? " · 正在识别" : ""}</Typography></Box><Stack direction="row" spacing={0.35}>{running ? <Button size="small" color="error" startIcon={<StopCircleOutlinedIcon />} onClick={() => void stop()} disabled={busy} data-testid="meeting-minutes-stop" sx={{ textTransform: "none", fontSize: "0.68rem" }}>停止并总结</Button> : <Button size="small" variant="contained" startIcon={<PlayArrowIcon />} onClick={() => void start()} disabled={busy || !sourceReady || meetingState.stage !== "in-meeting"} data-testid="meeting-minutes-start" sx={{ textTransform: "none", fontSize: "0.68rem" }}>{aiMore("aiMoreStartRecording")}</Button>}<Tooltip title="清空本次纪要"><span><IconButton size="small" onClick={clearSession} disabled={busy || running} aria-label="清空本次纪要"><CloseIcon fontSize="small" /></IconButton></span></Tooltip></Stack></Stack><Paper elevation={0} sx={{ px: 1.25, borderRadius: 2, border: "1px solid #e1e8f0", bgcolor: "#fff" }}><Timeline items={timeline} compact /></Paper></Box>{summaryData && <Box sx={{ p: 1.25 }}><Paper elevation={0} sx={{ p: 1.35, borderRadius: 2.25, border: "1px solid #e1e8f0", bgcolor: "#fff" }}><Typography sx={{ color: "#53708f", fontSize: "0.68rem", fontWeight: 800, mb: 0.7 }}>关键结论</Typography><SummaryBlocks value={summary} /></Paper></Box>}<Box sx={{ p: 1.25, pt: 0 }}><Button fullWidth variant="outlined" disabled={!summary && timeline.length === 0} onClick={onExpand} sx={{ borderRadius: 1.75, textTransform: "none", fontWeight: 800 }}>查看完整纪要</Button></Box>{error && <Box sx={{ p: 1.25, pt: 0 }}><Alert severity="error" onClose={() => setError("")} sx={{ borderRadius: 1.75, fontSize: "0.72rem" }}>{error}</Alert></Box>}</Box>;
-
-  const workspace = <Box data-testid="meeting-ai-minutes-workspace" sx={{ position: "fixed", left: { xs: 0, sm: 10 }, right: { xs: 0, sm: 338, md: 370 }, top: { xs: 58, sm: 66 }, bottom: { xs: 68, sm: 76 }, zIndex: 45, display: "flex", minWidth: 0, overflow: "hidden", bgcolor: "#f7f9fc", border: "1px solid #dfe7f0", borderRadius: { xs: 0, sm: 2.5 }, boxShadow: "0 14px 34px rgba(14,29,53,.12)" }}><Box sx={{ width: { xs: 0, sm: 172 }, display: { xs: "none", sm: "flex" }, flexDirection: "column", bgcolor: "#fff", borderRight: "1px solid #e3eaf2", p: 1.25 }}><Button startIcon={<ArrowBackIcon />} onClick={onClose} sx={{ justifyContent: "flex-start", textTransform: "none", color: "#1677ff", fontWeight: 800, mb: 2 }}>返回会议</Button><Typography sx={{ px: 1, color: "#243b56", fontSize: "0.8rem", fontWeight: 900, mb: 1.1 }}>{aiMore("aiMoreMeetingOutline")}</Typography>{["开场与背景", "方案讨论", aiMore("aiMoreKeyDecisions"), "行动计划"].map((item, index) => <Box key={item} sx={{ px: 1, py: 1, mb: 0.4, borderRadius: 1.5, bgcolor: index === 0 ? "#eaf2ff" : "transparent", color: index === 0 ? "#1677ff" : "#53708f" }}><Typography sx={{ fontSize: "0.74rem", fontWeight: index === 0 ? 800 : 700 }}>{index + 1} {item}</Typography><Typography sx={{ fontSize: "0.64rem", mt: 0.25, opacity: 0.75 }}>会议进行中</Typography></Box>)}</Box><Box sx={{ minWidth: 0, flex: 1, display: "flex", flexDirection: "column" }}><Box sx={{ px: { xs: 1.5, sm: 2.2 }, py: 1.35, bgcolor: "#fff", borderBottom: "1px solid #e3eaf2" }}><Stack direction="row" alignItems="center" spacing={1}><IconButton sx={{ display: { xs: "inline-flex", sm: "none" } }} onClick={onClose} aria-label="返回会议"><ArrowBackIcon /></IconButton><Box sx={{ width: 34, height: 34, borderRadius: 1.75, display: "grid", placeItems: "center", bgcolor: "#e7f0ff", color: "#1677ff" }}><NotesIcon fontSize="small" /></Box><Box sx={{ flex: 1, minWidth: 0 }}><Stack direction="row" spacing={0.8} alignItems="center" flexWrap="wrap"><Typography sx={{ fontSize: { xs: "0.95rem", sm: "1.08rem" }, fontWeight: 900 }}>{aiMore("aiMoreAIMeetingNotes")}</Typography><Chip size="small" label={running ? `记录中 · ${formatElapsed(startedAt)}` : aiMore("aiMoreConnected")} sx={{ height: 22, color: "#14976b", bgcolor: "#e8f8f2", fontSize: "0.64rem", fontWeight: 800 }} /></Stack><Typography sx={{ color: "text.secondary", fontSize: "0.68rem", mt: 0.15 }}>实时转写与智能总结，结果由前端结构化渲染</Typography></Box><Button size="small" startIcon={<DownloadIcon />} onClick={exportSummary} sx={{ textTransform: "none", display: { xs: "none", sm: "inline-flex" } }}>{aiMore("aiMoreExportNotes")}</Button></Stack></Box><Tabs value={workspaceTab} onChange={(_, value) => setWorkspaceTab(value)} variant="scrollable" sx={{ px: { xs: 1, sm: 2 }, bgcolor: "#fff", minHeight: 42, borderBottom: "1px solid #e3eaf2", "& .MuiTab-root": { minHeight: 42, textTransform: "none", fontWeight: 750, fontSize: "0.75rem" }, "& .MuiTabs-indicator": { height: 3, borderRadius: 2 } }}><Tab label={aiMore("aiMoreOverview")} /><Tab label={aiMore("aiMoreTimeline")} /><Tab label={aiMore("aiMoreStructure")} /><Tab label={aiMore("aiMoreTranscript")} /></Tabs><Box sx={{ flex: 1, minHeight: 0, overflowY: "auto", p: { xs: 1.25, sm: 2 } }}>{workspaceTab === 0 && <Stack spacing={1.25}><Paper elevation={0} sx={{ p: { xs: 1.35, sm: 1.8 }, borderRadius: 2.25, border: "1px solid #dfe8f3", bgcolor: "#fff" }}><Typography sx={{ color: "#53708f", fontSize: "0.7rem", fontWeight: 800 }}>{aiMore("aiMoreMeetingOverview")}</Typography><Typography sx={{ mt: 0.65, color: "#243b56", fontSize: "0.86rem", lineHeight: 1.75 }}>{safeSummaryText(summary, summaryData)}</Typography></Paper><Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr" }, gap: 1.25 }}><Paper elevation={0} sx={{ p: 1.5, borderRadius: 2.25, border: "1px solid #dfe8f3", bgcolor: "#fff" }}><Typography sx={{ color: "#14976b", fontSize: "0.72rem", fontWeight: 850, mb: 0.8 }}>{aiMore("aiMoreKeyDecisions")}</Typography>{summaryData?.decisions.length ? <SummaryList title="" color="#14976b" items={summaryData.decisions.map((item) => item.text)} /> : <Typography sx={{ color: "#8a9aac", fontSize: "0.76rem" }}>暂无决策</Typography>}</Paper><Paper elevation={0} sx={{ p: 1.5, borderRadius: 2.25, border: "1px solid #dfe8f3", bgcolor: "#fff" }}><Typography sx={{ color: "#f59e0b", fontSize: "0.72rem", fontWeight: 850, mb: 0.8 }}>{aiMore("aiMoreActionItems")}</Typography>{summaryData?.actionItems.length ? <Stack spacing={0.65}>{summaryData.actionItems.map((item, index) => <Box key={`${item.task}-${index}`} sx={{ p: 0.8, bgcolor: "#fff8e9", borderRadius: 1.4 }}><Typography sx={{ fontSize: "0.78rem", lineHeight: 1.45 }}>{item.task}</Typography><Typography sx={{ color: "#9a8055", fontSize: "0.66rem", mt: 0.2 }}>{[item.owner, item.deadline].filter(Boolean).join(" · ") || "待补充"}</Typography></Box>)}</Stack> : <Typography sx={{ color: "#8a9aac", fontSize: "0.76rem" }}>暂无行动项</Typography>}</Paper></Box><Paper elevation={0} sx={{ p: 1.5, borderRadius: 2.25, border: "1px solid #dfe8f3", bgcolor: "#fff" }}><Stack direction="row" justifyContent="space-between" alignItems="center"><Typography sx={{ color: "#243b56", fontSize: "0.78rem", fontWeight: 850 }}>{aiMore("aiMoreRecentDiscussion")}</Typography><Chip size="small" label={`${timeline.length} 个节点`} sx={{ height: 22, fontSize: "0.64rem" }} /></Stack><Timeline items={timeline.slice(-5)} compact /></Paper></Stack>}{workspaceTab === 1 && <Paper elevation={0} sx={{ p: { xs: 1.25, sm: 1.8 }, borderRadius: 2.25, border: "1px solid #dfe8f3", bgcolor: "#fff" }}><Typography sx={{ color: "#243b56", fontSize: "0.9rem", fontWeight: 900, mb: 0.8 }}>{aiMore("aiMoreMeetingTimeline")}</Typography><Timeline items={timeline} /></Paper>}{workspaceTab === 2 && <Paper elevation={0} sx={{ p: { xs: 1.25, sm: 2.2 }, minHeight: 330, borderRadius: 2.25, border: "1px solid #dfe8f3", bgcolor: "#fff" }}><Typography sx={{ color: "#243b56", fontSize: "0.9rem", fontWeight: 900, mb: 2 }}>会议结构</Typography><Box sx={{ maxWidth: 670, mx: "auto" }}><Box sx={{ p: 1.35, textAlign: "center", border: "1px solid #7eb5ff", bgcolor: "#eaf2ff", color: "#163c73", borderRadius: 2, fontWeight: 900 }}>{summaryData?.meetingTitle || aiMore("aiMoreThisMeeting")}</Box><Box sx={{ height: 26, width: 1, bgcolor: "#9fb8d4", mx: "auto" }} /><Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr 1fr", sm: "repeat(4, 1fr)" }, gap: 0.8 }}>{[{ label: "项目现状", color: "#1677ff" }, { label: "方案讨论", color: "#8b5cf6" }, { label: "技术风险", color: "#ef4444" }, { label: "下一步", color: "#f59e0b" }].map((item) => <Box key={item.label} sx={{ p: 1, textAlign: "center", border: `1px solid ${item.color}55`, bgcolor: `${item.color}0d`, color: item.color, borderRadius: 1.75, fontSize: "0.72rem", fontWeight: 800 }}>{item.label}</Box>)}</Box></Box></Paper>}{workspaceTab === 3 && <Paper elevation={0} sx={{ p: { xs: 1.25, sm: 1.8 }, borderRadius: 2.25, border: "1px solid #dfe8f3", bgcolor: "#fff" }}><Typography sx={{ color: "#243b56", fontSize: "0.9rem", fontWeight: 900, mb: 0.8 }}>{aiMore("aiMoreTranscript")}</Typography><Timeline items={transcript.map((segment) => ({ id: segment.id, startMs: segment.startMs, endMs: segment.endMs, speakerName: segment.speakerName || aiMore("aiMoreUnnamedMember"), summary: segment.text, transcript: segment.text, kind: "speech" as const }))} /></Paper>}</Box>{timeline.length > 0 && <Box sx={{ position: "absolute", right: { xs: 12, sm: 355 }, bottom: { xs: 84, sm: 92 }, px: 1, py: 0.7, borderRadius: 2, bgcolor: "#fff", boxShadow: "0 6px 18px rgba(14,29,53,.14)", border: "1px solid #e4eaf1" }}><Stack direction="row" spacing={0.7} alignItems="center"><Avatar sx={{ width: 25, height: 25, bgcolor: "#e7f0ff", color: "#1677ff", fontSize: "0.72rem" }}>{(timeline[timeline.length - 1].speakerName || aiMore("aiMoreYou")).slice(0, 1)}</Avatar><Box><Typography sx={{ fontSize: "0.64rem", color: "#8a9aac" }}>活动发言人</Typography><Typography sx={{ fontSize: "0.72rem", fontWeight: 800, color: "#243b56" }}>{timeline[timeline.length - 1].speakerName || aiMore("aiMoreUnnamedMember")}</Typography></Box></Stack></Box>}</Box></Box>;
-
-  const briefStatus = busy || summarizing ? "generating" : running ? (receiving ? summaryReady ? "recording" : "transcribing" : "paused") : summary ? "done" : summaryReady ? "ready" : "unconfigured";
-  const questionPanel = <MeetingMinutesQuestionPanel transcript={transcript} answers={questions} onAnswer={(answer) => setQuestions((previous) => [...previous, answer].slice(-10))} onViewTranscript={(id) => { setWorkspaceTab(1); if (onViewTranscript) onViewTranscript(id); else onExpand?.(); }} />;
-  const briefPanel = <MeetingAiBriefPanel questionPanel={questionPanel} status={briefStatus} statusLabel={summarizing ? aiMore("aiMoreSummarizing") : busy ? aiMore("aiMoreGenerating") : running ? receiving ? aiMore("aiMoreRecording") : aiMore("aiMoreMinutesPaused") : summary ? aiMore("aiMoreCompleted") : aiMore("aiMoreNotStarted")} canControl={meetingState.stage === "in-meeting"} recordingRunning={running} receiving={receiving} canSummarize={isCoordinator} startDisabled={busy || !minutesCapabilityReady || meetingState.stage !== "in-meeting"} summary={summary} summaryData={summaryData} timeline={timeline} transcript={transcript} summaryWarning={summaryWarning} summarizing={summarizing} summaryHint={summaryHint} onCopySummary={copySummary} interim={interim} error={visibleError} audioMuted={meetingState.muted} onConnect={() => setSettingsOpen(true)} onStart={() => void start()} onStop={() => void stop()} onExpand={onExpand ?? onClose} onSettings={() => setSettingsOpen(true)} onExport={exportSummary} onAskAssistant={onAskAssistant} onSummarizeNow={isCoordinator ? () => void requestSummaryUpdate(true) : undefined} />;
-  void livePanel;
-  void workspace;
-  const panel = <Box sx={{ height: "100%", minHeight: 0, display: "flex", flexDirection: "column", bgcolor: "#fff" }}>{briefPanel}</Box>;
+  const panel = settingsSurface || <MeetingAiBriefPanel statusLabel={statusLabel}
+    canControl={meetingState.stage === "in-meeting"} running={running} receiving={receiving} canGenerateSummary={summaryReady}
+    startDisabled={busy || !minutesCapabilityReady || meetingState.stage !== "in-meeting"} summary={summary} summaryData={summaryData}
+    timeline={timeline} transcript={transcript} summaryWarning={summaryWarning} summarizing={summarizing} summaryHint={summaryHint}
+    error={visibleError} audioMuted={meetingState.muted} onViewTranscript={onViewTranscript}
+    onStart={() => void start()} onStop={() => void stop()} onExpand={onExpand ?? onClose} onSettings={() => setSettingsOpen(true)}
+    onExport={exportSummary} onAskAssistant={onAskAssistant} onSummarizeNow={isCoordinator ? () => void requestSummaryUpdate(true) : undefined} />;
   if (mode === "panel") return mountSurface(open ? panel : null);
-  return mountSurface(<Dialog open={open} onClose={busy ? undefined : onClose} fullWidth maxWidth="md" data-testid="meeting-ai-minutes-dialog" PaperProps={{ sx: { height: "min(820px, calc(100dvh - 24px))", borderRadius: { xs: 2, sm: 3 }, overflow: "hidden" } }}><DialogContent sx={{ p: 0, overflow: "hidden" }}>{panel}</DialogContent></Dialog>);
+  return mountSurface(<Dialog open={open} onClose={busy ? undefined : onClose} fullWidth maxWidth="md" data-testid="meeting-ai-minutes-dialog"
+    PaperProps={{ sx: { height: "min(820px, calc(100dvh - 24px))", overflow: "hidden" } }}>
+    <DialogContent sx={{ p: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}>{panel}</DialogContent>
+  </Dialog>);
 }

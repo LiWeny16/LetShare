@@ -1,4 +1,40 @@
-import type { MeetingTranscriptSegment } from "./meetingAi";
+import type { MeetingMinutesJson, MeetingTranscriptSegment } from "./meetingAi";
+
+const SUMMARY_BATCH_TARGET = 3;
+const SUMMARY_BATCH_WAIT_MS = 30_000;
+const SUMMARY_REQUEST_INTERVAL_MS = 15_000;
+
+/** Collect a discussion before requesting its summary, with a ceiling for quiet meetings. */
+export function meetingSummaryDelay(pendingCount: number, pendingSince: number, lastAttempt: number, now: number): number {
+  const collectionDelay = pendingCount >= SUMMARY_BATCH_TARGET ? 0 : pendingSince + SUMMARY_BATCH_WAIT_MS - now;
+  return Math.max(0, collectionDelay, lastAttempt ? lastAttempt + SUMMARY_REQUEST_INTERVAL_MS - now : 0);
+}
+
+/** Publish one discussion note, with attribution taken from the source segments. */
+export function groupMeetingSummaryTimeline(
+  generated: MeetingMinutesJson["timeline"],
+  source: readonly MeetingTranscriptSegment[],
+): MeetingMinutesJson["timeline"] {
+  if (!source.length) return [];
+  const first = source[0]!;
+  const speakerName = first.speakerId && first.speakerId !== "meeting-audio" && source.every((segment) => segment.speakerId === first.speakerId)
+    ? first.speakerName
+    : "";
+  const transcript = source.map((segment) => segment.text.trim()).filter(Boolean).join(" ");
+  // If the model claims a conflicting speaker, keep the actual source text.
+  const generatedText = generated.every((item) => !item.speakerName.trim() || item.speakerName.trim() === speakerName.trim())
+    ? generated.map((item) => item.summary.trim()).filter(Boolean).join(" ").replace(/\s*\n+\s*/g, " ")
+    : "";
+  return [{
+    id: `discussion:${first.id}`,
+    startMs: Math.min(...source.map((segment) => segment.startMs)),
+    endMs: Math.max(...source.map((segment) => segment.endMs)),
+    speakerName,
+    summary: generatedText || transcript.slice(0, 1_200),
+    transcript: speakerName ? transcript.slice(0, 480) : "",
+    kind: generatedText && generated.length === 1 ? generated[0]!.kind : "speech",
+  }];
+}
 
 export type MeetingSummaryCursorOptions = {
   recordingId: string;

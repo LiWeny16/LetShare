@@ -356,11 +356,13 @@ class MeetingManagerImpl implements MeetingManager {
   private networkSampleInFlight = false;
   private subscribers = new Map<string, RTCPeerConnection>(); // 成员 uniqId → 订阅 PC
   private subscribed = new Set<string>();
-  /** 成员 → 最近一次已应答的订阅 offer sdp（服务器幂等重发同一 offer 时跳过二次协商）。 */
-  private lastSubscriberOfferSdp = new Map<string, string>();
-  /** 成员 → 待处理的订阅 offer 队列。服务器可能在首个 answer 前补发迟到轨道的 renegotiation。 */
+  /** Resend the same answer when the SFU retries an unanswered offer. */
+  private subscriberAnswers = new Map<string, { offer: string; answer: string }>();
   private subscriberOfferQueues = new Map<string, string[]>();
-  private subscriberOfferProcessing = new Set<string>();
+  private subscriberRestartIds = new Map<string, string>();
+  private subscriberRestartSequence = 0;
+  /** ICE received before the remote description. The empty key is for publishing. */
+  private pendingMeetingIce = new Map<string, RTCIceCandidateInit[]>();
   /** 成员 → 连续订阅失败恢复次数（有界，防止 PC 反复失败时的无限重订阅）。 */
   private subscriptionRecoveryCycles = new Map<string, number>();
   /** 发布 PC 断连自愈：有界 ICE restart 重试（失败→重建发布 PC）。 */
@@ -445,18 +447,10 @@ class MeetingManagerImpl implements MeetingManager {
     const failedRoomId = this.meetingChannel;
     this.broadcastSourceRoomStatus(false);
     this.stopMeetingHeartbeat();
-    this.clearSubscriptionRetry();
-    this.clearAllDegradedTimers();
+    this.clearSubscribers();
     this.publishRecoveryAttempts = 0;
     this.publishReconnecting = false;
-    this.subscriptionRecoveryCycles.clear();
-    this.lastSubscriberOfferSdp.clear();
-    this.subscriberOfferQueues.clear();
-    this.subscriberOfferProcessing.clear();
     this.publishOfferPc = null;
-    this.subscribers.forEach((subscriber) => subscriber.close());
-    this.subscribers.clear();
-    this.subscribed.clear();
     this.screenSender?.track?.stop();
     this.screenSender = null;
     this.stopAdaptiveVideoControl();
@@ -1144,14 +1138,9 @@ class MeetingManagerImpl implements MeetingManager {
     this.videoCaptureGeneration += 1;
     this.recoveringAudioFor = null;
     this.state = { ...this.state, microphoneError: undefined, microphonePending: false };
-    this.clearSubscriptionRetry();
-    this.clearAllDegradedTimers();
+    this.clearSubscribers();
     this.publishRecoveryAttempts = 0;
     this.publishReconnecting = false;
-    this.subscriptionRecoveryCycles.clear();
-    this.lastSubscriberOfferSdp.clear();
-    this.subscriberOfferQueues.clear();
-    this.subscriberOfferProcessing.clear();
     this.publishOfferPc = null;
     this.meetingChannel = roomId;
     if (!meetingPeerConnectionConstructor() || typeof MediaStream === "undefined") {
@@ -1293,14 +1282,9 @@ class MeetingManagerImpl implements MeetingManager {
     if (this.state.stage === "idle" || this.state.stage === "leaving") return;
     const leavingChannel = this.meetingChannel;
     ++this.lifecycle;
-    this.clearSubscriptionRetry();
-    this.clearAllDegradedTimers();
+    this.clearSubscribers();
     this.publishRecoveryAttempts = 0;
     this.publishReconnecting = false;
-    this.subscriptionRecoveryCycles.clear();
-    this.lastSubscriberOfferSdp.clear();
-    this.subscriberOfferQueues.clear();
-		this.subscriberOfferProcessing.clear();
 		this.publishOfferPc = null;
 		this.stopMeetingHeartbeat();
 		this.broadcastSourceRoomStatus(false);
@@ -1309,10 +1293,6 @@ class MeetingManagerImpl implements MeetingManager {
 		this.sendMeeting("meeting:leave", {}, leavingChannel);
 		this.clearMinutesSegmentQueue();
     this.rejectMeetingAIRequests();
-    for (const sub of this.subscribers.values()) sub.getSenders().forEach((s) => s.track?.stop());
-    this.subscribers.forEach((s) => s.close());
-    this.subscribers.clear();
-    this.subscribed.clear();
     this.screenSender = null;
     this.stopAdaptiveVideoControl();
     if (this.pc) {
@@ -1561,7 +1541,13 @@ class MeetingManagerImpl implements MeetingManager {
   /** 发布方向的 offer 统一入口：记录发出 offer 的 PC，answer/ICE 据此做会话绑定。 */
   private sendPublishOffer(pc: RTCPeerConnection, offer: RTCSessionDescriptionInit, roomId: string): void {
     this.publishOfferPc = pc;
-    this.sendSdp("offer", undefined, offer, roomId);
+    this.sendMeeting("meeting:sdp", { type: "offer", sdp: pc.localDescription?.sdp ?? offer.sdp }, roomId);
+  }
+
+  private flushMeetingIce(publisherId: string, pc: RTCPeerConnection): void {
+    const pending = this.pendingMeetingIce.get(publisherId) ?? [];
+    this.pendingMeetingIce.delete(publisherId);
+    for (const candidate of pending) void pc.addIceCandidate(candidate).catch(() => undefined);
   }
 
   // ── 媒体断连自愈（网络抖动导致单通的修复）────────────────────────
@@ -1641,18 +1627,7 @@ class MeetingManagerImpl implements MeetingManager {
         return;
       }
       console.warn(`[meeting] 订阅 ${publisherId} 宽限期未恢复，重建订阅`);
-      this.subscribers.delete(publisherId);
-      this.removeRemoteTracksOf(publisherId);
-      this.lastSubscriberOfferSdp.delete(publisherId);
-      if (
-        this.isCurrentMeeting(roomId, lifecycle) &&
-        this.state.members.some((m) => m.uniqId === publisherId) &&
-        (this.subscriptionRecoveryCycles.get(publisherId) ?? 0) < 3
-      ) {
-        this.subscriptionRecoveryCycles.set(publisherId, (this.subscriptionRecoveryCycles.get(publisherId) ?? 0) + 1);
-        this.subscribed.delete(publisherId);
-        this.subscribeToPeer(publisherId);
-      }
+      this.restartSubscriber(publisherId);
     }, MeetingManagerImpl.SUBSCRIBER_DEGRADED_GRACE_MS);
     this.subscriberDegradedTimers.set(publisherId, timer);
   }
@@ -1670,9 +1645,43 @@ class MeetingManagerImpl implements MeetingManager {
     this.subscriberDegradedTimers.clear();
   }
 
-  /** 恢复成功时重置该成员的恢复计数（网络间歇抖动不应耗尽有界重试预算）。 */
-  private resetSubscriberRecovery(publisherId: string): void {
-    this.subscriptionRecoveryCycles.delete(publisherId);
+  private clearSubscribers(): void {
+    this.clearSubscriptionRetry();
+    this.clearAllDegradedTimers();
+    this.subscriptionRecoveryCycles.clear();
+    this.subscriberAnswers.clear();
+    this.subscriberOfferQueues.clear();
+    this.subscriberRestartIds.clear();
+    this.pendingMeetingIce.clear();
+    this.subscribed.clear();
+    const peers = [...this.subscribers.values()];
+    this.subscribers.clear();
+    for (const pc of peers) pc.close();
+  }
+
+  private closeSubscriber(publisherId: string): void {
+    const pc = this.subscribers.get(publisherId);
+    this.subscribers.delete(publisherId);
+    this.subscribed.delete(publisherId);
+    this.subscriberAnswers.delete(publisherId);
+    this.subscriberOfferQueues.delete(publisherId);
+    this.subscriberRestartIds.delete(publisherId);
+    this.pendingMeetingIce.delete(publisherId);
+    this.clearSubscriptionRetry(publisherId);
+    this.clearSubscriberDegradedTimer(publisherId);
+    pc?.close();
+  }
+
+  private restartSubscriber(publisherId: string): void {
+    this.closeSubscriber(publisherId);
+    this.removeRemoteTracksOf(publisherId);
+    const attempts = this.subscriptionRecoveryCycles.get(publisherId) ?? 0;
+    if (attempts >= 3 || !this.state.members.some((member) => member.uniqId === publisherId)) return;
+    this.subscriptionRecoveryCycles.set(publisherId, attempts + 1);
+    // A normal subscribe request reuses the existing SFU PC. The restart ID
+    // replaces that PC once and lets retries replay the replacement offer.
+    this.subscriberRestartIds.set(publisherId, `${Date.now()}-${++this.subscriberRestartSequence}`);
+    this.subscribeToPeer(publisherId);
   }
 
   // 订阅收到的 offer/answer 时用于标识当前发布者（订阅场景）
@@ -1728,46 +1737,49 @@ class MeetingManagerImpl implements MeetingManager {
     if (!this.isMeetingRoom(roomId) || !this.isCurrentMeeting(roomId, lifecycle) || this.subscribed.has(memberId) || memberId === this.clientId()) return;
     this.subscribed.add(memberId);
     this.clearSubscriptionRetry(memberId);
-    // 发起订阅：offer(to=发布者)，服务器建 Subscriber 并用其 offer 回发本端
-    this.sendMeeting("meeting:sdp", { type: "offer", to: memberId }, roomId);
-    // 订阅竞态兜底：先加入者在后加入者发布轨之前订阅会被服务器拒绝
-    //（"发布者暂无已发布 track"）。该成员轨到达前短暂重试（服务器对重复订阅幂等拒绝，无害）。
+    const restartId = this.subscriberRestartIds.get(memberId);
+    const request = () => this.sendMeeting("meeting:sdp", { type: "offer", to: memberId, restartId }, roomId);
+    request();
     let tries = 0;
     const timer = window.setInterval(() => {
-      tries++;
       if (!this.isCurrentMeeting(roomId, lifecycle)) {
         this.clearSubscriptionRetry(memberId);
         return;
       }
-      const arrived = this.getState().remoteTracks.some((t) => t.uniqId === memberId);
-      if (arrived || tries >= 5) {
+      const pc = this.subscribers.get(memberId);
+      const connected = pc !== undefined && meetingConnectionState(pc) === "connected";
+      const expectsAudio = this.state.members.some((member) => member.uniqId === memberId && member.media?.muted === false);
+      const hasAudio = this.state.remoteTracks.some((remote) =>
+        remote.uniqId === memberId && remote.kind === "audio" && remote.track?.readyState === "live" && !remote.track.muted,
+      );
+      // ontrack can run before the answer arrives at the SFU. The track alone
+      // cannot tell us whether this subscription is actually receiving media.
+      if (connected && (!expectsAudio || hasAudio)) {
+        this.subscriptionRecoveryCycles.delete(memberId);
         this.clearSubscriptionRetry(memberId);
         return;
       }
-      this.sendMeeting("meeting:sdp", { type: "offer", to: memberId }, roomId);
+      if (++tries >= 5) {
+        this.clearSubscriptionRetry(memberId);
+        if (connected && expectsAudio) this.restartSubscriber(memberId);
+        return;
+      }
+      request();
     }, 1200);
     this.subscriptionRetryTimers.set(memberId, timer);
   }
 
   private ensureSubscriber(publisherId: string, roomId: string, lifecycle: number): RTCPeerConnection | null {
     const existing = this.subscribers.get(publisherId);
-    if (existing) {
-      // closed/failed 的订阅 PC 不得复用（发布者重进/重连场景），替换为新 PC
-      if (meetingConnectionState(existing) === "closed" || meetingConnectionState(existing) === "failed") {
-        this.subscribers.delete(publisherId);
-        this.removeRemoteTracksOf(publisherId);
-        this.lastSubscriberOfferSdp.delete(publisherId);
-      } else {
-        return existing;
-      }
-    }
+    if (existing) return existing;
     const PeerConnection = meetingPeerConnectionConstructor();
     if (!PeerConnection) return null;
     const pc = new PeerConnection(this.rtcConfig());
     this.subscribers.set(publisherId, pc);
+    const restartId = this.subscriberRestartIds.get(publisherId);
     pc.onicecandidate = (ev) => {
       if (ev.candidate && this.isCurrentMeeting(roomId, lifecycle) && this.subscribers.get(publisherId) === pc) {
-        this.sendMeeting("meeting:ice", { candidate: ev.candidate.toJSON(), to: publisherId }, roomId);
+        this.sendMeeting("meeting:ice", { candidate: ev.candidate.toJSON(), to: publisherId, restartId }, roomId);
       }
     };
     pc.ontrack = (ev) => {
@@ -1778,8 +1790,6 @@ class MeetingManagerImpl implements MeetingManager {
       if (!this.isCurrentMeeting(roomId, lifecycle) || this.subscribers.get(publisherId) !== pc) return;
       if (meetingConnectionState(pc) === "connected") {
         this.clearSubscriberDegradedTimer(publisherId);
-        // 恢复成功：重置计数，让后续网络抖动仍拥有完整的有界重试预算
-        this.resetSubscriberRecovery(publisherId);
         void this.ensureMeetingTurnServers().then(() => this.applyTurnToMeetingPcs());
         return;
       }
@@ -1789,25 +1799,9 @@ class MeetingManagerImpl implements MeetingManager {
         this.markSubscriberDegraded(publisherId, roomId, lifecycle, pc);
         return;
       }
-      // 订阅 PC failed/closed：必须从订阅表与远端轨清出（不得残留 closed 连接），
-      // 并按成员级重新订阅（有界：连续失败达到上限后停止，等待 membership 事件恢复）。
       this.clearSubscriberDegradedTimer(publisherId);
-      if (
-        (meetingConnectionState(pc) === "failed" || meetingConnectionState(pc) === "closed") &&
-        this.subscribers.get(publisherId) === pc
-      ) {
-        this.subscribers.delete(publisherId);
-        this.removeRemoteTracksOf(publisherId);
-        this.lastSubscriberOfferSdp.delete(publisherId);
-        if (
-          this.isCurrentMeeting(roomId, lifecycle) &&
-          this.state.members.some((m) => m.uniqId === publisherId) &&
-          (this.subscriptionRecoveryCycles.get(publisherId) ?? 0) < 3
-        ) {
-          this.subscriptionRecoveryCycles.set(publisherId, (this.subscriptionRecoveryCycles.get(publisherId) ?? 0) + 1);
-          this.subscribed.delete(publisherId);
-          this.subscribeToPeer(publisherId);
-        }
+      if (meetingConnectionState(pc) === "failed" || meetingConnectionState(pc) === "closed") {
+        this.restartSubscriber(publisherId);
       }
     };
     if (typeof (pc as { connectionState?: string }).connectionState === "string") pc.onconnectionstatechange = onConnectionStateChange;
@@ -2249,8 +2243,9 @@ class MeetingManagerImpl implements MeetingManager {
         if (subType === "offer") {
           const publisherId = data?.to as string | undefined;
           if (!publisherId || publisherId === this.clientId()) return;
+          if (data.restartId !== this.subscriberRestartIds.get(publisherId)) return;
           // 服务器给订阅 PC 的 offer（订阅请求的应答 / 迟发布自动补推）：本端建订阅 PC 并回 answer
-           this.enqueueSubscriberOffer(publisherId, sdp);
+          this.enqueueSubscriberOffer(publisherId, sdp);
           return;
         }
         if (subType !== "answer") return;
@@ -2259,18 +2254,28 @@ class MeetingManagerImpl implements MeetingManager {
         // 旧 session 的迟到 answer 不得污染新 PC 的协商状态。
         if (!this.pc || this.pc !== this.publishOfferPc) return;
         if (this.pc.signalingState !== "have-local-offer") return;
-        void this.pc.setRemoteDescription({ type: "answer", sdp }).catch(() => undefined);
+        const pc = this.pc;
+        void pc.setRemoteDescription({ type: "answer", sdp }).then(() => {
+          if (this.pc === pc && this.publishOfferPc === pc) this.flushMeetingIce("", pc);
+        }).catch(() => undefined);
         return;
       }
       case "meeting:ice": {
         if (!isMeetingChannelEvent(channel, this.meetingChannel) || this.state.stage === "idle" || this.state.stage === "leaving") return;
         const c = data?.candidate as RTCIceCandidateInit | null | undefined;
         if (!c) return;
-        const targetPc = data?.to && data.to !== this.clientId()
-          ? this.subscribers.get(data.to)
-          // 发布 PC 的候选只作用于本会话发出 offer 的 PC（防旧会话串扰）
+        const publisherId = typeof data?.to === "string" && data.to !== this.clientId() ? data.to : "";
+        if (publisherId && data.restartId !== this.subscriberRestartIds.get(publisherId)) return;
+        const targetPc = publisherId
+          ? this.subscribers.get(publisherId)
           : (this.pc === this.publishOfferPc ? this.pc : null);
-        if (targetPc) void targetPc.addIceCandidate(c).catch(() => undefined);
+        if (targetPc?.remoteDescription && (publisherId || targetPc.signalingState === "stable")) {
+          void targetPc.addIceCandidate(c).catch(() => undefined);
+        } else if (publisherId || targetPc) {
+          const pending = this.pendingMeetingIce.get(publisherId) ?? [];
+          if (pending.length < 64) pending.push(c);
+          this.pendingMeetingIce.set(publisherId, pending);
+        }
         return;
       }
       case "meeting:membership:snapshot":
@@ -2329,7 +2334,7 @@ class MeetingManagerImpl implements MeetingManager {
           if (announceJoin) this.emitEvent({ type: "meeting:member-joined", data: { uniqId: memberUniqId, name: memberName } });
           this.subscribeToPeer(memberUniqId);
         } else if (data?.type === "leave" && memberUniqId) {
-          this.clearSubscriptionRetry(memberUniqId);
+          this.closeSubscriber(memberUniqId);
           this.subscriptionRecoveryCycles.delete(memberUniqId);
           this.state = {
             ...this.state,
@@ -2337,11 +2342,6 @@ class MeetingManagerImpl implements MeetingManager {
             remoteTracks: this.state.remoteTracks.filter((t) => t.uniqId !== memberUniqId),
             inviteStates: clearHostInviteStateOnMemberLeave(this.state.inviteStates, memberUniqId),
           };
-          const sub = this.subscribers.get(memberUniqId);
-          if (sub) { sub.close(); this.subscribers.delete(memberUniqId); }
-          this.subscribed.delete(memberUniqId);
-          this.lastSubscriberOfferSdp.delete(memberUniqId);
-          this.subscriberOfferQueues.delete(memberUniqId);
           this.emit();
         }
         return;
@@ -2400,16 +2400,8 @@ class MeetingManagerImpl implements MeetingManager {
     this.rejectMeetingAIRequests();
     this.state = { ...this.state, microphonePending: false };
     this.monitorLocalMicrophone();
-    this.clearSubscriptionRetry();
-    this.subscriptionRecoveryCycles.clear();
-    this.lastSubscriberOfferSdp.clear();
-    this.subscriberOfferQueues.clear();
-    this.subscriberOfferProcessing.clear();
+    this.clearSubscribers();
     this.publishOfferPc = null;
-    // 拆旧订阅（server 侧已关闭，仅本地句柄清理；远端轨随之清出）
-    this.subscribers.forEach((s) => s.close());
-    this.subscribers.clear();
-    this.subscribed.clear();
     this.stopAdaptiveVideoControl();
     if (this.pc) {
       this.pc.close();
@@ -2443,81 +2435,51 @@ class MeetingManagerImpl implements MeetingManager {
    * 在 have-local-offer/have-remote-offer 状态上交叉执行。
    */
   private enqueueSubscriberOffer(publisherId: string, sdp: string): void {
-    if (this.lastSubscriberOfferSdp.get(publisherId) === sdp) return;
-    const queue = this.subscriberOfferQueues.get(publisherId) ?? [];
-    if (queue.includes(sdp)) return;
-    queue.push(sdp);
-    this.subscriberOfferQueues.set(publisherId, queue);
-    void this.drainSubscriberOffers(publisherId);
+    const queue = this.subscriberOfferQueues.get(publisherId);
+    if (queue) {
+      if (!queue.includes(sdp)) queue.push(sdp);
+      return;
+    }
+    const offers = [sdp];
+    this.subscriberOfferQueues.set(publisherId, offers);
+    void this.drainSubscriberOffers(publisherId, offers);
   }
 
-  private async drainSubscriberOffers(publisherId: string): Promise<void> {
-    if (this.subscriberOfferProcessing.has(publisherId)) return;
-    this.subscriberOfferProcessing.add(publisherId);
+  private async drainSubscriberOffers(publisherId: string, queue: string[]): Promise<void> {
+    const roomId = this.meetingChannel;
+    const lifecycle = this.lifecycle;
+    const restartId = this.subscriberRestartIds.get(publisherId);
+    const isCurrent = () => this.isCurrentMeeting(roomId, lifecycle) && this.subscriberOfferQueues.get(publisherId) === queue;
     try {
-      const queue = this.subscriberOfferQueues.get(publisherId);
-      while (queue && queue.length > 0) {
-        const sdp = queue.shift()!;
-        // A retry can arrive while the first answer is still being created.
-        // The duplicate may already be queued by then; never apply the same
-        // offer twice after the first answer has been sent.
-        if (this.lastSubscriberOfferSdp.get(publisherId) === sdp) continue;
-        const roomId = this.meetingChannel;
-        const lifecycle = this.lifecycle;
-        if (!this.isMeetingRoom(roomId) || !this.isCurrentMeeting(roomId, lifecycle)) break;
-
-        let delivered = false;
-        for (let attempt = 0; attempt < 2 && !delivered; attempt++) {
-          const pc = this.ensureSubscriber(publisherId, roomId, lifecycle);
-          if (!pc) break;
-          try {
-            // 正常情况下上一轮 answer 已让 subscriber PC 回到 stable；
-            // 若浏览器仍处于本地 offer 状态，重建这条局部 PC 比强行覆盖更安全。
-            if (pc.signalingState === "have-local-offer") {
-              this.subscribers.delete(publisherId);
-              this.removeRemoteTracksOf(publisherId);
-              this.lastSubscriberOfferSdp.delete(publisherId);
-              pc.close();
-              continue;
-            }
-            await pc.setRemoteDescription({ type: "offer", sdp });
-            if (!this.isCurrentMeeting(roomId, lifecycle) || this.subscribers.get(publisherId) !== pc) break;
-            const answer = await pc.createAnswer();
-            await pc.setLocalDescription(answer);
-            this.lastSubscriberOfferSdp.set(publisherId, sdp);
-            if (this.isCurrentMeeting(roomId, lifecycle) && this.subscribers.get(publisherId) === pc) {
-              this.sendMeeting("meeting:sdp", { type: "answer", to: publisherId, sdp: answer.sdp }, roomId);
-            }
-            delivered = true;
-          } catch (error) {
-            if (attempt === 0 && this.subscribers.get(publisherId) === pc) {
-              this.subscribers.delete(publisherId);
-              this.removeRemoteTracksOf(publisherId);
-              this.lastSubscriberOfferSdp.delete(publisherId);
-              pc.close();
-              continue;
-            }
-            console.warn("[meeting] 订阅 offer 应答失败", error);
-          }
+      while (isCurrent() && queue.length > 0) {
+        const offer = queue[0]!;
+        const pc = this.ensureSubscriber(publisherId, roomId, lifecycle);
+        if (!pc) return;
+        let cached = this.subscriberAnswers.get(publisherId);
+        if (cached?.offer !== offer) {
+          await pc.setRemoteDescription({ type: "offer", sdp: offer });
+          if (!isCurrent()) return;
+          this.flushMeetingIce(publisherId, pc);
+          const answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+          if (!isCurrent()) return;
+          cached = { offer, answer: pc.localDescription?.sdp ?? answer.sdp ?? "" };
+          this.subscriberAnswers.set(publisherId, cached);
         }
+        this.sendMeeting("meeting:sdp", { type: "answer", to: publisherId, sdp: cached.answer, restartId }, roomId);
+        queue.shift();
       }
-      if (queue?.length === 0) this.subscriberOfferQueues.delete(publisherId);
+    } catch (error) {
+      if (isCurrent()) {
+        console.warn("[meeting] 订阅 offer 应答失败", error);
+        this.restartSubscriber(publisherId);
+      }
     } finally {
-      this.subscriberOfferProcessing.delete(publisherId);
-      const queue = this.subscriberOfferQueues.get(publisherId);
-      if (queue && queue.length > 0) void this.drainSubscriberOffers(publisherId);
+      if (this.subscriberOfferQueues.get(publisherId) === queue) this.subscriberOfferQueues.delete(publisherId);
     }
   }
 
   private addRemote(uid: string, stream: MediaStream, kind: "audio" | "video", track?: MediaStreamTrack): void {
-    // Do not stop the bounded retry on the first media track. A participant
-    // can publish audio, camera video, and screen video on separate timing
-    // paths; one received track is not a completed subscription.
-    const kinds = new Set(this.state.remoteTracks.filter((t) => t.uniqId === uid).map((t) => t.kind));
-    kinds.add(kind);
-    if ((this.subscribers.get(uid) && meetingConnectionState(this.subscribers.get(uid)!) === "connected") && (kinds.has("audio") || kinds.has("video"))) {
-      this.subscriptionRecoveryCycles.delete(uid);
-    }
     // 音频轨也入列（UI 用隐藏 audio 元素统一播放）；视频轨按 track 分瓦片渲染，
     // 同成员摄像头+屏幕共享两路 video 各自成瓦片。
     // Keep each remote media entry track-scoped.  The SFU can expose the
@@ -2535,9 +2497,6 @@ class MeetingManagerImpl implements MeetingManager {
     this.emit();
   }
 
-  private sendSdp(type: "offer" | "answer", to: string | undefined, sdp: RTCSessionDescriptionInit, channel = this.meetingChannel): void {
-    this.sendMeeting("meeting:sdp", { type, to, sdp: sdp.sdp ?? "" }, channel);
-  }
   private clientId(): string {
     return realTimeColab.getUniqId() ?? "";
   }
@@ -3034,19 +2993,12 @@ class MeetingManagerImpl implements MeetingManager {
     this.clearMinutesSegmentQueue();
     this.rejectMeetingAIRequests();
     this.monitorLocalMicrophone();
-    this.clearSubscriptionRetry();
-    this.subscriptionRecoveryCycles.clear();
-    this.lastSubscriberOfferSdp.clear();
+    this.clearSubscribers();
     this.publishOfferPc = null;
     // 1) 离开当前房间（不发 meeting:leave 也会因空房被清理，但显式发更快释放）
     if (prevChannel) {
       this.sendMeeting("meeting:leave", { switchTo: roomId }, prevChannel);
     }
-    // 2) 拆订阅 PC
-    for (const sub of this.subscribers.values()) sub.getSenders().forEach((s) => s.track?.stop());
-    this.subscribers.forEach((s) => s.close());
-    this.subscribers.clear();
-    this.subscribed.clear();
     // 3) 拆发布 PC（保留 localStream 供重发布；仅停屏幕共享轨）
     if (this.screenSender?.track) {
       try { this.screenSender.track.stop(); } catch { /* 已停止 */ }

@@ -1,77 +1,91 @@
-import { aiMore, aiMoreLocale, aiMoreMarkdownLabels } from "@App/libs/i18n/meetingAiMoreTranslations";
-import { useMemo } from "react";
-import { Alert, Box, Button, Chip, Divider, Paper, Stack, Typography } from "@mui/material";
+import { useId, useRef, useState } from "react";
+import { Alert, Box, Button, Stack, Tab, Tabs, Typography } from "@mui/material";
+import ArrowBackRoundedIcon from "@mui/icons-material/ArrowBackRounded";
 import CheckCircleOutlineIcon from "@mui/icons-material/CheckCircleOutline";
-import DownloadIcon from "@mui/icons-material/Download";
-import NotesOutlinedIcon from "@mui/icons-material/NotesOutlined";
-import TaskAltIcon from "@mui/icons-material/TaskAlt";
+import DownloadOutlinedIcon from "@mui/icons-material/DownloadOutlined";
+import { aiMore, aiMoreLocale, aiMoreMarkdownLabels } from "@App/libs/i18n/meetingAiMoreTranslations";
 import type { MeetingMinutesHistoryRecord } from "@App/libs/meeting/meetingMinutesHistory";
 import { downloadMeetingMinutesMarkdown } from "@App/libs/meeting/meetingMinutesMarkdown";
+import MeetingMinutesRecap from "./MeetingMinutesRecap";
+import MeetingMinutesScrollArea, { type MeetingMinutesReadingPosition } from "./MeetingMinutesScrollArea";
+import MeetingMinutesTranscript from "./MeetingMinutesTranscript";
 
-function formatDate(value: number): string {
-  if (!value) return aiMore("aiMoreJustNow");
-  return new Intl.DateTimeFormat(aiMoreLocale(), { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).format(new Date(value));
-}
+const documentWidth = 800;
+const buttonSx = { minHeight: 40, textTransform: "none", borderRadius: 2, boxShadow: "none" } as const;
+const tabs = ["aiMoreMeetingNotes", "aiMoreFullTranscript"] as const;
 
-export default function MeetingMinutesEndScreen({ record, onExit, embedded = false, saved = true }: { record: MeetingMinutesHistoryRecord; onExit: () => void; embedded?: boolean; saved?: boolean }) {
+export default function MeetingMinutesEndScreen({ record, onExit, embedded = false, saved = true }: {
+  record: MeetingMinutesHistoryRecord;
+  onExit: () => void;
+  embedded?: boolean;
+  saved?: boolean;
+}) {
+  const sectionId = useId();
+  const [tab, setTab] = useState(0);
+  const [source, setSource] = useState<{ segmentId: string; requestId: number }>();
+  const readingPosition = useRef<MeetingMinutesReadingPosition | null>(null);
   const data = record.summaryData;
-  const overview = data?.overview || record.summary || aiMore("aiMoreNoAISummaryWasGeneratedBut");
-  const timeline = useMemo(() => (data?.timeline?.length ? data.timeline : record.timeline).slice(-8), [data?.timeline, record.timeline]);
+  const title = record.title || data?.meetingTitle || aiMore("aiMoreUntitledMeeting");
+  const endedAt = new Date(record.endedAt);
+  const dateLabel = record.endedAt && Number.isFinite(endedAt.valueOf())
+    ? endedAt.toLocaleString(aiMoreLocale(), { dateStyle: "medium", timeStyle: "short" })
+    : "";
   const download = () => {
     downloadMeetingMinutesMarkdown({
-      title: data?.meetingTitle || record.title,
-      summaryData: data,
-      timeline: data?.timeline || [],
-      transcript: data ? [] : record.transcript,
+      title, summaryData: data, timeline: data?.timeline || [], transcript: data ? [] : record.transcript,
     }, aiMoreMarkdownLabels(), aiMoreLocale());
   };
+  const viewTranscript = (segmentId: string) => {
+    setSource((previous) => ({ segmentId, requestId: (previous?.requestId ?? 0) + 1 }));
+    setTab(1);
+  };
+
   return (
-    <Box data-testid="meeting-ended-summary" sx={{ position: embedded ? "relative" : "fixed", inset: embedded ? undefined : 0, zIndex: embedded ? undefined : 60, minHeight: embedded ? "100%" : "100dvh", bgcolor: "#f4f7fb", p: { xs: 1.5, sm: 3 }, overflowY: "auto" }}>
-      <Box sx={{ width: "min(100%, 980px)", mx: "auto" }}>
-        <Stack direction={{ xs: "column", sm: "row" }} alignItems={{ xs: "flex-start", sm: "center" }} justifyContent="space-between" gap={1.5} sx={{ mb: 2.5 }}>
-          <Box>
-            <Typography sx={{ color: "#243b56", fontSize: { xs: "1.25rem", sm: "1.55rem" }, fontWeight: 900 }}>{aiMore("aiMoreMeetingEnded")}</Typography>
-            <Typography sx={{ mt: 0.45, color: "#71839a", fontSize: "0.78rem" }}>{record.title} · {formatDate(record.endedAt)}</Typography>
+    <Box data-testid="meeting-ended-summary" sx={{
+      position: embedded ? "relative" : "fixed", inset: embedded ? undefined : 0, zIndex: embedded ? undefined : 60,
+      flex: 1, minHeight: 0, display: "flex", flexDirection: "column", bgcolor: "background.paper", overflow: "hidden",
+    }}>
+      <Box sx={{ width: "100%", maxWidth: documentWidth, mx: "auto", px: { xs: 2, sm: 3 }, pt: { xs: 1.5, sm: 2.5 }, flexShrink: 0 }}>
+        {!embedded && <Button size="small" startIcon={<ArrowBackRoundedIcon />} onClick={onExit} data-testid="meeting-ended-return" sx={{ ...buttonSx, ml: -1, mb: 0.75 }}>{aiMore("aiMoreReturnToLetShare")}</Button>}
+        <Stack direction="row" alignItems="center" gap={1.5} flexWrap="wrap" sx={{ pb: 1.5 }}>
+          <Box sx={{ minWidth: 0, flex: "1 1 220px" }}>
+            <Typography component="h1" sx={{ fontSize: "clamp(1.25rem, 4vw, 1.75rem)", fontWeight: 800, lineHeight: 1.2, textWrap: "balance", overflowWrap: "anywhere" }}>{title}</Typography>
+            <Stack direction="row" gap={1} alignItems="center" flexWrap="wrap" sx={{ mt: 0.7, color: "text.secondary", fontSize: "0.75rem" }}>
+              {!embedded && <span>{aiMore("aiMoreMeetingEnded")}</span>}
+              {dateLabel && <Box component="time" dateTime={endedAt.toISOString()}>{dateLabel}</Box>}
+              {saved && <Stack component="span" direction="row" alignItems="center" gap={0.45} sx={{ color: "success.main" }}>
+                <CheckCircleOutlineIcon sx={{ fontSize: 15 }} />{aiMore("aiMoreSavedOnThisDevice")}
+              </Stack>}
+            </Stack>
           </Box>
-          <Stack direction="row" spacing={1}>
-            <Button variant="outlined" startIcon={<DownloadIcon />} onClick={download} sx={{ textTransform: "none", borderRadius: 2 }}>{aiMore("aiMoreExportNotes")}</Button>
-            <Button variant="contained" onClick={onExit} data-testid="meeting-ended-return" sx={{ textTransform: "none", borderRadius: 2, boxShadow: "none" }}>{aiMore("aiMoreReturnToLetShare")}</Button>
-          </Stack>
+          <Button variant="outlined" startIcon={<DownloadOutlinedIcon />} onClick={download} sx={buttonSx}>{aiMore("aiMoreExportNotes")}</Button>
         </Stack>
+        <Tabs aria-label={aiMore("aiMoreMeetingNotes")} value={tab} onChange={(_, value) => setTab(value)} variant="fullWidth"
+          sx={{ minHeight: 44, borderBottom: "1px solid", borderColor: "divider", "& .MuiTab-root": { minHeight: 44, minWidth: 0, px: 0.5, textTransform: "none", fontSize: "0.8rem", fontWeight: 750 }, "@media (prefers-reduced-motion: reduce)": { "& .MuiTabs-indicator": { transition: "none" } } }}>
+          {tabs.map((label, index) => (
+            <Tab key={label} id={`${sectionId}-tab-${index}`} aria-controls={`${sectionId}-panel`} label={aiMore(label)} />
+          ))}
+        </Tabs>
+      </Box>
 
-        {!saved && <Alert severity="warning" sx={{ mb: 1.5 }}>{aiMore("aiMoreMinutesEndNotSaved")}</Alert>}
-        <Alert severity="info" sx={{ mb: 1.5 }}>{data || record.summary ? aiMore("aiMoreMinutesEndMayBeIncomplete") : aiMore("aiMoreMinutesEndTranscriptOnly")}</Alert>
-        <Paper elevation={0} sx={{ p: { xs: 1.75, sm: 2.5 }, border: "1px solid #dce6f0", borderRadius: 3, bgcolor: "#fff" }}> 
-          <Stack direction="row" spacing={1.1} alignItems="flex-start">
-            <Box sx={{ width: 38, height: 38, borderRadius: 2, display: "grid", placeItems: "center", bgcolor: "#eaf2ff", color: "#1677ff", flexShrink: 0 }}><NotesOutlinedIcon /></Box>
-            <Box sx={{ minWidth: 0, flex: 1 }}>
-              <Stack direction="row" alignItems="center" spacing={0.8} flexWrap="wrap"><Typography sx={{ color: "#243b56", fontSize: "1rem", fontWeight: 850 }}>{aiMore("aiMoreMeetingNotes")}</Typography>{saved && <Chip size="small" icon={<CheckCircleOutlineIcon />} label={aiMore("aiMoreSavedOnThisDevice")} sx={{ height: 23, color: "#148765", bgcolor: "#e8f8f2", fontSize: "0.66rem" }} />}</Stack>
-              <Typography sx={{ mt: 1, color: "#30485f", fontSize: "0.9rem", lineHeight: 1.75 }}>{overview}</Typography>
-              <Stack direction="row" spacing={1.2} flexWrap="wrap" sx={{ mt: 1.5 }}>
-                <Chip size="small" label={aiMore("aiMoreCountStatements", { count: record.transcript.length })} />
-                <Chip size="small" label={aiMore("aiMoreCountDecisions", { count: data?.decisions.length ?? 0 })} color="success" variant="outlined" />
-                <Chip size="small" label={aiMore("aiMoreCountActionItems", { count: data?.actionItems.length ?? 0 })} color="warning" variant="outlined" />
+      <Box role="tabpanel" id={`${sectionId}-panel`} aria-labelledby={`${sectionId}-tab-${tab}`} sx={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+        {tab === 1 ? (
+          <MeetingMinutesTranscript transcript={record.transcript} focusSegmentId={source?.segmentId} focusRequestId={source?.requestId} />
+        ) : (
+          <MeetingMinutesScrollArea follow={false} readingPosition={readingPosition} sx={{ maxWidth: documentWidth, mx: "auto", px: { xs: 2, sm: 3 }, py: 2.5 }}>
+            {!saved && <Alert severity="warning" sx={{ mb: 2, fontSize: "0.85rem" }}>{aiMore("aiMoreMinutesEndNotSaved")}</Alert>}
+            {data?.contextTruncated && <Alert severity="info" sx={{ mb: 2, fontSize: "0.85rem" }}>{aiMore("aiMoreMinutesEndMayBeIncomplete")}</Alert>}
+            {data || record.summary ? (
+              <MeetingMinutesRecap summary={record.summary} summaryData={data} transcript={record.transcript}
+                timeline={data?.timeline?.length ? data.timeline : record.timeline} onViewTranscript={viewTranscript} />
+            ) : (
+              <Stack gap={0.5} alignItems="flex-start">
+                <Typography sx={{ color: "text.secondary", fontSize: "0.9rem" }}>{aiMore(record.transcript.length ? "aiMoreMinutesEndTranscriptOnly" : "aiMoreNoFinalTranscriptAvailable")}</Typography>
+                {record.transcript.length > 0 && <Button size="small" onClick={() => setTab(1)} sx={{ ...buttonSx, ml: -0.75 }}>{aiMore("aiMoreFullTranscript")}</Button>}
               </Stack>
-            </Box>
-          </Stack>
-        </Paper>
-
-        <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr" }, gap: 1.5, mt: 1.5 }}>
-          <Paper elevation={0} sx={{ p: 2, border: "1px solid #dce6f0", borderRadius: 3, bgcolor: "#fff" }}>
-            <Typography sx={{ color: "#138765", fontSize: "0.78rem", fontWeight: 850 }}>{aiMore("aiMoreKeyDecisions")}</Typography>
-            {data?.decisions.length ? <Stack spacing={1} sx={{ mt: 1 }}>{data.decisions.map((item, index) => <Stack key={`${item.text}-${index}`} direction="row" spacing={0.8} alignItems="flex-start"><CheckCircleOutlineIcon sx={{ color: "#16a36f", fontSize: 17, mt: 0.2 }} /><Typography sx={{ color: "#30485f", fontSize: "0.8rem", lineHeight: 1.55 }}>{item.text}</Typography></Stack>)}</Stack> : <Typography sx={{ mt: 1, color: "#95a4b3", fontSize: "0.8rem" }}>{aiMore("aiMoreThereWereNoExplicitDecisions")}</Typography>}
-          </Paper>
-          <Paper elevation={0} sx={{ p: 2, border: "1px solid #dce6f0", borderRadius: 3, bgcolor: "#fff" }}>
-            <Typography sx={{ color: "#c17a00", fontSize: "0.78rem", fontWeight: 850 }}>{aiMore("aiMoreActionItems")}</Typography>
-            {data?.actionItems.length ? <Stack spacing={1} sx={{ mt: 1 }}>{data.actionItems.map((item, index) => <Stack key={`${item.task}-${index}`} direction="row" spacing={0.8} alignItems="flex-start"><TaskAltIcon sx={{ color: "#e5a11a", fontSize: 17, mt: 0.2 }} /><Box><Typography sx={{ color: "#30485f", fontSize: "0.8rem", lineHeight: 1.5 }}>{item.task}</Typography><Typography sx={{ color: "#95a4b3", fontSize: "0.68rem", mt: 0.2 }}>{[item.owner, item.deadline].filter(Boolean).join(" · ") || aiMore("aiMoreOwnerAndDeadlineNotSet")}</Typography></Box></Stack>)}</Stack> : <Typography sx={{ mt: 1, color: "#95a4b3", fontSize: "0.8rem" }}>{aiMore("aiMoreThereWereNoActionItems")}</Typography>}
-          </Paper>
-        </Box>
-
-        <Paper elevation={0} sx={{ mt: 1.5, p: { xs: 1.75, sm: 2 }, border: "1px solid #dce6f0", borderRadius: 3, bgcolor: "#fff" }}>
-          <Typography sx={{ color: "#243b56", fontSize: "0.85rem", fontWeight: 850 }}>{aiMore("aiMoreRecentStatements")}</Typography>
-          <Divider sx={{ my: 1 }} />
-          <Stack spacing={1.1}>{timeline.length ? timeline.map((item, index) => <Box key={`${item.id}-${index}`}><Stack direction="row" spacing={0.8} alignItems="baseline"><Typography sx={{ color: "#1677ff", fontSize: "0.75rem", fontWeight: 800 }}>{item.speakerName || aiMore("aiMoreUnnamedMember")}</Typography><Typography sx={{ color: "#9aa9b8", fontSize: "0.66rem" }}>{formatDate(item.startMs)}</Typography></Stack><Typography sx={{ mt: 0.25, color: "#30485f", fontSize: "0.78rem", lineHeight: 1.6 }}>{item.summary || item.transcript}</Typography></Box>) : <Typography sx={{ color: "#95a4b3", fontSize: "0.8rem" }}>{aiMore("aiMoreNoFinalTranscriptAvailable")}</Typography>}</Stack>
-        </Paper>
+            )}
+          </MeetingMinutesScrollArea>
+        )}
       </Box>
     </Box>
   );

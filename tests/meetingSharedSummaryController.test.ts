@@ -29,7 +29,7 @@ test("all members can start and individually resume; only the coordinator can su
   assert.match(controller, /onSummarizeNow=\{isCoordinator \?/);
   assert.match(controller, /meetingManager\.setMinutesReceiving\(true, recordingId, 0\)/, "resume replays all retained segments after the local cache is cleared");
   assert.match(controller, /meetingManager\.requestMinutesReplay\(recordingId, 0\)/, "a newly enabled member rebuilds from server replay");
-  assert.match(briefPanel, /canSummarize && running && onSummarizeNow/);
+  assert.match(briefPanel, /activelyReceiving && transcript\.length > 0 \? onSummarizeNow/);
   assert.match(controller, /receiving=\{receiving\}/);
 });
 

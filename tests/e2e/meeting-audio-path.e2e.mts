@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { chromium } from "playwright";
 import { ensureLoudWav } from "./loudwav.mts";
+import type { LSDump } from "../../src/diagnostics/index";
 
 const SITE = process.env.E2E_SITE ?? "http://localhost:5173";
 const WS = process.env.E2E_WS ?? "ws://localhost:8080/";
@@ -322,14 +323,13 @@ test("meeting audio path: both participants receive an audible remote signal", a
   async function playbackProbe(page: import("playwright").Page) {
     return page.evaluate(() => {
       const probe = (window as unknown as { __meetingAudioProbe?: { contexts: Array<{ state: string }> } }).__meetingAudioProbe;
-      const audio = document.querySelector('[data-testid="meeting-shell"] audio');
+      const diagnostics = (window as Window & { __ls?: { dump(): LSDump } }).__ls?.dump();
+      const playback = diagnostics?.playback.participants?.[0]?.playback;
       return {
-        audioCount: document.querySelectorAll('[data-testid="meeting-shell"] audio').length,
-        audioTracks: audio?.srcObject?.getAudioTracks().length ?? 0,
         contextRunning: Boolean(probe?.contexts.some((context) => context.state === "running")),
-        nativeAudioAttached: Boolean(audio?.srcObject),
-        nativeAudioPlaying: Boolean(audio?.srcObject) && audio?.paused === false && !audio?.muted && (audio?.volume ?? 0) > 0,
-        nativeAudioState: audio ? { paused: audio.paused, muted: audio.muted, volume: audio.volume, readyState: audio.readyState } : null,
+        nativeAudioAttached: Boolean(playback?.sink?.connected && playback.sink.srcObjectSet),
+        nativeAudioPlaying: playback?.audibleVia.derived === "element",
+        nativeAudioState: playback?.outputElement ?? null,
       };
     });
   }

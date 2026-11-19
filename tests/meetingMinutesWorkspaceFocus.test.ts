@@ -1,4 +1,4 @@
-import test from "node:test";
+import test, { afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -8,6 +8,10 @@ import type { MeetingMinutesWorkspaceProps } from "../src/components/meeting/com
 import type { MeetingTranscriptSegment } from "../src/app/libs/meeting/meetingAi";
 
 type ScrollCall = { node: HTMLElement; options: ScrollIntoViewOptions | undefined };
+const unmounts: Array<() => void> = [];
+afterEach(async () => {
+  await act(async () => { unmounts.splice(0).forEach((unmount) => unmount()); });
+});
 
 type Harness = {
   browser: Window;
@@ -72,6 +76,7 @@ async function setupWorkspace(options: { reducedMotion?: boolean } = {}): Promis
     const container = browser.document.createElement("div") as unknown as HTMLElement;
     browser.document.body.appendChild(container);
     const root = createRoot(container);
+    unmounts.push(() => { root.unmount(); container.remove(); });
     let current: MeetingMinutesWorkspaceProps = {
       open: true,
       onClose: () => undefined,
@@ -129,6 +134,15 @@ test("changing the focused segment moves the reveal to the new line", async () =
   assert.equal(next.getAttribute("aria-current"), "true");
   assert.equal(row(container, "seg-1")?.getAttribute("aria-current"), null, "the previous highlight is cleared");
   assert.equal(browser.document.activeElement, next);
+});
+
+test("live transcript updates do not pull readers back to an already revealed citation", async () => {
+  const { render, scrollCalls } = await setupWorkspace();
+  const { update } = await render({ tab: 1, focusSegmentId: "seg-2", focusRequestId: 1 });
+  await update({ transcript: [...transcript, { ...transcript[2]!, id: "seg-4" }] });
+  assert.equal(scrollCalls.length, 1);
+  await update({ focusRequestId: 2 });
+  assert.equal(scrollCalls.length, 2, "explicitly reopening the same source still reveals it");
 });
 
 test("an unknown segment id never invents a match", async () => {
@@ -224,10 +238,10 @@ test("reduced motion disables smooth scrolling but keeps the reveal", async () =
 });
 
 test("segment lookup uses refs and data attributes, never a CSS selector built from the id", () => {
-  const source = readFileSync(join(process.cwd(), "src", "components", "meeting", "components", "MeetingMinutesWorkspace.tsx"), "utf8");
+  const source = readFileSync(join(process.cwd(), "src", "components", "meeting", "components", "MeetingMinutesTranscript.tsx"), "utf8");
   assert.match(source, /data-segment-id=\{row\.id\}/, "rows expose the id as a data attribute");
   assert.match(source, /node\.dataset\.segmentId !== focusSegmentId/, "the reveal verifies the exact id before acting");
-  assert.match(source, /scrollIntoView\(\{[^}]*block: "center"/, "the reveal centres the row in its transcript pane");
+  assert.match(source, /scrollIntoView(?:\?\.)?\(\{[^}]*block: "center"/, "the reveal centres the row in its transcript pane");
   assert.match(source, /prefers-reduced-motion: reduce/, "reduced motion is honoured in the highlight transition");
   assert.doesNotMatch(source, /querySelector(?:All)?\(\s*`[^`]*\$\{focusSegmentId\}/, "ids are never interpolated into a CSS selector");
 });

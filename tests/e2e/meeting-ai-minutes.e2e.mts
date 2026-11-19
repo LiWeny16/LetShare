@@ -126,13 +126,13 @@ test("distributed meeting minutes requires consent and broadcasts real final seg
   await until("member in-meeting", async () => (await member.getByTestId("meeting-stage").getAttribute("data-stage")) === "in-meeting");
 
   await host.getByTestId("meeting-ai-minutes-open").click();
+  await host.getByTestId("meeting-minutes-expand").click();
   await host.getByTestId("meeting-ai-minutes-workspace").waitFor({ state: "visible" });
   if (process.env.E2E_SCREENSHOT) await host.screenshot({ path: process.env.E2E_SCREENSHOT, fullPage: false });
-  await host.getByRole("tab", { name: "AI 纪要" }).click();
-  await host.getByText("AI 会议纪要详情见左边").waitFor({ state: "visible" });
-  await host.getByRole("button", { name: "纪要设置" }).click();
+  await host.getByRole("button", { name: /更多纪要操作|More minutes actions/ }).click();
+  await host.getByRole("menuitem", { name: /纪要设置|Notes settings/ }).click();
   if (process.env.E2E_SETTINGS_SCREENSHOT) await host.screenshot({ path: process.env.E2E_SETTINGS_SCREENSHOT, fullPage: false });
-  await host.getByRole("button", { name: "测试并连接" }).click();
+  await host.getByRole("button", { name: "保存", exact: true }).click();
   await host.getByTestId("meeting-minutes-start").click();
 
   // This assertion must use the real production surface.  __meeting is a
@@ -151,10 +151,10 @@ test("distributed meeting minutes requires consent and broadcasts real final seg
   await until("member consent prompt closes after stop", async () => !(await member.getByTestId("meeting-minutes-consent-dialog").isVisible().catch(() => false)));
   await host.getByTestId("meeting-ai-minutes-workspace").waitFor({ state: "visible", timeout: 10_000 });
   if (process.env.E2E_WORKSPACE_SCREENSHOT) await host.screenshot({ path: process.env.E2E_WORKSPACE_SCREENSHOT, fullPage: false });
-  assert.equal(await host.getByRole("button", { name: "返回会议" }).count(), 0);
-  await host.getByRole("button", { name: "关闭会议纪要" }).click();
+  await host.getByRole("button", { name: "返回会议" }).click();
   await host.getByTestId("meeting-ai-minutes-workspace").waitFor({ state: "hidden", timeout: 10_000 });
-  await host.getByTestId("meeting-ai-minutes-open").click();
+  await host.getByTestId("meeting-ai-minutes-panel").waitFor({ state: "visible", timeout: 10_000 });
+  await host.getByTestId("meeting-minutes-expand").click();
   await host.getByTestId("meeting-ai-minutes-workspace").waitFor({ state: "visible", timeout: 10_000 });
   await host.getByTestId("meeting-ai-minutes-open").click();
   await host.getByTestId("meeting-ai-minutes-workspace").waitFor({ state: "hidden", timeout: 10_000 });

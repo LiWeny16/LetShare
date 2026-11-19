@@ -2,7 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   getPendingMeetingSummarySegments,
+  groupMeetingSummaryTimeline,
   maxIncludedMeetingSegmentSeq,
+  meetingSummaryDelay,
   mergeMeetingTranscriptSegments,
   nextLatestMeetingSegmentSeq,
 } from "../src/app/libs/meeting/meetingSummaryQueue";
@@ -11,6 +13,43 @@ import type { MeetingTranscriptSegment } from "../src/app/libs/meeting/meetingAi
 function segment(id: string, seq: number | undefined, recordingId = "recording-a", final = true): MeetingTranscriptSegment {
   return { id, speakerId: "member", speakerName: "Member", text: id, startMs: Number(id.replace(/\D/g, "")) || 0, endMs: 1, final, recordingId, ...(seq === undefined ? {} : { seq }) };
 }
+
+test("automatic summaries collect three segments or wait for the quiet-meeting deadline", () => {
+  const firstArrival = 100_000;
+  assert.equal(meetingSummaryDelay(1, firstArrival, 0, firstArrival), 30_000);
+  assert.equal(meetingSummaryDelay(2, firstArrival, 0, firstArrival + 10_000), 20_000);
+  assert.equal(meetingSummaryDelay(3, firstArrival, 0, firstArrival + 12_000), 0);
+  assert.equal(meetingSummaryDelay(1, firstArrival, 0, firstArrival + 30_000), 0);
+  assert.equal(meetingSummaryDelay(3, firstArrival, firstArrival, firstArrival + 12_000), 3_000);
+});
+
+test("one synthesized discussion note covers the batch without assigning it to one of several speakers", () => {
+  const sources = [
+    { ...segment("line-1", 1), speakerId: "ana", speakerName: "Ana", startMs: 90, endMs: 120, text: "We can ship on Friday." },
+    { ...segment("line-2", 2), speakerId: "ben", speakerName: "Ben", startMs: 80, endMs: 130, text: "Test the new build first." },
+  ];
+  const result = groupMeetingSummaryTimeline([{
+    id: "generated", speakerName: "", startMs: 99, endMs: 101,
+    summary: "The team discussed a Friday release.\nThe new build needs testing before shipping.", transcript: "", kind: "speech",
+  }], sources);
+  assert.equal(result.length, 1);
+  assert.deepEqual(result[0], {
+    id: "discussion:line-1", speakerName: "", startMs: 80, endMs: 130, kind: "speech",
+    summary: "The team discussed a Friday release. The new build needs testing before shipping.",
+    transcript: "",
+  });
+});
+
+test("model speaker guesses cannot replace the single recorded speaker or their words", () => {
+  const source = { ...segment("line-1", 1), speakerId: "ana", speakerName: "Ana", text: "I will test it." };
+  const result = groupMeetingSummaryTimeline([{
+    id: "fabricated", speakerName: "Ben", startMs: 0, endMs: 5,
+    summary: "Ben will ship it.", transcript: "Ben will ship it.", kind: "action",
+  }], [source]);
+  assert.equal(result[0]?.speakerName, "Ana");
+  assert.equal(result[0]?.summary, source.text);
+  assert.equal(result[0]?.kind, "speech");
+});
 
 test("summary queue selects only a contiguous final tail for the active recording", () => {
   const transcript = [

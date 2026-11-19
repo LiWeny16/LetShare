@@ -55,10 +55,9 @@ test("meeting retries a missing microphone after joining with video only", async
         transferPriority: "p2p",
         version: "3.8.30",
         isNewUser: false,
-        // The product default remains muted. The test enables it only after
-        // the failed first capture, through the real meeting control.
+        // Request both inputs at join so the first microphone failure leaves video running.
         meetingCameraDefaultOn: true,
-        meetingMicrophoneDefaultOn: false,
+        meetingMicrophoneDefaultOn: true,
       }));
 
       // Production deliberately omits window.__meeting. Observe the actual
@@ -159,27 +158,29 @@ test("meeting retries a missing microphone after joining with video only", async
 
   await host.page.locator('button[aria-label="plus"]:visible').first().click();
   await host.page.getByRole("menuitem", { name: /创建会议|Create meeting/ }).click();
-  await host.page.getByText("MEETING PASS", { exact: true }).waitFor({ state: "visible", timeout: 15_000 });
+  await host.page.getByTestId("meeting-pass").waitFor({ state: "visible", timeout: 15_000 });
   await host.page.getByRole("button", { name: /开始会议|进入会议|Start meeting|Enter meeting/ }).click();
   await until("host meeting route", async () => (await host.page.evaluate(() => location.hash)).includes("/meeting"), 20_000);
   await until("host enters meeting", async () => (await host.page.getByTestId("meeting-stage").getAttribute("data-stage")) === "in-meeting", 35_000);
   const meetingId = (await host.page.evaluate(() => location.hash)).match(/[?&]room=(\d{4})/)?.[1] ?? "";
   assert.match(meetingId, /^\d{4}$/);
 
-    await guest.page.goto(`${SITE}/#/meeting?room=${meetingId}&source=${ROOM}`, { waitUntil: "domcontentloaded", timeout: 60_000 });
-    await until("guest enters meeting", async () => (await guest.page.getByTestId("meeting-stage").getAttribute("data-stage")) === "in-meeting", 35_000);
+  await guest.page.goto(`${SITE}/#/meeting?room=${meetingId}&source=${ROOM}`, { waitUntil: "domcontentloaded", timeout: 60_000 });
+  await until("guest enters meeting", async () => (await guest.page.getByTestId("meeting-stage").getAttribute("data-stage")) === "in-meeting", 35_000);
+  await Promise.all([host.page, guest.page].map((page) => page.getByTestId("meeting-microphone-retry").waitFor()));
 
   const beforeUnmute = await Promise.all([host.page, guest.page].map((page) => page.evaluate(() => ({
     localVideoTracks: Array.from(document.querySelectorAll<HTMLElement>('[data-testid^="meeting-member-tile-"] video'))
       .reduce((count, video) => count + (video.srcObject?.getVideoTracks().length ?? 0), 0),
-    muted: document.querySelector('button[aria-label="解除静音"], button[aria-label="Unmute"]') !== null,
+    muted: document.querySelector('[data-testid="meeting-self-microphone"]')?.getAttribute("aria-pressed") === "false",
     audioAttempts: (window as any).__meetingAudioRecovery?.audioAttempts ?? 0,
   }))));
   assert.ok(beforeUnmute.every((item) => item.localVideoTracks >= 1), JSON.stringify(beforeUnmute));
+  assert.deepEqual(beforeUnmute.map((item) => item.audioAttempts), [1, 1], "initial microphone capture failed for both participants");
   assert.deepEqual(beforeUnmute.map((item) => item.muted), [true, true], "the meeting must still enter muted");
 
   for (const page of [host.page, guest.page]) {
-    await page.locator('button[aria-label="解除静音"], button[aria-label="Unmute"]').first().click();
+    await page.getByTestId("meeting-microphone-retry").click();
   }
   await until("both participants explicitly unmute", async () => {
     const states = await Promise.all([host.page, guest.page].map((page) => page.evaluate(() => document.querySelector('button[aria-label="静音"], button[aria-label="Mute"]') !== null)));

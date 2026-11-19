@@ -80,10 +80,10 @@ function renderTimeline(
     .sort((left, right) => left.startMs - right.startMs)
     .map((item) => {
       const time = formatTimeRange(item.startMs, item.endMs, locale);
-      const speaker = cleanText(item.speakerName) || labels.unknownSpeaker;
+      const speaker = cleanText(item.speakerName) || (item.id.startsWith("discussion:") ? "" : labels.unknownSpeaker);
       const kind = labels.kinds[item.kind];
       const content = cleanText(item.summary) || cleanText(item.transcript);
-      const header = [time ? `\`${time}\`` : "", `**${speaker}**`, kind ? `_${kind}_` : ""].filter(Boolean).join(" ");
+      const header = [time ? `\`${time}\`` : "", speaker ? `**${speaker}**` : "", kind ? `_${kind}_` : ""].filter(Boolean).join(" ");
       const source = cleanText(item.transcript) && cleanText(item.transcript) !== content
         ? `\n${quoteMarkdown(cleanText(item.transcript))}`
         : "";
