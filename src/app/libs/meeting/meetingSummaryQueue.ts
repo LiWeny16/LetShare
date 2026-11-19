@@ -1,13 +1,11 @@
 import type { MeetingMinutesJson, MeetingTranscriptSegment } from "./meetingAi";
 
-const SUMMARY_BATCH_TARGET = 3;
-const SUMMARY_BATCH_WAIT_MS = 30_000;
-const SUMMARY_REQUEST_INTERVAL_MS = 15_000;
+const SUMMARY_BATCH_WAIT_MS = 60_000;
 
-/** Collect a discussion before requesting its summary, with a ceiling for quiet meetings. */
+/** Collect at least a minute of discussion before producing the next live note. */
 export function meetingSummaryDelay(pendingCount: number, pendingSince: number, lastAttempt: number, now: number): number {
-  const collectionDelay = pendingCount >= SUMMARY_BATCH_TARGET ? 0 : pendingSince + SUMMARY_BATCH_WAIT_MS - now;
-  return Math.max(0, collectionDelay, lastAttempt ? lastAttempt + SUMMARY_REQUEST_INTERVAL_MS - now : 0);
+  if (pendingCount <= 0) return 0;
+  return Math.max(0, pendingSince + SUMMARY_BATCH_WAIT_MS - now, lastAttempt ? lastAttempt + SUMMARY_BATCH_WAIT_MS - now : 0);
 }
 
 /** Publish one discussion note, with attribution taken from the source segments. */

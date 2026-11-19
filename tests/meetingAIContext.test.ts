@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildMeetingAIContext, buildMeetingSummaryBatch } from "../src/app/libs/meeting/meetingAIContext";
+import { buildMeetingAIContext, buildMeetingFinalSummaryContext, buildMeetingSummaryBatch } from "../src/app/libs/meeting/meetingAIContext";
 import type { MeetingTranscriptSegment } from "../src/app/libs/meeting/meetingAi";
 
 function make(index: number, text: string, final = true): MeetingTranscriptSegment {
@@ -77,4 +77,25 @@ test("meeting AI context can express an unanswered question without inventing tr
   const data = JSON.parse(buildMeetingAIContext([], { question: "刚才谁说了什么？" }));
   assert.deepEqual(data.segments, []);
   assert.equal(data.question, "刚才谁说了什么？");
+});
+
+test("explicit final minutes combine the discussion outline with recent final speech within the request limit", () => {
+  const timeline = Array.from({ length: 40 }, (_, index) => ({ id: `note-${index}`, startMs: index, endMs: index + 1, speakerName: "", summary: `讨论 ${index} ` + "内容".repeat(100), transcript: "", kind: "speech" as const }));
+  const transcript = Array.from({ length: 20 }, (_, index) => make(index, `发言 ${index} ` + "会议内容".repeat(250)));
+  transcript.push(make(21, "不要发送临时识别结果", false));
+  const result = buildMeetingFinalSummaryContext("项目讨论", timeline, transcript);
+  const data = JSON.parse(result.input);
+  assert.ok(new TextEncoder().encode(result.input).length <= 14_000);
+  assert.equal(result.contextTruncated, true);
+  assert.equal(data.contextTruncated, true);
+  assert.equal(data.timeline[0].summary.startsWith("讨论 0"), true);
+  assert.equal(data.segments.at(-1).id, "id-19");
+  assert.ok(data.segments.every((item: { text: string }) => !item.text.includes("临时识别")));
+});
+
+test("complete short final minutes keep all speech and accurately mark completeness", () => {
+  const result = buildMeetingFinalSummaryContext("Meeting", [], [make(1, "First"), make(2, "Second")]);
+  assert.equal(result.contextTruncated, false);
+  assert.deepEqual(JSON.parse(result.input).segments.map((item: { id: string }) => item.id), ["id-1", "id-2"]);
+  assert.equal(buildMeetingFinalSummaryContext("Meeting", [], [make(1, "First")], true).contextTruncated, true);
 });

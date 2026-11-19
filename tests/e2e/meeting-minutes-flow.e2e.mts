@@ -24,6 +24,7 @@ test("the original minutes layout retains batched summaries and follows new note
   await page.emulateMedia({ reducedMotion: "reduce" });
   const pageErrors: string[] = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
+  if (process.env.E2E_DEBUG) page.on("websocket", (ws) => console.log("websocket:", ws.url()));
   await page.addInitScript(({ ws, token, host }) => {
     localStorage.setItem("memorableState", JSON.stringify({ memorable: {
       userId: "minutes-host", userName: "Ana", userNameExplicit: true, uniqId: host,
@@ -37,18 +38,17 @@ test("the original minutes layout retains batched summaries and follows new note
   await page.route("**/api/turn-credentials", (route) => route.fulfill({ json: { ice_servers: [], ttl_seconds: 3600 } }));
 
   const initialOverview = "团队正在讨论下一次发布的范围及测试安排。";
-  const longOverview = Array.from({ length: 22 }, (_, index) => `讨论项 ${index + 1}。${initialOverview.repeat(3)}`).join("\n");
   const historicalNotes: MeetingMinutesJson["timeline"] = Array.from({ length: 26 }, (_, index) => ({
     id: `note-${index}`, startMs: 1_790_000_000_000 + index * 30_000, endMs: 1_790_000_001_000 + index * 30_000,
     speakerName: "", summary: `讨论记录 ${index + 1}。${initialOverview}`, transcript: "", kind: "speech",
   }));
-  let shared: MeetingMinutesJson = { meetingTitle: "发布讨论", overview: longOverview, timeline: historicalNotes, decisions: [], actionItems: [], openQuestions: [] };
+  let shared: MeetingMinutesJson = { meetingTitle: "发布讨论", overview: "", timeline: historicalNotes, decisions: [], actionItems: [], openQuestions: [] };
   const minutes = {
     configured: true, running: true, serverMix: true, ai: true, capabilitiesKnown: true, requireConsent: false,
     recordingId: RECORDING, historyStartSeq: 31, latestSegmentSeq: 30, summaryThroughSeq: 30,
-    summaryCoordinatorId: HOST, summaryCoordinatorEpoch: 1, summaryLanguage: "zh-CN", summary: JSON.stringify(shared),
+    summaryCoordinatorId: HOST, summaryCoordinatorEpoch: 1, summaryLanguage: "zh-CN", summary: JSON.stringify(shared), finalSummary: "", finalThroughSeq: 0,
   };
-  type SummaryRequest = { requestId: string; input: string; throughSeq: number; coordinatorEpoch: number; recordingId: string };
+  type SummaryRequest = { task: string; requestId: string; input: string; throughSeq: number; coordinatorEpoch: number; recordingId: string };
   const requests: SummaryRequest[] = [];
   let socket: WebSocketRoute | undefined;
   const send = (type: string, data: unknown, channel = ROOM, event = "signal:all") => {
@@ -68,7 +68,18 @@ test("the original minutes layout retains batched summaries and follows new note
       const { type, channel, data, event } = JSON.parse(frame);
       if (type === "subscribe") send("subscribed", {}, channel, event);
       if (type === "meeting:join") send("meeting:info", { host: HOST, title: "发布讨论", joined: true, minutes });
-      if (type === "meeting:minutes" && data?.action === "ai") requests.push(data);
+      if (type === "meeting:minutes" && data?.action === "ai") {
+        requests.push(data);
+        if (process.env.E2E_DEBUG) console.log("AI request", data.task, data.throughSeq);
+        if (data.task === "final-minutes") {
+          const captured = JSON.parse(data.input).segments as { id: string; startMs: number }[];
+          const actionTime = captured.find((item) => item.id === "line-32")?.startMs || 0;
+          const result = { meetingTitle: "发布讨论", overview: "会议讨论了周五发布和测试安排。", decisions: [{ text: "暂定周五发布", timeMs: actionTime }], actionItems: [{ task: "完成发布前回归测试", owner: "Ben", deadline: "周四", timeMs: actionTime }], openQuestions: [] };
+          Object.assign(minutes, { finalSummary: JSON.stringify(result), finalThroughSeq: data.throughSeq });
+          send("meeting:minutes", { kind: "final-summary", minutes, minutesSubscription: { enabled: true } });
+          send("meeting:minutes", { kind: "ai-result", ...data, ok: true, output: JSON.stringify(result) });
+        }
+      }
       if (type === "meeting:minutes" && data?.action === "summary") publishSummary(JSON.parse(data.summary), data.throughSeq);
     });
   });
@@ -79,13 +90,11 @@ test("the original minutes layout retains batched summaries and follows new note
   await page.getByTestId("meeting-ai-minutes-open").click();
   const workspace = page.getByTestId("meeting-ai-minutes-workspace");
   await workspace.waitFor();
-  const card = workspace.getByTestId("meeting-shared-summary-card");
-  const overview = card.getByTestId("meeting-minutes-overview");
   const viewport = workspace.getByTestId("meeting-minutes-scroll");
   const jump = workspace.getByTestId("meeting-minutes-jump-latest");
   await workspace.getByRole("tab", { name: /会议脉络|Meeting outline/ }).waitFor();
   await viewport.getByText(/会议助理|Meeting assistant/).first().waitFor();
-  assert.match(await overview.innerText(), /团队正在讨论/);
+  assert.equal(await workspace.getByTestId("meeting-shared-summary-card").count(), 0);
   await page.waitForFunction(() => {
     const scroller = document.querySelector('[data-testid="meeting-minutes-scroll"]')!;
     return scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop <= 2;
@@ -104,23 +113,34 @@ test("the original minutes layout retains batched summaries and follows new note
   assert.equal(requests.length, 0, "the first two statements are collected before summarizing");
 
   send("meeting:minutes", { kind: "segments", recordingId: RECORDING, segments: lines.slice(2) });
-  await card.getByRole("progressbar").waitFor();
+  await workspace.getByTestId("meeting-minutes-segment-count").getByText("3", { exact: true }).waitFor();
+  await page.clock.runFor(46_000);
+  assert.equal(requests.length, 0, "three statements do not trigger an early request");
+  await page.clock.runFor(2_000);
+  await workspace.getByTestId("meeting-minutes-thread").getByRole("progressbar").waitFor();
   assert.equal(requests.length, 1);
+  assert.equal(requests[0]!.task, "summary");
   assert.deepEqual(JSON.parse(requests[0]!.input).segments.map(({ id }: { id: string }) => id), lines.map(({ segmentId }) => segmentId));
-  assert.match(await overview.innerText(), /团队正在讨论/, "the previous overview stays visible while updating");
-  assert.equal(await card.getByRole("alert").count(), 0, "the update indicator does not cover the card");
 
   const paragraph = "讨论形成了周五发布的初步计划。回归通过后再确认发布时间。";
   const output = {
-    ...shared, timeline: [{ id: "ai-note", summary: paragraph, speakerName: "", kind: "speech" }],
-    decisions: [{ text: "暂定周五发布", timeMs: lines[0]!.startMs }],
-    actionItems: [{ task: "完成发布前回归测试", owner: "Ben", deadline: "周四", timeMs: lines[1]!.startMs }],
+    timeline: [{ id: "ai-note", summary: paragraph, speakerName: "", kind: "speech" }],
   };
   send("meeting:minutes", { kind: "ai-result", ...requests[0]!, ok: true, output: JSON.stringify(output) });
   await viewport.getByText(paragraph, { exact: true }).waitFor();
   assert.equal(shared.timeline.length, historicalNotes.length + 1);
   assert.equal(shared.timeline.at(-1)?.speakerName, "", "a group discussion has no single-speaker label");
   assert.ok((await scrollPosition(viewport)).remaining <= 2, "new notes are followed at the bottom");
+  assert.equal(requests.filter((request) => request.task === "final-minutes").length, 0, "live notes never request a full summary");
+  await workspace.getByTestId("meeting-minutes-summarize").click();
+  try {
+    await workspace.getByTestId("meeting-minutes-full").getByText("完成发布前回归测试").waitFor({ timeout: 10_000 });
+  } catch (error) {
+    if (process.env.E2E_DEBUG) console.log("Minutes UI:", await workspace.innerText(), "Requests:", requests.map((request) => [request.task, request.throughSeq]));
+    throw error;
+  }
+  assert.equal(requests.filter((request) => request.task === "final-minutes").length, 1);
+  await workspace.getByRole("tab", { name: /会议脉络|Meeting outline/ }).click();
 
   await viewport.hover();
   await page.mouse.wheel(0, -520);
@@ -159,12 +179,9 @@ test("the original minutes layout retains batched summaries and follows new note
   await page.setViewportSize({ width: 390, height: 700 });
   await page.getByTestId("meeting-panel").waitFor({ state: "hidden" });
   assert.equal(await page.getByTestId("meeting-panel-toggle").count(), 0);
-  await card.getByRole("button", { name: /展开概览|Expand overview/ }).click();
-  const cardBody = card.getByTestId("meeting-summary-scroll");
-  assert.ok((await card.boundingBox())!.height <= 700 * 0.42 + 1);
-  assert.ok((await scrollPosition(cardBody)).remaining > 0);
-  await cardBody.evaluate((node) => { node.scrollTop = 80; });
-  assert.ok((await scrollPosition(cardBody)).top > 0);
+  assert.equal(await workspace.getByTestId("meeting-shared-summary-card").count(), 0);
+  assert.ok((await workspace.boundingBox())!.height <= 700);
+  assert.ok((await viewport.boundingBox())!.height > 200);
   if (process.env.E2E_MINUTES_MOBILE_SCREENSHOT) await page.screenshot({ path: process.env.E2E_MINUTES_MOBILE_SCREENSHOT });
 
   await workspace.getByRole("tab", { name: /完整逐字稿|Full transcript/ }).click();
@@ -187,11 +204,18 @@ test("the original minutes layout retains batched summaries and follows new note
   await workspace.getByTestId("meeting-ask-assistant").click();
   await page.locator("#meeting-panel-content-chat").getByPlaceholder(/问会议助手|Ask the meeting assistant/).waitFor();
   assert.equal(await workspace.isVisible(), true, "the assistant can be used beside the restored desktop workspace");
+  const lastLine = { ...lines[0]!, segmentId: "line-36", seq: 36, text: "最后补充：上线前检查监控。", startMs: Date.now(), endMs: Date.now() + 1000 };
+  send("meeting:minutes", { kind: "segments", recordingId: RECORDING, segments: [lastLine] });
+  await workspace.getByRole("tab", { name: /完整逐字稿|Full transcript/ }).click();
+  await workspace.locator('[data-segment-id="line-36"]').waitFor();
   await page.getByRole("button", { name: /更多离会选项|Leave options/ }).click();
   await page.getByRole("menuitem", { name: /结束会议|End meeting/ }).click();
   await page.getByRole("dialog").getByRole("button", { name: /结束会议|End meeting/ }).click();
   const endScreen = page.getByTestId("meeting-ended-summary");
   await endScreen.getByText("完成发布前回归测试", { exact: true }).waitFor();
+  const finalRequests = requests.filter((request) => request.task === "final-minutes");
+  assert.equal(finalRequests.length, 2, "ending the meeting summarizes the newly added speech once");
+  assert.ok(JSON.parse(finalRequests[1]!.input).segments.some((item: { id: string }) => item.id === "line-36"));
   await endScreen.getByText("完成发布前回归测试", { exact: true }).locator("..").getByRole("button", { name: /查看原话|View transcript source/ }).click();
   await endScreen.locator('[data-segment-id="line-32"][aria-current="true"]').waitFor();
   assert.deepEqual(pageErrors, []);

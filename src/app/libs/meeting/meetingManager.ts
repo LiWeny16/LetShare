@@ -290,7 +290,7 @@ export interface MeetingManager {
   setCaptionsSubscribed(enabled: boolean): void;
   flushMinutesSegments(): void;
   requestMinutesReplay(recordingId: string, afterSeq?: number): void;
-  requestMeetingAI(task: "summary" | "translate" | "question" | "live-notes" | "final-minutes", input: string, targetLanguage?: "zh" | "en", summaryRequest?: MeetingMinutesSummaryRequest): Promise<string>;
+  requestMeetingAI(task: "summary" | "translate" | "question" | "live-notes" | "final-minutes" | "end-minutes", input: string, targetLanguage?: "zh" | "en", summaryRequest?: MeetingMinutesSummaryRequest): Promise<string>;
   sendMinutesSegment(segment: Omit<MeetingTranscriptSegment, "speakerId" | "speakerName">): void;
   /** Uploads one PCM chunk for server-side recognition (speaker = this client). */
   sendServerAsrChunk(pcmBase64: string, language: string): void;
@@ -1852,7 +1852,7 @@ class MeetingManagerImpl implements MeetingManager {
             hostId: host || this.state.hostId,
             title: title === undefined ? this.state.title : title || undefined,
             presentation: incomingPresentation ?? this.state.presentation,
-            minutes: incomingMinutes ? { ...incomingMinutes, consented: this.state.stage === "in-meeting" && (this.state.minutes.running || !!this.state.minutes.captionActive) && (incomingMinutes.running || !!incomingMinutes.captionActive) && this.state.minutes.consented } : incomingMinutesSubscription?.enabled === false ? { ...this.state.minutes, summary: undefined } : this.state.minutes,
+            minutes: incomingMinutes ? { ...incomingMinutes, consented: this.state.stage === "in-meeting" && (this.state.minutes.running || !!this.state.minutes.captionActive) && (incomingMinutes.running || !!incomingMinutes.captionActive) && this.state.minutes.consented } : incomingMinutesSubscription?.enabled === false ? { ...this.state.minutes, summary: undefined, finalSummary: undefined } : this.state.minutes,
             minutesSubscription: incomingMinutesSubscription ?? this.state.minutesSubscription,
           };
           this.emit();
@@ -2030,7 +2030,7 @@ class MeetingManagerImpl implements MeetingManager {
           this.state = {
             ...this.state,
             minutesSubscription: incomingSubscription,
-            ...(incomingSubscription.enabled ? {} : { minutes: { ...this.state.minutes, summary: undefined } }),
+            ...(incomingSubscription.enabled ? {} : { minutes: { ...this.state.minutes, summary: undefined, finalSummary: undefined } }),
           };
         }
         if (incomingMinutes || incomingSubscription) this.emit();
@@ -2581,6 +2581,8 @@ class MeetingManagerImpl implements MeetingManager {
       ...(typeof data.summaryCoordinatorId === "string" ? { summaryCoordinatorId: data.summaryCoordinatorId.slice(0, 128) } : {}),
       ...(Number.isSafeInteger(data.summaryCoordinatorEpoch) && data.summaryCoordinatorEpoch >= 0 ? { summaryCoordinatorEpoch: data.summaryCoordinatorEpoch } : {}),
       ...(data.summaryLanguage === "zh-CN" || data.summaryLanguage === "en-US" ? { summaryLanguage: data.summaryLanguage } : {}),
+      ...(typeof data.finalSummary === "string" ? { finalSummary: data.finalSummary } : {}),
+      ...(Number.isSafeInteger(data.finalThroughSeq) && data.finalThroughSeq >= 0 ? { finalThroughSeq: data.finalThroughSeq } : {}),
       requireConsent: data.configured === true ? data.requireConsent !== false : true,
       asrSource: "server-stream",
       asrModel: typeof data.asrModel === "string" && data.asrModel ? data.asrModel : "server-asr",
@@ -2668,7 +2670,7 @@ class MeetingManagerImpl implements MeetingManager {
     if (!Number.isSafeInteger(afterSeq) || afterSeq < 0) return;
     this.sendMeeting("meeting:minutes", { action: "replay", recordingId, afterSeq });
   }
-  requestMeetingAI(task: "summary" | "translate" | "question" | "live-notes" | "final-minutes", input: string, targetLanguage?: "zh" | "en", summaryRequest?: MeetingMinutesSummaryRequest): Promise<string> {
+  requestMeetingAI(task: "summary" | "translate" | "question" | "live-notes" | "final-minutes" | "end-minutes", input: string, targetLanguage?: "zh" | "en", summaryRequest?: MeetingMinutesSummaryRequest): Promise<string> {
     if (!this.isMeetingRoom(this.meetingChannel) || this.state.stage !== "in-meeting" || typeof window === "undefined") return Promise.reject(new Error("会议 AI 服务暂不可用，已保留原文。"));
     if (!input.trim() || new TextEncoder().encode(input).length > 16 * 1024) return Promise.reject(new Error("会议内容为空或过长。"));
     const roomId = this.meetingChannel;

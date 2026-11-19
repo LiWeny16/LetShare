@@ -120,7 +120,7 @@ test("server-mixed minutes uses real Opus -> ASR -> Gemini", async (t) => {
   console.log("SPEAK NOW: please speak Chinese into the host microphone for 40-60 seconds");
   await host.evaluate(() => {
     const banner = document.createElement("div");
-    banner.textContent = "请现在对着麦克风连续说 40–60 秒中文；概览出现后继续说一段";
+    banner.textContent = "请对着麦克风说中文；会议脉络出现后继续说一段";
     banner.style.cssText = "position:fixed;z-index:99999;left:50%;top:14px;transform:translateX(-50%);background:#1677ff;color:#fff;padding:12px 22px;border-radius:12px;font:700 18px/1.4 sans-serif;box-shadow:0 8px 28px rgba(0,0,0,.35)";
     document.body.appendChild(banner);
   });
@@ -137,9 +137,9 @@ test("server-mixed minutes uses real Opus -> ASR -> Gemini", async (t) => {
   console.log("STEP host: wait for a live summary while recording");
   try {
     await until("live summary while recording", async () => {
-      const text = await host.getByTestId("meeting-minutes-overview").innerText();
-      return text.trim().length > 8 && !text.includes("会议开始记录后") && !text.includes("重点、决策和行动项会出现在这里");
-    }, 60_000);
+      const text = await host.getByTestId("meeting-minutes-note-count").innerText();
+      return Number.parseInt(text, 10) >= 1;
+    }, 90_000);
   } catch (error) {
     console.log("LIVE SUMMARY ALERTS:", JSON.stringify(await host.locator('[role="alert"]').allInnerTexts()));
     console.log("PAGE ERRORS:", errors.join("\n"));
@@ -153,12 +153,12 @@ test("server-mixed minutes uses real Opus -> ASR -> Gemini", async (t) => {
     return Number.parseInt(text, 10) >= 2;
   }, 45_000).catch(() => undefined);
 
-  console.log("STEP host: stop and finalize");
-  await host.getByTestId("meeting-minutes-stop").click();
+  console.log("STEP host: explicitly request complete minutes");
+  await host.getByTestId("meeting-minutes-summarize").click();
   try {
     await until("final summary", async () => {
-      return host.getByText("已生成", { exact: true }).isVisible().catch(() => false);
-    }, 60_000);
+      return host.getByTestId("meeting-minutes-full").isVisible().catch(() => false);
+    }, 65_000);
   } catch (error) {
     console.log("SUMMARY ALERTS:", JSON.stringify(await host.locator('[role="alert"]').allInnerTexts()));
     console.log("PAGE ERRORS:", errors.join("\n"));

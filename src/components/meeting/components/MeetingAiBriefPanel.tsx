@@ -24,7 +24,6 @@ import { aiMore } from "@App/libs/i18n/meetingAiMoreTranslations";
 import { MEETING_PANEL_GUTTER } from "../designTokens";
 import { MeetingMenu } from "./MeetingMenu";
 import MeetingLiveNotesList, { meetingNoteSourceId } from "./MeetingLiveNotesList";
-import MeetingMinutesOverviewCard from "./MeetingMinutesOverviewCard";
 import MeetingMinutesScrollArea from "./MeetingMinutesScrollArea";
 
 export type MeetingAiBriefStatus = "unconfigured" | "ready" | "transcribing" | "recording" | "paused" | "generating" | "done";
@@ -46,6 +45,7 @@ export interface MeetingAiBriefPanelProps {
   audioMuted?: boolean;
   summaryWarning?: string;
   summarizing?: boolean;
+  finalSummarizing?: boolean;
   summaryHint?: string;
   questionPanel?: ReactNode;
   onConnect?: () => void;
@@ -69,8 +69,6 @@ export default function MeetingAiBriefPanel({
   receiving = true,
   canSummarize = false,
   startDisabled = false,
-  summary,
-  summaryData,
   timeline,
   transcript,
   interim = "",
@@ -78,13 +76,13 @@ export default function MeetingAiBriefPanel({
   audioMuted = false,
   summaryWarning = "",
   summarizing = false,
+  finalSummarizing = false,
   summaryHint = "",
   onStart,
   onStop,
   onExpand,
   onSettings,
   onExport,
-  onCopySummary,
   onAskAssistant,
   onViewTranscript,
   onSummarizeNow,
@@ -102,8 +100,6 @@ export default function MeetingAiBriefPanel({
     sourceId: meetingNoteSourceId(item.id, transcriptIds),
   }));
   const speakers = Array.from(new Set(transcript.map((segment) => segment.speakerName).filter(Boolean)));
-  const overview = summaryData ? summaryData.overview : summary;
-
   return (
     <Box data-testid="meeting-ai-minutes-panel" sx={{ height: "100%", minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column", overflowX: "hidden", bgcolor: (theme) => theme.palette.mode === "dark" ? theme.palette.background.paper : "#F9F9F9" }}>
       <Box sx={{ px: MEETING_PANEL_GUTTER, pt: 1.5, pb: 0.9, flexShrink: 0 }}>
@@ -124,17 +120,13 @@ export default function MeetingAiBriefPanel({
         </Stack>
       </Box>
 
-      <Box sx={{ mx: MEETING_PANEL_GUTTER, mb: 0.6, flexShrink: 0 }}>
-        <MeetingMinutesOverviewCard compact overview={overview} summaryData={summaryData} summarizing={summarizing}
-          warning={summaryWarning} hint={summaryHint} onCopy={onCopySummary}
-          onSummarizeNow={canSummarize && running ? onSummarizeNow : undefined} />
-      </Box>
-
       <MeetingMinutesScrollArea follow sx={{ px: MEETING_PANEL_GUTTER, pt: 1.25, pb: 7.5 }}>
         {error && <Alert severity="error" sx={{ mb: 1.5, borderRadius: 1.5, fontSize: "0.8rem", "& .MuiAlert-message": textWrap }}>{error}</Alert>}
+        {summaryWarning && <Alert severity="warning" sx={{ mb: 1.5, borderRadius: 1.5, fontSize: "0.75rem" }}>{summaryWarning}</Alert>}
         {running && audioMuted && <Alert severity="warning" data-testid="meeting-ai-muted-warning" sx={{ mb: 1.5, borderRadius: 1.5, fontSize: "0.8rem", "& .MuiAlert-message": textWrap }}>{aiMore("aiMoreMutedMinutesWarning")}</Alert>}
-        <Stack direction="row" alignItems="baseline" justifyContent="space-between" gap={1}>
+        <Stack direction="row" alignItems="center" justifyContent="space-between" gap={1} flexWrap="wrap">
           <Typography sx={{ color: "#172033", fontSize: "0.9rem", fontWeight: 900 }}>{aiMore("aiMoreMeetingOutline")}</Typography>
+          {canSummarize && onSummarizeNow && <Button size="small" onClick={onSummarizeNow} disabled={finalSummarizing || (!transcript.length && !timelineNotes.length)} data-testid="meeting-minutes-summarize" startIcon={finalSummarizing ? <CircularProgress size={12} /> : undefined} sx={{ minWidth: 0, px: 0.7, textTransform: "none", fontSize: "0.72rem", fontWeight: 750 }}>{aiMore("aiMoreSummarizeNow")}</Button>}
           <Stack direction="row" spacing={0.3} alignItems="baseline">
             <Typography data-testid="meeting-minutes-segment-count" sx={{ color: "#98a2b3", fontSize: "0.66rem", fontVariantNumeric: "tabular-nums" }}>{transcript.length}</Typography>
             <Typography sx={{ color: "#98a2b3", fontSize: "0.66rem" }}>{aiMore("aiMoreUnitStatements")}{interim ? ` · ${aiMore("aiMoreRecognizing")}` : ""}</Typography>
@@ -146,11 +138,12 @@ export default function MeetingAiBriefPanel({
             {summarizing && <CircularProgress size={10} sx={{ ml: 0.4 }} />}
           </Stack>
         </Stack>
+        {summaryHint && <Typography role="status" sx={{ color: "text.secondary", fontSize: "0.72rem", mt: 0.5 }}>{summaryHint}</Typography>}
         <Box data-testid="meeting-minutes-flow" sx={{ mt: 1.2 }}>
           {timelineNotes.length > 0
             ? <MeetingLiveNotesList notes={timelineNotes} speakers={speakers} onViewTranscript={onViewTranscript} compact />
             : summarizing
-              ? <Stack direction="row" spacing={0.8} alignItems="center" justifyContent="center" data-testid="meeting-minutes-waiting" sx={{ py: 2 }}><CircularProgress size={13} /><Typography sx={{ color: "text.secondary", fontSize: "0.76rem" }}>{aiMore("aiMoreSummarizingOverview")}</Typography></Stack>
+              ? <Stack direction="row" spacing={0.8} alignItems="center" justifyContent="center" data-testid="meeting-minutes-waiting" sx={{ py: 2 }}><CircularProgress size={13} /><Typography sx={{ color: "text.secondary", fontSize: "0.76rem" }}>{aiMore("aiMoreWaitingForAINotes")}</Typography></Stack>
               : <Typography data-testid="meeting-minutes-waiting" sx={{ py: 2, color: "text.secondary", fontSize: "0.76rem", textAlign: "center" }}>{transcript.length > 0 ? aiMore("aiMoreWaitingForAINotes") : aiMore("aiMoreWaitingForTranscript")}</Typography>}
         </Box>
       </MeetingMinutesScrollArea>

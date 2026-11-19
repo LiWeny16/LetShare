@@ -1,4 +1,4 @@
-import type { MeetingTranscriptSegment } from "./meetingAi";
+import type { MeetingMinutesJson, MeetingTranscriptSegment } from "./meetingAi";
 
 const MAX_CONTEXT_BYTES = 14_000;
 const MAX_PREVIOUS_SUMMARY_BYTES = 6_000;
@@ -163,6 +163,63 @@ export function buildMeetingSummaryBatch(segments: MeetingTranscriptSegment[], p
     includedCount += 1;
   }
   return { input: JSON.stringify(base), includedCount, previousOmitted, contentTruncated };
+}
+
+/** A bounded snapshot for an explicitly requested or end-of-meeting summary. */
+export function buildMeetingFinalSummaryContext(
+  title: string,
+  timeline: MeetingMinutesJson["timeline"],
+  segments: MeetingTranscriptSegment[],
+  historyIncomplete = false,
+): { input: string; contextTruncated: boolean } {
+  const base = {
+    meetingTitle: title.slice(0, 120),
+    timeline: [] as { startMs: number; endMs: number; summary: string }[],
+    segments: [] as ContextSegment[],
+    contextTruncated: true,
+  };
+  let omitted = historyIncomplete || title.length > 120;
+  // Preserve early meeting context in the outline; the newest verbatim speech
+  // is added below. The marker makes any omissions visible to the reader.
+  for (const item of timeline) {
+    const candidate = { startMs: item.startMs, endMs: item.endMs, summary: item.summary.slice(0, 400) };
+    if (item.summary.length > candidate.summary.length) omitted = true;
+    base.timeline.push(candidate);
+    if (encoder.encode(JSON.stringify(base)).length > MAX_PREVIOUS_SUMMARY_BYTES) {
+      base.timeline.pop();
+      omitted = true;
+      break;
+    }
+  }
+  const usable = segments.filter((segment) => segment.final && segment.text.trim());
+  for (let index = usable.length - 1; index >= 0; index -= 1) {
+    const segment = usable[index];
+    const candidate = contextSegment(segment);
+    if (candidate.text.length < segment.text.length || candidate.id.length < segment.id.length || candidate.speakerName.length < segment.speakerName.length) omitted = true;
+    base.segments.unshift(candidate);
+    // Reserve one byte because `false` is longer than `true` in JSON.
+    if (encoder.encode(JSON.stringify(base)).length > MAX_CONTEXT_BYTES - 1) {
+      base.segments.shift();
+      omitted = true;
+      if (!base.segments.length) {
+        let low = 0;
+        let high = candidate.text.length;
+        let fittingText = "";
+        while (low <= high) {
+          const middle = Math.floor((low + high) / 2);
+          const shortened = { ...candidate, text: `${candidate.text.slice(0, middle)}…`, textTruncated: true };
+          base.segments.unshift(shortened);
+          const fits = encoder.encode(JSON.stringify(base)).length <= MAX_CONTEXT_BYTES - 1;
+          base.segments.shift();
+          if (fits) { fittingText = shortened.text; low = middle + 1; } else high = middle - 1;
+        }
+        if (fittingText) base.segments.unshift({ ...candidate, text: fittingText, textTruncated: true });
+      }
+      break;
+    }
+  }
+  base.contextTruncated = omitted;
+  return { input: JSON.stringify(base), contextTruncated: omitted };
 }
 
 /**

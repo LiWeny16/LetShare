@@ -146,6 +146,9 @@ export type MeetingMinutesPublicState = {
   summaryCoordinatorEpoch?: number;
   /** Room-wide summary language fixed when this recording epoch starts. */
   summaryLanguage?: "zh-CN" | "en-US";
+  /** Complete meeting summary, generated only on request or when ending. */
+  finalSummary?: string;
+  finalThroughSeq?: number;
   /** Shared recording includes audio published by meeting members; caption-only capture uses consented. */
   requireConsent: boolean;
   asrSource: AsrSource;
@@ -443,7 +446,7 @@ export function parseMeetingMinutesJson(value: string): MeetingMinutesJson | nul
   const fallbackOverview = normalizedTimeline.map((item) => item.summary || item.transcript).filter(Boolean).slice(0, 3).join(" ");
   return {
     meetingTitle: String(parsed.meetingTitle || "会议纪要"),
-    overview: String(parsed.overview || parsed.summary || fallbackOverview),
+    overview: typeof parsed.overview === "string" ? parsed.overview : String(parsed.summary || fallbackOverview),
     timeline: normalizedTimeline,
     decisions: decisions.map((item: any) => ({ text: String(item?.text || item || ""), timeMs: Number.isFinite(Number(item?.timeMs)) ? Number(item.timeMs) : 0 })),
     actionItems: actionItems.map((item: any) => ({ task: String(item?.task || item || ""), owner: String(item?.owner || ""), deadline: String(item?.deadline || ""), timeMs: Number.isFinite(Number(item?.timeMs)) ? Number(item.timeMs) : 0 })),

@@ -185,7 +185,7 @@ test("workspace keeps existing behaviour without a focus request", async () => {
   assert.equal(container.textContent?.includes("The budget needs a second review."), true, "transcript content still renders");
 });
 
-test("shared overview is visible in the workspace instead of hidden from readers", async () => {
+test("the live outline does not display an overview card", async () => {
   const { render } = await setupWorkspace();
   const sharedSummary = {
     meetingTitle: "Planning sync",
@@ -197,9 +197,8 @@ test("shared overview is visible in the workspace instead of hidden from readers
   };
   const { container } = await render({ tab: 0, summaryData: sharedSummary, summary: JSON.stringify(sharedSummary) });
   const overview = container.querySelector<HTMLElement>("[data-testid=meeting-minutes-overview]");
-  assert.ok(overview);
-  assert.equal(overview?.textContent?.includes(sharedSummary.overview), true);
-  assert.equal(overview?.getAttribute("aria-hidden"), null, "the overview is exposed as visible content");
+  assert.equal(overview, null);
+  assert.equal(container.textContent?.includes(sharedSummary.overview), false);
 });
 
 test("full minutes and copy action use the shared structured summary", async () => {

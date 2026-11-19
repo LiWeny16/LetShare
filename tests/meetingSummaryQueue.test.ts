@@ -14,13 +14,15 @@ function segment(id: string, seq: number | undefined, recordingId = "recording-a
   return { id, speakerId: "member", speakerName: "Member", text: id, startMs: Number(id.replace(/\D/g, "")) || 0, endMs: 1, final, recordingId, ...(seq === undefined ? {} : { seq }) };
 }
 
-test("automatic summaries collect three segments or wait for the quiet-meeting deadline", () => {
+test("automatic notes wait for a full minute regardless of the number of utterances", () => {
   const firstArrival = 100_000;
-  assert.equal(meetingSummaryDelay(1, firstArrival, 0, firstArrival), 30_000);
-  assert.equal(meetingSummaryDelay(2, firstArrival, 0, firstArrival + 10_000), 20_000);
-  assert.equal(meetingSummaryDelay(3, firstArrival, 0, firstArrival + 12_000), 0);
-  assert.equal(meetingSummaryDelay(1, firstArrival, 0, firstArrival + 30_000), 0);
-  assert.equal(meetingSummaryDelay(3, firstArrival, firstArrival, firstArrival + 12_000), 3_000);
+  assert.equal(meetingSummaryDelay(1, firstArrival, 0, firstArrival), 60_000);
+  assert.equal(meetingSummaryDelay(2, firstArrival, 0, firstArrival + 10_000), 50_000);
+  assert.equal(meetingSummaryDelay(10, firstArrival, 0, firstArrival + 12_000), 48_000);
+  assert.equal(meetingSummaryDelay(3, firstArrival, 0, firstArrival + 59_999), 1);
+  assert.equal(meetingSummaryDelay(1, firstArrival, 0, firstArrival + 60_000), 0);
+  assert.equal(meetingSummaryDelay(3, firstArrival, firstArrival + 30_000, firstArrival + 60_000), 30_000);
+  assert.equal(meetingSummaryDelay(0, firstArrival, 0, firstArrival), 0);
 });
 
 test("one synthesized discussion note covers the batch without assigning it to one of several speakers", () => {

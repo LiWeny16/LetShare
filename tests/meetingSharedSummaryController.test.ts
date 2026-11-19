@@ -7,10 +7,11 @@ const briefPanel = readFileSync("src/components/meeting/components/MeetingAiBrie
 const meetingRoom = readFileSync("src/components/meeting/MeetingRoom.tsx", "utf8");
 const manager = readFileSync("src/app/libs/meeting/meetingManager.ts", "utf8");
 
-test("meeting summary controller keeps one coordinator-only shared summary request path", () => {
+test("live notes remain coordinator-owned while full minutes use the explicit finalization path", () => {
   assert.match(controller, /requestMeetingAI\("summary"/);
   assert.doesNotMatch(controller, /requestMeetingAI\("live-notes"/);
-  assert.doesNotMatch(controller, /requestMeetingAI\("final-minutes"/);
+  assert.match(controller, /requestMeetingAI\("final-minutes"/);
+  assert.match(controller, /registerMeetingMinutesFinalizer/);
   assert.match(controller, /meetingManager\.sendMinutesSummary\(sharedResult, recordingId, throughSeq, coordinatorEpoch!\)/);
   assert.match(controller, /const summaryRequest: MeetingMinutesSummaryRequest = \{ recordingId, coordinatorEpoch: coordinatorEpoch!, throughSeq \}/);
   assert.match(controller, /waitForSummaryBroadcast\(/);
@@ -25,11 +26,11 @@ test("summary sharing waits for a server confirmation and surfaces transcription
   assert.match(controller, /asrErrorRef\.current\?\.recordingId === recordingId/);
 });
 
-test("all members can start and individually resume; only the coordinator can summarize", () => {
-  assert.match(controller, /onSummarizeNow=\{isCoordinator \?/);
+test("all receiving members can request full minutes and individually resume", () => {
+  assert.match(controller, /canSummarize=\{receiving && summaryReady\}/);
   assert.match(controller, /meetingManager\.setMinutesReceiving\(true, recordingId, 0\)/, "resume replays all retained segments after the local cache is cleared");
   assert.match(controller, /meetingManager\.requestMinutesReplay\(recordingId, 0\)/, "a newly enabled member rebuilds from server replay");
-  assert.match(briefPanel, /canSummarize && running \? onSummarizeNow : undefined/);
+  assert.match(briefPanel, /canSummarize && onSummarizeNow/);
   assert.match(controller, /receiving=\{receiving\}/);
 });
 

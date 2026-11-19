@@ -27,9 +27,10 @@ import MeetingAiBriefPanel from "./MeetingAiBriefPanel";
 import MeetingMinutesWorkspace from "./MeetingMinutesWorkspace";
 import {
   ensureMeetingMinutesSession,
+  registerMeetingMinutesFinalizer,
   updateMeetingMinutesSession,
 } from "@App/libs/meeting/meetingMinutesSession";
-import { buildMeetingSummaryBatch } from "@App/libs/meeting/meetingAIContext";
+import { buildMeetingFinalSummaryContext, buildMeetingSummaryBatch } from "@App/libs/meeting/meetingAIContext";
 import { getMeetingMinutesSession } from "@App/libs/meeting/meetingMinutesSession";
 import { buildMeetingMinutesMarkdown, downloadMeetingMinutesMarkdown } from "@App/libs/meeting/meetingMinutesMarkdown";
 import {
@@ -141,19 +142,6 @@ function parsedSummary(value: string): MeetingMinutesJson | null {
   return value ? parseMeetingMinutesJson(value) : null;
 }
 
-function fallbackTimeline(transcript: MeetingTranscriptSegment[], summary: MeetingMinutesJson | null): MeetingMinutesJson["timeline"] {
-  if (summary?.timeline?.length) return summary.timeline;
-  return transcript.map((segment, index) => ({
-    id: segment.id || `line-${index}`,
-    startMs: segment.startMs,
-    endMs: segment.endMs,
-    speakerName: segment.speakerName || aiMore("aiMoreUnnamedMember"),
-    summary: segment.text,
-    transcript: segment.text,
-    kind: "speech" as const,
-  }));
-}
-
 export default function MeetingAiMinutesDialog({ open, onClose, mode = "dialog", embedded = false, onExpand, portalTarget, focusTranscript, onViewTranscript, onAskAssistant }: MeetingAiMinutesDialogProps) {
   const { t } = useTranslation();
   const [meetingState, setMeetingState] = useState(() => meetingManager.getState());
@@ -162,8 +150,10 @@ export default function MeetingAiMinutesDialog({ open, onClose, mode = "dialog",
   const [transcript, setTranscript] = useState<MeetingTranscriptSegment[]>([]);
   const [summaryTimeline, setSummaryTimeline] = useState<MeetingMinutesJson["timeline"]>([]);
   const [summary, setSummary] = useState("");
+  const [finalSummary, setFinalSummary] = useState("");
   const [busy, setBusy] = useState(false);
   const [summarizing, setSummarizing] = useState(false);
+  const [finalSummarizing, setFinalSummarizing] = useState(false);
   const [summaryHint, setSummaryHint] = useState("");
   const summaryHintTimerRef = useRef<number | null>(null);
   const [receiveOverride, setReceiveOverride] = useState<boolean | null>(null);
@@ -187,6 +177,9 @@ export default function MeetingAiMinutesDialog({ open, onClose, mode = "dialog",
   const summaryQueuedRef = useRef(false);
   const summaryPayloadTooLargeRef = useRef(false);
   const summaryRef = useRef("");
+  const finalSummaryRef = useRef("");
+  const finalRequestRef = useRef<Promise<boolean> | null>(null);
+  const requestFinalSummaryRef = useRef<() => Promise<boolean>>(async () => false);
   const errorRef = useRef(error);
   const summaryErrorRef = useRef("");
   const asrErrorRef = useRef<{ recordingId: string; message: string } | null>(null);
@@ -197,6 +190,7 @@ export default function MeetingAiMinutesDialog({ open, onClose, mode = "dialog",
   const replayRequestedRef = useRef("");
   const configRef = useRef(config);
   summaryRef.current = summary;
+  finalSummaryRef.current = finalSummary;
   errorRef.current = error;
   configRef.current = config;
   receiveOverrideRef.current = receiveOverride;
@@ -214,20 +208,39 @@ export default function MeetingAiMinutesDialog({ open, onClose, mode = "dialog",
   const receiving = receiveOverride ?? meetingState.minutesSubscription.enabled;
   const isCoordinator = isMeetingMinutesSummaryCoordinator(meetingState.minutes, { enabled: receiving }, realTimeColab.getUniqId() || "");
   const parsedSharedSummary = parsedSummary(summary);
-  const summaryData = parsedSharedSummary ? { ...parsedSharedSummary, timeline: summaryTimeline.length ? summaryTimeline : parsedSharedSummary.timeline } : null;
   // 会议脉络只呈现 AI 生成的小结；原始逐字稿仍保留在逐字稿页和导出中。
-  const timeline = summaryData?.timeline || [];
+  const timeline = summaryTimeline.length ? summaryTimeline : parsedSharedSummary?.timeline || [];
+  const parsedFinalSummary = parsedSummary(finalSummary);
+  const summaryData = parsedFinalSummary ? { ...parsedFinalSummary, timeline } : null;
   const summaryHistoryGap = meetingState.minutes.historyStartSeq !== undefined
     && meetingState.minutes.summaryThroughSeq !== undefined
     && meetingState.minutes.historyStartSeq > meetingState.minutes.summaryThroughSeq + 1;
   const summaryWarning = receiving
     ? [
       summaryHistoryGap ? aiMore("aiMoreSummaryHistoryMayBeIncomplete") : "",
-      summaryData?.contextTruncated ? aiMore("aiMoreSummaryContextTooLarge") : summaryContextWarning,
+      summaryData?.contextTruncated || parsedSharedSummary?.contextTruncated ? aiMore("aiMoreSummaryContextTooLarge") : summaryContextWarning,
     ].filter(Boolean).join(" ")
     : "";
 
   useEffect(() => meetingManager.subscribe(setMeetingState), []);
+  const syncSession = () => {
+    const currentFinal = parsedSummary(finalSummaryRef.current);
+    const currentTimeline = summaryTimelineRef.current;
+    const combined = currentFinal ? { ...currentFinal, timeline: currentTimeline } : null;
+    updateMeetingMinutesSession({ transcript: transcriptRef.current, summary: combined ? JSON.stringify(combined) : "", summaryData: combined, timeline: currentTimeline });
+  };
+  useEffect(() => registerMeetingMinutesFinalizer(async () => {
+    if (finalRequestRef.current && !(await finalRequestRef.current)) return;
+    const current = meetingManager.getState();
+    if (current.minutesSubscription.enabled && receiveOverrideRef.current !== false) {
+      await requestFinalSummaryRef.current();
+    } else if (current.stage === "in-meeting" && current.hostId === realTimeColab.getUniqId()
+      && current.minutes.recordingId && hasSharedMeetingMinutesCapability(current.minutes)) {
+      // A host who paused their own receipt must not receive other people's
+      // transcript; the server can finalize for the remaining recipients.
+      try { await meetingManager.requestMeetingAI("end-minutes", "{}"); } catch { /* still allow the meeting to end */ }
+    }
+  }), []);
   const meetingTitleRef = useRef(meetingState.title);
   meetingTitleRef.current = meetingState.title;
   useEffect(() => {
@@ -241,12 +254,14 @@ export default function MeetingAiMinutesDialog({ open, onClose, mode = "dialog",
     summaryPendingSinceRef.current = null;
     const nextTranscript: MeetingTranscriptSegment[] = [];
     const nextSummary = meetingState.minutesSubscription.enabled ? meetingState.minutes.summary || "" : "";
+    const nextFinalSummary = meetingState.minutesSubscription.enabled ? meetingState.minutes.finalSummary || "" : "";
     const parsed = parsedSummary(nextSummary);
     const nextTimeline = parsed?.timeline || [];
     transcriptRef.current = [];
     summaryTimelineRef.current = nextTimeline;
     setSummaryTimeline(nextTimeline);
     summaryRef.current = nextSummary;
+    finalSummaryRef.current = nextFinalSummary;
     summaryCursorRef.current = {
       recordingId: meetingState.minutes.recordingId || "",
       throughSeq: meetingState.minutes.summaryThroughSeq || 0,
@@ -257,8 +272,9 @@ export default function MeetingAiMinutesDialog({ open, onClose, mode = "dialog",
     summaryLastAttemptRef.current = 0;
     setTranscript(nextTranscript);
     setSummary(nextSummary);
+    setFinalSummary(nextFinalSummary);
     setReceiveOverride(null);
-    updateMeetingMinutesSession({ transcript: [], summary: nextSummary, summaryData: parsed, timeline: nextTimeline });
+    syncSession();
     setWorkspaceTab(0);
     setSettingsOpen(false);
     setSummaryContextWarning("");
@@ -276,7 +292,6 @@ export default function MeetingAiMinutesDialog({ open, onClose, mode = "dialog",
     }
     const incoming = meetingState.minutes.summary;
     if (!incoming) return;
-    if (meetingState.minutes.recordingId) summaryRecordingRef.current = meetingState.minutes.recordingId;
     if (incoming !== summaryRef.current) {
       summaryRef.current = incoming;
       setSummary(incoming);
@@ -284,9 +299,18 @@ export default function MeetingAiMinutesDialog({ open, onClose, mode = "dialog",
       const authoritativeTimeline = parsed?.timeline || [];
       summaryTimelineRef.current = authoritativeTimeline;
       setSummaryTimeline(authoritativeTimeline);
-      updateMeetingMinutesSession({ transcript: transcriptRef.current, summary: incoming, summaryData: parsed, timeline: authoritativeTimeline });
+      syncSession();
     }
   }, [meetingState.roomId, meetingState.title, meetingState.minutesSubscription.enabled, meetingState.minutes.recordingId, meetingState.minutes.summary, meetingState.minutes.summaryThroughSeq, meetingState.minutes.latestSegmentSeq, receiving]);
+  useEffect(() => {
+    if (!receiving || !meetingState.minutes.finalSummary) return;
+    const incoming = meetingState.minutes.finalSummary;
+    if (incoming !== finalSummaryRef.current) {
+      finalSummaryRef.current = incoming;
+      setFinalSummary(incoming);
+      syncSession();
+    }
+  }, [meetingState.minutes.finalSummary, meetingState.minutes.recordingId, receiving]);
   useEffect(() => {
     if (receiveOverride !== null && meetingState.minutesSubscription.enabled === receiveOverride) setReceiveOverride(null);
   }, [meetingState.minutesSubscription.enabled, receiveOverride]);
@@ -295,8 +319,10 @@ export default function MeetingAiMinutesDialog({ open, onClose, mode = "dialog",
     if (!recordingId || !summaryRecordingRef.current || summaryRecordingRef.current === recordingId) return;
     summaryRecordingRef.current = recordingId;
     summaryRef.current = "";
+    finalSummaryRef.current = "";
     summaryTimelineRef.current = [];
     setSummary("");
+    setFinalSummary("");
     setSummaryTimeline([]);
     transcriptRef.current = [];
     setTranscript([]);
@@ -324,6 +350,17 @@ export default function MeetingAiMinutesDialog({ open, onClose, mode = "dialog",
   useEffect(() => {
     const unsubscribe = meetingManager.onEvent((event) => {
       if (event.type !== "meeting:minutes") return;
+      if (event.data.kind === "final-summary") {
+        const latest = meetingManager.getState();
+        const incoming = event.data.minutes;
+        if (latest.minutesSubscription.enabled && incoming?.recordingId === latest.minutes.recordingId && incoming?.finalSummary) {
+          finalSummaryRef.current = incoming.finalSummary;
+          setFinalSummary(incoming.finalSummary);
+          // Persist synchronously: the host may end the room immediately after
+          // broadcasting, before React has committed another render.
+          syncSession();
+        }
+      }
       if (event.data.kind === "summary" && event.data.summary) {
         const latestState = meetingManager.getState();
         const publicMinutes = event.data.minutes;
@@ -344,7 +381,7 @@ export default function MeetingAiMinutesDialog({ open, onClose, mode = "dialog",
         const authoritativeTimeline = parsed?.timeline || [];
         summaryTimelineRef.current = authoritativeTimeline;
         setSummaryTimeline(authoritativeTimeline);
-        updateMeetingMinutesSession({ transcript: transcriptRef.current, summary: event.data.summary, summaryData: parsed, timeline: authoritativeTimeline });
+        syncSession();
         if (summaryErrorRef.current && errorRef.current === summaryErrorRef.current) {
           summaryErrorRef.current = "";
           setError("");
@@ -520,9 +557,10 @@ export default function MeetingAiMinutesDialog({ open, onClose, mode = "dialog",
       if (!parsed) throw new Error(t("meeting.minutesAIFormatError", aiMore("aiMoreCouldNotGenerateMeetingNotes")));
       const previousShared = parsedSummary(summaryRef.current);
       const sharedResult = JSON.stringify({
-        ...parsed,
-        meetingTitle: parsed.meetingTitle || previousShared?.meetingTitle || startState.title || aiMore("aiMoreUntitledMeeting"),
+        meetingTitle: previousShared?.meetingTitle || startState.title || aiMore("aiMoreUntitledMeeting"),
+        overview: "",
         timeline: mergeMeetingMinutesTimeline(previousShared?.timeline || [], groupMeetingSummaryTimeline(parsed.timeline, pending)),
+        decisions: [], actionItems: [], openQuestions: [],
         ...(previousShared?.contextTruncated || batch.contentTruncated ? { contextTruncated: true } : {}),
       });
       if (new TextEncoder().encode(sharedResult).length > MAX_MEETING_MINUTES_SUMMARY_BYTES) {
@@ -561,10 +599,7 @@ export default function MeetingAiMinutesDialog({ open, onClose, mode = "dialog",
         if (summaryQueuedRef.current) {
           summaryQueuedRef.current = false;
           const state = meetingManager.getState();
-          if (getPendingSummary(state).length) {
-            if (state.minutes.running) scheduleSummaryUpdateRef.current();
-            else void requestSummaryUpdateRef.current(true);
-          }
+          if (state.minutes.running && getPendingSummary(state).length) scheduleSummaryUpdateRef.current();
         }
       }
     }
@@ -620,7 +655,7 @@ export default function MeetingAiMinutesDialog({ open, onClose, mode = "dialog",
       const next = mergeMeetingTranscriptSegments(transcriptRef.current, matching);
       transcriptRef.current = next;
       setTranscript(next);
-      updateMeetingMinutesSession({ transcript: next, summary: summaryRef.current, summaryData: parsedSummary(summaryRef.current), timeline: fallbackTimeline(next, parsedSummary(summaryRef.current)) });
+      syncSession();
       if (!isMeetingMinutesSummaryCoordinator(currentState.minutes, currentState.minutesSubscription, realTimeColab.getUniqId() || "")) return;
       const pending = getPendingMeetingSummarySegments(next, {
         recordingId,
@@ -631,8 +666,6 @@ export default function MeetingAiMinutesDialog({ open, onClose, mode = "dialog",
       });
       if (currentState.minutes.running) {
         if (pending.length) scheduleSummaryUpdateRef.current();
-      } else if (pending.length) {
-        void requestSummaryUpdateRef.current(true);
       }
     });
     return unsubscribe;
@@ -651,6 +684,61 @@ export default function MeetingAiMinutesDialog({ open, onClose, mode = "dialog",
     replayRequestedRef.current = requestKey;
     meetingManager.requestMinutesReplay(recordingId, 0);
   }, [meetingState.stage, meetingState.roomId, meetingState.minutes.recordingId, meetingState.minutes.latestSegmentSeq, meetingState.minutesSubscription.enabled]);
+
+  const requestFinalSummary = (): Promise<boolean> => {
+    if (finalRequestRef.current) return finalRequestRef.current;
+    const current = meetingManager.getState();
+    const roomId = current.roomId || "";
+    const recordingId = current.minutes.recordingId || "";
+    const captured = transcriptRef.current.filter((segment) => segment.recordingId === recordingId && segment.final && !!segment.text.trim());
+    const throughSeq = Math.max(maxIncludedMeetingSegmentSeq(captured) || 0, current.minutes.summaryThroughSeq || 0);
+    if (current.stage !== "in-meeting" || !roomId || !recordingId || !current.minutesSubscription.enabled
+      || receiveOverrideRef.current === false || !hasSharedMeetingMinutesCapability(current.minutes) || !throughSeq) {
+      return Promise.resolve(false);
+    }
+    if (current.minutes.finalSummary && (current.minutes.finalThroughSeq || 0) >= throughSeq) return Promise.resolve(true);
+    const historyIncomplete = (current.minutes.historyStartSeq || 1) > (current.minutes.summaryThroughSeq || 0) + 1;
+    const context = buildMeetingFinalSummaryContext(current.title || "", summaryTimelineRef.current, captured, historyIncomplete);
+    setFinalSummarizing(true);
+    setError("");
+    const request = (async () => {
+      try {
+        const summaryLanguage = current.minutes.summaryLanguage || "zh-CN";
+        const generated = await meetingManager.requestMeetingAI("final-minutes", context.input, summaryLanguage === "en-US" ? "en" : "zh", {
+          recordingId, coordinatorEpoch: current.minutes.summaryCoordinatorEpoch || 0, throughSeq,
+        });
+        const latest = meetingManager.getState();
+        if (latest.roomId !== roomId || latest.minutes.recordingId !== recordingId || !latest.minutesSubscription.enabled) return false;
+        const parsed = parsedSummary(generated);
+        if (!parsed?.overview) throw new Error(t("meeting.minutesAIFormatError", aiMore("aiMoreCouldNotGenerateMeetingNotes")));
+        finalSummaryRef.current = generated;
+        setFinalSummary(generated);
+        syncSession();
+        return true;
+      } catch (requestError) {
+        const latest = meetingManager.getState();
+        if (latest.roomId === roomId && latest.minutes.recordingId === recordingId) {
+          setError(requestError instanceof Error ? requestError.message : aiMore("aiMoreCouldNotGenerateMeetingNotes"));
+        }
+        return false;
+      } finally {
+        finalRequestRef.current = null;
+        setFinalSummarizing(false);
+      }
+    })();
+    finalRequestRef.current = request;
+    return request;
+  };
+  requestFinalSummaryRef.current = requestFinalSummary;
+
+  const summarizeNow = async () => {
+    if (await requestFinalSummary()) {
+      setWorkspaceTab(2);
+      if (mode !== "workspace") onExpand?.();
+    } else if (!transcriptRef.current.length && !summaryTimelineRef.current.length) {
+      showSummaryHint(aiMore("aiMoreNoNewContentToSummarize"));
+    }
+  };
 
   const start = async () => {
     if (Date.now() - startRequestAtRef.current < 2_000) return;
@@ -750,16 +838,16 @@ export default function MeetingAiMinutesDialog({ open, onClose, mode = "dialog",
     setSettingsOpen(false);
   };
   const meetingNotesExport = () => {
-    const sharedSummary = parsedSummary(summaryRef.current);
+    const sharedSummary = parsedSummary(finalSummaryRef.current);
     const snapshot = getMeetingMinutesSession();
     const current = meetingManager.getState();
-    const sharedTimeline = mergeMeetingMinutesTimeline(sharedSummary?.timeline || [], fallbackTimeline(transcriptRef.current, null));
+    const sharedTimeline = summaryTimelineRef.current;
     const exportSummaryData = sharedSummary ? { ...sharedSummary, timeline: sharedTimeline } : null;
     return {
       title: sharedSummary?.meetingTitle || current.title || snapshot?.title,
       summaryData: exportSummaryData,
       timeline: sharedTimeline,
-      transcript: sharedSummary ? [] : transcriptRef.current,
+      transcript: transcriptRef.current,
     };
   };
   const exportSummary = () => downloadMeetingMinutesMarkdown(meetingNotesExport(), aiMoreMarkdownLabels(), aiMoreLocale());
@@ -779,14 +867,14 @@ export default function MeetingAiMinutesDialog({ open, onClose, mode = "dialog",
   if (mode === "workspace" && !settingsOpen) {
     return mountSurface(
       <MeetingMinutesWorkspace open={open} embedded={embedded} onClose={onClose} onSettings={() => setSettingsOpen(true)}
-        canControl={meetingState.stage === "in-meeting"} running={running} receiving={receiving} canSummarize={isCoordinator}
-        busy={busy} summarizing={summarizing} summaryHint={summaryHint}
+        canControl={meetingState.stage === "in-meeting"} running={running} receiving={receiving} canSummarize={receiving && summaryReady}
+        busy={busy} summarizing={summarizing} finalSummarizing={finalSummarizing} summaryHint={summaryHint}
         startDisabled={!minutesCapabilityReady || meetingState.stage !== "in-meeting"} onStart={() => void start()} onStop={() => void stop()}
         error={visibleError} summaryWarning={summaryWarning} statusLabel={statusLabel}
-        summary={summary} summaryData={summaryData} timeline={timeline} transcript={transcript} tab={workspaceTab} onTabChange={setWorkspaceTab}
+        summary={finalSummary} summaryData={summaryData} timeline={timeline} transcript={transcript} tab={workspaceTab} onTabChange={setWorkspaceTab}
         focusSegmentId={focusTranscript?.segmentId} focusRequestId={focusTranscript?.requestId} onViewTranscript={onViewTranscript}
         onExport={exportSummary} onCopySummary={copySummary} onAskAssistant={onAskAssistant}
-        onSummarizeNow={isCoordinator ? () => void requestSummaryUpdate(true) : undefined} />,
+        onSummarizeNow={() => void summarizeNow()} />,
     );
   }
   if (settingsOpen) {
@@ -806,12 +894,12 @@ export default function MeetingAiMinutesDialog({ open, onClose, mode = "dialog",
   }
 
   const briefPanel = <MeetingAiBriefPanel status={briefStatus} statusLabel={statusLabel}
-    canControl={meetingState.stage === "in-meeting"} recordingRunning={running} receiving={receiving} canSummarize={isCoordinator}
-    startDisabled={busy || !minutesCapabilityReady || meetingState.stage !== "in-meeting"} summary={summary} summaryData={summaryData}
-    timeline={timeline} transcript={transcript} summaryWarning={summaryWarning} summarizing={summarizing} summaryHint={summaryHint}
+    canControl={meetingState.stage === "in-meeting"} recordingRunning={running} receiving={receiving} canSummarize={receiving && summaryReady}
+    startDisabled={busy || !minutesCapabilityReady || meetingState.stage !== "in-meeting"} summary={finalSummary} summaryData={summaryData}
+    timeline={timeline} transcript={transcript} summaryWarning={summaryWarning} summarizing={summarizing} finalSummarizing={finalSummarizing} summaryHint={summaryHint}
     onCopySummary={copySummary} error={visibleError} audioMuted={meetingState.muted} onViewTranscript={onViewTranscript}
     onStart={() => void start()} onStop={() => void stop()} onExpand={onExpand ?? onClose} onSettings={() => setSettingsOpen(true)}
-    onExport={exportSummary} onAskAssistant={onAskAssistant} onSummarizeNow={isCoordinator ? () => void requestSummaryUpdate(true) : undefined} />;
+    onExport={exportSummary} onAskAssistant={onAskAssistant} onSummarizeNow={() => void summarizeNow()} />;
   const panel = <Box sx={{ height: "100%", minHeight: 0, display: "flex", flexDirection: "column", bgcolor: "#fff" }}>{briefPanel}</Box>;
   if (mode === "panel") return mountSurface(open ? panel : null);
   return mountSurface(<Dialog open={open} onClose={busy ? undefined : onClose} fullWidth maxWidth="md" data-testid="meeting-ai-minutes-dialog"

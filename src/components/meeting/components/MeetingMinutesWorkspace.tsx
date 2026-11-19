@@ -23,7 +23,6 @@ import { aiMore } from "@App/libs/i18n/meetingAiMoreTranslations";
 import type { MeetingMinutesJson, MeetingTranscriptSegment } from "@App/libs/meeting/meetingAi";
 import MeetingMinutesSwitch from "./MeetingMinutesSwitch";
 import MeetingLiveNotesList, { MeetingMinutesSourceButton, meetingNoteSourceId, meetingSourceAtTime, type LiveNote } from "./MeetingLiveNotesList";
-import MeetingMinutesOverviewCard from "./MeetingMinutesOverviewCard";
 import MeetingMinutesScrollArea, { type MeetingMinutesReadingPosition } from "./MeetingMinutesScrollArea";
 import MeetingMinutesTranscript from "./MeetingMinutesTranscript";
 
@@ -49,6 +48,7 @@ export interface MeetingMinutesWorkspaceProps {
   canSummarize?: boolean;
   busy?: boolean;
   summarizing?: boolean;
+  finalSummarizing?: boolean;
   summaryHint?: string;
   startLabel?: string;
   startDisabled?: boolean;
@@ -82,12 +82,14 @@ function EmptyState({ title, detail }: { title: string; detail: string }) {
   );
 }
 
-function MeetingThread({ notes, speakers, transcriptCount, summarizing, onViewTranscript }: { notes: LiveNote[]; speakers: string[]; transcriptCount: number; summarizing: boolean; onViewTranscript?: (id: string) => void }) {
+function MeetingThread({ notes, speakers, transcriptCount, summarizing, finalSummarizing, onSummarizeNow, summaryHint, summaryWarning, onViewTranscript }: { notes: LiveNote[]; speakers: string[]; transcriptCount: number; summarizing: boolean; finalSummarizing: boolean; onSummarizeNow?: () => void; summaryHint: string; summaryWarning: string; onViewTranscript?: (id: string) => void }) {
   return (
     <Stack spacing={1.5} data-testid="meeting-minutes-thread">
+      {summaryWarning && <Alert severity="warning" sx={{ borderRadius: 1.5, fontSize: "0.75rem" }}>{summaryWarning}</Alert>}
       <Box>
-        <Stack direction="row" alignItems="baseline" justifyContent="space-between" gap={1}>
+        <Stack direction="row" alignItems="center" justifyContent="space-between" gap={1} flexWrap="wrap">
           <Typography sx={{ color: "#172033", fontSize: "1rem", fontWeight: 900 }}>{aiMore("aiMoreMeetingOutline")}</Typography>
+          {onSummarizeNow && <Button size="small" onClick={onSummarizeNow} disabled={finalSummarizing || (!transcriptCount && !notes.length)} data-testid="meeting-minutes-summarize" startIcon={finalSummarizing ? <CircularProgress size={12} /> : undefined} sx={{ minWidth: 0, textTransform: "none", fontSize: "0.75rem", fontWeight: 750 }}>{aiMore("aiMoreSummarizeNow")}</Button>}
           <Stack direction="row" spacing={0.35} alignItems="baseline">
             <Typography data-testid="meeting-minutes-segment-count" sx={{ color: "#98a2b3", fontSize: "0.7rem", fontVariantNumeric: "tabular-nums" }}>{transcriptCount}</Typography>
             <Typography sx={{ color: "#98a2b3", fontSize: "0.7rem" }}>{aiMore("aiMoreUnitStatements")}</Typography>
@@ -99,11 +101,12 @@ function MeetingThread({ notes, speakers, transcriptCount, summarizing, onViewTr
             {summarizing && <CircularProgress size={11} sx={{ ml: 0.3 }} />}
           </Stack>
         </Stack>
+        {summaryHint && <Typography role="status" sx={{ color: "text.secondary", fontSize: "0.72rem", mt: 0.5 }}>{summaryHint}</Typography>}
       </Box>
       {notes.length > 0
         ? <MeetingLiveNotesList notes={notes} speakers={speakers} onViewTranscript={onViewTranscript} />
         : transcriptCount > 0
-          ? <EmptyState title={summarizing ? aiMore("aiMoreSummarizingOverview") : aiMore("aiMoreWaitingForAINotes")} detail={aiMore("aiMoreAINotesAutoGenerate")} />
+          ? <EmptyState title={aiMore("aiMoreWaitingForAINotes")} detail={aiMore("aiMoreAINotesAutoGenerate")} />
           : <EmptyState title={aiMore("aiMoreWaitingForTranscript")} detail={aiMore("aiMoreTranscriptStartsAfterRecording")} />}
     </Stack>
   );
@@ -198,6 +201,7 @@ export default function MeetingMinutesWorkspace({
   canSummarize = false,
   busy = false,
   summarizing = false,
+  finalSummarizing = false,
   summaryHint = "",
   startLabel = aiMore("aiMoreStartRecording"),
   startDisabled = false,
@@ -289,14 +293,8 @@ export default function MeetingMinutesWorkspace({
           <Tab label={aiMore("aiMoreFullTranscript")} />
           <Tab label={aiMore("aiMoreMeetingNotes")} />
         </Tabs>
-        <Box sx={{ mx: { xs: 1.4, sm: 2.3 }, mt: 1.2, mb: 0.2, flexShrink: 0 }}>
-          <MeetingMinutesOverviewCard overview={summaryData ? summaryData.overview : summary} summaryData={summaryData}
-            summarizing={summarizing} warning={summaryWarning} hint={summaryHint} onCopy={onCopySummary}
-            onSummarizeNow={canSummarize && running ? onSummarizeNow : undefined} />
-        </Box>
-
         <MeetingMinutesScrollArea key={tab} follow={tab === 0} readingPosition={tab === 0 ? readingPosition : tab === 2 ? recapReadingPosition : undefined} sx={{ p: { xs: 1.4, sm: 2.3 }, pb: tab === 0 ? 7.5 : 2.3, bgcolor: "#f8fafc", minHeight: "100%" }}>
-          {tab === 0 && <MeetingThread notes={notes} speakers={speakers} transcriptCount={transcript.length} summarizing={summarizing} onViewTranscript={onViewTranscript} />}
+          {tab === 0 && <MeetingThread notes={notes} speakers={speakers} transcriptCount={transcript.length} summarizing={summarizing} finalSummarizing={finalSummarizing} onSummarizeNow={canSummarize ? onSummarizeNow : undefined} summaryHint={summaryHint} summaryWarning={summaryWarning} onViewTranscript={onViewTranscript} />}
           {tab === 1 && <MeetingMinutesTranscript rows={transcript} focusSegmentId={focusSegmentId} focusRequestId={focusRequestId} />}
           {tab === 2 && <ProfessionalMinutes summary={summary} summaryData={summaryData} onCopySummary={onCopySummary} summaryWarning={summaryWarning} transcript={transcript} onViewTranscript={onViewTranscript} />}
         </MeetingMinutesScrollArea>
